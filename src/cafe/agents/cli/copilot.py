@@ -10,6 +10,38 @@ from cafe.core.types import PermissionDenial, TokenUsage
 class CopilotCLI(AbstractCLI):
     """Concrete implementation of Copilot CLI tool."""
 
+    read_only_operations = frozenset({"open_interactive_session", "run_one_shot"})
+
+    def apply_read_only(self, command: List[str], operation: str) -> List[str]:
+        self.require_read_only(operation)
+        # Model availability names (view/glob/grep) differ from permission kinds
+        # (read/shell/write). Approvals or --plan alone are not a tool cap. Native
+        # UI/config, hooks/plugins/MCP, subprocess/IPC and session/history writes
+        # remain outside whole-process confinement. Installed help describes
+        # --allow-all-tools as required for non-interactive use; report actual
+        # rejection of this bounded alternative instead of restoring broad access.
+        native = []
+        index = 1
+        while index < len(command):
+            option = command[index]
+            name = option.split("=", 1)[0]
+            if option == "--":
+                native.extend(command[index:])
+                break
+            if name in {"--available-tools", "--allow-tool"}:
+                index += 1 if "=" in option else 2
+            elif name in {"--allow-all-tools", "--allow-all", "--yolo"}:
+                index += 1
+            elif option in {"-p", "--model", "--resume", "--add-dir", "--deny-tool"}:
+                native.extend(command[index:index + 2])
+                index += 2
+            else:
+                native.append(option)
+                index += 1
+        options = ["--available-tools=view,glob,grep", "--allow-tool=read",
+                   "--deny-tool=shell", "--deny-tool=write"]
+        return [command[0], *options, *native]
+
     def build_command(
         self,
         prompt: str,

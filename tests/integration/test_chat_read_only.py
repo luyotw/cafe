@@ -1,0 +1,836 @@
+"""Read-only wiring/storage journeys; native fixtures do not prove process confinement."""
+
+import json
+import subprocess
+import sys
+
+import pytest
+
+from cafe.core.human_task_records import HumanTaskRecordStore
+from cafe.core.blackboard import BlackboardStore
+from cafe.playbooks.loader import PlaybookLoader
+from cafe.ui.chat import _load_chat_workflow_context
+from tests.unit.test_chat_read_only import inventory
+
+
+def materialize_pending(issue, workflow_id):
+    return HumanTaskRecordStore(issue).materialize(
+        workflow_id=workflow_id,
+        step="inspect",
+        iteration=1,
+        trigger="need_clarification",
+        policy_id="clarification-feedback",
+        prompt="Inspect this pending question.",
+        expected_result={"input_schema": "feedback", "required": True},
+        continuations={"submit": "inspect"},
+        assignee_type="user",
+    )
+
+
+@pytest.mark.integration
+def test_i4_pending_work_is_readable_without_preparation_or_recovery(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("cafe.utils.config.Path.home", lambda: tmp_path / "missing-home")
+    issue = tmp_path / ".cafe/issues/issue520"
+    store = BlackboardStore(issue)
+    store.load_or_create("develop")
+    materialize_pending(issue, store.load_read_only().workflow_id)
+    before = inventory(tmp_path)
+    current_step, steps, playbook = _load_chat_workflow_context(issue, read_only=True)
+    assert current_step == "develop"
+    assert current_step in steps
+    assert playbook == "standard"
+    assert inventory(tmp_path) == before
+    assert not (issue / "sessions").exists()
+    store.file_path.unlink()
+    before = inventory(tmp_path)
+    with pytest.raises((OSError, ValueError)):
+        _load_chat_workflow_context(issue, read_only=True)
+    assert inventory(tmp_path) == before
+
+
+@pytest.mark.integration
+def test_i4_unsafe_catalog_returns_error_without_recovering_pending_work(tmp_path):
+    global_root = tmp_path / "global"
+    transaction = global_root / ".catalog-transactions" / "pending"
+    transaction.mkdir(parents=True)
+    before = inventory(tmp_path)
+    loader = PlaybookLoader(project_root=tmp_path, global_root=global_root, read_only=True)
+    with pytest.raises(ValueError):
+        loader.load("standard")
+    assert inventory(tmp_path) == before
+
+
+from datetime import datetime
+from pathlib import Path
+from unittest.mock import MagicMock
+
+import yaml
+from typer.testing import CliRunner
+
+from cafe.core.session import SessionManager
+from cafe.core.types import AgentCLI
+from cafe.ui import cli
+
+
+@pytest.fixture
+def diagnostic_workspace(tmp_path, monkeypatch):
+    """Real declarations/state including a custom role and step; no model call."""
+    repo = tmp_path / "project"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "issue520", str(repo)], check=True)
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("CAFE_MOCK_AGENTS", raising=False)
+    # A valid existing playbook is adapted to test declarative custom topology.
+    builtin = Path(__file__).resolve().parents[2] / "src/cafe/data/playbooks/standard.yaml"
+
+    def rename(value):
+        if isinstance(value, dict):
+            return {rename(k): rename(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [rename(v) for v in value]
+        if isinstance(value, str):
+            return {"developer": "analyst", "develop": "inspect"}.get(value, value)
+        return value
+
+    declaration = rename(yaml.safe_load(builtin.read_text()))
+    declaration["steps"]["spec"]["initial_input"].pop("legacy_presentation")
+    text = yaml.safe_dump(declaration)
+    catalog = repo / ".cafe/playbooks"
+    catalog.mkdir(parents=True)
+    (catalog / "standard.yaml").write_text(text)
+    issue = repo / ".cafe/issues/issue520"
+    store = BlackboardStore(issue)
+    state = store.load_or_create("inspect")
+    materialize_pending(issue, state.workflow_id)
+    # Real pre-existing accounting metadata, produced through its public owner.
+    from cafe.core.usage import chat_usage_sink
+    from cafe.agents.transport_types import TransportResult
+    from cafe.core.types import TokenUsage
+
+    (issue / "issue.yaml").write_text("feature_branch: issue520\n")
+    chat_usage_sink(
+        repo,
+        issue / "issue.yaml",
+        cli="claude",
+        requested_model="old-model",
+        phase="inspect",
+        mode="one_shot",
+        issue_metadata=True,
+    )((TransportResult(usage=TokenUsage(input_tokens=3)),))
+    (issue / "artifacts").mkdir()
+    (issue / "artifacts/report.md").write_text("diagnostic context")
+    return repo, issue, store
+
+
+def configure_provider(repo, provider, resumed=False):
+    (repo / ".cafe/phases.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "inspect": {
+                    "role": "analyst",
+                    "name": "Ada",
+                    "clis": [{"cli": provider, "model": "selected-model"}],
+                },
+            }
+        )
+    )
+    if resumed:
+        SessionManager().save_session(
+            "Ada", AgentCLI(provider), "stored-session", "issue520", "inspect"
+        )
+
+
+@pytest.fixture
+def native_io(monkeypatch):
+    """Only native subprocess I/O is replaced; Git/discovery remains real.
+
+    Native-shaped stream fixtures are parameter/response evidence, not inference
+    or native mutation-denial evidence. Interactive fixture retains inherited IO.
+    """
+    real_run, real_popen = subprocess.run, subprocess.Popen
+    launches = []
+    scenario = {"returncode": 0, "stderr": "", "missing": False}
+
+    def native_run(command, **kwargs):
+        if command[0] not in {"codex", "claude", "gemini", "cursor-agent", "copilot"}:
+            return real_run(command, **kwargs)
+        launches.append((command, kwargs))
+        current = (
+            scenario.get("attempts", [scenario]).pop(0) if scenario.get("attempts") else scenario
+        )
+        if current.get("missing", False):
+            raise FileNotFoundError(command[0])
+        return subprocess.CompletedProcess(command, current["returncode"], stderr=current["stderr"])
+
+    def native_popen(command, **kwargs):
+        if command[0] not in {"codex", "claude", "gemini", "cursor-agent", "copilot"}:
+            return real_popen(command, **kwargs)
+        launches.append((command, kwargs))
+        current = (
+            scenario.get("attempts", [scenario]).pop(0) if scenario.get("attempts") else scenario
+        )
+        if current.get("missing", False):
+            raise FileNotFoundError(command[0])
+        session = "stored-session" if "stored-session" in command else "fresh-session"
+        records = (
+            [
+                {"type": "thread.started", "thread_id": session},
+                {
+                    "type": "item.completed",
+                    "item": {"type": "agent_message", "text": "diagnostic response"},
+                },
+                {"type": "turn.completed"},
+            ]
+            if command[0] == "codex"
+            else [
+                {"type": "system", "subtype": "init", "session_id": session},
+                {
+                    "type": "assistant",
+                    "message": {"content": [{"type": "text", "text": "diagnostic response"}]},
+                },
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "result": "diagnostic response",
+                    "session_id": session,
+                },
+            ]
+        )
+        if command[0] == "gemini":
+            records = [
+                {"type": "init", "session_id": session},
+                {"type": "message", "role": "assistant", "content": "diagnostic response"},
+                {"type": "result", "status": "success"},
+            ]
+        if current.get("invalid_request"):
+            records.insert(
+                1,
+                {
+                    "type": "assistant",
+                    "error": "invalid_request",
+                    "message": {"content": [{"type": "text", "text": current["stderr"]}]},
+                },
+            )
+        process = MagicMock()
+        lines = (["diagnostic response\n"] if command[0] == "copilot"
+                 else [json.dumps(r) + "\n" for r in records])
+        process.stdout.readline.side_effect = lines + [""]
+        process.stderr.read.return_value = current["stderr"]
+        process.poll.return_value = None
+        process.wait.return_value = current["returncode"]
+        return process
+
+    monkeypatch.setattr(subprocess, "run", native_run)
+    monkeypatch.setattr(subprocess, "Popen", native_popen)
+    # The deterministic process has no OS descriptor for select; this is only
+    # the terminal polling boundary, as in existing transport tests.
+    monkeypatch.setattr("sys.platform", "win32")
+    return launches, scenario
+
+
+def assert_native_options(command, provider):
+    assert command[0] == provider
+    assert "selected-model" in command
+    if provider == "codex":
+        assert command[command.index("--sandbox") + 1] == "read-only"
+        approval = "-a" if "-a" in command else "--ask-for-approval"
+        assert command[command.index(approval) + 1] == "never"
+    elif provider == "claude":
+        assert command[command.index("--tools") + 1] == "Read,Glob,Grep"
+        assert command[command.index("--allowed-tools") + 1] == "Read,Glob,Grep"
+        assert command[command.index("--disallowed-tools") + 1] == "Bash,Edit,Write,NotebookEdit"
+        assert command[command.index("--permission-mode") + 1] == "plan"
+    elif provider == "gemini":
+        assert command[command.index("--approval-mode") + 1] == "plan"
+    elif provider == "cursor-agent":
+        assert command[command.index("--mode") + 1] == "ask"
+        assert "--force" not in command and "--yolo" not in command
+    elif provider == "copilot":
+        assert "--available-tools=view,glob,grep" in command
+        assert "--allow-tool=read" in command
+        assert "--deny-tool=shell" in command and "--deny-tool=write" in command
+        assert "--allow-all-tools" not in command
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("provider", ["codex", "claude", "gemini", "cursor-agent", "copilot"])
+@pytest.mark.parametrize("resumed", [False, True])
+@pytest.mark.parametrize("mode", [None, "--prompt", "-p"])
+@pytest.mark.parametrize("explicit_phase", [False, True])
+def test_i1_i2_i5_diagnose_without_cafe_state_changes(
+    diagnostic_workspace, native_io, provider, resumed, mode, explicit_phase
+):
+    repo, issue, _ = diagnostic_workspace
+    configure_provider(repo, provider, resumed)
+    before = inventory(repo.parent)
+    args = ["chat", "analyst", "--read-only"]
+    if explicit_phase:
+        args += ["--phase", "inspect"]
+    if mode:
+        args += [mode, "inspect existing workflow"]
+    result = CliRunner().invoke(cli.app, args)
+    assert result.exit_code == 0, result.output
+    launches, _ = native_io
+    assert len(launches) == 1
+    command, kwargs = launches[0]
+    assert_native_options(command, provider)
+    assert ("stored-session" in command) == resumed
+    assert kwargs["env"]["CAFE_CHAT_CURRENT_STEP"] == "inspect"
+    assert kwargs["env"]["CAFE_ISSUE_DIR"] == str(issue)
+    if mode:
+        assert "diagnostic response" in result.output
+    else:
+        assert "stdin" not in kwargs and "stdout" not in kwargs and "stderr" not in kwargs
+    assert inventory(repo.parent) == before
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("provider", ["codex", "claude", "gemini", "cursor-agent", "copilot"])
+@pytest.mark.parametrize("mode", [None, "-p"])
+@pytest.mark.parametrize("missing", [False, True])
+def test_i6_native_error_is_visible_without_writable_fallback(
+    diagnostic_workspace, native_io, provider, mode, missing
+):
+    repo, _, _ = diagnostic_workspace
+    configure_provider(repo, provider, True)
+    native_io[1].update(returncode=1, stderr="native backend unavailable", missing=missing)
+    before = inventory(repo.parent)
+    args = ["chat", "analyst", "--read-only"] + ([mode, "inspect"] if mode else [])
+    result = CliRunner().invoke(cli.app, args)
+    assert result.exit_code != 0
+    assert len(native_io[0]) == 1
+    assert_native_options(native_io[0][0][0], provider)
+    assert inventory(repo.parent) == before
+
+
+@pytest.mark.parametrize("provider", ["codex", "claude", "gemini", "cursor-agent", "copilot"])
+@pytest.mark.parametrize("resumed", [False, True])
+@pytest.mark.parametrize("interactive", [False, True])
+def test_u5_final_transport_spawn_restricts_without_accounting_or_streaming_file(
+    diagnostic_workspace, native_io, provider, resumed, interactive
+):
+    from cafe.agents.executor import AgentExecutor
+    from cafe.agents.transport import ConversationTransport
+    from cafe.core.types import AgentConfig
+
+    repo, _, _ = diagnostic_workspace
+    executor = AgentExecutor(
+        AgentConfig(
+            name="Ada",
+            cli=AgentCLI(provider),
+            model="selected-model",
+            session_id="stored-session" if resumed else None,
+        ),
+        stream_output=False,
+    )
+    transport = ConversationTransport(executor)
+    before = inventory(repo.parent)
+    if interactive:
+        accounting = []
+        transport.open_interactive_session(
+            "inspect", read_only=True, on_accounting=accounting.append
+        )
+        assert accounting == []
+    else:
+        responses = []
+        transport.run_one_shot(
+            "inspect",
+            read_only=True,
+            on_response=responses.append,
+            streaming_output_file=str(repo / "streaming.jsonl"),
+        )
+        assert responses[0].response.strip() == "diagnostic response"
+    assert len(native_io[0]) == 1
+    command, kwargs = native_io[0][0]
+    assert_native_options(command, provider)
+    assert ("stored-session" in command) == resumed
+    assert inventory(repo.parent) == before
+
+
+def test_u2_custom_nested_playbook_read_does_not_recover(diagnostic_workspace):
+    repo, _, _ = diagnostic_workspace
+    before = inventory(repo.parent)
+    PlaybookLoader(project_root=repo, read_only=True).load("standard")
+    assert inventory(repo.parent) == before
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("custom", [False, True])
+@pytest.mark.parametrize("step", ["develop", "pr"])
+@pytest.mark.parametrize("prompt_option", ["--prompt", "-p"])
+def test_i9_public_nested_context_reads_existing_home_without_recovery(
+    tmp_path, monkeypatch, custom, step, prompt_option
+):
+    """Exercise production prepare assets/presentation under the pure-read lock."""
+    import os
+
+    repo = tmp_path / "project"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "issue520", str(repo)], check=True)
+    home = tmp_path / "home"
+    home.mkdir()  # An absent parent bypasses the nested lock guard entirely.
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(repo)
+    role, selected_step, playbook = "developer", step, "standard-qa"
+    if custom:
+        role, selected_step, playbook = "analyst", "inspect", "diagnostic"
+        builtin = Path(__file__).resolve().parents[2] / "src/cafe/data/playbooks/standard-qa.yaml"
+        def rename(value):
+            if isinstance(value, dict):
+                return {rename(k): rename(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [rename(v) for v in value]
+            if isinstance(value, str):
+                return {"developer": role, step: selected_step}.get(value, value)
+            return value
+
+        declaration = rename(yaml.safe_load(builtin.read_text()))
+        declaration["playbook"]["id"] = playbook
+        declaration["steps"]["spec"]["initial_input"].pop("legacy_presentation")
+        catalog = repo / ".cafe/playbooks"
+        catalog.mkdir(parents=True)
+        (catalog / f"{playbook}.yaml").write_text(yaml.safe_dump(declaration))
+    issue = repo / ".cafe/issues/issue520"
+    BlackboardStore(issue).load_or_create(selected_step, playbook)
+    (repo / ".cafe/phases.yaml").write_text(yaml.safe_dump({selected_step: {
+        "role": role, "name": "Ada", "clis": [{"cli": "codex", "model": "selected-model"}]
+    }}))
+    binary = tmp_path / "bin/codex"
+    binary.parent.mkdir()
+    binary.write_text(f"#!{sys.executable}\nimport json\n"
+                      "print(json.dumps({'type':'item.completed','item':"
+                      "{'type':'agent_message','text':'fixture diagnosis'}}))\n"
+                      "print(json.dumps({'type':'turn.completed'}))\n")
+    binary.chmod(0o755)
+    before = inventory(tmp_path)
+    env = dict(os.environ, PATH=str(binary.parent) + os.pathsep + os.environ["PATH"],
+               PYTHONPATH=str(Path(__file__).resolve().parents[2] / "src"),
+               PYTHONDONTWRITEBYTECODE="1")
+    env.pop("CAFE_SKIP_GLOBAL_SKILL_SYNC", None)
+    result = subprocess.run([sys.executable, "-m", "cafe.ui.cli", "chat", role,
+                             "--phase", selected_step, "--read-only", prompt_option, "diagnose"],
+                            capture_output=True, text=True, env=env, timeout=20)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "fixture diagnosis" in result.stdout
+    assert inventory(tmp_path) == before
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("unsafe", [None, "blackboard", "catalog", "session"])
+@pytest.mark.parametrize("provider", ["codex", "claude", "gemini", "cursor-agent", "copilot"])
+def test_i4_actual_module_startup_does_not_install_or_repair(diagnostic_workspace, unsafe, provider):
+    import os
+    import stat
+
+    repo, issue, store = diagnostic_workspace
+    configure_provider(repo, provider)
+    if unsafe == "blackboard":
+        store.receipts_path.unlink()
+    if unsafe == "catalog":
+        journal = repo.parent / "home/.cafe/.catalog-transactions/pending"
+        journal.mkdir(parents=True)
+    if unsafe == "session":
+        session_file = issue / "sessions/broken.json"
+        session_file.parent.mkdir()
+        session_file.write_text("invalid JSON")
+    binary = repo.parent / "bin" / provider
+    binary.parent.mkdir()
+    if provider == "codex":
+        records = [{"type": "item.completed", "item": {"type": "agent_message", "text": "fixture diagnosis"}},
+                   {"type": "turn.completed"}]
+    elif provider == "gemini":
+        records = [{"type": "message", "role": "assistant", "content": "fixture diagnosis"},
+                   {"type": "result", "status": "success"}]
+    else:
+        records = [{"type": "assistant", "message": {"content": [{"type": "text", "text": "fixture diagnosis"}]}},
+                   {"type": "result", "subtype": "success", "result": "fixture diagnosis"}]
+    body = ("print('fixture diagnosis')\n" if provider == "copilot"
+            else f"for r in {records!r}: print(json.dumps(r))\n")
+    binary.write_text(f"#!{sys.executable}\nimport json\n" + body)
+    binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
+    before = inventory(repo.parent)
+    env = dict(
+        os.environ,
+        PATH=str(binary.parent) + os.pathsep + os.environ["PATH"],
+        PYTHONPATH=str(Path(__file__).resolve().parents[2] / "src"),
+        PYTHONDONTWRITEBYTECODE="1",
+    )
+    # No skip-sync flag: the actual option must suppress eligible main startup.
+    env.pop("CAFE_SKIP_GLOBAL_SKILL_SYNC", None)
+    result = subprocess.run(
+        [sys.executable, "-m", "cafe.ui.cli", "chat", "analyst", "--read-only", "-p", "inspect"],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=20,
+    )
+    assert (result.returncode == 0) == (unsafe is None), result.stdout + result.stderr
+    if unsafe is None:
+        assert "fixture diagnosis" in result.stdout
+    else:
+        assert "read-only" in result.stdout.lower()
+    assert inventory(repo.parent) == before
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["analyst", "--unknown-option", "--read-only"],
+        ["analyst", "--read-only", "--unknown-option"],
+        ["analyst", "--read-only", "--phase"],
+    ],
+)
+def test_i4_malformed_diagnostic_startup_preserves_real_state(diagnostic_workspace, args):
+    import os
+
+    repo, _, _ = diagnostic_workspace
+    configure_provider(repo, "codex")
+    before = inventory(repo.parent)
+    env = dict(
+        os.environ,
+        PYTHONPATH=str(Path(__file__).resolve().parents[2] / "src"),
+        PYTHONDONTWRITEBYTECODE="1",
+    )
+    # Exercise main and the real installer eligibility with an absent HOME;
+    # no skip-sync flag or mocked storage owner can hide startup writes.
+    env.pop("CAFE_SKIP_GLOBAL_SKILL_SYNC", None)
+    result = subprocess.run(
+        [sys.executable, "-m", "cafe.ui.cli", "chat", *args],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=20,
+    )
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert inventory(repo.parent) == before
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("provider", ["codex", "claude", "gemini", "cursor-agent", "copilot"])
+def test_i3_linked_worktree_shared_and_absent_context_remains_unchanged(
+    diagnostic_workspace, native_io, provider, monkeypatch
+):
+    repo, issue, _ = diagnostic_workspace
+    configure_provider(repo, provider, True)
+    # Real linked Git worktree, with the issue/catalog/phase authorities shared
+    # by links outside cwd. Inventory includes link identities AND their targets.
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.test",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "fixture",
+        ],
+        check=True,
+    )
+    linked = repo.parent / "linked"
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "add", "-qb", "diagnostic", str(linked)], check=True
+    )
+    (linked / ".cafe").symlink_to(repo / ".cafe", target_is_directory=True)
+    monkeypatch.chdir(linked)
+    before = inventory(repo.parent)
+    from cafe.ui.chat import launch_chat_session
+
+    result = launch_chat_session(
+        "analyst", "issue520", read_only=True, phase_name="inspect", prompt="inspect"
+    )
+    assert result == 0
+    assert_native_options(native_io[0][0][0], provider)
+    assert inventory(repo.parent) == before
+    assert not (issue / "absent-artifacts").exists()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("provider,reason", [
+    (provider, reason)
+    for provider in ["codex", "claude", "gemini", "cursor-agent", "copilot"]
+    for reason in ["No conversation found", "Prompt is too long"]
+    # Plain-text Copilot has no invalid_request classification in ordinary chat.
+    if provider != "copilot" or reason != "Prompt is too long"
+])
+def test_i7_same_provider_recovery_keeps_options_without_persistence(
+    diagnostic_workspace, native_io, provider, reason
+):
+    repo, _, _ = diagnostic_workspace
+    configure_provider(repo, provider, True)
+    native_io[1]["attempts"] = [
+        {"returncode": 1, "stderr": reason, "invalid_request": reason == "Prompt is too long"},
+        {"returncode": 0, "stderr": ""},
+    ]
+    before = inventory(repo.parent)
+    result = CliRunner().invoke(
+        cli.app, ["chat", "analyst", "--read-only", "--phase", "inspect", "-p", "diagnose"]
+    )
+    assert result.exit_code == 0, result.output
+    commands = [c for c, _ in native_io[0]]
+    assert len(commands) == 2
+    assert "stored-session" in commands[0] and "stored-session" not in commands[1]
+    for command in commands:
+        assert_native_options(command, provider)
+    assert "diagnostic response" in result.output
+    assert inventory(repo.parent) == before
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(sys.platform == "win32", reason="Exercises the Unix stderr pre-read")
+@pytest.mark.parametrize("provider", ["codex", "claude", "gemini", "cursor-agent", "copilot"])
+@pytest.mark.parametrize("scenario", ["recover", "failure"])
+def test_i6_i7_unix_stderr_only_rejection_reaches_chat(
+    diagnostic_workspace, tmp_path_factory, provider, scenario
+):
+    import os
+
+    repo, _, _ = diagnostic_workspace
+    configure_provider(repo, provider, True)
+    # Native-owned receipts are outside the measured CAFE repository/HOME.
+    native_root = tmp_path_factory.mktemp("native-stderr")
+    receipt = native_root / "attempts.jsonl"
+    binary = native_root / provider
+    binary.write_text(
+        f"#!{sys.executable}\n"
+        + """import json, os, pathlib, sys
+args = sys.argv[1:]
+provider = pathlib.Path(sys.argv[0]).name
+context = (pathlib.Path(os.environ['CAFE_ISSUE_DIR']) / 'artifacts/report.md').read_text()
+with open(os.environ['NATIVE_STDERR_RECEIPT'], 'a') as handle:
+    handle.write(json.dumps({'argv': args, 'context': context}) + '\\n')
+if os.environ['NATIVE_STDERR_SCENARIO'] == 'failure':
+    print('native option rejected', file=sys.stderr)
+    print('native rejection detail', file=sys.stderr)
+    sys.exit(1)
+if 'stored-session' in args:
+    print('No conversation found', file=sys.stderr)
+    sys.exit(1)
+message = 'fixture diagnosis: ' + context
+if provider == 'codex':
+    records = [
+        {'type': 'thread.started', 'thread_id': 'fresh-session'},
+        {'type': 'item.completed', 'item': {'type': 'agent_message', 'text': message}},
+        {'type': 'turn.completed'},
+    ]
+elif provider == 'gemini':
+    records = [
+        {'type': 'init', 'session_id': 'fresh-session'},
+        {'type': 'message', 'role': 'assistant', 'content': message},
+        {'type': 'result', 'status': 'success'},
+    ]
+elif provider == 'copilot':
+    print(message)
+    sys.exit(0)
+else:
+    records = [
+        {'type': 'system', 'subtype': 'init', 'session_id': 'fresh-session'},
+        {'type': 'assistant', 'message': {'content': [{'type': 'text', 'text': message}]}},
+        {'type': 'result', 'subtype': 'success', 'session_id': 'fresh-session', 'result': message},
+    ]
+for record in records:
+    print(json.dumps(record))
+"""
+    )
+    binary.chmod(0o755)
+    env = dict(
+        os.environ,
+        PATH=str(native_root) + os.pathsep + os.environ["PATH"],
+        PYTHONPATH=str(Path(__file__).resolve().parents[2] / "src"),
+        PYTHONDONTWRITEBYTECODE="1",
+        NATIVE_STDERR_RECEIPT=str(receipt),
+        NATIVE_STDERR_SCENARIO=scenario,
+    )
+    env.pop("CAFE_SKIP_GLOBAL_SKILL_SYNC", None)
+    before = inventory(repo.parent)
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "cafe.ui.cli", "chat", "analyst",
+            "--read-only", "--phase", "inspect", "-p", "diagnose",
+        ],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=20,
+    )
+    assert inventory(repo.parent) == before
+    attempts = [json.loads(line) for line in receipt.read_text().splitlines()]
+    for attempt in attempts:
+        assert_native_options([provider, *attempt["argv"]], provider)
+        assert attempt["argv"][attempt["argv"].index("--model") + 1] == "selected-model"
+        assert attempt["context"] == "diagnostic context"
+        if provider == "claude":
+            args = attempt["argv"]
+            assert args[args.index("--allowed-tools") + 1] == "Read,Glob,Grep"
+            assert args[args.index("--disallowed-tools") + 1] == "Bash,Edit,Write,NotebookEdit"
+    assert "stored-session" in attempts[0]["argv"]
+    if scenario == "recover":
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert len(attempts) == 2
+        assert "stored-session" not in attempts[1]["argv"]
+        assert "fixture diagnosis: diagnostic context" in result.stdout
+    else:
+        assert result.returncode != 0
+        assert len(attempts) == 1
+        assert "native option rejected" in result.stdout + result.stderr
+        assert "native rejection detail" in result.stdout + result.stderr
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("provider", ["codex", "claude", "gemini", "cursor-agent", "copilot"])
+def test_i7_partial_native_failure_preserves_cafe_records(
+    diagnostic_workspace, native_io, provider
+):
+    repo, _, _ = diagnostic_workspace
+    configure_provider(repo, provider, True)
+    native_io[1].update(returncode=1, stderr="native option rejected")
+    before = inventory(repo.parent)
+    result = CliRunner().invoke(cli.app, ["chat", "analyst", "--read-only", "-p", "diagnose"])
+    assert result.exit_code != 0
+    assert "diagnostic response" in result.output  # partial native text stays visible
+    assert len(native_io[0]) == 1
+    assert_native_options(native_io[0][0][0], provider)
+    assert inventory(repo.parent) == before
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("provider", ["codex", "claude", "gemini", "cursor-agent", "copilot"])
+def test_i8_writable_chat_persists_session_and_prepares_context(
+    diagnostic_workspace, native_io, provider
+):
+    repo, issue, store = diagnostic_workspace
+    configure_provider(repo, provider, True)
+    # Global/default skill destinations remain isolated by fixture HOME.
+    session_file = SessionManager().get_session_file(
+        "Ada", AgentCLI(provider), "issue520", "inspect"
+    )
+    before_timestamp = session_file.stat().st_mtime_ns
+    result = CliRunner().invoke(
+        cli.app, ["chat", "analyst", "--phase", "inspect", "-p", "diagnose"]
+    )
+    assert result.exit_code == 0, result.output
+    assert session_file.stat().st_mtime_ns > before_timestamp
+    assert len(native_io[0]) == 1
+    command = native_io[0][0][0]
+    assert "--sandbox" not in command and "--tools" not in command
+    if provider == "gemini":
+        assert "--approval-mode" not in command
+        assert "!/.cafe" in (repo / ".geminiignore").read_text()
+    elif provider == "cursor-agent":
+        assert "--force" in command and "--mode" not in command
+    elif provider == "copilot":
+        assert "--allow-all-tools" in command
+        assert "--available-tools=view,glob,grep" not in command
+    assert (repo.parent / "home/.cafe").exists()
+    assert (
+        SessionManager().load_session("Ada", AgentCLI(provider), "issue520", "inspect").session_id
+        == "stored-session"
+    )
+    assert json.loads(store.next_step_path.read_text())["to_step"] == "inspect"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("provider", ["codex", "claude", "gemini", "cursor-agent", "copilot"])
+def test_i5_saved_configured_backup_keeps_current_model_authority(
+    diagnostic_workspace, native_io, provider
+):
+    repo, _, _ = diagnostic_workspace
+    configure_provider(repo, provider, True)
+    (repo / ".cafe/phases.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "inspect": {
+                    "name": "Ada",
+                    "role": "analyst",
+                    "clis": [
+                        {"cli": "claude" if provider == "codex" else "codex", "model": "primary-model"},
+                        {"cli": provider, "model": "selected-model"},
+                    ],
+                }
+            }
+        )
+    )
+    before = inventory(repo.parent)
+    result = CliRunner().invoke(
+        cli.app, ["chat", "analyst", "--read-only", "--phase", "inspect", "-p", "inspect"]
+    )
+    assert result.exit_code == 0, result.output
+    assert_native_options(native_io[0][0][0], provider)
+    assert "stored-session" in native_io[0][0][0]
+    assert "primary-model" not in native_io[0][0][0]
+    assert inventory(repo.parent) == before
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("ignore_state", ["absent", "existing", "linked"])
+@pytest.mark.parametrize("mode", [None, "--prompt", "-p"])
+def test_i4_gemini_ignore_is_not_prepared_in_read_only_chat(
+    diagnostic_workspace, native_io, ignore_state, mode
+):
+    repo, _, _ = diagnostic_workspace
+    configure_provider(repo, "gemini", True)
+    path = repo / ".geminiignore"
+    if ignore_state == "existing":
+        path.write_text("existing custom ignore\n")
+    elif ignore_state == "linked":
+        target = repo.parent / "shared-ignore"
+        target.write_text("shared custom ignore\n")
+        path.symlink_to(target)
+    before = inventory(repo.parent)
+    args = ["chat", "analyst", "--read-only", "--phase", "inspect"]
+    if mode:
+        args += [mode, "diagnose"]
+    result = CliRunner().invoke(cli.app, args)
+    assert result.exit_code == 0, result.output
+    assert_native_options(native_io[0][0][0], "gemini")
+    assert inventory(repo.parent) == before
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("provider", ["codex", "claude", "gemini", "cursor-agent", "copilot"])
+def test_i7_recovery_exhaustion_keeps_all_attempts_read_only(
+    diagnostic_workspace, native_io, provider
+):
+    repo, _, _ = diagnostic_workspace
+    configure_provider(repo, provider, True)
+    native_io[1].update(returncode=1, stderr="No conversation found")
+    before = inventory(repo.parent)
+    result = CliRunner().invoke(cli.app, ["chat", "analyst", "--read-only", "-p", "diagnose"])
+    assert result.exit_code != 0
+    # The existing session retry policy is bounded; every attempted native
+    # command retains the model and restriction, even after losing the session.
+    assert 1 < len(native_io[0]) <= 4
+    for command, _ in native_io[0]:
+        assert_native_options(command, provider)
+    assert inventory(repo.parent) == before
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("provider", ["codex", "claude", "gemini", "cursor-agent", "copilot"])
+def test_i2_existing_completed_result_and_pending_task_remain_unchanged(
+    diagnostic_workspace, native_io, provider
+):
+    repo, issue, blackboard = diagnostic_workspace
+    configure_provider(repo, provider, True)
+    records = HumanTaskRecordStore(issue)
+    workflow_id = blackboard.load_read_only().workflow_id
+    historical = records.materialize(
+        workflow_id=workflow_id, step="inspect", iteration=2,
+        trigger="need_clarification", policy_id="clarification-feedback",
+        prompt="Historical diagnosis", expected_result={"input_schema": "feedback", "required": True},
+        continuations={"submit": "inspect"}, assignee_type="user",
+    )
+    records.complete(workflow_id=workflow_id, task_id=historical.id,
+                     payload={"feedback": "Preserve this completed result"}, source="command")
+    before = inventory(repo.parent)
+    result = CliRunner().invoke(cli.app, ["chat", "analyst", "--read-only", "-p", "diagnose"])
+    assert result.exit_code == 0, result.output
+    assert_native_options(native_io[0][0][0], provider)
+    assert inventory(repo.parent) == before

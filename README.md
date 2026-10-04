@@ -390,6 +390,81 @@ If behavior is wrong rather than merely incomplete, let `use-cafe-workflow`
 classify whether the defect belongs to a project playbook, a phase skill, or the
 CAFE runtime before changing sources.
 
+### Read-only diagnostic chat
+
+Use the current issue branch and its configured role, phase, provider, model and
+conversation context:
+
+```bash
+cafe chat developer --read-only
+cafe chat developer --phase develop --read-only
+cafe chat developer --read-only --prompt "Diagnose the current issue"
+cafe chat developer --phase develop --read-only -p "Diagnose the current issue"
+```
+
+Both interactive and one-shot diagnosis support fresh and resumed conversations
+with all five integrated providers, including custom roles/phases and currently
+configured backup sessions. The current invocation receives these native options:
+
+| Provider | Native options |
+| --- | --- |
+| Codex | `--sandbox read-only`, never approval |
+| Claude | `--tools Read,Glob,Grep`, matching `--allowed-tools`, `--disallowed-tools Bash,Edit,Write,NotebookEdit`, `--permission-mode plan` |
+| Gemini | `--approval-mode plan` |
+| Cursor | `--mode ask`, removing CAFE-built `--force`/`--yolo` |
+| Copilot | `--available-tools=view,glob,grep`, `--allow-tool=read`, `--deny-tool=shell`, `--deny-tool=write`, removing CAFE-built broad tool approvals |
+
+Availability lists restrict model tools; approval lists alone do not do so.
+Copilot availability names differ from permission kinds. Its installed help and
+command reference describe `--allow-all-tools` as required for programmatic use;
+CAFE uses the explicit read approval/cap instead and reports any actual version
+rejection without restoring broad approval. Unsupported operations fail before
+launch. Actual native option,
+authentication or backend errors remain errors, without switching provider or
+retrying writable chat. Omitting the flag retains ordinary writable behavior.
+
+CAFE skips helper/chat-skill synchronization, handoff preparation/clearing,
+session/timestamp persistence, usage publication and Gemini `.geminiignore`
+preparation (including existing files and linked targets). Existing artifacts, task
+and result records, baton, blackboard and associated linked/shared context are
+read without CAFE initialization, reconciliation, repair, task completion or
+ownership changes. Missing optional state stays absent; required unsafe context
+reports an error. Permitted stale-session or prompt-too-long recovery retains
+native restrictions and the configured provider/model, updating session identity
+only in memory. Diagnostic output remains available, but CAFE does not record
+chat usage or save the recovered session.
+
+These native model-tool parameters are not immutable protection of the entire
+CLI process. Provider-owned history/session/configuration persistence may still
+write inside or outside the repository. Native UI commands, permission changes,
+integrations/subprocesses and IPC/daemon paths are not guaranteed confined.
+Recorded limitations include:
+
+- Codex app-server `thread/settings/update` accepted changing read-only settings
+  to `workspaceWrite` in a metadata-only probe. No file write occurred in that
+  probe; it demonstrates mutable settings, not a demonstrated filesystem write.
+- Claude Code **2.1.284** native TUI `!touch` created a scratch file despite
+  restricted read tools, write/command denial and plan mode. That observed native
+  shell path bypasses the model-tool restriction; other versions were not tested.
+- Codex's native read-only mode can depend on its built-in sandbox/backend, which
+  may be unavailable locally. CAFE surfaces the actual failure and adds no outer
+  sandbox or environment admission probe.
+- Gemini's documented plan mode permits writes to plan files and mutable policy.
+  In headless execution, entry/exit of plan mode is automatically approved, and
+  exit switches to YOLO automated implementation. This is a documentation-derived
+  limitation, not a new native observation. See [Plan Mode](https://geminicli.com/docs/cli/plan-mode/)
+  and [Policy engine](https://geminicli.com/docs/reference/policy-engine/).
+- Cursor ask mode and Copilot's read-tool availability do not guarantee protection
+  from native UI/settings, hooks/plugins/MCP, integrations/subprocesses, external
+  IPC/daemon paths or provider-owned history/session/configuration writes. No new
+  native mutation-denial experiment was run for these providers. Option sources:
+  [Cursor parameters](https://cursor.com/docs/cli/reference/parameters) and
+  [Copilot command/tool reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference).
+
+Argument/forwarding tests and isolated CAFE storage inventories verify the
+feature's wiring and CAFE effects. They do not prove native inference success,
+whole-process confinement or denial of every mutation path.
+
 ### Global helper skills
 
 CAFE synchronizes its bundled helper skills only for detected coding agents. An

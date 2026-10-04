@@ -11,6 +11,35 @@ from cafe.core.types import PermissionDenial, TokenUsage
 class GeminiCLI(AbstractCLI):
     """Concrete implementation of Gemini CLI tool."""
 
+    read_only_operations = frozenset({"open_interactive_session", "run_one_shot"})
+
+    def apply_read_only(self, command: List[str], operation: str) -> List[str]:
+        self.require_read_only(operation)
+        # Native plan mode is invocation-local, not immutable confinement.
+        # Gemini's documented policy permits plan-file writes and headless
+        # enter/exit_plan_mode transitions; exit switches to YOLO execution.
+        # Native settings, integrations and session/history writes remain outside
+        # CAFE's no-write guarantee. --allowed-tools is approval, not availability.
+        native = []
+        index = 1
+        while index < len(command):
+            option = command[index]
+            if option == "--":
+                native.extend(command[index:])
+                break
+            if option == "--approval-mode":
+                index += 2
+            elif option in {"--yolo", "-y"} or option.startswith("--approval-mode="):
+                index += 1
+            elif option in {"-p", "--model", "--resume", "--output-format",
+                            "--include-directories", "--allowed-tools"}:
+                native.extend(command[index:index + 2])
+                index += 2
+            else:
+                native.append(option)
+                index += 1
+        return [command[0], "--approval-mode", "plan", *native]
+
     def build_command(
         self,
         prompt: str,

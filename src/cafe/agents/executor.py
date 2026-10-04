@@ -215,6 +215,7 @@ class AgentExecutor:
         streaming_output_file: Optional[str] = None,
         execution_control: AgentExecutionControl | None = None,
         exact_session: bool = False,
+        read_only: bool = False,
         environment_overrides: Optional[dict[str, str]] = None,
     ) -> AgentResponse:
         """Execute the agent with given prompt.
@@ -238,10 +239,15 @@ class AgentExecutor:
         try:
             # Get CLI strategy
             cli_strategy = self._get_cli_strategy()
+            if read_only:
+                cli_strategy.require_read_only("run_one_shot")
+                # Diagnostic output is terminal/response only; no CAFE log file.
+                streaming_output_file = None
             # Normal Gemini agents keep the repository-owned ignore file.
             # Decision-only execution creates it only inside its isolated cwd.
+            # Read-only chat preserves absent/existing/shared ignore state.
             decision_only = allowed_tools == [] and allowed_directories == []
-            if self.config.cli == AgentCLI.GEMINI and not decision_only:
+            if self.config.cli == AgentCLI.GEMINI and not decision_only and not read_only:
                 cli_strategy.ensure_geminiignore()
             if self.config.cli == AgentCLI.COPILOT:
                 cli_strategy.record_existing_sessions()
@@ -261,6 +267,8 @@ class AgentExecutor:
                 allowed_directories,
                 execution_control,
             )
+            if read_only:
+                cmd = cli_strategy.apply_read_only(cmd, "run_one_shot")
             env = cli_strategy.build_environment()
             if environment_overrides:
                 env.update(
@@ -1227,6 +1235,7 @@ class AgentExecutor:
         import sys
 
         stderr_check_timeout = 0.5  # 500ms to check for immediate errors
+        stderr_output = ""
 
         if sys.platform != "win32" and process.stderr:
             # Use select on Unix-like systems to check for immediate stderr output
@@ -1235,6 +1244,9 @@ class AgentExecutor:
             if process.stderr in ready:
                 # Read first line of stderr if available (non-blocking)
                 stderr_line = process.stderr.readline()
+                # Preserve nonfatal diagnostics for normal reporting/recovery;
+                # the final stderr drain must append rather than replace them.
+                stderr_output = stderr_line
                 # Only treat as fatal error if it's NOT a tool execution error
                 # Tool errors like "Error executing tool" are recoverable and agent continues
                 is_tool_error = "error executing tool" in stderr_line.lower()
@@ -1277,7 +1289,6 @@ class AgentExecutor:
         streaming_log: List[str] = []  # Record all streaming fragments
         token_usage = TokenUsage()
         returncode = None
-        stderr_output = ""
         observer_failed = False
         observation_evidence = TransportResult()
         observation_strategy = self._get_cli_strategy()
@@ -1533,7 +1544,6 @@ class AgentExecutor:
                                         except BaseException:
                                             observer_failed = True
                                             raise
-
 
                             if any(key in data and not isinstance(data[key], dict)
                                    for key in ("usage", "stats")):
@@ -1796,7 +1806,7 @@ class AgentExecutor:
                     returncode = -1
 
             # Read stderr after termination
-            stderr_output = process.stderr.read() if process.stderr else ""
+            stderr_output += process.stderr.read() if process.stderr else ""
 
             # Treat as success only if we can actually tell the run finished:
             # either the CLI has no structured completion signal at all (e.g.
@@ -1816,7 +1826,7 @@ class AgentExecutor:
             try:
                 returncode = process.wait(timeout=300)
                 # Only read stderr after process completes normally
-                stderr_output = process.stderr.read() if process.stderr else ""
+                stderr_output += process.stderr.read() if process.stderr else ""
             except subprocess.TimeoutExpired:
                 print(f"⚠️  {cli_name} process did not exit within timeout, terminating...")
                 process.terminate()
@@ -1828,7 +1838,7 @@ class AgentExecutor:
                     returncode = process.wait()
 
                 # Read stderr after termination
-                stderr_output = process.stderr.read() if process.stderr else ""
+                stderr_output += process.stderr.read() if process.stderr else ""
 
                 # Same reasoning as the idle-timeout branch above: only treat
                 # this as "finished but slow to exit" when we have a way to

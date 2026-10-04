@@ -95,13 +95,16 @@ class PlaybookLoader:
         global_root: Optional[Path] = None,
         builtin_root: Optional[Path] = None,
         resolve_presentation: bool = True,
+        read_only: bool = False,
     ) -> None:
         self.resolve_presentation = resolve_presentation
         self.resolver = CatalogResolver(
             project_root=project_root,
             global_root=global_root,
             builtin_root=builtin_root,
+            read_only=read_only,
         )
+        self.read_only = read_only
         self.project_root = self.resolver.project_root
         self.global_root = self.resolver.global_root
         self.builtin_root = self.resolver.builtin_root
@@ -132,13 +135,14 @@ class PlaybookLoader:
         return entry.source, entry.path
 
     def load_model(self, name: str, *, strict: bool = False) -> LoadedPlaybook:
-        with global_catalog_lock(self.global_root):
+        with global_catalog_lock(self.global_root, read_only=self.read_only):
             source, path = self._resolve_path(name)
             skill_loader = SkillLoader(
                 project_root=self.project_root,
                 global_root=self.global_root,
                 builtin_root=self.builtin_root,
                 resolve_presentation=self.resolve_presentation,
+                read_only=self.read_only,
             )
             skill_loader.discover(strict=strict)
             return load_playbook_file(

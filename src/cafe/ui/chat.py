@@ -12,6 +12,7 @@ from cafe.agents.transport_types import TransportResult
 from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.playbook import resolve_playbook_skills
+from cafe.core.session import SessionManager
 from cafe.core.types import AgentCLI, AgentConfig, CliEntry, SessionData
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.loader import SkillLoader
@@ -115,6 +116,7 @@ def _load_latest_role_session(
     role: str,
     playbook: dict,
     phase_name: Optional[str] = None,
+    read_only: bool = False,
 ) -> Optional[SessionData]:
     """Load the most recently used phase session for a playbook role."""
     role_steps = _playbook_role_steps(playbook, role)
@@ -129,6 +131,8 @@ def _load_latest_role_session(
             raw = json.loads(session_file.read_text(encoding="utf-8"))
             session = SessionData(**raw)
         except (OSError, json.JSONDecodeError, ValueError):
+            if read_only:
+                raise ValueError(f"Unreadable read-only role session: {session_file}")
             continue
         if session.phase_name in role_steps:
             candidates.append(session)
@@ -159,9 +163,10 @@ def _resolve_configured_chat_session(
     return cli, model, None
 
 
-def _load_chat_execution_step(issue_dir: Path) -> str:
+def _load_chat_execution_step(issue_dir: Path, *, read_only: bool = False) -> str:
     """Resolve the agent step whose execution chain should launch paused chat."""
-    blackboard = BlackboardStore(issue_dir).load_or_create("spec")
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_read_only() if read_only else store.load_or_create("spec")
     current_step = blackboard.current_step
     if current_step != "user":
         return current_step
@@ -324,12 +329,23 @@ def _load_latest_role_iteration_cli(
     *,
     role: str,
     role_config: dict,
+    read_only: bool = False,
 ) -> Optional[tuple[str, Optional[str]]]:
     """Find the latest successful iteration for this role and reuse its CLI."""
     try:
-        _, _, playbook_id = _load_chat_workflow_context(issue_dir)
-        playbook = PlaybookLoader(project_root=Path.cwd()).load(playbook_id)
+        _, _, playbook_id = (
+            _load_chat_workflow_context(issue_dir, read_only=True)
+            if read_only
+            else _load_chat_workflow_context(issue_dir)
+        )
+        playbook = (
+            PlaybookLoader(project_root=Path.cwd(), read_only=True)
+            if read_only
+            else PlaybookLoader(project_root=Path.cwd())
+        ).load(playbook_id)
     except Exception:
+        if read_only:
+            raise
         return None
 
     steps = playbook.get("steps", {})
@@ -378,27 +394,43 @@ def _resolve_chat_cli(
     role: str,
     agent_name: str,
     role_config: dict,
+    read_only: bool = False,
 ) -> tuple[Optional[str], Optional[str]]:
     active = _load_active_chat_cli(issue_dir, agent_name=agent_name, role_config=role_config)
     if active:
         return active
 
-    latest = _load_latest_role_iteration_cli(issue_dir, role=role, role_config=role_config)
+    latest = _load_latest_role_iteration_cli(
+        issue_dir,
+        role=role,
+        role_config=role_config,
+        **({"read_only": True} if read_only else {}),
+    )
     if latest:
         return latest
 
     return _resolve_primary_chat_cli(role_config)
 
 
-def _load_chat_workflow_context(issue_dir: Path) -> tuple[str, list[str], str]:
-    blackboard = BlackboardStore(issue_dir).load_or_create("spec")
+def _load_chat_workflow_context(
+    issue_dir: Path, *, read_only: bool = False
+) -> tuple[str, list[str], str]:
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_read_only() if read_only else store.load_or_create("spec")
     playbook_id = getattr(blackboard, "playbook_id", "standard") or "standard"
     current_step = blackboard.current_step
 
     try:
-        playbook = PlaybookLoader(project_root=Path.cwd()).load(playbook_id)
+        loader = (
+            PlaybookLoader(project_root=Path.cwd(), read_only=True)
+            if read_only
+            else PlaybookLoader(project_root=Path.cwd())
+        )
+        playbook = loader.load(playbook_id)
         steps = list(playbook["steps"].keys())
     except Exception:
+        if read_only:
+            raise
         steps = ["spec", "plan", "develop", "review", "pr"]
 
     return current_step, steps, playbook_id
@@ -564,7 +596,7 @@ def _chat_usage_sink(issue_dir: Path, step_name: str, *, cli, requested_model, m
     return record
 
 
-def launch_chat_session(
+def _launch_chat_session(
     role: str,
     issue_name: str,
     *,
@@ -573,6 +605,7 @@ def launch_chat_session(
     extra_env: Optional[dict[str, str]] = None,
     initial_prompt: Optional[str] = None,
     prompt: Optional[str] = None,
+    read_only: bool = False,
 ) -> int:
     """Launch an inline chat session with the agent for the given role.
 
@@ -593,8 +626,16 @@ def launch_chat_session(
 
     playbook_id = "standard"
     try:
-        _current_step, _valid_steps, playbook_id = _load_chat_workflow_context(issue_dir)
-        chat_playbook = PlaybookLoader(project_root=Path.cwd()).load(playbook_id)
+        _current_step, _valid_steps, playbook_id = (
+            _load_chat_workflow_context(issue_dir, read_only=True)
+            if read_only
+            else _load_chat_workflow_context(issue_dir)
+        )
+        chat_playbook = (
+            PlaybookLoader(project_root=Path.cwd(), read_only=True)
+            if read_only
+            else PlaybookLoader(project_root=Path.cwd())
+        ).load(playbook_id)
         if phase_name is not None:
             _validate_chat_phase(chat_playbook, role, phase_name)
     except Exception as exc:
@@ -609,16 +650,21 @@ def launch_chat_session(
         role=role,
         playbook=chat_playbook,
         phase_name=phase_name,
+        read_only=read_only,
     )
     execution_step = (
         phase_name
         or (selected_session.phase_name if selected_session is not None else None)
-        or _load_chat_execution_step(issue_dir)
+        or (
+            _load_chat_execution_step(issue_dir, read_only=True)
+            if read_only
+            else _load_chat_execution_step(issue_dir)
+        )
     )
     phase_routing = phase_name is not None or selected_session is not None
 
     # Load configuration
-    config_manager = ConfigManager()
+    config_manager = ConfigManager(read_only=True) if read_only else ConfigManager()
     try:
         agent_config = _load_chat_role_config(
             config_manager,
@@ -635,7 +681,7 @@ def launch_chat_session(
 
     if agent_config is None:
         print(f"\n⚠️  No agent configured for role '{role}'. Skipping chat.\n")
-        return 0
+        return 1 if read_only else 0
 
     agent_name = agent_config.get("name")
     if phase_routing:
@@ -650,20 +696,25 @@ def launch_chat_session(
             role=role,
             agent_name=agent_name,
             role_config=agent_config,
+            **({"read_only": True} if read_only else {}),
         )
         selected_session_id = None
 
     if not agent_name or not agent_cli_str:
         print(f"\n⚠️  Invalid agent configuration for role '{role}'. Skipping chat.\n")
-        return 0
+        return 1 if read_only else 0
 
     # Set up agent manager and load existing session
-    agent_manager = AgentManager(issue_name=issue_name)
+    agent_manager = (
+        AgentManager(session_manager=SessionManager(read_only=True), issue_name=issue_name)
+        if read_only
+        else AgentManager(issue_name=issue_name)
+    )
     try:
         agent_cli = AgentCLI(agent_cli_str)
     except ValueError:
         print(f"\n⚠️  Unknown CLI tool '{agent_cli_str}'. Skipping chat.\n")
-        return 0
+        return 1 if read_only else 0
 
     agent_manager.register_agent(
         AgentConfig(
@@ -678,19 +729,24 @@ def launch_chat_session(
         executor = agent_manager.get_agent(agent_name)
     except Exception as e:
         print(f"\n⚠️  Failed to get agent '{agent_name}': {e}. Skipping chat.\n")
-        return 0
+        return 1 if read_only else 0
     if phase_routing:
         # Phase-routed chat must not inherit a generic session from another step.
         executor.config.session_id = selected_session_id
     transport = ConversationTransport(executor)
 
-    _current_step, _valid_steps, _playbook_id = _prepare_chat_handoff_state(issue_dir)
-    _prepare_chat_environment(
-        agent_cli=agent_cli,
-        playbook=chat_playbook,
-        role=role,
-        step_name=execution_step,
-    )
+    if read_only:
+        operation = "run_one_shot" if prompt is not None else "open_interactive_session"
+        executor._get_cli_strategy().require_read_only(operation)
+        _playbook_id = playbook_id
+    else:
+        _current_step, _valid_steps, _playbook_id = _prepare_chat_handoff_state(issue_dir)
+        _prepare_chat_environment(
+            agent_cli=agent_cli,
+            playbook=chat_playbook,
+            role=role,
+            step_name=execution_step,
+        )
     chat_env = {
         "CAFE_ISSUE_NAME": issue_name,
         "CAFE_ISSUE_DIR": str(issue_dir),
@@ -710,24 +766,36 @@ def launch_chat_session(
     if prompt is not None:
         executor.stream_output = True
         try:
-            usage_sink = _chat_usage_sink(
-                issue_dir, execution_step, cli=agent_cli_str,
-                requested_model=executor.config.model, mode="one_shot",
+            usage_sink = (
+                None
+                if read_only
+                else _chat_usage_sink(
+                    issue_dir,
+                    execution_step,
+                    cli=agent_cli_str,
+                    requested_model=executor.config.model,
+                    mode="one_shot",
+                )
             )
             responses = []
 
             def attempt():
                 try:
                     result = transport.run_one_shot(
-                        prompt, environment_overrides=chat_env, on_response=responses.append,
+                        prompt,
+                        environment_overrides=chat_env,
+                        on_response=responses.append,
+                        **({"read_only": True} if read_only else {}),
                     )
                 except (AgentExecutionError, OSError, ValueError) as error:
                     partial = getattr(error, "transport_result", None) or TransportResult(
                         failure_code=getattr(error, "error_type", None) or "execution_failed",
                     )
-                    usage_sink((partial,))
+                    if usage_sink is not None:
+                        usage_sink((partial,))
                     raise
-                usage_sink((result,))
+                if usage_sink is not None:
+                    usage_sink((result,))
                 return responses[-1]
 
             response = executor.with_session_recovery(attempt)
@@ -736,7 +804,7 @@ def launch_chat_session(
             print(f"\n⚠️  Chat CLI failed: {detail}\n")
             return 1
 
-        if response.session_id:
+        if response.session_id and not read_only:
             if phase_routing:
                 agent_manager.session_manager.save_session(
                     agent_name,
@@ -758,7 +826,8 @@ def launch_chat_session(
         )
         if not streamed_text and response.response:
             print(response.response)
-        _warn_if_chat_handoff_missing(issue_dir, _current_step, _valid_steps)
+        if not read_only:
+            _warn_if_chat_handoff_missing(issue_dir, _current_step, _valid_steps)
         return 0
 
     session_id: Optional[str] = executor.config.session_id
@@ -771,9 +840,16 @@ def launch_chat_session(
     # Execute interactive CLI (blocks until user exits)
     try:
         try:
-            usage_sink = _chat_usage_sink(
-                issue_dir, execution_step, cli=agent_cli_str,
-                requested_model=executor.config.model, mode="interactive",
+            usage_sink = (
+                None
+                if read_only
+                else _chat_usage_sink(
+                    issue_dir,
+                    execution_step,
+                    cli=agent_cli_str,
+                    requested_model=executor.config.model,
+                    mode="interactive",
+                )
             )
         except (OSError, ValueError) as error:
             # Missing telemetry must remain visible without changing the user's
@@ -781,7 +857,10 @@ def launch_chat_session(
             print(f"\n⚠️  Chat accounting incomplete: {error}\n")
             usage_sink = None
         result = transport.open_interactive_session(
-            initial_prompt, environment_overrides=chat_env, on_accounting=usage_sink,
+            initial_prompt,
+            environment_overrides=chat_env,
+            on_accounting=usage_sink,
+            **({"read_only": True} if read_only else {}),
         )
     except AgentExecutionError as error:
         if error.error_type != "cli_not_found":
@@ -794,7 +873,7 @@ def launch_chat_session(
         print(f"\n⚠️  Failed to execute CLI: {e}\n")
         return 1
 
-    if agent_cli == AgentCLI.CODEX:
+    if agent_cli == AgentCLI.CODEX and not read_only:
         resolved_session_id = session_id or _extract_latest_codex_session_id(codex_history_start_ts)
         if resolved_session_id:
             executor.config.session_id = resolved_session_id
@@ -818,6 +897,41 @@ def launch_chat_session(
         return _handle_chat_launch_failure(agent_cli, subprocess.CompletedProcess(
             args=[], returncode=result.returncode, stderr=result.error_excerpt))
 
-    _warn_if_chat_handoff_missing(issue_dir, _current_step, _valid_steps)
+    if not read_only:
+        _warn_if_chat_handoff_missing(issue_dir, _current_step, _valid_steps)
 
     return result.returncode
+
+
+def launch_chat_session(
+    role: str,
+    issue_name: str,
+    *,
+    phase_name: Optional[str] = None,
+    chat_mode: Optional[str] = None,
+    extra_env: Optional[dict[str, str]] = None,
+    initial_prompt: Optional[str] = None,
+    prompt: Optional[str] = None,
+    read_only: bool = False,
+) -> int:
+    """Launch chat with optional native model-tool limits and no CAFE writes.
+
+    Native UI/integrations and provider persistence remain outside this limit.
+    Read-only context failures are reported without initializing or repairing it.
+    """
+    try:
+        return _launch_chat_session(
+            role,
+            issue_name,
+            phase_name=phase_name,
+            chat_mode=chat_mode,
+            extra_env=extra_env,
+            initial_prompt=initial_prompt,
+            prompt=prompt,
+            read_only=read_only,
+        )
+    except (OSError, ValueError) as exc:
+        if not read_only:
+            raise
+        print(f"\n⚠️  Read-only chat cannot start: {exc}\n")
+        return 1
