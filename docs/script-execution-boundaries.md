@@ -18,7 +18,7 @@ This inventory is executable documentation: the unit contract discovers every `s
 
 | Launcher identity | Classification |
 | --- | --- |
-| `src/cafe/agents/executor.py::_execute_with_streaming` | Internal agent CLI transport |
+| `src/cafe/agents/executor.py::_execute_streaming_process` | Internal agent CLI transport |
 | `src/cafe/agents/manager.py::_create_claude_session` | Internal agent CLI transport |
 | `src/cafe/core/capabilities.py::_current_repo_slug` | Internal fixed Git query |
 | `src/cafe/core/capabilities.py::_git_ref_exists` | Internal fixed Git query |
