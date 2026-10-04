@@ -93,8 +93,11 @@ for owner in sys.argv[2:]:
     catalogs = load_catalogs(root)
     assert set(catalogs["en-US"]) == set(catalogs["zh-TW"])
     for locale in ("en-US", "zh-TW"):
-        for key in catalogs[locale]:
-            assert render_text(key, locale=locale, catalog_root=root) == catalogs[locale][key]
+        from string import Formatter
+        for key, template in catalogs[locale].items():
+            parameters = {field: "fixture-" + field
+                          for _, field, _, _ in Formatter().parse(template) if field}
+            assert render_text(key, locale=locale, catalog_root=root, **parameters) == template.format(**parameters)
         for policy in declaration.human_tasks:
             snapshot = policy.for_locale(locale).model_dump(mode="json")
             assert isinstance(snapshot["prompt"], str)
