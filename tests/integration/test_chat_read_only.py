@@ -6,6 +6,7 @@ import sys
 
 import pytest
 
+from cafe.constraints.rendering import END, START
 from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.blackboard import BlackboardStore
 from cafe.playbooks.loader import PlaybookLoader
@@ -254,6 +255,14 @@ def assert_native_options(command, provider):
         assert "--allow-all-tools" not in command
 
 
+def assert_initial_context_admission_refused(result, launches):
+    assert result.exit_code != 0
+    assert not launches
+    diagnostic = result.output.lower()
+    assert "context" in diagnostic and "one-shot" in diagnostic
+    assert 0 < len(result.output.encode("utf-8")) <= 8192
+
+
 @pytest.mark.integration
 @pytest.mark.parametrize("provider", ["codex", "claude", "gemini", "cursor-agent", "copilot"])
 @pytest.mark.parametrize("resumed", [False, True])
@@ -271,18 +280,25 @@ def test_i1_i2_i5_diagnose_without_cafe_state_changes(
     if mode:
         args += [mode, "inspect existing workflow"]
     result = CliRunner().invoke(cli.app, args)
-    assert result.exit_code == 0, result.output
     launches, _ = native_io
-    assert len(launches) == 1
-    command, kwargs = launches[0]
-    assert_native_options(command, provider)
-    assert ("stored-session" in command) == resumed
-    assert kwargs["env"]["CAFE_CHAT_CURRENT_STEP"] == "inspect"
-    assert kwargs["env"]["CAFE_ISSUE_DIR"] == str(issue)
-    if mode:
-        assert "diagnostic response" in result.output
+    if mode is None and provider in {"gemini", "cursor-agent", "copilot"}:
+        assert_initial_context_admission_refused(result, launches)
     else:
-        assert "stdin" not in kwargs and "stdout" not in kwargs and "stderr" not in kwargs
+        assert result.exit_code == 0, result.output
+        assert len(launches) == 1
+        command, kwargs = launches[0]
+        assert_native_options(command, provider)
+        assert ("stored-session" in command) == resumed
+        assert kwargs["env"]["CAFE_CHAT_CURRENT_STEP"] == "inspect"
+        assert kwargs["env"]["CAFE_ISSUE_DIR"] == str(issue)
+        guidance = "\n".join(command)
+        assert guidance.count(START) == guidance.count(END) == 1
+        assert "human-task.user-authority" in guidance
+        if mode:
+            assert "diagnostic response" in result.output
+        else:
+            assert "agent.stdout-idle" not in guidance
+            assert "stdin" not in kwargs and "stdout" not in kwargs and "stderr" not in kwargs
     assert inventory(repo.parent) == before
 
 
@@ -300,8 +316,11 @@ def test_i6_native_error_is_visible_without_writable_fallback(
     args = ["chat", "analyst", "--read-only"] + ([mode, "inspect"] if mode else [])
     result = CliRunner().invoke(cli.app, args)
     assert result.exit_code != 0
-    assert len(native_io[0]) == 1
-    assert_native_options(native_io[0][0][0], provider)
+    if mode is None and provider in {"gemini", "cursor-agent", "copilot"}:
+        assert_initial_context_admission_refused(result, native_io[0])
+    else:
+        assert len(native_io[0]) == 1
+        assert_native_options(native_io[0][0][0], provider)
     assert inventory(repo.parent) == before
 
 
@@ -792,8 +811,12 @@ def test_i4_gemini_ignore_is_not_prepared_in_read_only_chat(
     if mode:
         args += [mode, "diagnose"]
     result = CliRunner().invoke(cli.app, args)
-    assert result.exit_code == 0, result.output
-    assert_native_options(native_io[0][0][0], "gemini")
+    if mode is None:
+        assert_initial_context_admission_refused(result, native_io[0])
+    else:
+        assert result.exit_code == 0, result.output
+        assert len(native_io[0]) == 1
+        assert_native_options(native_io[0][0][0], "gemini")
     assert inventory(repo.parent) == before
 
 
