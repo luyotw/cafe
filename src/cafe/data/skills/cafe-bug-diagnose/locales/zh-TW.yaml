@@ -1,0 +1,5 @@
+human_task.cafe_bug_diagnose.clarification_feedback.prompt: 請提供缺少的缺陷決策或重現資訊，以繼續同一個有限範圍工作。
+human_task.cafe_bug_diagnose.correction_guidance: 請依指定格式完整回覆，並維持已確認的缺陷範圍與授權界線。
+human_task.cafe_bug_diagnose.iteration_limit.prompt: 已達修正次數上限。請檢視未解決證據，並授權以既有設定調整上限後再恢復。
+human_task.cafe_bug_diagnose.iteration_limit.resume: 授權調整後恢復
+human_task.cafe_bug_diagnose.permission_answers.prompt: 請提供此未完成缺陷工作的權限決策或存取資訊。

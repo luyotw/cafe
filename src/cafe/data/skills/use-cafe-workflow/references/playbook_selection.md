@@ -82,6 +82,38 @@ Separate spec ownership needs evidence of an independent owner or artifact
 boundary. Unresolved requirements or architecture alone do not require separate
 spec and plan phases when a joint phase with a planning partner covers them.
 
+## Focused defect selection
+
+| Playbook | Appropriate boundary |
+| --- | --- |
+| `bug` | Confirmed bounded defect; verify diagnosis and failing regression before minimal repair, independent review and PR. |
+| `hotfix` | Urgent production correction with already understood repair, rollback and regression boundaries. |
+| `standard` | Requirements and implementation sequencing need dedicated specification and planning. |
+| `tdd` | Planned test-driven delivery extends beyond the focused defect contract. |
+
+Example explicit selection: “Use CAFE with the bug playbook for issue #123:
+twice(3) returns 5; the confirmed result is 6.” Retain that direct choice through
+existing issue/manual preparation without changing the default or another
+confirmed issue choice.
+
+The report still needs verification. Diagnosis retains triggering conditions,
+expected/observed behavior, cause/uncertainty, unfixed revision, runnable test
+source/patch, actual exit status and defect-specific RED. A new test may run in
+an isolated unfixed checkout while the active workspace remains clean. Repair
+installs that exact test before production changes, records unchanged-test GREEN
+and focused checks, and commits normally. Independent review precedes PR for
+every corrective batch; local PR review, publication confirmation and trusted
+capability policy remain intact.
+
+Inconclusive reproduction, unrelated/setup failure, disputed behavior or broader
+investigation require the existing human clarification surface. Speculative
+cleanup, redesign, incident management or separate-QA acceptance are outside
+this path. Each diagnosis/repair/review correction cycle allows three unfinished
+attempts, then an iteration-limit HumanTask; resume requires human-authorized
+supported configuration and response. Apply the shared three-round disagreement
+rule separately. Interruptions retain durable evidence, reused only for matching
+revision/test identities, without silently completing partial work.
+
 ## Independent QA decision
 
 Select a QA-capable candidate when any of these apply:
