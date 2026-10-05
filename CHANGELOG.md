@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.7.5] - 2026-10-05
+
+### Fixed
+
+- Recover legacy dirty-workspace preparation failures before agent invocation
+  through first-attempt, workflow- and task-bound audit evidence.
+- Exclude only CAFE-managed native skill paths and their manifest from Git
+  status, replacing CAFE's marked legacy whole-directory exclusions while
+  preserving user ignore rules and visibility of user-owned skills.
+
+### Added
+
+- Add regression coverage for legacy workspace recovery, managed skill
+  exclusions in repositories and linked worktrees, and recovery through exact
+  handoff correction and publication without repeating external effects.
+
+See [the v0.7.5 release notes](docs/releases/v0.7.5.md) for recovery behavior,
+native skill exclusions, and upgrade guidance.
+
 ## [0.7.4] - 2026-10-05
 
 ### Changed
