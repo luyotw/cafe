@@ -1,0 +1,196 @@
+CASE pr-fresh-full
+  observe: git init -q
+  observe: git config user.name Measurement
+  observe: git config user.email measurement@example.invalid
+  observe: git add .
+  observe: env GIT_AUTHOR_DATE=2026-10-06T00:00:00+08:00 GIT_COMMITTER_DATE=2026-10-06T00:00:00+08:00 git
+  observe: git checkout -qb feature
+  observe: git init --bare -q
+  observe: git remote add origin
+  observe: git rev-parse HEAD
+  observe: git status --porcelain
+  observe: rg --files src tests
+  observe: claude --version
+  observe primary source: https://code.claude.com/docs/en/model-config
+  observe: curl --fail --silent --show-error
+  observe primary source: https://code.claude.com/docs/en/sub-agents
+  observe: curl --fail --silent --show-error
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/cafe update check --json
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/cafe catalog check --json
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/python /home/luyotw/cafe/.cafe/worktrees/issue598/src/cafe/data/skills/use-cafe-workflow/scripts/prepare_kickoff.py discover --request-file
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/python /home/luyotw/cafe/.cafe/worktrees/issue598/src/cafe/data/skills/use-cafe-workflow/scripts/prepare_kickoff.py assemble --request-file
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/python /home/luyotw/cafe/.cafe/worktrees/issue598/src/cafe/data/skills/use-cafe-workflow/scripts/prepare_kickoff.py render --request-file
+  observe: git rev-parse HEAD
+  observe: git status --porcelain
+  terminal: rendered children exit 0; 5.633 seconds; 146 tools
+CASE pr-fresh-compact
+  observe: git init -q
+  observe: git config user.name Measurement
+  observe: git config user.email measurement@example.invalid
+  observe: git add .
+  observe: env GIT_AUTHOR_DATE=2026-10-06T00:00:00+08:00 GIT_COMMITTER_DATE=2026-10-06T00:00:00+08:00 git
+  observe: git checkout -qb feature
+  observe: git init --bare -q
+  observe: git remote add origin
+  observe: git rev-parse HEAD
+  observe: git status --porcelain
+  observe: rg --files src tests
+  observe: claude --version
+  observe primary source: https://code.claude.com/docs/en/model-config
+  observe: curl --fail --silent --show-error
+  observe primary source: https://code.claude.com/docs/en/sub-agents
+  observe: curl --fail --silent --show-error
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/python /home/luyotw/cafe/.cafe/worktrees/issue598/src/cafe/data/skills/use-cafe-workflow/scripts/prepare_kickoff.py discover --request-file
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/python /home/luyotw/cafe/.cafe/worktrees/issue598/src/cafe/data/skills/use-cafe-workflow/scripts/prepare_kickoff.py assemble --request-file
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/python /home/luyotw/cafe/.cafe/worktrees/issue598/src/cafe/data/skills/use-cafe-workflow/scripts/prepare_kickoff.py render --request-file
+  observe: git rev-parse HEAD
+  observe: git status --porcelain
+  terminal: rendered children exit 0; 1.28 seconds; 53 tools
+CASE pr-reused-full
+  observe: git init -q
+  observe: git config user.name Measurement
+  observe: git config user.email measurement@example.invalid
+  observe: git add .
+  observe: env GIT_AUTHOR_DATE=2026-10-06T00:00:00+08:00 GIT_COMMITTER_DATE=2026-10-06T00:00:00+08:00 git
+  observe: git checkout -qb feature
+  observe: git init --bare -q
+  observe: git remote add origin
+  observe: claude --version
+  observe primary source: https://code.claude.com/docs/en/model-config
+  observe: curl --fail --silent --show-error
+  observe primary source: https://code.claude.com/docs/en/sub-agents
+  observe: curl --fail --silent --show-error
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/cafe update check --json
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/cafe catalog check --json
+  observe: git rev-parse HEAD
+  observe: git status --porcelain
+  observe: rg --files src tests
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/python /home/luyotw/cafe/.cafe/worktrees/issue598/src/cafe/data/skills/use-cafe-workflow/scripts/prepare_kickoff.py discover --request-file
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/python /home/luyotw/cafe/.cafe/worktrees/issue598/src/cafe/data/skills/use-cafe-workflow/scripts/prepare_kickoff.py assemble --request-file
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/python /home/luyotw/cafe/.cafe/worktrees/issue598/src/cafe/data/skills/use-cafe-workflow/scripts/prepare_kickoff.py render --request-file
+  observe: git rev-parse HEAD
+  observe: git status --porcelain
+  terminal: rendered children exit 0; 2.795 seconds; 139 tools
+CASE pr-reused-compact
+  observe: git init -q
+  observe: git config user.name Measurement
+  observe: git config user.email measurement@example.invalid
+  observe: git add .
+  observe: env GIT_AUTHOR_DATE=2026-10-06T00:00:00+08:00 GIT_COMMITTER_DATE=2026-10-06T00:00:00+08:00 git
+  observe: git checkout -qb feature
+  observe: git init --bare -q
+  observe: git remote add origin
+  observe: claude --version
+  observe primary source: https://code.claude.com/docs/en/model-config
+  observe: curl --fail --silent --show-error
+  observe primary source: https://code.claude.com/docs/en/sub-agents
+  observe: curl --fail --silent --show-error
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/cafe update check --json
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/cafe catalog check --json
+  observe: git rev-parse HEAD
+  observe: git status --porcelain
+  observe: rg --files src tests
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/python /home/luyotw/cafe/.cafe/worktrees/issue598/src/cafe/data/skills/use-cafe-workflow/scripts/prepare_kickoff.py discover --request-file
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/python /home/luyotw/cafe/.cafe/worktrees/issue598/src/cafe/data/skills/use-cafe-workflow/scripts/prepare_kickoff.py assemble --request-file
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/python /home/luyotw/cafe/.cafe/worktrees/issue598/src/cafe/data/skills/use-cafe-workflow/scripts/prepare_kickoff.py render --request-file
+  observe: git rev-parse HEAD
+  observe: git status --porcelain
+  terminal: rendered children exit 0; 1.1 seconds; 50 tools
+CASE direct-fresh-full
+  observe: git init -q
+  observe: git config user.name Measurement
+  observe: git config user.email measurement@example.invalid
+  observe: git add .
+  observe: env GIT_AUTHOR_DATE=2026-10-06T00:00:00+08:00 GIT_COMMITTER_DATE=2026-10-06T00:00:00+08:00 git
+  observe: git checkout -qb feature
+  observe: git init --bare -q
+  observe: git remote add origin
+  observe: git rev-parse HEAD
+  observe: git status --porcelain
+  observe: rg --files src tests
+  observe: claude --version
+  observe primary source: https://code.claude.com/docs/en/model-config
+  observe: curl --fail --silent --show-error
+  observe primary source: https://code.claude.com/docs/en/sub-agents
+  observe: curl --fail --silent --show-error
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/cafe update check --json
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/cafe catalog check --json
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/python /home/luyotw/cafe/.cafe/worktrees/issue598/src/cafe/data/skills/use-cafe-workflow/scripts/prepare_kickoff.py discover --request-file
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/python /home/luyotw/cafe/.cafe/worktrees/issue598/src/cafe/data/skills/use-cafe-workflow/scripts/prepare_kickoff.py assemble --request-file
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/python /home/luyotw/cafe/.cafe/worktrees/issue598/src/cafe/data/skills/use-cafe-workflow/scripts/prepare_kickoff.py render --request-file
+  observe: git rev-parse HEAD
+  observe: git status --porcelain
+  terminal: rendered children exit 0; 4.104 seconds; 146 tools
+CASE direct-fresh-compact
+  observe: git init -q
+  observe: git config user.name Measurement
+  observe: git config user.email measurement@example.invalid
+  observe: git add .
+  observe: env GIT_AUTHOR_DATE=2026-10-06T00:00:00+08:00 GIT_COMMITTER_DATE=2026-10-06T00:00:00+08:00 git
+  observe: git checkout -qb feature
+  observe: git init --bare -q
+  observe: git remote add origin
+  observe: git rev-parse HEAD
+  observe: git status --porcelain
+  observe: rg --files src tests
+  observe: claude --version
+  observe primary source: https://code.claude.com/docs/en/model-config
+  observe: curl --fail --silent --show-error
+  observe primary source: https://code.claude.com/docs/en/sub-agents
+  observe: curl --fail --silent --show-error
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/python /home/luyotw/cafe/.cafe/worktrees/issue598/src/cafe/data/skills/use-cafe-workflow/scripts/prepare_kickoff.py discover --request-file
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/python /home/luyotw/cafe/.cafe/worktrees/issue598/src/cafe/data/skills/use-cafe-workflow/scripts/prepare_kickoff.py assemble --request-file
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/python /home/luyotw/cafe/.cafe/worktrees/issue598/src/cafe/data/skills/use-cafe-workflow/scripts/prepare_kickoff.py render --request-file
+  observe: git rev-parse HEAD
+  observe: git status --porcelain
+  terminal: rendered children exit 0; 1.296 seconds; 53 tools
+CASE direct-reused-full
+  observe: git init -q
+  observe: git config user.name Measurement
+  observe: git config user.email measurement@example.invalid
+  observe: git add .
+  observe: env GIT_AUTHOR_DATE=2026-10-06T00:00:00+08:00 GIT_COMMITTER_DATE=2026-10-06T00:00:00+08:00 git
+  observe: git checkout -qb feature
+  observe: git init --bare -q
+  observe: git remote add origin
+  observe: claude --version
+  observe primary source: https://code.claude.com/docs/en/model-config
+  observe: curl --fail --silent --show-error
+  observe primary source: https://code.claude.com/docs/en/sub-agents
+  observe: curl --fail --silent --show-error
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/cafe update check --json
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/cafe catalog check --json
+  observe: git rev-parse HEAD
+  observe: git status --porcelain
+  observe: rg --files src tests
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/python /home/luyotw/cafe/.cafe/worktrees/issue598/src/cafe/data/skills/use-cafe-workflow/scripts/prepare_kickoff.py discover --request-file
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/python /home/luyotw/cafe/.cafe/worktrees/issue598/src/cafe/data/skills/use-cafe-workflow/scripts/prepare_kickoff.py assemble --request-file
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/python /home/luyotw/cafe/.cafe/worktrees/issue598/src/cafe/data/skills/use-cafe-workflow/scripts/prepare_kickoff.py render --request-file
+  observe: git rev-parse HEAD
+  observe: git status --porcelain
+  terminal: rendered children exit 0; 2.701 seconds; 139 tools
+CASE direct-reused-compact
+  observe: git init -q
+  observe: git config user.name Measurement
+  observe: git config user.email measurement@example.invalid
+  observe: git add .
+  observe: env GIT_AUTHOR_DATE=2026-10-06T00:00:00+08:00 GIT_COMMITTER_DATE=2026-10-06T00:00:00+08:00 git
+  observe: git checkout -qb feature
+  observe: git init --bare -q
+  observe: git remote add origin
+  observe: claude --version
+  observe primary source: https://code.claude.com/docs/en/model-config
+  observe: curl --fail --silent --show-error
+  observe primary source: https://code.claude.com/docs/en/sub-agents
+  observe: curl --fail --silent --show-error
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/cafe update check --json
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/cafe catalog check --json
+  observe: git rev-parse HEAD
+  observe: git status --porcelain
+  observe: rg --files src tests
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/python /home/luyotw/cafe/.cafe/worktrees/issue598/src/cafe/data/skills/use-cafe-workflow/scripts/prepare_kickoff.py discover --request-file
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/python /home/luyotw/cafe/.cafe/worktrees/issue598/src/cafe/data/skills/use-cafe-workflow/scripts/prepare_kickoff.py assemble --request-file
+  observe: /home/luyotw/cafe/.cafe/worktrees/issue598/.venv/bin/python /home/luyotw/cafe/.cafe/worktrees/issue598/src/cafe/data/skills/use-cafe-workflow/scripts/prepare_kickoff.py render --request-file
+  observe: git rev-parse HEAD
+  observe: git status --porcelain
+  terminal: rendered children exit 0; 1.144 seconds; 50 tools
