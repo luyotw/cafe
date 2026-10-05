@@ -177,7 +177,7 @@ class Entry(StrictModel):
 
 
 class Registry(StrictModel):
-    schema_version: Literal[1]
+    schema_version: Annotated[int, Field(strict=True, ge=1, le=1)]
     entries: list[Entry] = Field(min_length=1)
 
     @model_validator(mode="after")

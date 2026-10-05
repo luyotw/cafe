@@ -315,3 +315,12 @@ and route support through existing HumanTask/capability/worker controls. Never
 execute the request or advance the workflow solely because this declaration
 exists. Progress visibility is separate from exit status and completion proof.
 Record the IDs in interruption/recovery communication.
+
+Runtime constraints evidence is version 1 in the optional
+`provenance.runtime_constraints` field of Manager schema 8. It is refresh evidence,
+not a user-confirmed policy field or permission. Old schema-8 contracts remain
+readable, but absence of this evidence yields `unknown` freshness and cannot
+establish eligibility for reuse. Use existing preflight/reconfirmation recovery;
+do not fill a missing historical digest with today's value and call it unchanged.
+Metadata-only registry edits preserve semantic identity. Applicable boundary,
+action, authority, scope or external-validity changes invalidate it.

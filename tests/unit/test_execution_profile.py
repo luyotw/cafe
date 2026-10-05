@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from cafe.skills.execution_profile import (
     resolve_execution_profile,
 )
@@ -129,3 +131,13 @@ def test_custom_workload_refinement_is_composed_not_inferred_from_step_name(tmp_
     profile = resolve_execution_profile(SkillLoader(project_root=tmp_path), "bespoke", step_name="arbitrary")
     assert profile.workloads == ("short-docs",)
     assert profile.capabilities == ("technical-writing",)
+
+
+@pytest.mark.parametrize("tags", [("Build",), ("with space",), ("short-docs", "short-docs")])
+def test_declared_constraint_tags_are_validated_before_resolution(tags):
+    """U1/U2: declaration validation rejects malformed or duplicate refinements."""
+    from pydantic import ValidationError
+
+    from cafe.skills.contracts import ExecutionProfile
+    with pytest.raises(ValidationError):
+        ExecutionProfile(requested_workloads=tags)

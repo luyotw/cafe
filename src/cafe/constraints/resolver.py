@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import sys
 from datetime import datetime, timezone
+
 from pydantic import Field
 
 from .models import Boundary, Context, Entry, Registry, Scope, StrictModel
 from .registry import load_registry
 
-PROVIDERS = {"codex": "openai", "claude": "anthropic", "gemini": "google", "copilot": "github", "cursor-agent": "cursor"}
+PROVIDERS = {
+    "codex": "openai",
+    "claude": "anthropic",
+    "gemini": "google",
+    "copilot": "github",
+    "cursor-agent": "cursor",
+}
 
 
 class EffectiveEntry(StrictModel):
@@ -87,7 +94,8 @@ def resolve(
                 validity = "verified" if verified else "unverified"
                 if not verified:
                     diagnostics.append(
-                        f"{entry.id}: unverified external fact; reverify source or request assistance"
+                        f"{entry.id}: unverified external fact; "
+                        "reverify source or request assistance"
                     )
             selected.append(
                 EffectiveEntry(

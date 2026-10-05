@@ -32,13 +32,20 @@ def render_prompt(view: View) -> str:
         )
     lines.extend(
         [
-            "Record applicable IDs and chosen action in your execution plan; include IDs in interruption handoffs/recovery requests. "
-            "Verify progress is CAFE-observable, preserve child exit status, and collect separate completion evidence. "
-            "If bounded work or supported visible progress is unavailable, declare assistance before starting in the existing output/handoff:",
-            '```json\n{"kind":"constraint_assistance","constraint_ids":["<applicable ID>"],"workload":"<work>",'
-            '"reason":"<boundary>","requested_support":"<support>","completion_evidence":"<required proof>"}\n```',
-            "All fields must be non-empty; IDs must be unique. This declaration records intent, not approval or a capability request. "
-            "Use only existing authorized handoff routes. Inspect details with cafe constraints show <ID> --json.",
+            "Record applicable IDs and chosen action in your execution plan; "
+            "include IDs in interruption handoffs/recovery requests. "
+            "Verify progress is CAFE-observable, preserve child exit status, "
+            "and collect separate completion evidence. "
+            "If bounded work or supported visible progress is unavailable, declare assistance "
+            "before starting in the existing output/handoff:",
+            '```json\n{"kind":"constraint_assistance","constraint_ids":["<applicable ID>"],'
+            '"workload":"<work>",'
+            '"reason":"<boundary>","requested_support":"<support>",'
+            '"completion_evidence":"<required proof>"}\n```',
+            "All fields must be non-empty; IDs must be unique. This declaration records intent, "
+            "not approval or a capability request. "
+            "Use only existing authorized handoff routes. "
+            "Inspect details with cafe constraints show <ID> --json.",
             END,
         ]
     )
@@ -92,9 +99,12 @@ def render_docs(registry: Registry) -> str:
                     f'<a id="{e.id}"></a>',
                     f"### `{e.id}` — {e.title}",
                     "",
-                    f"Status: {e.status}; enforcement: {e.enforcement}; observed CAFE: {e.lifecycle.observed_version}.",
+                    f"Status: {e.status}; enforcement: {e.enforcement}; "
+                    f"observed CAFE: {e.lifecycle.observed_version}.",
                     "",
-                    f"Lifecycle: introduced={e.lifecycle.introduced or 'unknown'}, changed={e.lifecycle.changed or 'unknown'}, resolved={e.lifecycle.resolved or 'N/A'}.",
+                    f"Lifecycle: introduced={e.lifecycle.introduced or 'unknown'}, "
+                    f"changed={e.lifecycle.changed or 'unknown'}, "
+                    f"resolved={e.lifecycle.resolved or 'N/A'}.",
                     e.lifecycle.historical_evidence,
                     "",
                 ]
@@ -102,7 +112,8 @@ def render_docs(registry: Registry) -> str:
             for v in e.variants:
                 lines.extend(
                     [
-                        f"- Scope: `{v.scope.model_dump_json(exclude_defaults=True)}`. {describe(v.boundary)}",
+                        f"- Scope: `{v.scope.model_dump_json(exclude_defaults=True)}`. "
+                        f"{describe(v.boundary)}",
                         "",
                     ]
                 )

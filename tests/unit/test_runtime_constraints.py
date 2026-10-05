@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from cafe.constraints import Context, load_registry, resolve, render_prompt, material_digest
+from cafe.constraints import Context, load_registry, material_digest, render_prompt, resolve
 from cafe.constraints.registry import parse_registry
 from cafe.constraints.rendering import render_docs
 
@@ -157,3 +157,53 @@ def test_documentation_is_deterministic_and_contains_sources_actions_history():
     for e in registry.entries:
         assert e.id in docs and e.mitigation in docs and e.detection in docs
     assert "Policy" in docs and "Runtime" in docs and "Resolved" in docs
+
+
+@pytest.mark.parametrize("value", [True, False, 2, "1"])
+def test_registry_schema_version_is_strict(value):
+    data = seed()
+    data["schema_version"] = value
+    with pytest.raises(ValueError):
+        parse_registry(json.dumps(data))
+
+
+def test_all_supported_cli_contexts_and_worst_case_seed_fit():
+    from cafe.constraints import execution_context
+    from cafe.core.types import AgentCLI
+
+    for cli in AgentCLI:
+        context = execution_context(
+            cli,
+            capabilities=["execute", "structured-output"],
+            consumers=["callback", "authority", "single-chain"],
+        )
+        view = resolve(context)
+        assert len(render_prompt(view).encode()) <= 8192
+        assert values(view, "agent.stdout-idle")["idle"] == (600 if cli == AgentCLI.GEMINI else 300)
+
+
+def test_scope_dimensions_are_all_applied_without_step_identity():
+    data = seed()
+    entry = data["entries"][0]
+    entry["variants"] = [entry["variants"][0]]
+    entry["variants"][0]["scope"].update(
+        providers=["openai"],
+        surfaces=["chat"],
+        modes=["batch"],
+        workloads=["import"],
+        consumers=["opaque"],
+    )
+    registry = parse_registry(json.dumps(data))
+    context = Context(surface="chat", modes=["batch"], workloads=["import"], consumers=["opaque"])
+    assert values(resolve(context, registry=registry), "agent.stdout-idle")["idle"] == 300
+    for field, value in [
+        ("provider", "anthropic"),
+        ("surface", "phase"),
+        ("modes", []),
+        ("workloads", []),
+        ("consumers", []),
+    ]:
+        altered = context.model_copy(update={field: value})
+        assert "agent.stdout-idle" not in {
+            e.id for e in resolve(altered, registry=registry).entries
+        }

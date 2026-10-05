@@ -1,8 +1,8 @@
 """Package-owned resource loading; project data cannot override runtime truth."""
 
+import json
 from functools import lru_cache
 from importlib.resources import files
-import json
 
 from .models import Registry
 
@@ -30,4 +30,4 @@ def load_registry() -> Registry:
     # Read bytes on each access: live resource changes cannot retain stale facts.
     return _validated(
         files("cafe.data").joinpath("runtime_constraints.json").read_text(encoding="utf-8")
-    )
+    ).model_copy(deep=True)

@@ -1,10 +1,10 @@
 """Neutral canonical constraints API shared by runtime, chat and inspection."""
 
+from .fingerprint import material_digest
 from .models import Context
 from .registry import load_registry
-from .resolver import execution_context, resolve, numeric_limit
-from .fingerprint import material_digest
 from .rendering import render_prompt, replace_prompt_block
+from .resolver import execution_context, numeric_limit, resolve
 
 __all__ = [
     "Context",
