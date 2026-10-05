@@ -112,7 +112,7 @@ def pre_invocation_recovery_evidence(
     ):
         return None
 
-    # Older runtimes wrote the invocation marker after checklist preparation.
+    # Older runtimes wrote the invocation marker after workspace/checklist preparation.
     # Accept only the specific, workflow/task-bound audit evidence for that gap.
     if set(context) <= {"effective_inputs", "workflow_completion_trusted", "agent_invoked"}:
         audit = AuditEventStore(issue_dir)
@@ -132,13 +132,20 @@ def pre_invocation_recovery_evidence(
             and task["sequence"] > failure["sequence"]
             and failure["data"].get("reason") == "agent_error"
             and failure["data"].get("attempt") == 1
-            and re.fullmatch(
+        ):
+            detail = str(failure["data"].get("detail", ""))
+            if re.fullmatch(
                 rf"Step {re.escape(repr(step_name))}, skill '[^']+', "
                 r"workflow\.checklist\.[^\n]+: unresolved placeholders \[[^\n]+\]",
-                str(failure["data"].get("detail", "")),
-            )
-        ):
-            return {"kind": "checklist_preparation_failed", "event_id": failure["event_id"]}
+                detail,
+            ):
+                return {"kind": "checklist_preparation_failed", "event_id": failure["event_id"]}
+            if re.fullmatch(
+                r"workspace artifact '[^'\n]+' is stale or contradictory: "
+                r"workspace worktree is dirty; refresh it or resolve the conflict before retrying",
+                detail,
+            ):
+                return {"kind": "workspace_preparation_failed", "event_id": failure["event_id"]}
 
     if context.get("agent_invoked") is False:
         return {"kind": "agent_not_invoked"}
