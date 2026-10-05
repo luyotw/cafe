@@ -5,6 +5,7 @@ import re
 import secrets
 from collections import deque
 from datetime import datetime, timezone
+from hashlib import sha256
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Lock, Thread
@@ -29,6 +30,7 @@ class CodexStreamActivity:
         self._latest_timestamp = 0.0
         self._latest_kinds = set()
         self._accepted = 0
+        self._metric_points = {}
         self._rejected_requests = 0
         self._max_request_bytes = 0
         self._path = f"/{secrets.token_hex(24)}/v1/logs"
@@ -104,7 +106,10 @@ class CodexStreamActivity:
                 override = argument[2:].removeprefix("=")
             if override:
                 key = override.split("=", 1)[0].strip()
-                if key == "otel.exporter" or key.startswith("otel.exporter."):
+                if any(
+                    key == name or key.startswith(name + ".")
+                    for name in ("otel.exporter", "otel.metrics_exporter")
+                ):
                     raise ValueError(
                         "Live Codex stream capture cannot replace an existing telemetry exporter."
                     )
@@ -116,15 +121,23 @@ class CodexStreamActivity:
             if profile:
                 config_files.append(home / f"{profile}.config.toml")
             exporter = "none"
+            metrics_exporter = "none"
             for config_file in config_files:
                 if config_file.exists():
                     config = tomllib.loads(config_file.read_text(encoding="utf-8"))
                     exporter = config.get("otel", {}).get("exporter", exporter)
-            if exporter != "none":
+                    metrics_exporter = config.get("otel", {}).get(
+                        "metrics_exporter", metrics_exporter
+                    )
+            if exporter != "none" or metrics_exporter != "none":
                 raise ValueError(
                     "Live Codex stream capture cannot replace an existing telemetry exporter."
                 )
         endpoint = f"http://127.0.0.1:{self._server.server_port}{self._path}"
+        # WebSocket events are native counters, not log events. The SDK's
+        # default 60-second collection interval is unsuitable for liveness.
+        # This is the isolated child environment, never the parent's settings.
+        environment["OTEL_METRIC_EXPORT_INTERVAL"] = "1000"
         # exec owns config overrides: global flags before exec are ignored by
         # exec --ignore-user-config. Append to the executed subcommand instead.
         return [
@@ -133,6 +146,10 @@ class CodexStreamActivity:
             "otel.exporter={otlp-http={endpoint=" + json.dumps(endpoint) + ',protocol="json"}}',
             "-c",
             "otel.log_user_prompt=false",
+            "-c",
+            "otel.metrics_exporter={otlp-http={endpoint="
+            + json.dumps(endpoint)
+            + ',protocol="json"}}',
         ]
 
     @staticmethod
@@ -153,13 +170,96 @@ class CodexStreamActivity:
         }
 
     def receive(self, payload):
-        """Discard every field except stream kind, conversation ID and event time."""
+        """Retain only bounded stream kinds, times and counter fingerprints."""
         if not isinstance(payload, dict):
             return
 
         def entries(container, key, limit):
             value = container.get(key, [])
             return value[:limit] if isinstance(value, list) else []
+
+        # Native WebSocket telemetry has no conversation label. Its private
+        # invocation-only receiver binds these counters to the stdout-verified
+        # child session; unrelated metrics and unchanged/replayed counters
+        # cannot refresh the watchdog.
+        for resource in entries(payload, "resourceMetrics", 128):
+            if not isinstance(resource, dict):
+                continue
+            for scope in entries(resource, "scopeMetrics", 128):
+                if not isinstance(scope, dict):
+                    continue
+                for metric in entries(scope, "metrics", 1024):
+                    if (
+                        not isinstance(metric, dict)
+                        or metric.get("name") != "codex.websocket.event"
+                    ):
+                        continue
+                    total = metric.get("sum")
+                    if not isinstance(total, dict) or total.get("isMonotonic") is not True:
+                        continue
+                    temporality = total.get("aggregationTemporality")
+                    if temporality in (1, "AGGREGATION_TEMPORALITY_DELTA"):
+                        delta = True
+                    elif temporality in (2, "AGGREGATION_TEMPORALITY_CUMULATIVE"):
+                        delta = False
+                    else:
+                        continue
+                    for point in entries(total, "dataPoints", 1024):
+                        if not isinstance(point, dict):
+                            continue
+                        attributes = self._attributes(point)
+                        kind = attributes.get("kind")
+                        if (
+                            attributes.get("success") != "true"
+                            or not isinstance(kind, str)
+                            or not re.fullmatch(r"response\.[a-zA-Z._]{1,96}", kind)
+                        ):
+                            continue
+                        try:
+                            values = [
+                                point[name]
+                                for name in ("timeUnixNano", "startTimeUnixNano", "asInt")
+                            ]
+                            if any(
+                                isinstance(value, bool)
+                                or not isinstance(value, (str, int))
+                                or not re.fullmatch(r"[0-9]{1,20}", str(value))
+                                for value in values
+                            ):
+                                continue
+                            stamp, start, count = map(int, values)
+                        except (KeyError, TypeError, ValueError, OverflowError):
+                            continue
+                        if not 0 < start <= stamp or not 0 < count <= 2**63 - 1:
+                            continue
+                        seconds = stamp / 1_000_000_000
+                        if not -5 <= wall_time() - seconds <= 10:
+                            continue
+                        # Keep counters from different model/scope series apart
+                        # without retaining their attribute values or content.
+                        identity = json.dumps(attributes, sort_keys=True)
+                        key = (kind, delta, sha256(identity.encode()).digest())
+                        with self._lock:
+                            previous = self._metric_points.get(key)
+                            if previous is not None:
+                                old_stamp, old_start, old_count = previous
+                                if stamp <= old_stamp:
+                                    continue
+                                if delta:
+                                    # Each positive delta must cover a new,
+                                    # non-overlapping collection interval.
+                                    if start < old_stamp:
+                                        continue
+                                elif start < old_start or (
+                                    start == old_start and count <= old_count
+                                ):
+                                    # Fresh timestamps with unchanged cumulative
+                                    # counts are not fresh provider activity.
+                                    continue
+                            if previous is None and len(self._metric_points) >= 128:
+                                continue
+                            self._metric_points[key] = (stamp, start, count)
+                            self._pending.append((None, seconds, "codex.websocket_metric", kind))
 
         for resource in entries(payload, "resourceLogs", 128):
             if not isinstance(resource, dict):
@@ -218,6 +318,8 @@ class CodexStreamActivity:
                 session, seconds, source, kind = self._pending.popleft()
                 if not -5 <= wall_time() - seconds <= 10:
                     continue
+                if source == "codex.websocket_metric" and session is None:
+                    session = self._session
                 if session != self._session or seconds < self._latest_timestamp:
                     continue
                 if seconds > self._latest_timestamp:
@@ -251,4 +353,9 @@ class CodexStreamActivity:
                 "stream_activity_events": self._accepted,
                 "stream_activity_rejected_requests": self._rejected_requests,
                 "stream_activity_max_request_bytes": self._max_request_bytes,
+                "stream_activity_last_event_at": (
+                    datetime.fromtimestamp(self._latest_timestamp, timezone.utc).isoformat()
+                    if self._accepted
+                    else None
+                ),
             }

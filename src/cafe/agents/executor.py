@@ -1209,8 +1209,15 @@ class AgentExecutor:
         if activity is not None:
             try:
                 activity.__enter__()
-                environment = kwargs.get("env", args[0] if args else None) or os.environ
+                supplied_environment = kwargs.get("env", args[0] if args else None)
+                environment = dict(
+                    os.environ if supplied_environment is None else supplied_environment
+                )
                 observed_cmd = activity.command(cmd, environment)
+                if args:
+                    args = (environment, *args[1:])
+                else:
+                    kwargs["env"] = environment
             except (OSError, ValueError) as cause:
                 activity.__exit__(None, None, None)
                 raise AgentExecutionError(
