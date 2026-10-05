@@ -1013,6 +1013,33 @@ def test_native_subagent_preference_checks_chains_without_overriding_scope() -> 
     assert "candidate probe and fallback smoke below do not exercise native subagents" in models
 
 
+def test_narrowed_scope_reassesses_draft_selection_and_independent_owners() -> None:
+    selection = " ".join(_read_skill_resource("references/playbook_selection.md").split())
+
+    assert "unconfirmed kickoff table is not a direct user choice" in selection
+    assert "current scope and exclusions supersede older issue descriptions" in selection
+    assert "When scope narrows, reassess the responsibilities" in selection
+    assert "excluded work must not justify extra phases" in selection
+    assert "Keep applicable repository requirements" in selection
+    assert "Separate spec ownership needs evidence of an independent owner or artifact boundary" in selection
+    assert "joint phase with a planning partner covers them" in selection
+    assert "Cross-module changes and platform-specific conditions alone do not require QA" in selection
+    assert "identify the concrete acceptance check that needs another owner" in selection
+
+
+def test_user_confirmed_native_capability_preserves_other_preflight_checks() -> None:
+    selection = " ".join(_read_skill_resource("references/playbook_selection.md").split())
+    models = " ".join(_read_skill_resource("references/model_selection.md").split())
+
+    assert "Check these accepted sources before declaring capability unknown" in selection
+    assert "Do not demand a redundant probe solely because the evidence is user-confirmed" in selection
+    assert "Confirmation for one setup does not establish capability for uncovered fallback entries" in selection
+    assert "contradicts it" in selection
+    assert "satisfies the native-subagent check without a fresh native probe" in models
+    assert "Apply that coverage to each primary and fallback" in models
+    assert "does not replace the exact-model availability, authentication, or fallback smoke checks" in models
+
+
 def test_kickoff_contract_formatter_lists_all_phases_and_confirmation_owners(
     tmp_path: Path,
 ) -> None:

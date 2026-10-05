@@ -12,6 +12,10 @@ Use the first applicable durable or explicit source:
 1. A direct playbook choice from the user in the current thread.
 2. On resume, the playbook in the issue's confirmed `issue.yaml` contract.
 
+A Manager proposal or an unconfirmed kickoff table is not a direct user choice.
+Do not promote a previous recommendation into selection authority merely
+because it appears in a draft contract.
+
 A direct change to a persisted choice is allowed, but it invalidates the old
 kickoff contract and requires full reconfirmation. Conflicting durable sources
 are not a reason to guess; show the conflict and ask one focused question.
@@ -29,6 +33,11 @@ First assess the issue nature, scale, risk, acceptance surface, and repository
 instructions from confirmed current scope. Unconfirmed speculative future work must not add
 responsibilities or phases to the current recommendation; handle it through the
 existing clarification or permission boundary only if it becomes current.
+
+Explicit current scope and exclusions supersede older issue descriptions and
+earlier Manager proposals. When scope narrows, reassess the responsibilities
+before proposing the graph again; excluded work must not justify extra phases.
+Keep applicable repository requirements unless the user explicitly changes them.
 
 Run `prepare_kickoff.py discover` using one request file and use its compact
 index of every valid effective playbook across the project, Global, and builtin
@@ -69,6 +78,10 @@ material tradeoff when the user needs to choose. If no eligible candidate is suf
 uncovered requirements and ask the user for an explicit decision instead of
 choosing a familiar or larger playbook.
 
+Separate spec ownership needs evidence of an independent owner or artifact
+boundary. Unresolved requirements or architecture alone do not require separate
+spec and plan phases when a joint phase with a planning partner covers them.
+
 ## Independent QA decision
 
 Select a QA-capable candidate when any of these apply:
@@ -87,6 +100,11 @@ candidate is acceptable only when develop verification plus independent review
 fully covers the acceptance boundary and no repository policy requires another
 owner. Make that judgment before proposing the graph; no rationale field is required.
 
+Cross-module changes and platform-specific conditions alone do not require QA.
+When recommending QA, identify the concrete acceptance check that needs another
+owner or the explicit user or repository requirement; do not infer that need
+from the number of layers touched.
+
 When both a base and QA variant are plausible, compare their graphs directly.
 Prefer the QA variant when the evidence above applies; otherwise prefer the base
 variant when its verification and review phases are sufficient.
@@ -104,7 +122,11 @@ Assess capability provisionally before recommending the graph, then verify it
 for every primary and configured fallback of the affected steps during model
 preflight. Accept the user's explicit capability confirmation for the current
 setup or successful native execution evidence for the installed CLI, selected
-model, and effective settings. Documentation, a version number, model login,
+model, and effective settings. Check these accepted sources before declaring
+capability unknown. Missing a fresh native probe is not missing capability
+evidence when the user's confirmation covers the intended setup and delegation.
+Do not demand a redundant probe solely because the evidence is user-confirmed.
+Documentation, a version number, model login,
 or an ordinary model probe alone does not prove usable delegation.
 
 If capability is unknown, inspect the affected phase's resolved skills and use
@@ -119,8 +141,10 @@ Honor native workspace trust and custom-agent acknowledgment. An unregistered
 probe definition is a setup failure, not proof that the provider lacks subagents.
 Require native tool events rather than a parent claim of delegation. A missing
 result or permission denial is a failure; serial execution fails a phase that
-requires parallelism. Keep evidence local; recheck when the CLI,
-model, settings, or a live failure contradict it. Do not hardcode a provider
+requires parallelism. Keep evidence local; recheck when a changed CLI,
+model, or setting falls outside the accepted evidence, or a live failure
+contradicts it. Confirmation for one setup does not establish capability for
+uncovered fallback entries or different delegation requirements. Do not hardcode a provider
 ranking or maintain a second runtime capability registry here.
 
 The preference cannot override an explicit or persisted choice, repository
