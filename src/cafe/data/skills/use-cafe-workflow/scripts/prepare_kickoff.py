@@ -297,7 +297,8 @@ def _request_command(args: argparse.Namespace) -> int:
                 if offer is None:
                     atomic_write_text(args.output, rendered["output"])
                     proposal_file = args.output.with_suffix(".proposal.json")
-                    atomic_write_text(proposal_file, json.dumps(rendered["proposal"], ensure_ascii=False, indent=2) + "\n")
+                    from cafe.core.execution_artifacts import bounded_execution_json
+                    atomic_write_text(proposal_file, bounded_execution_json(rendered["proposal"]).decode("utf-8"))
                     _json({"stage": "render", "status": "rendered", "contract_mode": "compact",
                            "output_file": str(args.output.resolve()), "proposal_file": str(proposal_file.resolve())})
                     return 0

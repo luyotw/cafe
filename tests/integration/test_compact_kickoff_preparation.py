@@ -6,6 +6,8 @@ import json
 import subprocess
 import sys
 
+import pytest
+
 from tests.unit.test_compact_contract import compact_request, compact_proposal, activate
 from tests.unit._kickoff_test_support import load_kickoff_module, SCRIPT_ROOT
 
@@ -38,10 +40,13 @@ def test_missing_configured_chain_is_a_focused_gap(compact_request, tmp_path):
     assert assembled["proposal"] is None
 
 
-def test_rendered_proposal_activates_only_with_explicit_user_provenance(compact_request, tmp_path):
+@pytest.mark.parametrize("path_count", [2, 1024])
+def test_rendered_proposal_activates_only_with_explicit_user_provenance(compact_request, tmp_path, path_count):
     from cafe.core.blackboard import BlackboardStore
     from cafe.manager.api import confirmed_contract_snapshot
     from datetime import datetime, timezone
+    if path_count == 1024:
+        compact_request["compact_inputs"]["files"] = [f"new/file-{i}.py" for i in range(path_count)]
     root = Path(compact_request["project_root"])
     request_file = tmp_path / "request.json"
     request_file.write_text(json.dumps(compact_request))
@@ -62,3 +67,26 @@ def test_rendered_proposal_activates_only_with_explicit_user_provenance(compact_
     activated = subprocess.run([*command, "--confirmed-by", "user"], capture_output=True, text=True, timeout=30)
     assert activated.returncode == 0 and json.loads(activated.stdout)["status"] == "activated"
     assert confirmed_contract_snapshot(issue)["identity"]["workflow_id"] == board.workflow_id
+    from cafe.manager.file_scope import execution_scope_projection
+    from cafe.core.execution_artifacts import bounded_execution_json
+    from cafe.core.execution_checkpoints import load_execution_context
+    context_file = issue / "execution_context.json"
+    context_file.write_bytes(bounded_execution_json(execution_scope_projection(issue, root)))
+    assert load_execution_context(context_file)["paths"] == compact_request["compact_inputs"]["files"]
+
+
+def test_excessive_literal_path_list_is_rejected_before_ready_proposal(compact_request, tmp_path):
+    owner = load_kickoff_module("kickoff_inputs")
+    compact_request["compact_inputs"]["files"] = [f"{number:04}" + "x" * 251 for number in range(1024)]
+    discovery = owner.discover_kickoff(compact_request, config_dir=tmp_path / "prefs", cache_dir=tmp_path / "cache")
+    assembled = owner.assemble_kickoff(compact_request, discovery=discovery)
+    assert assembled["status"] != "ready"
+    assert assembled.get("proposal") is None
+
+
+def test_path_count_plus_one_is_rejected_by_public_producer(compact_request, tmp_path):
+    owner = load_kickoff_module("kickoff_inputs")
+    compact_request["compact_inputs"]["files"] = [f"new/file-{i}.py" for i in range(1025)]
+    discovery = owner.discover_kickoff(compact_request, config_dir=tmp_path / "prefs", cache_dir=tmp_path / "cache")
+    assembled = owner.assemble_kickoff(compact_request, discovery=discovery)
+    assert assembled["status"] != "ready" and assembled.get("proposal") is None

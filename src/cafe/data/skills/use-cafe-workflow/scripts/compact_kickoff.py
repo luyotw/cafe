@@ -266,6 +266,7 @@ def assemble(request, *, discovery):
 
             proposal = validate_compact_proposal(proposal)
         except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
+            proposal = None
             diagnostics.append(str(exc))
     status = "incomplete" if missing else "invalid" if diagnostics else "ready"
     values = {"contract_mode": "compact", "status": status, "proposal": proposal}

@@ -272,3 +272,56 @@ def test_native_preparation_checks_explicit_backup_before_confirmation(compact_r
     assert assembled['status'] == 'incomplete'
     assert any('native_review_configuration' in gap['requirement'] for gap in assembled['missing_decisions'])
     assert assembled['proposal'] is None
+
+
+@pytest.mark.parametrize("merged_bytes", [256 * 1024, 256 * 1024 + 1])
+def test_native_result_merge_respects_delivery_reader_budget(compact_request, tmp_path, monkeypatch, merged_bytes):
+    from cafe.agents.cli.claude import ClaudeCLI
+    from cafe.core.types import AgentConfig, AgentCLI
+    from cafe.core.workflow_models import StepExecutionResult
+    from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
+    from cafe.core.execution_checkpoints import load_review_evidence, require_verified_review
+    from cafe.core.packet_io import canonical_json
+    root, issue, playbook, context = native_context(compact_request, tmp_path, monkeypatch)
+    adapter = ClaudeCLI(AgentConfig(name="parent", cli=AgentCLI.CLAUDE, model="test",
+                                   native_review_configuration=context["review_configuration"]))
+    def provider(step, definition, board, **kwargs):
+        (root / "app.py").write_text("value = 1\n")
+        checked = scope(issue, root, "before_review")
+        assert checked.returncode == 0
+        receipt = json.loads(checked.stdout)
+        def records(detail):
+            conclusion = {"findings": [{"severity": "nonblocking", "detail": detail}],
+                          "targeted_tests": ["approved value check passed"]}
+            stream = [json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use",
+                "name": "Agent", "id": "child", "input": {"subagent_type": "cafe_reviewer",
+                "prompt": "CAFE_REVIEW_CHECKPOINT:" + receipt["receipt_id"]}}]}}),
+                json.dumps({"type": "user", "message": {"content": [{"type": "tool_result",
+                "tool_use_id": "child", "content": json.dumps(conclusion)}]}})]
+            observations = {"version": 1, "parent_id": "parent", "observations": adapter.native_review_observations(stream)}
+            evidence = {"version": 1, "round_id": receipt["round_id"], "checkpoint": receipt,
+                "invocations": [{"reviewer_id": "child", "parent_id": "parent",
+                    "configuration": context["review_configuration"], "terminal": "result", "exit_status": 0,
+                    "result_reference": "child", **conclusion}], "producer_note": ""}
+            return evidence, observations
+        evidence, observations = records("x")
+        overhead = len(canonical_json({**evidence, "native_observations": observations}))
+        padding, remainder = divmod(merged_bytes - overhead, 2)
+        evidence, observations = records("x" * (padding + 1))
+        evidence["producer_note"] = "x" * remainder
+        assert len(canonical_json({**evidence, "native_observations": observations})) == merged_bytes
+        iteration = issue / step / "iteration_001"
+        iteration.mkdir(parents=True)
+        (iteration / "native-review.json").write_bytes(canonical_json(evidence))
+        (iteration / "native_invocations.json").write_bytes(canonical_json(observations))
+        (iteration / "output.md").write_text("Bounded native result\n")
+        (issue / "next_step.txt").write_text(json.dumps({"version": 1, "to_owner": "done", "to_step": "done", "intent": "workflow_complete"}))
+        return StepExecutionResult(response="", artifacts={})
+    result = BlackboardWorkflowRuntime(issue_dir=issue, playbook=playbook, executor=provider, execution_context=context).run()
+    if merged_bytes > 256 * 1024:
+        assert not result.completed and result.final_status_code == "NATIVE_REVIEW_BLOCKED"
+        assert not (issue / "execution_review.json").exists()
+    else:
+        assert result.completed
+        current = load_review_evidence(issue / "execution_review.json")
+        require_verified_review(context, current)

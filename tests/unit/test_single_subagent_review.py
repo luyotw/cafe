@@ -158,3 +158,32 @@ def test_native_findings_cannot_be_downgraded_by_parent(execution_context, revie
     actual["findings"] = []
     invocation["findings"] = []
     require_current_review(execution_context, review, native_observations=host)
+
+
+@pytest.mark.parametrize("committed", [False, True])
+def test_new_git_blob_invalidates_review_even_when_working_bytes_are_restored(execution_context, review, committed):
+    from cafe.core.execution_checkpoints import require_current_review
+    from test_file_scope import git
+    root = Path(execution_context["root"])
+    allowed = root / "allowed"
+    reviewed = allowed.read_text()
+    allowed.write_text("unreviewed blob")
+    git(root, "add", "allowed")
+    if committed:
+        git(root, "commit", "-qm", "new blob")
+    allowed.write_text(reviewed)
+    with pytest.raises(ValueError):
+        require_current_review(execution_context, review)
+
+
+def test_normal_stage_and_commit_preserve_review_of_the_same_contents(execution_context, review):
+    from cafe.core.execution_checkpoints import checkpoint, require_current_review
+    from test_file_scope import git
+    root = Path(execution_context["root"])
+    (root / "allowed").write_text("reviewed contents")
+    review["checkpoint"] = checkpoint(execution_context, "before_review", round_id="round-1", parent_id="parent")
+    require_current_review(execution_context, review)
+    git(root, "add", "allowed")
+    require_current_review(execution_context, review)
+    git(root, "commit", "-qm", "reviewed implementation")
+    require_current_review(execution_context, review)

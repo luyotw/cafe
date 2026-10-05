@@ -84,3 +84,19 @@ def test_malformed_evidence_cannot_pass():
     result = compare_scope(ChangeCollection(records=({"path": "../escape"},)), ["allowed"])
     assert not result.passed
     assert result.findings[0]["reason"] == "malformed_evidence"
+
+
+def test_replaced_retained_index_blob_is_a_new_scope_violation(repository):
+    from cafe.core.file_scope import collect_changes, compare_scope
+    from cafe.manager.file_scope import prepare_file_scope
+    root, baseline = repository
+    (root / 'outside').write_text('retained user edit')
+    git(root, 'add', 'outside')
+    retained = prepare_file_scope(root, ['allowed'])['preexisting']
+    (root / 'outside').write_text('new unauthorized staged edit')
+    git(root, 'add', 'outside')
+    (root / 'outside').write_text('retained user edit')
+    result = compare_scope(collect_changes(root, baseline), ['allowed'], preexisting=retained)
+    assert not result.passed
+    assert any(f['path'] == 'outside' for f in result.findings)
+    assert git(root, 'show', ':outside') == 'new unauthorized staged edit'

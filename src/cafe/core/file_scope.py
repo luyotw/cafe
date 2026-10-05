@@ -37,6 +37,7 @@ def validate_scope_paths(paths):
 class ChangeCollection:
     records: tuple[dict, ...] = ()
     error: str | None = None
+    baseline_commit: str | None = None
 
 
 @dataclass(frozen=True)
@@ -79,6 +80,58 @@ def path_content(root: Path, path: str):
     return digest.hexdigest()
 
 
+def git_content_entries(root: Path, revision: str | None = None):
+    """Read bounded Git modes/blob identities, rejecting unresolved index stages."""
+    data = (_git(root, "ls-tree", "-r", "-z", revision) if revision else
+            _git(root, "ls-files", "--stage", "-z"))
+    result = {}
+    for item in data.split("\x00"):
+        if not item:
+            continue
+        metadata, path = item.split("\t", 1)
+        mode, middle, last = metadata.split()
+        if revision:
+            oid = last
+        else:
+            oid = middle
+            if last != "0":
+                raise ValueError("unresolved index cannot establish content identity")
+        result[path] = (mode, oid)
+    return result
+
+
+def workspace_content(root: Path, path: str, *, index_entries=None):
+    """Retained user work binds both worktree bytes and the exact staged blob."""
+    entries = git_content_entries(root) if index_entries is None else index_entries
+    value = {"working": path_content(root, path), "index": entries.get(path)}
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+
+def working_git_entry(root: Path, path: str):
+    """Identity Git would stage, including mode, symlinks and clean filters."""
+    candidate = root / path
+    path_content(root, path)  # Apply the same file/size/containment bounds.
+    try:
+        metadata = candidate.lstat()
+    except FileNotFoundError:
+        return None
+    if stat.S_ISLNK(metadata.st_mode):
+        value = subprocess.run(["git", "-C", str(root), "hash-object", "--stdin"],
+            input=os.readlink(candidate).encode(errors="surrogateescape"),
+            capture_output=True, check=True, timeout=20).stdout.decode().strip()
+        return ("120000", value)
+    return ("100755" if metadata.st_mode & 0o111 else "100644",
+            _git(root, "hash-object", "--path=" + path, "--", path).strip())
+
+
+def require_committed_content(root: Path, paths):
+    """The delivered tree must contain the implementation actually reviewed."""
+    head = git_content_entries(root, "HEAD")
+    for path in validate_scope_paths(paths):
+        if head.get(path) != working_git_entry(root, path):
+            raise ValueError("committed content differs from reviewed working content: " + path)
+
+
 def collect_changes(root: Path, baseline_commit: str) -> ChangeCollection:
     """Collect every baseline-descendant commit edge plus Git-visible dirt."""
     try:
@@ -113,15 +166,16 @@ def collect_changes(root: Path, baseline_commit: str) -> ChangeCollection:
                 index += 1
                 validate_scope_paths([path])
                 records.append({"origin": "committed", "state": status_token, "path": path})
+        entries = git_content_entries(root)
         for change in inspect_workspace(root).changes:
             record = {**change, "origin": "workspace"}
             for key in ("path", "old_path"):
                 if key in record:
-                    record[key + "_content"] = path_content(root, record[key])
+                    record[key + "_content"] = workspace_content(root, record[key], index_entries=entries)
             records.append(record)
         if len(records) > 8192:
             raise ValueError("change records exceed the bounded inspection limit")
-        return ChangeCollection(tuple(records))
+        return ChangeCollection(tuple(records), baseline_commit=resolved)
     except (OSError, ValueError, IndexError, subprocess.SubprocessError) as exc:
         return ChangeCollection(error=f"{type(exc).__name__}: {str(exc)[:500]}")
 
@@ -168,5 +222,22 @@ def content_snapshot(root: Path, changes: ChangeCollection, approved_paths) -> s
         paths.add(record["path"])
         if "old_path" in record:
             paths.add(record["old_path"])
-    payload = {"paths": {p: path_content(root, p) for p in sorted(paths)}}
-    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+    index = git_content_entries(root)
+    head = git_content_entries(root, "HEAD")
+    baseline = git_content_entries(root, changes.baseline_commit) if changes.baseline_commit else {}
+    content = {}
+    approved = set(approved_paths)
+    for path in sorted(paths):
+        value = {"working": path_content(root, path)}
+        if path in approved:
+            working = working_git_entry(root, path)
+            # Normal staging/commit of reviewed bytes is stable. Divergent new
+            # staged/committed blobs are additional content requiring review.
+            if index.get(path) not in (working, head.get(path), baseline.get(path)):
+                value["index"] = index.get(path)
+            if head.get(path) not in (working, baseline.get(path)):
+                value["head"] = head.get(path)
+        else:
+            value["index"] = index.get(path)
+        content[path] = value
+    return hashlib.sha256(json.dumps({"paths": content}, sort_keys=True).encode()).hexdigest()

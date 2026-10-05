@@ -199,7 +199,7 @@ PY
 
 # Resolve the explicitly selected remote before any mutation.
 if [[ -n "$EXPLICIT_REMOTE" ]]; then
-  REPO_URL=$(git remote get-url "$REMOTE")
+  REPO_URL=$(git remote get-url --push "$REMOTE")
   GH_REPO=$(gh repo view "$REPO_URL" --json nameWithOwner --jq .nameWithOwner)
   export GH_REPO
 fi

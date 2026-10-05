@@ -139,13 +139,17 @@ def validate_compact_proposal(proposal):
                        keys={"need_clarification", "need_permission", "alignment_checkpoint"})
     if any(v != "user_required" for v in reactive.values()):
         raise ValueError("compact unresolved authority remains user-owned")
-    return {"contract_mode": "compact", "file_scope": scope, "execution": execution,
+    result = {"contract_mode": "compact", "file_scope": scope, "execution": execution,
             "review_configuration": review, "phases": phases, "delivery_contract": delivery,
             "locales": _validate_locales(raw["locales"]),
             "confirmation_contract": _validate_confirmation(raw["confirmation_contract"]),
             "reactive_user_handoffs": reactive,
             "proactive_review": _validate_proactive(raw["proactive_review"], phases),
             "manager": _validate_manager(raw["manager"]), "checkout": _validate_checkout(raw["checkout"])}
+
+    from ._compact_capacity import require_compact_capacity
+    require_compact_capacity(result)
+    return result
 
 
 def _mapping(value: Any, label: str, *, keys: set[str] | None = None) -> dict[str, Any]:

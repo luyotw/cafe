@@ -97,8 +97,9 @@ def test_pr_policy_retains_human_gate_without_dispatch(compact_request, compact_
 
 
 @pytest.mark.parametrize("approval_required", [False, True])
+@pytest.mark.parametrize("wrong_repository", [False, True])
 def test_pr_delivery_verifies_actual_branches_and_sha_without_duplicate_confirmation(
-    compact_request, compact_proposal, monkeypatch, approval_required
+    compact_request, compact_proposal, monkeypatch, approval_required, wrong_repository
 ):
     import cafe.core.capabilities as capabilities
     from cafe.manager.delivery import publish_compact_pr
@@ -109,7 +110,7 @@ def test_pr_delivery_verifies_actual_branches_and_sha_without_duplicate_confirma
     output = issue / "deliver/iteration_001/pr.md"
     output.parent.mkdir(parents=True)
     output.write_text("# Change\n\nEvidence\n")
-    url = "https://github.com/example/project/pull/1"
+    url = "https://github.com/" + ("other/unapproved" if wrong_repository else "example/project") + "/pull/1"
     invocations = []
     def github_publish(**kwargs):
         invocations.append(kwargs["request"])
@@ -118,10 +119,13 @@ def test_pr_delivery_verifies_actual_branches_and_sha_without_duplicate_confirma
     monkeypatch.setitem(capabilities.HOST_CAPABILITY_ADAPTERS, "sync_pr", github_publish)
     original = subprocess.run
     def transport(argv, **kwargs):
+        if argv[:3] == ["gh", "repo", "view"]:
+            return subprocess.CompletedProcess(argv, 0, "example/project\n", "")
         if argv[:3] == ["gh", "pr", "view"]:
             return subprocess.CompletedProcess(argv, 0, json.dumps({"url": url,
                 "headRefName": "feature", "baseRefName": "main",
-                "headRefOid": git(root, "rev-parse", "HEAD"), "state": "OPEN"}), "")
+                "headRefOid": git(root, "rev-parse", "HEAD"), "state": "OPEN",
+                "headRepository": {"nameWithOwner": "example/project"}}), "")
         return original(argv, **kwargs)
     monkeypatch.setattr(subprocess, "run", transport)
     registry = dict(capabilities.load_capability_registry(capabilities.default_capability_definition_dirs(root)))
@@ -137,6 +141,12 @@ def test_pr_delivery_verifies_actual_branches_and_sha_without_duplicate_confirma
             "workflow_id": "workflow", "task_id": pending["task_id"],
             "request_fingerprint": task["fingerprint"], "correlation_id": task["correlation_id"]})
         approval = {"approval_task_id": pending["task_id"], "correlation_id": task["correlation_id"]}
+    if wrong_repository:
+        with pytest.raises(ValueError):
+            publish_compact_pr(issue, root, output, registry=registry, **approval)
+        assert json.loads((issue / "delivery_result.json").read_text())["status"] == "unknown"
+        assert len(invocations) == 1
+        return
     result = publish_compact_pr(issue, root, output, registry=registry, **approval)
     assert result["delivered"] and result["pr"]["url"] == url
     assert len(invocations) == 1
@@ -155,6 +165,12 @@ def test_uncertain_pr_publication_is_retained_and_never_replayed(compact_request
     output = issue / "deliver/iteration_001/pr.md"
     output.parent.mkdir(parents=True)
     output.write_text("# Change\n\nEvidence\n")
+    original = subprocess.run
+    def repository_transport(argv, **kwargs):
+        if argv[:3] == ["gh", "repo", "view"]:
+            return subprocess.CompletedProcess(argv, 0, "example/project\n", "")
+        return original(argv, **kwargs)
+    monkeypatch.setattr(subprocess, "run", repository_transport)
     def disconnected(**kwargs):
         raise TimeoutError("connection lost after external dispatch")
     monkeypatch.setitem(capabilities.HOST_CAPABILITY_ADAPTERS, "sync_pr", disconnected)
@@ -165,7 +181,8 @@ def test_uncertain_pr_publication_is_retained_and_never_replayed(compact_request
         publish_compact_pr(issue, root, output)
 
 
-def test_existing_custom_publication_hook_checks_scope_before_dispatch(compact_request, compact_proposal, monkeypatch):
+@pytest.mark.parametrize("drift", ["scope", "fetch_url"])
+def test_existing_custom_publication_hook_checks_scope_before_dispatch(compact_request, compact_proposal, monkeypatch, drift):
     from types import SimpleNamespace
     import cafe.core.capabilities as capabilities
     from cafe.core.hooks.native import GitHubPRCreator
@@ -173,6 +190,7 @@ def test_existing_custom_publication_hook_checks_scope_before_dispatch(compact_r
     from cafe.manager.file_scope import execution_scope_projection
     root = Path(compact_request["project_root"])
     issue = root / ".cafe/issues/sample"
+    git(root, "remote", "set-url", "--push", "origin", git(root, "remote", "get-url", "origin"))
     activate(issue, compact_proposal)
     context = execution_scope_projection(issue, root)
     output = issue / "custom-publish/iteration_001/output.md"
@@ -196,7 +214,128 @@ def test_existing_custom_publication_hook_checks_scope_before_dispatch(compact_r
         "execution_context": context}
     hook.run(**arguments)
     assert len(invocations) == 1
-    (root / "outside.py").write_text("unapproved change after implementation")
+    if drift == "scope":
+        (root / "outside.py").write_text("unapproved change after implementation")
+    else:
+        git(root, "remote", "set-url", "origin", "https://github.com/other/unapproved.git")
     with pytest.raises(ValueError):
         hook.run(**arguments)
     assert len(invocations) == 1
+
+
+def test_normal_commit_hook_cannot_deliver_unreviewed_index_blob(compact_request, compact_proposal):
+    root, issue = direct_ready(compact_request, compact_proposal)
+    hook = root / '.git/hooks/pre-commit'
+    hook.write_text("#!/bin/sh\nblob=$(printf 'unreviewed hook contents' | git hash-object -w --stdin)\ngit update-index --cacheinfo 100644,$blob,app.py\n")
+    hook.chmod(0o755)
+    assert closeout(root, issue, '--initialize').returncode == 0
+    commit = closeout(root, issue, '--execute', '--stage', 'deliver', '--index', '0')
+    assert git(root, 'show', 'HEAD:app.py') == 'unreviewed hook contents'
+    assert (root / 'app.py').read_text() == 'approved work'
+    assert commit.returncode != 0
+    assert closeout(root, issue, '--execute', '--stage', 'deliver', '--index', '1').returncode != 0
+    assert not git(root, 'ls-remote', 'origin', 'refs/heads/feature')
+    assert git(root, 'show', ':user.txt') == 'user work'
+    assert not (issue / 'delivery_result.json').exists()
+
+
+def test_fetch_endpoint_change_blocks_owned_publication_before_dispatch(compact_request, compact_proposal, monkeypatch):
+    import cafe.core.capabilities as capabilities
+    from cafe.manager.delivery import publish_compact_pr
+    root = Path(compact_request["project_root"])
+    git(root, "remote", "set-url", "--push", "origin", git(root, "remote", "get-url", "origin"))
+    issue = root / ".cafe/issues/sample"
+    activate(issue, compact_proposal)
+    make_ready(root, issue)
+    output = issue / "deliver/iteration_001/pr.md"
+    output.parent.mkdir(parents=True)
+    output.write_text("# Change\n\nEvidence\n")
+    calls = []
+    def transport(**kwargs):
+        calls.append(kwargs)
+        raise RuntimeError("unexpected external dispatch")
+    monkeypatch.setitem(capabilities.HOST_CAPABILITY_ADAPTERS, "sync_pr", transport)
+    git(root, "remote", "set-url", "origin", "https://github.com/other/unapproved.git")
+    with pytest.raises(ValueError):
+        publish_compact_pr(issue, root, output)
+    assert not calls
+    assert not (issue / "delivery_result.json").exists()
+
+
+def test_owned_publication_uses_real_publisher_and_authorized_push_repository(compact_request, compact_proposal, tmp_path, monkeypatch):
+    import os
+    from cafe.manager.delivery import prepare_compact_delivery, publish_compact_pr
+    root = Path(compact_request["project_root"])
+    push_url = git(root, "remote", "get-url", "origin")
+    git(root, "remote", "set-url", "--push", "origin", push_url)
+    git(root, "remote", "set-url", "origin", "https://github.com/other/fetch-only.git")
+    compact_proposal["delivery_contract"] = prepare_compact_delivery(root,
+        compact_request["compact_inputs"]["delivery_contract"], issue_name="sample")
+    issue = root / ".cafe/issues/sample"
+    activate(issue, compact_proposal)
+    make_ready(root, issue)
+    output = issue / "deliver/iteration_001/pr.md"
+    output.parent.mkdir(parents=True)
+    output.write_text("# Change\n\nEvidence\n")
+    binary = tmp_path / "github-bin"
+    binary.mkdir()
+    log = tmp_path / "github-calls.jsonl"
+    gh = binary / "gh"
+    gh.write_text("#!" + sys.executable + '\n' + '''import json, os, sys
+args = sys.argv[1:]
+repository = os.environ.get("GH_REPO", "example/project")
+with open(os.environ["TEST_GH_LOG"], "a") as output:
+    output.write(json.dumps({"args": args, "repository": repository}) + "\\n")
+if args[:2] == ["repo", "view"]:
+    print("other/fetch-only" if "fetch-only" in args[2] else "example/project")
+elif args[:2] == ["pr", "view"]:
+    if len(args) > 2 and args[2].startswith("https://"):
+        print(json.dumps({"url": args[2], "headRefName": "feature", "baseRefName": "main",
+            "headRefOid": os.environ["TEST_HEAD"], "state": "OPEN",
+            "headRepository": {"nameWithOwner": "example/project"}}))
+    else:
+        sys.exit(1)
+elif args[:2] == ["pr", "create"]:
+    print("https://github.com/" + repository + "/pull/1")
+else:
+    sys.exit(2)
+''')
+    gh.chmod(0o755)
+    monkeypatch.setenv("PATH", str(binary) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("TEST_GH_LOG", str(log))
+    monkeypatch.setenv("TEST_HEAD", git(root, "rev-parse", "HEAD"))
+    result = publish_compact_pr(issue, root, output)
+    assert result["delivered"] and result["pr"]["url"] == "https://github.com/example/project/pull/1"
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    assert all(call["args"][2] == push_url for call in calls if call["args"][:2] == ["repo", "view"])
+    assert [call["repository"] for call in calls if call["args"][:2] == ["pr", "create"]] == ["example/project"]
+    assert git(root, "ls-remote", push_url, "refs/heads/feature").split()[0] == result["commit"]
+
+
+def test_endpoint_change_during_repository_lookup_blocks_external_dispatch(compact_request, compact_proposal, monkeypatch):
+    import cafe.core.capabilities as capabilities
+    from cafe.manager.delivery import publish_compact_pr
+    root = Path(compact_request["project_root"])
+    git(root, "remote", "set-url", "--push", "origin", git(root, "remote", "get-url", "origin"))
+    issue = root / ".cafe/issues/sample"
+    activate(issue, compact_proposal)
+    make_ready(root, issue)
+    output = issue / "deliver/iteration_001/pr.md"
+    output.parent.mkdir(parents=True)
+    output.write_text("# Change\n\nEvidence\n")
+    original = subprocess.run
+    def repository_transport(argv, **kwargs):
+        if argv[:3] == ["gh", "repo", "view"]:
+            git(root, "remote", "set-url", "origin", "https://github.com/other/unapproved.git")
+            return subprocess.CompletedProcess(argv, 0, "example/project\n", "")
+        return original(argv, **kwargs)
+    monkeypatch.setattr(subprocess, "run", repository_transport)
+    calls = []
+    def publish_transport(**kwargs):
+        calls.append(kwargs)
+        raise RuntimeError("unexpected external mutation")
+    monkeypatch.setitem(capabilities.HOST_CAPABILITY_ADAPTERS, "sync_pr", publish_transport)
+    with pytest.raises(ValueError):
+        publish_compact_pr(issue, root, output)
+    assert not calls
+    assert json.loads((issue / "delivery_result.json").read_text())["status"] == "unknown"

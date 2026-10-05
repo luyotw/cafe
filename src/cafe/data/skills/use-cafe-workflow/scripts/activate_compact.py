@@ -18,9 +18,8 @@ def main():
     parser.add_argument("--confirmed-at", required=True)
     args = parser.parse_args()
     try:
-        if args.proposal_file.is_symlink() or args.proposal_file.stat().st_size > 256 * 1024:
-            raise ValueError("proposal must be a bounded regular file")
-        proposal = json.loads(args.proposal_file.read_text())
+        from cafe.core.execution_artifacts import load_execution_artifact
+        proposal = load_execution_artifact(args.proposal_file)
         if proposal.get("contract_mode") != "compact":
             raise ValueError("activation requires the exact rendered compact proposal")
         def activate():

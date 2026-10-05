@@ -3,7 +3,7 @@
 from pathlib import Path
 import sys
 
-from cafe.core.file_scope import collect_changes, compare_scope, path_content, validate_scope_paths
+from cafe.core.file_scope import collect_changes, compare_scope, workspace_content, git_content_entries, validate_scope_paths
 from cafe.core.workspace_artifact import inspect_workspace
 from ._store import load_contract
 
@@ -20,11 +20,12 @@ def prepare_file_scope(root: Path, paths):
         timeout=10,
     ).stdout.strip()
     preexisting = []
+    entries = git_content_entries(root)
     for change in inspect_workspace(root).changes:
         for key in ("path", "old_path"):
             if key in change and change[key] not in paths:
                 preexisting.append(
-                    {"path": change[key], "content": path_content(root, change[key])}
+                    {"path": change[key], "content": workspace_content(root, change[key], index_entries=entries)}
                 )
     return {"paths": paths, "baseline_commit": baseline, "preexisting": preexisting}
 
@@ -60,22 +61,12 @@ def execution_scope_projection(issue_dir: Path, root: Path):
             [name for name, step in graph["steps"].items() if step["execution"]["review_policy"]],
             review,
         )
-    scope = contract["file_scope"]
-    return {
-        "version": 1,
-        "authority_digest": digest,
-        "revision": contract["revision"]["generation"],
-        "identity": dict(contract["identity"]),
-        "root": str(root.resolve()),
-        "paths": list(scope["paths"]),
-        "baseline_commit": scope["baseline_commit"],
-        "preexisting": scope["preexisting"],
-        "review_configuration": contract["review_configuration"],
-        "review_policy": review_policy,
-        "phase_chains": {phase["name"]: phase["chain"] for phase in contract["phases"]},
-        "delivery_endpoint": contract["delivery_contract"],
-        "native_reviewer_type": "cafe_reviewer",
-        "checkpoint_command": [
+    from ._execution_projection import execution_inputs
+    from cafe.core.execution_artifacts import bounded_execution_json
+    context = execution_inputs(contract, identity=contract["identity"],
+        revision=contract["revision"]["generation"], digest=digest,
+        root=str(root.resolve()), review_policy=review_policy,
+        checkpoint_command=[
             sys.executable,
             str(
                 Path(__file__).resolve().parents[1]
@@ -85,8 +76,9 @@ def execution_scope_projection(issue_dir: Path, root: Path):
             str(issue_dir.resolve()),
             "--root",
             str(root.resolve()),
-        ],
-    }
+        ])
+    bounded_execution_json(context)
+    return context
 
 
 def check_current_scope(issue_dir: Path, root: Path):

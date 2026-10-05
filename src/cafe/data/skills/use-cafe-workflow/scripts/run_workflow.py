@@ -552,7 +552,8 @@ def run(
             if not receipt["passed"]:
                 raise ValueError("execution_checkpoint_blocked: " + json.dumps(receipt["findings"]))
             execution_context_file = issue_dir / "execution_context.json"
-            atomic_write_bytes(execution_context_file, canonical_json(context))
+            from cafe.core.execution_artifacts import bounded_execution_json
+            atomic_write_bytes(execution_context_file, bounded_execution_json(context))
         manager = contract.get("manager", contract.get("driver"))
         confirmed_mode = manager.get("mode") if isinstance(manager, Mapping) else None
         if confirmed_mode != mode:

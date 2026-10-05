@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 
 from cafe.core.packet_io import canonical_json
+from cafe.core.git_delivery import git_text as _git, remote_identity as _remote_identity
 
 MAX_CLOSEOUT_EVIDENCE_BYTES = 256 * 1024
 # Linux pathname limit is 4096 bytes. JSON can expand each byte sixfold.
@@ -292,24 +293,10 @@ def validate_closeout_plan_policy(
                 raise ValueError("cafe close --squash is unavailable in create-PR mode")
 
 
-def _git(root: Path, *args: str) -> str:
-    import subprocess
-    return subprocess.run(["git", "-C", str(root), *args], check=True,
-                          capture_output=True, text=True, timeout=20).stdout.strip()
-
-
-def _remote_identity(root: Path, remote: str) -> str:
-    import hashlib
-    urls = _git(root, "remote", "get-url", "--push", "--all", remote).splitlines()
-    if len(urls) != 1 or not urls[0]:
-        raise ValueError("delivery requires one exact remote push endpoint")
-    return hashlib.sha256(urls[0].encode()).hexdigest()
-
-
 def prepare_compact_delivery(root: Path, value: dict, *, issue_name: str) -> dict:
     """Resolve internal endpoint identity and literal closeout before confirmation."""
     endpoint = validate_compact_delivery(value)
-    endpoint["remote_identity"] = _remote_identity(root, endpoint["remote"])
+    endpoint["remote_identity"] = _remote_identity(root, endpoint["remote"], endpoint["route"])
     if endpoint["route"] == "direct":
         endpoint["closeout_plan"] = {"deliver": [
             {"argv": ["git", "commit", "--allow-empty", "-m", f"Deliver {issue_name}"]},
@@ -335,7 +322,7 @@ def validate_compact_action(issue_dir: Path, root: Path) -> dict:
             or baton.intent != HandoffIntent.WORKFLOW_COMPLETE):
         raise ValueError("delivery requires terminal workflow readiness and quiescence")
     endpoint = context["delivery_endpoint"]
-    if endpoint.get("remote_identity") != _remote_identity(root, endpoint["remote"]):
+    if endpoint.get("remote_identity") != _remote_identity(root, endpoint["remote"], endpoint["route"]):
         raise ValueError("confirmed remote endpoint changed")
     branch = endpoint["source_branch"] if endpoint["route"] == "pr" else endpoint["branch"]
     if _git(root, "symbolic-ref", "--short", "HEAD") != branch:
@@ -369,12 +356,17 @@ def run_compact_closeout_command(issue_dir: Path, root: Path, argv: list[str]):
         if endpoint["route"] != "direct" or argv not in [c["argv"] for c in commands]:
             raise ValueError("closeout command differs from the approved direct effect")
         if argv[1] != "commit":
+            from cafe.core.file_scope import require_committed_content
+            require_committed_content(root, context["paths"])
             result = subprocess.run(argv, cwd=root, check=False, timeout=240)
             if result.returncode == 0:
                 head = _git(root, "rev-parse", "HEAD")
-                observed = _git(root, "ls-remote", endpoint["remote"], f"refs/heads/{endpoint['branch']}")
+                push_url = _git(root, "remote", "get-url", "--push", endpoint["remote"])
+                observed = _git(root, "ls-remote", push_url, f"refs/heads/{endpoint['branch']}")
                 if observed.split()[0:1] != [head]:
                     raise ValueError("push outcome is unverified; inspect read-only before recovery")
+                if validate_compact_action(issue_dir, root)["authority_digest"] != context["authority_digest"]:
+                    raise ValueError("delivery authority changed during push")
                 from cafe.core.packet_io import atomic_write_bytes
                 atomic_write_bytes(issue_dir / "delivery_result.json", canonical_json({
                     "delivered": True, "route": "direct", "commit": head,
@@ -393,6 +385,10 @@ def run_compact_closeout_command(issue_dir: Path, root: Path, argv: list[str]):
                                cwd=root, env=env, check=True, timeout=20)
             # Git hooks run normally against this exact staged change.
             result = subprocess.run(argv, cwd=root, env=env, check=False, timeout=240)
+            if result.returncode == 0:
+                from cafe.core.file_scope import require_committed_content
+                require_committed_content(root, context["paths"])
+                validate_compact_action(issue_dir, root)
             if result.returncode == 0 and paths:
                 subprocess.run(["git", "--literal-pathspecs", "reset", "-q", "HEAD", "--", *paths],
                                cwd=root, check=True, timeout=20)
@@ -401,80 +397,17 @@ def run_compact_closeout_command(issue_dir: Path, root: Path, argv: list[str]):
 
 
 def publish_compact_pr(issue_dir: Path, root: Path, output: Path, *, registry=None, approval_task_id=None, correlation_id=None) -> dict:
-    """Publish through existing capability policy; persist attempts before external work."""
-    from cafe.core.capabilities import load_capability_registry, default_capability_definition_dirs, run_capability_request
-    from cafe.core.packet_io import atomic_write_bytes
+    """Resolve Manager authority and delegate publication to its capability owner."""
+    from cafe.core.pr_delivery import publish_resolved_pr
     from cafe.workflow_execution.workflow_hosting import WorkflowHost
-    import json
-    import subprocess
 
     def action():
         context = validate_compact_action(issue_dir, root)
-        endpoint = context["delivery_endpoint"]
-        if endpoint["route"] != "pr":
-            raise ValueError("confirmed delivery is not PR publication")
-        target = output.resolve().relative_to(root.resolve()).as_posix()
-        if not output.resolve().is_relative_to(issue_dir.resolve()) or output.is_symlink():
-            raise ValueError("PR material must belong to this issue")
-        request = {"capability": "cafe.pr.publish", "args": {"output": target,
-            "base": endpoint["target_branch"], "remote": endpoint["remote"]},
-            "effects": {"writes": [target, ".git", issue_dir.relative_to(root).as_posix()],
-                "network_destinations": ["github.com", "api.github.com"], "browser_open": []},
-            "credentials": ["gh"], "permissions": {
-                "writes": [target, ".git", issue_dir.relative_to(root).as_posix()],
-                "network": ["github.com", "api.github.com"]}}
-        path = issue_dir / "delivery_result.json"
-        if path.exists():
-            raise ValueError("PR delivery already attempted; reconcile read-only instead of replaying")
-        from cafe.core.capabilities import evaluate_capability_request, PolicyDecision
-        definitions = registry if registry is not None else load_capability_registry(default_capability_definition_dirs(root))
-        evaluation = evaluate_capability_request(definitions, request)
-        if evaluation.decision == PolicyDecision.REQUIRE_APPROVAL and approval_task_id is None:
-            from cafe.core.capability_approvals import CapabilityApprovalService
-            service = CapabilityApprovalService(issue_dir=issue_dir,
-                workflow_id=context["identity"]["workflow_id"], step="delivery", iteration=1)
-            task = service.request_approval(request=evaluation.request, manifest=evaluation.manifest)
-            return {"delivered": False, "needs_human_task": True, "task_id": task.id,
-                    "correlation_id": task.capability_approval["correlation_id"]}
-        if evaluation.decision == PolicyDecision.DENY:
-            run = run_capability_request(repo_root=root, registry=definitions,
-                capability_request=request, output_file=output, timeout_sec=240)
-            return {"delivered": False, "receipt": run.receipt,
-                    "needs_human_task": evaluation.decision == PolicyDecision.REQUIRE_APPROVAL}
-        record = {"delivered": False, "status": "unknown", "authority_digest": context["authority_digest"],
-                  "commit": _git(root, "rev-parse", "HEAD")}
-        atomic_write_bytes(path, canonical_json(record))
-        # No approval bypass: the capability re-evaluates the same host policy.
-        validate_compact_action(issue_dir, root)
-        if approval_task_id is not None:
-            from cafe.core.capability_approvals import CapabilityApprovalService
-            service = CapabilityApprovalService(issue_dir=issue_dir,
-                workflow_id=context["identity"]["workflow_id"], step="delivery", iteration=1)
-            receipt = service.resume(approval_task_id, correlation_id=correlation_id,
-                request=evaluation.request, registry=definitions, repo_root=root,
-                output_file=output, timeout_sec=240,
-                before_dispatch=lambda: validate_compact_action(issue_dir, root))
-        else:
-            run = run_capability_request(repo_root=root, registry=definitions,
-                capability_request=request, output_file=output, timeout_sec=240)
-            receipt = run.receipt
-        record["receipt"] = receipt
-        if receipt.get("success"):
-            execution_receipt = receipt.get("execution", receipt)
-            url = execution_receipt["outputs"]["pr_url"]
-            observed = subprocess.run(["gh", "pr", "view", url, "--json",
-                "url,headRefName,baseRefName,headRefOid,state"], cwd=root,
-                capture_output=True, text=True, check=True, timeout=20)
-            actual = json.loads(observed.stdout)
-            if (actual.get("url") != url or actual.get("headRefName") != endpoint["source_branch"]
-                    or actual.get("baseRefName") != endpoint["target_branch"]
-                    or actual.get("headRefOid") != _git(root, "rev-parse", "HEAD")
-                    or actual.get("state") != "OPEN"):
-                raise ValueError("published PR endpoint is unverified; reconcile read-only")
-            record.update(delivered=True, status="succeeded", pr=actual)
-        else:
-            # A failed publisher may already have pushed/created a PR.
-            record["status"] = "unknown"
-        atomic_write_bytes(path, canonical_json(record))
-        return record
+        def before_dispatch():
+            if validate_compact_action(issue_dir, root)["authority_digest"] != context["authority_digest"]:
+                raise ValueError("publication authority changed during delivery")
+        return publish_resolved_pr(issue_dir, root, output, context=context,
+            before_dispatch=before_dispatch,
+            registry=registry, approval_task_id=approval_task_id,
+            correlation_id=correlation_id)
     return WorkflowHost(issue_dir).run(action, hosting="foreground").result

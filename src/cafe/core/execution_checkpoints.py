@@ -84,9 +84,8 @@ def require_checkpoint(context, receipt, boundary):
 
 
 def load_execution_context(path: Path):
-    if path.is_symlink() or path.stat().st_size > 256 * 1024:
-        raise ValueError("execution context must be a bounded regular file")
-    context = json.loads(path.read_text(encoding="utf-8"))
+    from cafe.core.execution_artifacts import load_execution_artifact
+    context = load_execution_artifact(path)
     context_digest(context)
     return context
 
@@ -154,9 +153,8 @@ def require_current_review(context, evidence, *, native_observations=None):
 
 
 def load_review_evidence(path: Path):
-    if path.is_symlink() or path.stat().st_size > 256 * 1024:
-        raise ValueError("native review evidence must be a bounded regular file")
-    return json.loads(path.read_text(encoding="utf-8"))
+    from cafe.core.execution_artifacts import load_execution_artifact
+    return load_execution_artifact(path)
 
 
 def require_verified_review(context, evidence):
@@ -168,7 +166,6 @@ def require_verified_review(context, evidence):
 
 def guard_execution_delivery(context, request, *, issue_dir, output_dir):
     """Check resolved scope/endpoint before an existing workflow publication hook."""
-    import hashlib
     import subprocess
     endpoint = context["delivery_endpoint"]
     args = request.get("args", {})
@@ -181,8 +178,8 @@ def guard_execution_delivery(context, request, *, issue_dir, output_dir):
             text=True, check=True, timeout=20).stdout.strip()
     if git("symbolic-ref", "--short", "HEAD") != endpoint["source_branch"]:
         raise ValueError("publication source branch changed")
-    remote = git("remote", "get-url", "--push", "--all", endpoint["remote"])
-    if "\n" in remote or hashlib.sha256(remote.encode()).hexdigest() != endpoint["remote_identity"]:
+    from cafe.core.git_delivery import remote_identity
+    if remote_identity(root, endpoint["remote"], endpoint["route"]) != endpoint["remote_identity"]:
         raise ValueError("publication remote endpoint changed")
     command = list(context["checkpoint_command"]) + ["--boundary", "before_delivery",
         "--round-id", "publication", "--parent-id", "publication-hook", "--output",

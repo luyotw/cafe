@@ -3739,8 +3739,9 @@ class BlackboardWorkflowRuntime:
                 if (readiness.get("authority_digest") != self.execution_context["authority_digest"] or
                         readiness.get("endpoint") != self.execution_context["delivery_endpoint"]):
                     raise ValueError("delivery readiness differs from the confirmed endpoint")
-                from cafe.core.packet_io import atomic_write_bytes, canonical_json
-                atomic_write_bytes(self.issue_dir / "execution_delivery.json", canonical_json(readiness))
+                from cafe.core.packet_io import atomic_write_bytes
+                from cafe.core.execution_artifacts import bounded_execution_json
+                atomic_write_bytes(self.issue_dir / "execution_delivery.json", bounded_execution_json(readiness))
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 result = self._emit_pause(current_step=current_step, status_code="DELIVERY_READINESS_BLOCKED",
                     runtime=runtime, reason=str(exc), pause_intent=HandoffIntent.NEED_CLARIFICATION)
@@ -3755,8 +3756,9 @@ class BlackboardWorkflowRuntime:
                 observations = load_review_evidence(iteration / "native_invocations.json")
                 require_current_review(self.execution_context, evidence, native_observations=observations)
                 evidence["native_observations"] = observations
-                from cafe.core.packet_io import atomic_write_bytes, canonical_json
-                atomic_write_bytes(self.issue_dir / "execution_review.json", canonical_json(evidence))
+                from cafe.core.packet_io import atomic_write_bytes
+                from cafe.core.execution_artifacts import bounded_execution_json
+                atomic_write_bytes(self.issue_dir / "execution_review.json", bounded_execution_json(evidence))
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 result = self._emit_pause(current_step=current_step, status_code="NATIVE_REVIEW_BLOCKED",
                     runtime=runtime, reason=str(exc), pause_intent=HandoffIntent.NEED_CLARIFICATION)
