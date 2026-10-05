@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.7.4] - 2026-10-05
+
+### Changed
+
+- Use LibYAML's safe loader when available, retaining the Python safe-loader
+  fallback and existing validation contracts.
+- Reuse bounded, content-keyed skill frontmatter parsing while rereading files
+  and returning independent metadata to each caller.
+- Isolate kickoff test catalogs and run release tests with configurable workers
+  and work stealing, preserving the complete regression case inventory.
+- Record per-stage release timings and logs in separate directories for every
+  run, including failed runs.
+
+### Fixed
+
+- Include the YAML helper in kickoff catalog dependency fingerprints.
+- Ignore `.DS_Store` files in repository worktrees.
+
+See [the v0.7.4 release notes](docs/releases/v0.7.4.md) for performance details,
+release-check controls, and upgrade guidance.
+
 ## [0.7.3] - 2026-10-05
 
 This release uses the explicitly requested `0.7.3` version and includes new
