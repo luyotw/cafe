@@ -1,0 +1,422 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "id": "agent.stdout-idle",
+      "title": "Agent stdout idle watchdog",
+      "status": "active",
+      "lifecycle": {
+        "introduced": null,
+        "changed": null,
+        "resolved": null,
+        "historical_evidence": "Bounded Git history and current source inspected at ba2fab07b93061a59ebc2d4638ea158e6690a87d; first release not established. Observed behavior predates registry publication.",
+        "observed_version": "0.7.2"
+      },
+      "enforcement": "runtime",
+      "variants": [
+        {
+          "scope": {
+            "platforms": [
+              "linux",
+              "darwin"
+            ],
+            "operations": [
+              "managed"
+            ],
+            "capabilities": [
+              "long-command"
+            ],
+            "clis": [
+              "codex",
+              "claude",
+              "copilot"
+            ]
+          },
+          "boundary": {
+            "kind": "numeric",
+            "limits": [
+              {
+                "name": "idle",
+                "value": 300,
+                "unit": "seconds"
+              }
+            ],
+            "semantics": "Elapsed > threshold; only CAFE-read stdout lines or drained supported native activity reset idle time. Stderr and unseen tool output do not. Activity is not completion."
+          }
+        },
+        {
+          "scope": {
+            "platforms": [
+              "linux",
+              "darwin"
+            ],
+            "operations": [
+              "managed"
+            ],
+            "capabilities": [
+              "long-command"
+            ],
+            "clis": [
+              "gemini"
+            ]
+          },
+          "boundary": {
+            "kind": "numeric",
+            "limits": [
+              {
+                "name": "idle",
+                "value": 600,
+                "unit": "seconds"
+              }
+            ],
+            "semantics": "Elapsed > threshold; only CAFE-read stdout lines or drained supported native activity reset idle time. Stderr and unseen tool output do not. Activity is not completion."
+          }
+        }
+      ],
+      "trigger": "Managed CLI stops producing observed activity.",
+      "impact": "CAFE terminates a quiet subprocess.",
+      "detection": "Idle diagnostics and observed stdout/native activity timestamps.",
+      "sources": [
+        "src/cafe/agents/executor.py",
+        "src/cafe/agents/cli/codex_stream_activity.py"
+      ],
+      "mitigation": "Split work within the threshold or verify progress reaches CAFE stdout/supported native activity; preserve child exit status and separate completion evidence. Unseen background terminal output is insufficient.",
+      "escalation": "Declare constraint_assistance before starting work without observable progress.",
+      "permission_boundary": "Guidance grants no host action, worker ownership, permission approval or workflow advancement authority.",
+      "related_issues": []
+    },
+    {
+      "id": "agent.post-output-exit",
+      "title": "Post-output process exit wait",
+      "status": "active",
+      "lifecycle": {
+        "introduced": null,
+        "changed": null,
+        "resolved": null,
+        "historical_evidence": "Bounded Git history and current source inspected at ba2fab07b93061a59ebc2d4638ea158e6690a87d; first release not established. Observed behavior predates registry publication.",
+        "observed_version": "0.7.2"
+      },
+      "enforcement": "runtime",
+      "variants": [
+        {
+          "scope": {
+            "operations": [
+              "managed"
+            ],
+            "capabilities": [
+              "long-command"
+            ]
+          },
+          "boundary": {
+            "kind": "numeric",
+            "limits": [
+              {
+                "name": "exit-wait",
+                "value": 300,
+                "unit": "seconds"
+              }
+            ],
+            "semantics": "Wait starts after stdout consumption; timeout terminates with bounded kill cleanup. Existing terminal-evidence success rules remain."
+          }
+        }
+      ],
+      "trigger": "Stdout consumption finishes but process remains alive.",
+      "impact": "Process is terminated after exit wait.",
+      "detection": "post_output timeout diagnostics.",
+      "sources": [
+        "src/cafe/agents/executor.py"
+      ],
+      "mitigation": "Ensure children close stdout and exit; verify explicit completion and exit status.",
+      "escalation": "Record interruption evidence and request bounded recovery through existing routes.",
+      "permission_boundary": "Guidance grants no host action, worker ownership, permission approval or workflow advancement authority.",
+      "related_issues": []
+    },
+    {
+      "id": "agent.structured-completion",
+      "title": "Structured terminal evidence",
+      "status": "active",
+      "lifecycle": {
+        "introduced": null,
+        "changed": null,
+        "resolved": null,
+        "historical_evidence": "Bounded Git history and current source inspected at ba2fab07b93061a59ebc2d4638ea158e6690a87d; first release not established. Observed behavior predates registry publication.",
+        "observed_version": "0.7.2"
+      },
+      "enforcement": "runtime",
+      "variants": [
+        {
+          "scope": {
+            "operations": [
+              "managed"
+            ],
+            "capabilities": [
+              "structured-output"
+            ]
+          },
+          "boundary": {
+            "kind": "semantic",
+            "rule": "Parsed structured streams with durable output or explicit terminal requirement need result or turn.completed; process exit alone is insufficient."
+          }
+        }
+      ],
+      "trigger": "Structured execution has a terminal requirement.",
+      "impact": "Missing terminal event fails execution.",
+      "detection": "terminal_event_observed and structured failure diagnostics.",
+      "sources": [
+        "src/cafe/agents/executor.py",
+        "src/cafe/agents/transport.py"
+      ],
+      "mitigation": "Collect explicit terminal and required handoff evidence; do not treat progress as completion.",
+      "escalation": "Retry through existing recovery with this ID.",
+      "permission_boundary": "Guidance grants no host action, worker ownership, permission approval or workflow advancement authority.",
+      "related_issues": []
+    },
+    {
+      "id": "agent.streaming-error-retention",
+      "title": "Streaming error retention limitation",
+      "status": "active",
+      "lifecycle": {
+        "introduced": null,
+        "changed": null,
+        "resolved": null,
+        "historical_evidence": "Bounded Git history and current source inspected at ba2fab07b93061a59ebc2d4638ea158e6690a87d; first release not established. Observed behavior predates registry publication.",
+        "observed_version": "0.7.2"
+      },
+      "enforcement": "runtime",
+      "variants": [
+        {
+          "scope": {
+            "operations": [
+              "managed"
+            ],
+            "capabilities": [
+              "structured-output"
+            ]
+          },
+          "boundary": {
+            "kind": "semantic",
+            "rule": "Sanitized persistence truncates earlier streaming records to one safe error plus diagnostics."
+          }
+        }
+      ],
+      "trigger": "A streamed execution error is persisted.",
+      "impact": "Pre-error records in the streaming file are lost.",
+      "detection": "One sanitized error record replaces prior file contents.",
+      "sources": [
+        "src/cafe/agents/executor.py"
+      ],
+      "mitigation": "Diagnose using durable sanitized diagnostics; do not claim lost records are recoverable or disable sanitization.",
+      "escalation": "Refer to #492 for the separate retention repair.",
+      "permission_boundary": "Guidance grants no host action, worker ownership, permission approval or workflow advancement authority.",
+      "related_issues": [
+        "#492"
+      ]
+    },
+    {
+      "id": "callback.attempt-budget",
+      "title": "Callback execution attempt budget",
+      "status": "active",
+      "lifecycle": {
+        "introduced": null,
+        "changed": null,
+        "resolved": null,
+        "historical_evidence": "Bounded Git history and current source inspected at ba2fab07b93061a59ebc2d4638ea158e6690a87d; first release not established. Observed behavior predates registry publication.",
+        "observed_version": "0.7.2"
+      },
+      "enforcement": "runtime",
+      "variants": [
+        {
+          "scope": {
+            "consumers": [
+              "callback"
+            ],
+            "operations": [
+              "managed",
+              "event-driver"
+            ]
+          },
+          "boundary": {
+            "kind": "numeric",
+            "limits": [
+              {
+                "name": "duration",
+                "value": 60,
+                "unit": "seconds"
+              },
+              {
+                "name": "output-bytes",
+                "value": 65536,
+                "unit": "bytes"
+              },
+              {
+                "name": "output-lines",
+                "value": 128,
+                "unit": "lines"
+              }
+            ],
+            "semantics": "Per builtin bootstrap/delivery attempt, including retained native activity; not a total detached delivery wall-clock bound or native queue acceptance guarantee."
+          }
+        }
+      ],
+      "trigger": "Builtin callback launches bootstrap or delivery attempt.",
+      "impact": "An attempt exceeding time/output budget is stopped.",
+      "detection": "AgentExecutionControl limit diagnostics and callback receipts.",
+      "sources": [
+        "src/cafe/data/skills/use-cafe-workflow/scripts/workflow_event_callback.py"
+      ],
+      "mitigation": "Keep callbacks brief and bounded; inspect current facts, use ordinary workflow execution for larger work.",
+      "escalation": "Use existing workflow recovery and assistance routes.",
+      "permission_boundary": "Guidance grants no host action, worker ownership, permission approval or workflow advancement authority.",
+      "related_issues": []
+    },
+    {
+      "id": "callback.delivery-semantics",
+      "title": "Detached callback delivery",
+      "status": "active",
+      "lifecycle": {
+        "introduced": null,
+        "changed": null,
+        "resolved": null,
+        "historical_evidence": "Bounded Git history and current source inspected at ba2fab07b93061a59ebc2d4638ea158e6690a87d; first release not established. Observed behavior predates registry publication.",
+        "observed_version": "0.7.2"
+      },
+      "enforcement": "runtime",
+      "variants": [
+        {
+          "scope": {
+            "consumers": [
+              "callback"
+            ]
+          },
+          "boundary": {
+            "kind": "semantic",
+            "rule": "Asynchronous, best-effort, non-gating delivery; launch acceptance does not prove model handling or OS/webhook notification."
+          }
+        }
+      ],
+      "trigger": "Workflow launches an event callback.",
+      "impact": "Workflow does not observe delivery result.",
+      "detection": "Inspect callback dispatch/handling receipts.",
+      "sources": [
+        "src/cafe/workflow_execution/event_callback.py"
+      ],
+      "mitigation": "Distinguish launch, acceptance, model completion and notification; inspect receipts before claiming handling.",
+      "escalation": "Use separately authorized notification capabilities if required.",
+      "permission_boundary": "Guidance grants no host action, worker ownership, permission approval or workflow advancement authority.",
+      "related_issues": []
+    },
+    {
+      "id": "callback.worker-ownership",
+      "title": "Callback worker ownership boundary",
+      "status": "active",
+      "lifecycle": {
+        "introduced": null,
+        "changed": null,
+        "resolved": null,
+        "historical_evidence": "Bounded Git history and current source inspected at ba2fab07b93061a59ebc2d4638ea158e6690a87d; first release not established. Observed behavior predates registry publication.",
+        "observed_version": "0.7.2"
+      },
+      "enforcement": "policy",
+      "variants": [
+        {
+          "scope": {
+            "consumers": [
+              "callback"
+            ]
+          },
+          "boundary": {
+            "kind": "semantic",
+            "rule": "Session/dispatch locks confer no worker PID registry, cancellation authority or safe workflow-worker stop channel."
+          }
+        }
+      ],
+      "trigger": "Callback inspects or considers controlling a workflow worker.",
+      "impact": "Inferred process control can target the wrong worker.",
+      "detection": "Detached launcher has no worker ownership or stop contract.",
+      "sources": [
+        "src/cafe/workflow_execution/event_callback.py",
+        "src/cafe/data/skills/use-cafe-workflow/scripts/workflow_event_callback.py"
+      ],
+      "mitigation": "Refresh worker state and use existing authorized control paths; never kill an inferred PID.",
+      "escalation": "Escalate worker control through existing authority.",
+      "permission_boundary": "Guidance grants no host action, worker ownership, permission approval or workflow advancement authority.",
+      "related_issues": []
+    },
+    {
+      "id": "human-task.user-authority",
+      "title": "User-required HumanTask authority",
+      "status": "active",
+      "lifecycle": {
+        "introduced": null,
+        "changed": null,
+        "resolved": null,
+        "historical_evidence": "Bounded Git history and current source inspected at ba2fab07b93061a59ebc2d4638ea158e6690a87d; first release not established. Observed behavior predates registry publication.",
+        "observed_version": "0.7.2"
+      },
+      "enforcement": "policy",
+      "variants": [
+        {
+          "scope": {
+            "consumers": [
+              "authority"
+            ]
+          },
+          "boundary": {
+            "kind": "semantic",
+            "rule": "Mandatory/user-required decisions and capability/permission approval remain human-only; confirmed eligible automation contracts retain existing behavior."
+          }
+        }
+      ],
+      "trigger": "An agent or callback considers answering a HumanTask.",
+      "impact": "An unauthorized answer cannot advance the workflow.",
+      "detection": "Inspect task authority decision and confirmed contract.",
+      "sources": [
+        "src/cafe/manager/task_authority.py",
+        "src/cafe/core/human_tasks.py"
+      ],
+      "mitigation": "Route mandatory/user-required decisions through the existing HumanTask; never infer authority from this registry.",
+      "escalation": "Request the user's decision via the existing handoff.",
+      "permission_boundary": "Guidance grants no host action, worker ownership, permission approval or workflow advancement authority.",
+      "related_issues": []
+    },
+    {
+      "id": "execution.primary-only-chain",
+      "title": "Configured chain boundary",
+      "status": "active",
+      "lifecycle": {
+        "introduced": null,
+        "changed": null,
+        "resolved": null,
+        "historical_evidence": "Bounded Git history and current source inspected at ba2fab07b93061a59ebc2d4638ea158e6690a87d; first release not established. Observed behavior predates registry publication.",
+        "observed_version": "0.7.2"
+      },
+      "enforcement": "runtime",
+      "variants": [
+        {
+          "scope": {
+            "operations": [
+              "managed"
+            ],
+            "consumers": [
+              "single-chain"
+            ]
+          },
+          "boundary": {
+            "kind": "semantic",
+            "rule": "A single-entry chain has no backup; failure is re-raised. Only explicitly configured multi-entry chains allow existing fallback behavior."
+          }
+        }
+      ],
+      "trigger": "Primary fails and no fallback entry exists.",
+      "impact": "Execution stops for a decision.",
+      "detection": "Inspect configured chain and failed attempt evidence.",
+      "sources": [
+        "src/cafe/agents/manager.py"
+      ],
+      "mitigation": "Do not infer or append backups; retain the confirmed chain.",
+      "escalation": "Chain changes require existing authorization.",
+      "permission_boundary": "Guidance grants no host action, worker ownership, permission approval or workflow advancement authority.",
+      "related_issues": []
+    }
+  ]
+}
