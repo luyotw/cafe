@@ -10,6 +10,7 @@ from typing import Any, Dict, Iterable, Optional
 import yaml
 
 from cafe.core.conversation_locale import DEFAULT_CONVERSATION_LOCALE, normalize_locale_tag
+from cafe.utils.yaml_utils import safe_load
 
 #: Used when the repository has not confirmed a content locale of its own.
 DEFAULT_CONTENT_LOCALE = DEFAULT_CONVERSATION_LOCALE
@@ -97,7 +98,7 @@ def load_strategic_context(project_root: Path | str = Path.cwd(), issue_name: Op
         )
 
     try:
-        raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        raw = safe_load(config_path.read_text(encoding="utf-8")) or {}
     except (OSError, yaml.YAMLError):
         # An unreadable or unparseable strategic context must not crash the
         # workflow; degrade to the missing-file shape so the alignment policy

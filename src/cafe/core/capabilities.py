@@ -32,6 +32,7 @@ from pydantic import (
 from cafe.core.execution_boundary import redact
 from cafe.core.human_task_notifications import NotificationPresentation
 from cafe.utils.github import GitHubOps
+from cafe.utils.yaml_utils import safe_load
 
 CAPABILITY_PR_PUBLISH_ID = "cafe.pr.publish"
 CAPABILITY_BROWSER_OPEN_ID = "cafe.browser.open"
@@ -408,7 +409,7 @@ def load_capability_registry(
                 raise CapabilityRegistryError(f"Cannot read capability file {path}") from exc
             try:
                 if path.suffix.lower() in {".yaml", ".yml"}:
-                    data = yaml.safe_load(raw)
+                    data = safe_load(raw)
                 else:
                     data = json.loads(raw)
             except (yaml.YAMLError, json.JSONDecodeError) as exc:
@@ -1146,7 +1147,7 @@ def _sync_issue_comment_adapter(
         if output.resolve() != output_file.resolve():
             raise ValueError("output_mismatch")
         issue_dir = output.parents[2]
-        issue_config = yaml.safe_load((issue_dir / "issue.yaml").read_text(encoding="utf-8")) or {}
+        issue_config = safe_load((issue_dir / "issue.yaml").read_text(encoding="utf-8")) or {}
     except (OSError, ValueError, IndexError, yaml.YAMLError) as exc:
         raise CapabilityExecutionError(VALIDATION_ERROR, "issue_context_invalid") from exc
     phase_config = issue_config.get(phase) or {}

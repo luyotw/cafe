@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import importlib.util
 import copy
 import hashlib
+import importlib.util
 import json
 import sys
 from datetime import datetime, timedelta, timezone
@@ -17,10 +17,10 @@ import yaml
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 UNIT_ROOT = PROJECT_ROOT / "tests/unit"
 sys.path.insert(0, str(UNIT_ROOT))
-from _kickoff_test_support import load_kickoff_module
 import kickoff_inputs
+from _kickoff_test_support import load_kickoff_module
 
-pytestmark = pytest.mark.release_extended
+pytestmark = [pytest.mark.release_extended, pytest.mark.usefixtures("isolated_global_catalog")]
 
 
 @pytest.fixture(scope="module")
@@ -28,7 +28,10 @@ def repository_catalog(tmp_path_factory):
     """Resolve the unchanged repository catalog once for input-focused CLI journeys."""
     from cafe.catalogs.resolver import CatalogResolver
 
-    resolver = CatalogResolver(project_root=PROJECT_ROOT)
+    resolver = CatalogResolver(
+        project_root=PROJECT_ROOT,
+        global_root=tmp_path_factory.mktemp("kickoff-global") / ".cafe",
+    )
     return load_kickoff_module("kickoff_catalog").discover_index(
         project_root=PROJECT_ROOT,
         global_root=resolver.global_root,
@@ -1129,9 +1132,9 @@ def test_parallel_report_capture_preserves_both_original_report_references(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """U14-U16/I06: parallel producer outputs cannot lose a sibling report."""
+    import threading
     from concurrent.futures import ThreadPoolExecutor
     from contextlib import contextmanager
-    import threading
 
     cli = load_kickoff_module("prepare_kickoff")
     stores = load_kickoff_module("_kickoff_store")

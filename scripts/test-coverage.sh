@@ -11,7 +11,7 @@ REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 cd "$REPO_ROOT"
 
 PROJECT_PYTHON=".venv/bin/python"
-REPORT_DIR=".cafe/reports"
+REPORT_DIR="${CAFE_TEST_REPORT_DIR:-.cafe/reports}"
 JUNIT_REPORT="$REPORT_DIR/test-durations-latest.xml"
 TEST_LOG="$REPORT_DIR/test-coverage-latest.log"
 
@@ -57,8 +57,13 @@ if [ "${CAFE_RELEASE_FAST_TESTS:-0}" = "1" ]; then
     TEST_SELECTION=(-m 'not release_extended or release_smoke')
 fi
 
+TEST_WORKERS="${CAFE_TEST_WORKERS:-8}"
+case "$TEST_WORKERS" in
+    ''|*[!0-9]*) echo "CAFE_TEST_WORKERS must be a non-negative integer" >&2; exit 2 ;;
+esac
+
 "$PROJECT_PYTHON" -m pytest tests/unit/ tests/integration/ "${TEST_SELECTION[@]}" -q --tb=short \
-    -n 8 --dist=load \
+    -n "$TEST_WORKERS" --dist=worksteal \
     --cov=cafe --cov-report=term-missing --cov-fail-under=75 \
     --durations=50 --durations-min=0.5 \
     --junitxml="$JUNIT_REPORT" | tee "$TEST_LOG"

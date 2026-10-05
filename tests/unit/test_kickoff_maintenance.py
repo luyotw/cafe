@@ -1,5 +1,4 @@
 """U05/U12/U13/I05/I07: public evidence transactions and recoverable capture."""
-import hashlib
 import io
 import json
 import sys
@@ -9,6 +8,8 @@ from pathlib import Path
 from threading import Barrier
 
 import pytest
+
+pytestmark = pytest.mark.usefixtures("isolated_global_catalog")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _kickoff_test_support import load_kickoff_module

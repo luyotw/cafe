@@ -11,10 +11,14 @@ import typer
 import yaml
 from rich.console import Console
 
-from cafe.ui.commands import lifecycle as lifecycle_commands
 from cafe.ui.cli_shared import _load_issue_step_names
-from cafe.ui.inquirer_prompts import prompt_confirm, prompt_text  # noqa: F401 — kept for type resolution; actual calls go through cli for test-patch compat
+from cafe.ui.commands import lifecycle as lifecycle_commands
+from cafe.ui.inquirer_prompts import (  # noqa: F401 — kept for type resolution; actual calls go through cli for test-patch compat
+    prompt_confirm,
+    prompt_text,
+)
 from cafe.utils.config import ConfigError, ConfigManager
+from cafe.utils.yaml_utils import safe_load
 
 ALL_PHASES = ["spec", "plan", "develop", "review", "pr"]
 console = Console()
@@ -192,7 +196,7 @@ def list_issues() -> None:
         if config_file.exists():
             try:
                 with open(config_file, "r") as f:
-                    config = yaml.safe_load(f)
+                    config = safe_load(f)
                     if config and "worktree_path" in config:
                         worktree_path = config["worktree_path"]
             except Exception:
@@ -343,7 +347,7 @@ def remove_issue(
             issue_yaml = issue_path / "issue.yaml"
             if issue_yaml.exists():
                 try:
-                    config_data = yaml.safe_load(issue_yaml.read_text(encoding="utf-8")) or {}
+                    config_data = safe_load(issue_yaml.read_text(encoding="utf-8")) or {}
                 except Exception:
                     config_data = {}
                 raw_worktree_path = config_data.get("worktree_path")

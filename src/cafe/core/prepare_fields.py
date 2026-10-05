@@ -9,13 +9,13 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
-import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from cafe.catalogs.resolver import global_catalog_lock
 from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.loader import SkillLoader
 from cafe.templates.manager import TemplateManager
+from cafe.utils.yaml_utils import safe_load
 
 ALLOWED_WRITE_TARGETS = frozenset(
     {
@@ -245,7 +245,7 @@ def _load_static_document(path: Path) -> Any:
     suffix = path.suffix.lower()
     if suffix == ".json":
         return json.loads(text)
-    return yaml.safe_load(text)
+    return safe_load(text)
 
 
 def load_fields_ref(

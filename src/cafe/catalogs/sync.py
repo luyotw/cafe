@@ -43,6 +43,7 @@ from cafe.catalogs.transactions import (
     retire_committed_transaction,
     write_json_durable,
 )
+from cafe.utils.yaml_utils import safe_load
 
 
 class CatalogSyncError(ValueError):
@@ -160,7 +161,7 @@ def _frontmatter(path: Path) -> dict[str, object]:
     if end < 0:
         raise CatalogSyncError(f"Catalog entry has unterminated YAML frontmatter: {path}")
     try:
-        metadata = yaml.safe_load(text[4:end])
+        metadata = safe_load(text[4:end])
     except yaml.YAMLError as exc:
         raise CatalogSyncError(f"Catalog entry has invalid YAML frontmatter: {path}") from exc
     if not isinstance(metadata, dict):
@@ -171,7 +172,7 @@ def _frontmatter(path: Path) -> dict[str, object]:
 def _validate_publishable(kind: CatalogKind, key: str, path: Path) -> None:
     if kind is CatalogKind.PLAYBOOK:
         try:
-            document = yaml.safe_load(path.read_text(encoding="utf-8"))
+            document = safe_load(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, yaml.YAMLError) as exc:
             raise CatalogSyncError(f"Invalid playbook {key}: {path}") from exc
         if not isinstance(document, dict):

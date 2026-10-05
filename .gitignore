@@ -14,3 +14,4 @@
 .cursor-agent
 dist/
 configs/
+**/.DS_Store

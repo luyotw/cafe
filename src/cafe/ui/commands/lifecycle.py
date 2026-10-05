@@ -20,6 +20,7 @@ from cafe.core.blackboard import (
 from cafe.core.conversation_locale import ConversationLocaleError, supplied_locale_from_inputs
 from cafe.updates.service import UpdateApplyError, UpdateService
 from cafe.utils.issue_config import resolve_issue_config_path, resolve_issue_id
+from cafe.utils.yaml_utils import safe_load
 
 VALID_PHASES = ["spec", "plan", "develop", "review", "pr"]
 
@@ -1214,7 +1215,7 @@ def _remove_worktree_inventory_pointer(
     if not pointer_file.is_file() or {path.name for path in pointer_dir.iterdir()} != {"issue.yaml"}:
         return
     try:
-        pointer = yaml.safe_load(pointer_file.read_text(encoding="utf-8"))
+        pointer = safe_load(pointer_file.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, yaml.YAMLError):
         return
     if not isinstance(pointer, dict) or set(pointer) != {"issue_name", "worktree_path"}:
@@ -1430,7 +1431,7 @@ def close(
             raise typer.Exit(1)
 
         with open(issue_config_file, "r", encoding="utf-8") as f:
-            config_data = yaml.safe_load(f)
+            config_data = safe_load(f)
 
         pr_auto_create = config_data.get("pr", {}).get("auto_create", False)
         if message is not None and not squash:
@@ -1855,7 +1856,7 @@ def restore(issue_name: str = typer.Argument(..., help="Issue name to restore"))
             raise typer.Exit(1)
 
         with open(issue_config_file, "r", encoding="utf-8") as f:
-            config_data = yaml.safe_load(f)
+            config_data = safe_load(f)
 
         feature_branch = config_data.get("feature_branch", issue_name)
         worktree_path = config_data.get("worktree_path")

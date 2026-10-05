@@ -18,6 +18,7 @@ import yaml
 
 from cafe.core.conversation_locale import DEFAULT_CONVERSATION_LOCALE
 from cafe.core.runtime_locales import render_text
+from cafe.utils.yaml_utils import safe_load
 
 SLACK_WEBHOOK_FILENAME = ".slack-webhook"
 TEST_RUN_SLACK_WEBHOOK_FILENAME = ".cafe/test-slack-webhook"
@@ -75,7 +76,7 @@ def _load_machine_config() -> tuple[Path, dict[object, object]]:
             raise SlackNotificationError(
                 "validation_error", "human_task_notification_config_invalid"
             )
-        raw_config = yaml.safe_load(config_bytes.decode("utf-8"))
+        raw_config = safe_load(config_bytes.decode("utf-8"))
     except SlackNotificationError:
         raise
     except (OSError, UnicodeError, yaml.YAMLError) as exc:

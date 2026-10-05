@@ -34,6 +34,7 @@ from cafe.skills.loader import SkillLoader
 from cafe.utils.config import ConfigError, ConfigManager
 from cafe.utils.git_utils import get_git_toplevel, get_repo_root
 from cafe.utils.phase_config import load_phase_step_model
+from cafe.utils.yaml_utils import safe_load
 from cafe.workflow_execution.phase_bindings import resolve_phase_binding
 
 VALID_CONTENT_TYPES = [
@@ -407,7 +408,7 @@ def _resolve_issue_playbook_name(issue_name: str) -> str:
     issue_config_file = issue_dir / "issue.yaml"
     if issue_config_file.exists():
         try:
-            config = yaml.safe_load(issue_config_file.read_text(encoding="utf-8")) or {}
+            config = safe_load(issue_config_file.read_text(encoding="utf-8")) or {}
         except (OSError, yaml.YAMLError) as exc:
             raise ValueError(f"Issue {issue_name!r} has unreadable workflow metadata") from exc
         if not isinstance(config, dict):
@@ -446,7 +447,7 @@ def _load_issue_step_names(issue_name: str) -> List[str]:
 
     if playbook_name is None and issue_config_file.exists():
         try:
-            config = yaml.safe_load(issue_config_file.read_text(encoding="utf-8")) or {}
+            config = safe_load(issue_config_file.read_text(encoding="utf-8")) or {}
         except (OSError, yaml.YAMLError) as exc:
             raise ValueError(f"Issue {issue_name!r} has unreadable workflow metadata") from exc
         if not isinstance(config, dict):
@@ -883,14 +884,13 @@ def _handle_declared_human_task_handoff(
     """Render and apply any step-declared human task through one shared path."""
     from cafe.core.human_tasks import HumanTaskPolicyError
     from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
+    from cafe.skills.loader import SkillLoader
     from cafe.ui.human_tasks import (
         apply_human_task_payload,
         collect_human_task_payload,
         latest_step_iteration,
         resolve_step_human_task,
     )
-
-    from cafe.skills.loader import SkillLoader
 
     record_store = HumanTaskRecordStore(issue_dir)
     if summary:
