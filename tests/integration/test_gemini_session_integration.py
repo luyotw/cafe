@@ -163,7 +163,7 @@ class TestGeminiSessionIntegration:
             # Primary fallback runs Gemini and establishes its session
             return mock_process(
                 [
-                    '{"type":"init","session_id":"gemini-issue-session-111","model":"auto"}\n',
+                    '{"type":"init","session_id":"gemini-issue-session-111","model":"gemini-pro"}\n',
                     '{"type":"message","role":"assistant","content":"Fallback response"}\n',
                     '{"response": "Fallback response"}\n',
                 ],
@@ -177,6 +177,9 @@ class TestGeminiSessionIntegration:
             )
 
         assert response1 == "Fallback response"
+        saved = session_manager.load_session("PM_Agent", AgentCLI.GEMINI, issue_name, "spec")
+        assert saved is not None and saved.session_id == fallback_session
+        assert session_manager.load_session("PM_Agent", AgentCLI.CLAUDE, issue_name, "spec") is None
 
         (issue_dir / "active_clis.json").write_text(
             '{"PM_Agent": {"cli": "gemini", "model": "gemini-pro", "configured_primary": "claude", "step_name": "spec", "updated_at": "2026-06-13T00:00:00+08:00"}}',
@@ -190,7 +193,7 @@ class TestGeminiSessionIntegration:
             second_call_commands.append(list(cmd))
             return mock_process(
                 [
-                    '{"type":"init","session_id":"gemini-issue-session-111","model":"auto"}\n',
+                    '{"type":"init","session_id":"gemini-issue-session-111","model":"gemini-pro"}\n',
                     '{"type":"message","role":"assistant","content":"Second response"}\n',
                     '{"response": "Second response"}\n',
                 ]

@@ -154,6 +154,7 @@ class AgentExecutor:
         self.config = config
         self.stream_output = stream_output
         self._total_token_usage = TokenUsage()
+        self.on_session_observed: Callable[[str], None] | None = None
 
     def _get_cli_strategy(self) -> AbstractCLI:
         """Get the appropriate CLI strategy based on config.
@@ -354,6 +355,7 @@ class AgentExecutor:
                     process_cwd=process_cwd,
                     execution_control=execution_control,
                     allow_session_recovery=not exact_session,
+                    expected_session_id=self.config.session_id if exact_session else None,
                 )
             else:
                 # Only use response parser for stream-json formats
@@ -494,6 +496,7 @@ class AgentExecutor:
                 process_cwd=process_cwd,
                 execution_control=execution_control,
                 structured_records=records,
+                expected_session_id=expected_session_id,
                 structured_record_observer=observe_record,
                 require_terminal_stream_event=True,
                 response_parser=lambda lines: self._parse_using_strategy(strategy, lines),
@@ -1206,8 +1209,15 @@ class AgentExecutor:
         if activity is not None:
             try:
                 activity.__enter__()
-                environment = kwargs.get("env", args[0] if args else None) or os.environ
+                supplied_environment = kwargs.get("env", args[0] if args else None)
+                environment = dict(
+                    os.environ if supplied_environment is None else supplied_environment
+                )
                 observed_cmd = activity.command(cmd, environment)
+                if args:
+                    args = (environment, *args[1:])
+                else:
+                    kwargs["env"] = environment
             except (OSError, ValueError) as cause:
                 activity.__exit__(None, None, None)
                 raise AgentExecutionError(
@@ -1237,6 +1247,7 @@ class AgentExecutor:
         structured_record_observer: Callable[[dict[str, Any]], None] | None = None,
         require_terminal_stream_event: bool = False,
         stream_activity: StreamActivity | None = None,
+        expected_session_id: str | None = None,
     ) -> AgentResponse:
         """Execute command with streaming output.
 
@@ -1305,6 +1316,7 @@ class AgentExecutor:
         retained_output_bytes = 0
         received_terminal_stream_event = False
         try:
+            startup_fatal_error = False
             if sys.platform != "win32":
                 process_output.first_stderr_ready.wait(timeout=0.5)
                 stderr_line = process_output.first_stderr_line
@@ -1312,38 +1324,15 @@ class AgentExecutor:
                     # Only treat as fatal error if it's NOT a tool execution error
                     # Tool errors like "Error executing tool" are recoverable and agent continues
                     is_tool_error = "error executing tool" in stderr_line.lower()
-                    is_fatal_error = stderr_line and (
+                    startup_fatal_error = stderr_line and (
                         "already in use" in stderr_line.lower()
                         or "limit reached" in stderr_line.lower()
                         or "hit your limit" in stderr_line.lower()
                         or ("error" in stderr_line.lower() and not is_tool_error)
                     )
-
-                    if is_fatal_error:
-                        # Likely a fatal error, read rest and terminate
-                        process.kill()
-                        process.wait(timeout=2)
-                        full_stderr = process_output.stderr_text()
-
-                        error_type, display_message = self._classify_execution_error(
-                            cli_name, full_stderr
-                        )
-
-                        # Attach actual CLI arguments to error object for history recording
-                        err = AgentExecutionError(
-                            f"{cli_name} execution failed: {full_stderr}",
-                            error_type=error_type,
-                            display_message=display_message or (
-                                f"{cli_name} failed before producing a complete response."
-                            ),
-                        )
-                        # Exclude executable itself (e.g. 'gemini' / 'claude')
-                        err.cli_command_args = cmd[1:]
-                        raise err
-
             # Agent narration may be muted for a supervising driver. Parsing, durable
             # streaming logs, lifecycle events, and error output remain unaffected.
-            if self.stream_output:
+            if self.stream_output and not startup_fatal_error:
                 print(f"\n{'=' * 80}")
                 print(f"{cli_name} Response (streaming):")
                 print(f"{'=' * 80}")
@@ -1359,6 +1348,7 @@ class AgentExecutor:
             observation_strategy = self._get_cli_strategy()
             parsed_for_call = None
             session_id = None
+            legacy_session_id = None
             model: Optional[str] = None
             permission_denials: List[PermissionDenial] = []
             retained_output_bytes = 0
@@ -1533,16 +1523,47 @@ class AgentExecutor:
                         streaming_file_handle.write(encoded_activity)
                         streaming_file_handle.flush()
 
+            def raise_startup_error() -> None:
+                # Drain already received identity events before acting on startup
+                # stderr. Otherwise a fast CLI failure discards its session ID.
+                nonlocal returncode
+                process.kill()
+                returncode = process.wait(timeout=2)
+                full_stderr = process_output.stderr_text()
+                error_type, display_message = self._classify_execution_error(
+                    cli_name, full_stderr
+                )
+                error = AgentExecutionError(
+                    f"{cli_name} execution failed: {full_stderr}",
+                    error_type=error_type,
+                    display_message=display_message or (
+                        f"{cli_name} failed before producing a complete response."
+                    ),
+                )
+                error.cli_command_args = cmd[1:]
+                persist_safe_stream_error(error)
+                raise error
+
+            startup_error_deadline = (
+                time.monotonic() + 1 if startup_fatal_error else None
+            )
             try:
                 if process.stdout:
                     while True:
+                        if (
+                            startup_error_deadline is not None
+                            and time.monotonic() >= startup_error_deadline
+                        ):
+                            raise_startup_error()
                         if execution_limit_reached.is_set():
                             break
                         record_stream_activity()
                         if execution_limit_reached.is_set():
                             break
                         try:
-                            line = process_output.readline(timeout=1.0)
+                            line = process_output.readline(
+                                timeout=0.1 if startup_fatal_error else 1.0
+                            )
                         except ProcessOutputError as cause:
                             error = AgentExecutionError(
                                 "Unable to read provider output.", error_type="pipe_read_error"
@@ -1550,6 +1571,8 @@ class AgentExecutor:
                             persist_safe_stream_error(error)
                             raise error from cause
                         except Empty:
+                            if startup_fatal_error:
+                                raise_startup_error()
                             # Activity can arrive while stdout readline is waiting.
                             record_stream_activity()
                             if execution_limit_reached.is_set():
@@ -1560,6 +1583,8 @@ class AgentExecutor:
                                 break
                             continue
                         if line is None:
+                            if startup_fatal_error:
+                                raise_startup_error()
                             break
 
                         line_bytes = len(line.encode("utf-8", errors="replace"))
@@ -1631,6 +1656,63 @@ class AgentExecutor:
                                     reported_model=observation_evidence.reported_model or observed.reported_model,
                                     failure_code=failure,
                                 )
+                                if (
+                                    session_id is None
+                                    and observation_evidence.observed_session_id is not None
+                                    and observation_evidence.failure_code is None
+                                ):
+                                    session_id = observation_evidence.observed_session_id
+                                    if (
+                                        expected_session_id is not None
+                                        and session_id != expected_session_id
+                                    ):
+                                        observation_evidence = replace(
+                                            observation_evidence,
+                                            failure_code="session_mismatch",
+                                        )
+                                        error = AgentExecutionError(
+                                            "Provider session does not match "
+                                            "the exact continuation.",
+                                            error_type="session_mismatch",
+                                        )
+                                        persist_safe_stream_error(error)
+                                        raise error
+                                    try:
+                                        if self.on_session_observed is not None:
+                                            self.on_session_observed(session_id)
+                                    except AgentExecutionError as error:
+                                        observation_evidence = replace(
+                                            observation_evidence, failure_code=error.error_type
+                                        )
+                                        persist_safe_stream_error(error)
+                                        raise
+                                    except Exception as cause:
+                                        error = AgentExecutionError(
+                                            "Unable to persist the observed agent session.",
+                                            error_type="session_persistence_error",
+                                        )
+                                        persist_safe_stream_error(error)
+                                        raise error from cause
+                                    self.config.session_id = session_id
+                                # Older Claude response records carry the identity
+                                # without an init event. Preserve their successful
+                                # completion path; only authoritative init events
+                                # are eligible for immediate persistence.
+                                if (
+                                    self.config.cli == AgentCLI.CLAUDE
+                                    and session_id is None
+                                    and "session_id" in data
+                                    and data.get("type") in {None, "assistant", "result"}
+                                ):
+                                    candidate = _validated_evidence_scalar(
+                                        data["session_id"], strip=True
+                                    )
+                                    if _has_evidence_conflict((legacy_session_id, candidate)):
+                                        observation_evidence = replace(
+                                            observation_evidence,
+                                            failure_code="conflicting_session_evidence",
+                                        )
+                                    legacy_session_id = legacy_session_id or candidate
                                 if data.get("type") in terminal_stream_event_types:
                                     received_terminal_stream_event = True
                                 if isinstance(data, dict) and structured_records is not None:
@@ -1690,16 +1772,6 @@ class AgentExecutor:
                                     persist_safe_stream_error(err)
                                     raise err
 
-                                # Extract session_id (from init message for Gemini, or any message for Claude)
-                                if "session_id" in data and not session_id:
-                                    session_id = data["session_id"]
-                                elif (
-                                    data.get("type") == "thread.started"
-                                    and "thread_id" in data
-                                    and not session_id
-                                ):
-                                    session_id = data["thread_id"]
-
                                 # Extract token usage (usually in final message)
                                 if "usage" in data:
                                     usage_data = data["usage"]
@@ -1748,6 +1820,8 @@ class AgentExecutor:
                                 # process exit: that loses mid-turn failures.
                                 if data.get("type") in terminal_stream_event_types:
                                     received_terminal_stream_event = True
+                                    if startup_fatal_error:
+                                        raise_startup_error()
                                     break
 
                                 # Extract content using custom extractor or default Claude extractor
@@ -2012,6 +2086,21 @@ class AgentExecutor:
                     print(f"⚠️  Failed to close streaming output file: {e}")
 
             # Save session_id if extracted (always update to handle session expiration)
+            if session_id is None and observation_evidence.failure_code is None:
+                session_id = legacy_session_id
+                if (
+                    session_id is not None and expected_session_id is not None
+                    and session_id != expected_session_id
+                ):
+                    observation_evidence = replace(
+                        observation_evidence, failure_code="session_mismatch"
+                    )
+                    error = AgentExecutionError(
+                        "Provider session does not match the exact continuation.",
+                        error_type="session_mismatch",
+                    )
+                    persist_safe_stream_error(error)
+                    raise error
             if session_id:
                 self.config.session_id = session_id
 

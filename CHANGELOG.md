@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.7.2] - 2026-10-05
+
+### Fixed
+
+- Preserve separate bounded stderr diagnostics for each execution attempt,
+  including failures, and prevent successful structured tool output from
+  misclassifying a provider exit or executor timeout.
+- Persist authoritative observed provider session identities before execution
+  completes, across primary, retry, and backup attempts, while retaining exact
+  continuation and persistence-failure checks.
+- Observe native Codex WebSocket delta and cumulative counters for quiet-stdout
+  idle detection, with invocation-only metric export, bounded metadata, replay
+  rejection, and existing completion and budget requirements.
+- Reassess kickoff playbook recommendations against current confirmed scope and
+  accepted native-subagent capability evidence without treating a draft proposal
+  as a user-selected workflow or demanding a redundant capability probe.
+- Resolve the base-branch checkout from Git's worktree inventory when closing
+  from nested linked worktrees.
+
+See [the v0.7.2 release notes](docs/releases/v0.7.2.md) for execution diagnostics,
+activity detection, and upgrade guidance.
+
 ## [0.7.1] - 2026-10-04
 
 This release uses the explicitly requested `0.7.1` version and includes new

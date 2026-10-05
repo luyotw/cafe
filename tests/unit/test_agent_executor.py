@@ -10,6 +10,96 @@ from cafe.agents.executor import AgentExecutionControl, AgentExecutionError, Age
 from cafe.core.types import AgentConfig, AgentCLI, AgentResponse, TokenUsage
 
 
+class TestObservedSessionPersistence:
+    def run_provider(self, executor, records, **kwargs):
+        import json
+        import sys
+
+        script = "import sys; sys.stdout.write(" + repr(
+            "".join(json.dumps(record) + "\n" for record in records)
+        ) + "); sys.stdout.flush()"
+        with patch.object(
+            executor, "_build_controlled_command",
+            return_value=([sys.executable, "-u", "-c", script], None),
+        ):
+            return executor.execute("fixture", **kwargs)
+
+    def test_observer_runs_before_terminal_event(self, tmp_path):
+        import sys
+
+        executor = AgentExecutor(AgentConfig(name="fixture", cli=AgentCLI.CODEX))
+        observed = tmp_path / "observed"
+        executor.on_session_observed = lambda session: observed.write_text(session)
+        script = (
+            "import json,time; from pathlib import Path; "
+            "print(json.dumps({'type':'thread.started','thread_id':'early-session'}),flush=True); "
+            f"path=Path({str(observed)!r}); deadline=time.monotonic()+2\n"
+            "while not path.exists() and time.monotonic()<deadline: time.sleep(.01)\n"
+            "assert path.read_text()=='early-session'\n"
+            "print(json.dumps({'type':'turn.completed','usage':{}}),flush=True)"
+        )
+        with patch.object(
+            executor, "_build_controlled_command",
+            return_value=([sys.executable, "-u", "-c", script], tmp_path),
+        ):
+            response = executor.execute(
+                "fixture", execution_control=AgentExecutionControl(max_duration_seconds=3)
+            )
+        assert response.session_id == "early-session"
+
+    @pytest.mark.parametrize("session_id", [None, "", "  ", [], {}, "x" * 513])
+    def test_invalid_identity_never_reaches_observer(self, session_id):
+        executor = AgentExecutor(AgentConfig(name="fixture", cli=AgentCLI.CODEX))
+        observer = MagicMock()
+        executor.on_session_observed = observer
+        response = self.run_provider(executor, [
+            {"type": "thread.started", "thread_id": session_id},
+            {"type": "turn.completed", "usage": {}},
+        ])
+        observer.assert_not_called()
+        assert executor.config.session_id is None
+        assert response.transport_result.failure_code == "invalid_evidence"
+
+    def test_conflicting_second_identity_does_not_replace_first(self):
+        executor = AgentExecutor(AgentConfig(name="fixture", cli=AgentCLI.CODEX))
+        observer = MagicMock()
+        executor.on_session_observed = observer
+        response = self.run_provider(executor, [
+            {"type": "thread.started", "thread_id": "first"},
+            {"type": "thread.started", "thread_id": "second"},
+            {"type": "turn.completed", "usage": {}},
+        ])
+        observer.assert_called_once_with("first")
+        assert executor.config.session_id == "first"
+        assert response.transport_result.failure_code == "conflicting_session_evidence"
+
+    def test_exact_continuation_rejects_wrong_identity_before_observer(self):
+        executor = AgentExecutor(AgentConfig(
+            name="fixture", cli=AgentCLI.CODEX, session_id="expected"
+        ))
+        observer = MagicMock()
+        executor.on_session_observed = observer
+        with pytest.raises(AgentExecutionError) as caught:
+            self.run_provider(executor, [
+                {"type": "thread.started", "thread_id": "wrong"},
+                {"type": "turn.completed", "usage": {}},
+            ], exact_session=True)
+        assert caught.value.error_type == "session_mismatch"
+        observer.assert_not_called()
+        assert executor.config.session_id == "expected"
+
+    def test_non_identity_record_does_not_publish_session(self):
+        executor = AgentExecutor(AgentConfig(name="fixture", cli=AgentCLI.CODEX))
+        observer = MagicMock()
+        executor.on_session_observed = observer
+        self.run_provider(executor, [
+            {"type": "item.completed", "session_id": "tool-session"},
+            {"type": "turn.completed", "usage": {}},
+        ])
+        observer.assert_not_called()
+        assert executor.config.session_id is None
+
+
 class TestAgentExecutorBasics:
     """Test basic AgentExecutor functionality."""
 

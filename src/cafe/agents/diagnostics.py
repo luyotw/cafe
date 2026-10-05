@@ -121,8 +121,13 @@ def build_failed_attempt(
     evidence = getattr(error, "transport_result", None)
     if (
         isinstance(evidence, TransportResult)
-        and error_type in {"timeout", "execution_limit", "incomplete_stream"}
-        and evidence.failure_code in {None, error_type}
+        and error_type not in {
+            "conflicting_session_evidence", "invalid_evidence", "model_mismatch", "session_mismatch"
+        }
+        and evidence.failure_code in {None, error_type, "execution_failed"}
+        and evidence.failure_code not in {
+            "conflicting_session_evidence", "invalid_evidence", "model_mismatch", "session_mismatch"
+        }
     ):
         try:
             record["session_id"] = _validated_evidence_scalar(
