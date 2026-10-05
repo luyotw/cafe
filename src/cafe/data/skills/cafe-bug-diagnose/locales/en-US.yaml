@@ -1,0 +1,10 @@
+human_task.cafe_bug_diagnose.clarification_feedback.prompt: Provide the missing defect
+  decision or reproduction facts to resume the same bounded activity.
+human_task.cafe_bug_diagnose.correction_guidance: Provide a complete response in the
+  requested format; retain the confirmed defect scope and authority.
+human_task.cafe_bug_diagnose.iteration_limit.prompt: The bounded correction limit
+  was reached. Review unresolved evidence and authorize a supported limit adjustment
+  before resuming.
+human_task.cafe_bug_diagnose.iteration_limit.resume: Resume after the authorized adjustment
+human_task.cafe_bug_diagnose.permission_answers.prompt: Provide the permission decision
+  or access details for this unfinished defect activity.
