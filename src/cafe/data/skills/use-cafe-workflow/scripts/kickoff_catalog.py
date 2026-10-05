@@ -29,7 +29,7 @@ from cafe.skills.selectors import skill_selector_names
 from cafe.skills.workflow_composition import resolve_step_workflow_composition
 from cafe.utils.yaml_utils import safe_load
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 _DEPENDENCY_FILES = (
     "src/cafe/utils/yaml_utils.py",
     "src/cafe/catalogs/resolver.py",
@@ -178,6 +178,7 @@ def _candidate_details(
     )
     return {
         "id": candidate_id,
+        "contract_mode": validated_model.contract.mode,
         "source": source,
         "path": str(path),
         "applicability": applicability if isinstance(applicability, dict) else None,
@@ -203,7 +204,8 @@ def _candidate_details(
     }
 
 def discover_index(
-    *, project_root: Path, global_root: Path, builtin_root: Path, cache_file: Path
+    *, project_root: Path, global_root: Path, builtin_root: Path, cache_file: Path,
+    lightweight: bool = False, selected_id: str | None = None,
 ) -> dict[str, Any]:
     """Discover effective candidate facts and report per-candidate diagnostics."""
     resolver = CatalogResolver(
@@ -211,6 +213,27 @@ def discover_index(
         global_root=global_root,
         builtin_root=builtin_root,
     )
+    if lightweight:
+        # Resolve effective YAML metadata only. Skill composition, templates,
+        # model probes and capabilities belong to selected preparation.
+        candidates, diagnostics = [], []
+        names = [selected_id] if selected_id else resolver.keys(CatalogKind.PLAYBOOK)
+        for candidate_id in names:
+            try:
+                entry = resolver.resolve(CatalogKind.PLAYBOOK, candidate_id)
+                model = PlaybookDefinition.model_validate(normalize_playbook_yaml(
+                    safe_load(entry.path.read_text(encoding="utf-8"))))
+                applicability = model.playbook.applicability
+                candidates.append({
+                    "id": candidate_id, "source": entry.source, "path": str(entry.path),
+                    "contract_mode": model.contract.mode,
+                    "applicability": applicability.model_dump() if applicability else None,
+                    "eligible": applicability is not None, "fingerprint": entry.digest,
+                })
+            except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError) as exc:
+                diagnostics.append({"id": candidate_id, "status": "invalid",
+                                    "reason": type(exc).__name__, "detail": str(exc)[:250]})
+        return {"candidates": candidates, "diagnostics": diagnostics, "reuse": {}}
     loader = PlaybookLoader(
         project_root=project_root, global_root=global_root, builtin_root=builtin_root
     )
@@ -226,7 +249,7 @@ def discover_index(
     diagnostics: list[dict[str, str]] = []
     reuse: dict[str, bool] = {}
     try:
-        names = resolver.keys(CatalogKind.PLAYBOOK)
+        names = [selected_id] if selected_id else resolver.keys(CatalogKind.PLAYBOOK)
     except (OSError, ValueError) as exc:
         return {
             "candidates": [],

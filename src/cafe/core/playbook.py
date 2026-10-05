@@ -1003,12 +1003,20 @@ def _has_mandatory_confirmation_gate(step: StepConfig) -> bool:
     )
 
 
+class ContractForm(BaseModel):
+    """Proposal form only; never changes the execution graph or its gates."""
+
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["full", "compact"] = "full"
+
+
 class PlaybookDefinition(BaseModel):
     """Top-level playbook definition."""
 
     model_config = ConfigDict(extra="forbid")
 
     playbook: PlaybookMeta
+    contract: ContractForm = Field(default_factory=ContractForm)
     roles: Dict[str, PlaybookRole] = Field(default_factory=dict)
     skills: Optional[PlaybookSkillEnvironments] = None
     behavior: StepBehaviorDeclaration = Field(default_factory=StepBehaviorDeclaration)
