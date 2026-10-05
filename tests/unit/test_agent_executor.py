@@ -10,6 +10,96 @@ from cafe.agents.executor import AgentExecutionControl, AgentExecutionError, Age
 from cafe.core.types import AgentConfig, AgentCLI, AgentResponse, TokenUsage
 
 
+class TestObservedSessionPersistence:
+    def run_provider(self, executor, records, **kwargs):
+        import json
+        import sys
+
+        script = "import sys; sys.stdout.write(" + repr(
+            "".join(json.dumps(record) + "\n" for record in records)
+        ) + "); sys.stdout.flush()"
+        with patch.object(
+            executor, "_build_controlled_command",
+            return_value=([sys.executable, "-u", "-c", script], None),
+        ):
+            return executor.execute("fixture", **kwargs)
+
+    def test_observer_runs_before_terminal_event(self, tmp_path):
+        import sys
+
+        executor = AgentExecutor(AgentConfig(name="fixture", cli=AgentCLI.CODEX))
+        observed = tmp_path / "observed"
+        executor.on_session_observed = lambda session: observed.write_text(session)
+        script = (
+            "import json,time; from pathlib import Path; "
+            "print(json.dumps({'type':'thread.started','thread_id':'early-session'}),flush=True); "
+            f"path=Path({str(observed)!r}); deadline=time.monotonic()+2\n"
+            "while not path.exists() and time.monotonic()<deadline: time.sleep(.01)\n"
+            "assert path.read_text()=='early-session'\n"
+            "print(json.dumps({'type':'turn.completed','usage':{}}),flush=True)"
+        )
+        with patch.object(
+            executor, "_build_controlled_command",
+            return_value=([sys.executable, "-u", "-c", script], tmp_path),
+        ):
+            response = executor.execute(
+                "fixture", execution_control=AgentExecutionControl(max_duration_seconds=3)
+            )
+        assert response.session_id == "early-session"
+
+    @pytest.mark.parametrize("session_id", [None, "", "  ", [], {}, "x" * 513])
+    def test_invalid_identity_never_reaches_observer(self, session_id):
+        executor = AgentExecutor(AgentConfig(name="fixture", cli=AgentCLI.CODEX))
+        observer = MagicMock()
+        executor.on_session_observed = observer
+        response = self.run_provider(executor, [
+            {"type": "thread.started", "thread_id": session_id},
+            {"type": "turn.completed", "usage": {}},
+        ])
+        observer.assert_not_called()
+        assert executor.config.session_id is None
+        assert response.transport_result.failure_code == "invalid_evidence"
+
+    def test_conflicting_second_identity_does_not_replace_first(self):
+        executor = AgentExecutor(AgentConfig(name="fixture", cli=AgentCLI.CODEX))
+        observer = MagicMock()
+        executor.on_session_observed = observer
+        response = self.run_provider(executor, [
+            {"type": "thread.started", "thread_id": "first"},
+            {"type": "thread.started", "thread_id": "second"},
+            {"type": "turn.completed", "usage": {}},
+        ])
+        observer.assert_called_once_with("first")
+        assert executor.config.session_id == "first"
+        assert response.transport_result.failure_code == "conflicting_session_evidence"
+
+    def test_exact_continuation_rejects_wrong_identity_before_observer(self):
+        executor = AgentExecutor(AgentConfig(
+            name="fixture", cli=AgentCLI.CODEX, session_id="expected"
+        ))
+        observer = MagicMock()
+        executor.on_session_observed = observer
+        with pytest.raises(AgentExecutionError) as caught:
+            self.run_provider(executor, [
+                {"type": "thread.started", "thread_id": "wrong"},
+                {"type": "turn.completed", "usage": {}},
+            ], exact_session=True)
+        assert caught.value.error_type == "session_mismatch"
+        observer.assert_not_called()
+        assert executor.config.session_id == "expected"
+
+    def test_non_identity_record_does_not_publish_session(self):
+        executor = AgentExecutor(AgentConfig(name="fixture", cli=AgentCLI.CODEX))
+        observer = MagicMock()
+        executor.on_session_observed = observer
+        self.run_provider(executor, [
+            {"type": "item.completed", "session_id": "tool-session"},
+            {"type": "turn.completed", "usage": {}},
+        ])
+        observer.assert_not_called()
+        assert executor.config.session_id is None
+
+
 class TestAgentExecutorBasics:
     """Test basic AgentExecutor functionality."""
 
@@ -374,6 +464,56 @@ class TestAgentExecutorErrorHandling:
 
         assert error_type is None
         assert display_message is None
+
+    def test_tool_output_rate_limit_text_does_not_classify_nonzero_exit(self):
+        """Application documentation is not provider failure evidence."""
+        executor = AgentExecutor(AgentConfig(name="Nick", cli=AgentCLI.CODEX))
+        process = MagicMock()
+        process.stdout.readline.side_effect = [
+            '{"type":"item.completed","item":{"type":"command_execution",'
+            '"aggregated_output":"Pairing rate limit must be implemented by the application",'
+            '"exit_code":0,"status":"completed"}}\n',
+            "",
+        ]
+        process.stderr.read.return_value = "connection closed unexpectedly"
+        process.wait.return_value = 1
+        with patch("subprocess.Popen", return_value=process), patch("sys.platform", "win32"):
+            with pytest.raises(AgentExecutionError) as caught:
+                executor._execute_with_streaming(["codex"], "Codex", parse_stream_json=True)
+        assert caught.value.error_type != "rate_limit"
+        assert "API rate limit reached" not in (caught.value.display_message or "")
+
+    def test_plain_provider_stdout_still_classifies_quota_error(self):
+        executor = AgentExecutor(AgentConfig(name="Nick", cli=AgentCLI.COPILOT))
+        process = MagicMock()
+        process.stdout.readline.side_effect = [
+            "You have exceeded your monthly quota\n", "",
+        ]
+        process.stderr.read.return_value = ""
+        process.wait.return_value = 1
+        with patch("subprocess.Popen", return_value=process), patch("sys.platform", "win32"):
+            with pytest.raises(AgentExecutionError) as caught:
+                executor._execute_with_streaming(["copilot"], "Copilot", parse_stream_json=False)
+        assert caught.value.error_type == "rate_limit"
+
+    def test_idle_timeout_takes_precedence_over_stderr_rate_limit_words(self):
+        executor = AgentExecutor(AgentConfig(name="Nick", cli=AgentCLI.CODEX))
+        process = MagicMock()
+        process.wait.return_value = -15
+        from queue import Empty
+        reader = MagicMock()
+        reader.first_stderr_line = ""
+        reader.stderr_read_failed = False
+        reader.stderr_text.return_value = "debug: rate limit configuration loaded"
+        reader.readline.side_effect = [Empty()]
+        with (
+            patch("subprocess.Popen", return_value=process),
+            patch("cafe.agents.executor.ProcessOutput", return_value=reader),
+            patch("time.time", side_effect=[0, 301]),
+        ):
+            with pytest.raises(AgentExecutionError) as caught:
+                executor._execute_with_streaming(["codex"], "Codex", parse_stream_json=True)
+        assert caught.value.error_type == "timeout"
 
     @pytest.mark.parametrize(
         ("cli", "message"),

@@ -13,6 +13,7 @@ from cafe.agents.diagnostics import (
     sanitize_error_excerpt,
 )
 from cafe.agents.executor import AgentExecutionControl, AgentExecutionError, AgentExecutor
+from cafe.agents.transport_types import _validated_evidence_scalar
 from cafe.core.session import SessionManager, SessionStore
 from cafe.core.session_continuation import (
     SessionContinuation,
@@ -443,6 +444,7 @@ class AgentManager:
             AgentExecutionError: If all agents (primary + backups) fail
         """
         self._failed_attempts = []
+        saved_sessions: Dict[AgentCLI, str] = {}
         base_executor = self.get_agent(agent_name)
 
         effective_continuation = continuation or SessionContinuation.auto()
@@ -492,13 +494,23 @@ class AgentManager:
                 exact_session_kwargs = (
                     {"exact_session": True} if effective_continuation.is_exact else {}
                 )
-                agent_response = executor.execute(
-                    attempt_prompt,
-                    allowed_tools,
-                    allowed_directories,
-                    streaming_output_file,
-                    **control_kwargs,
-                    **exact_session_kwargs,
+                agent_response = self._execute_with_session_persistence(
+                    executor,
+                    lambda: executor.execute(
+                        attempt_prompt,
+                        allowed_tools,
+                        allowed_directories,
+                        streaming_output_file,
+                        **control_kwargs,
+                        **exact_session_kwargs,
+                    ),
+                    agent_name=agent_name,
+                    phase_name=phase_name,
+                    saved_sessions=saved_sessions,
+                    expected_session_id=(
+                        effective_continuation.session_id
+                        if effective_continuation.is_exact else None
+                    ),
                 )
                 break  # Success, exit loop
             except AgentExecutionError as e:
@@ -558,6 +570,7 @@ class AgentManager:
                         continuation=effective_continuation,
                         backup_context_callback=backup_context_callback,
                         execution_control=execution_control,
+                        saved_sessions=saved_sessions,
                     )
                     break  # Backup succeeded, exit loop
                 else:
@@ -582,7 +595,7 @@ class AgentManager:
         self._last_reported_model = reported_model
 
         # Save session ID if it was created during execution
-        if actual_session_id:
+        if actual_session_id and saved_sessions.get(actual_cli) != actual_session_id:
             self.session_manager.save_session(
                 agent_name,
                 actual_cli,
@@ -659,6 +672,41 @@ class AgentManager:
         )
         return executor.preview_cli_environment()
 
+    def _execute_with_session_persistence(
+        self,
+        executor: AgentExecutor,
+        invoke: Callable[[], AgentResponse],
+        *,
+        agent_name: str,
+        phase_name: Optional[str],
+        saved_sessions: Dict[AgentCLI, str],
+        expected_session_id: str | None = None,
+    ) -> AgentResponse:
+        """Persist each newly observed identity before the provider continues."""
+        previous_observer = getattr(executor, "on_session_observed", None)
+
+        def save_observed_session(session_id: str) -> None:
+            session_id = _validated_evidence_scalar(session_id, strip=True)
+            if expected_session_id is not None and session_id != expected_session_id:
+                raise AgentExecutionError(
+                    "Provider session does not match the exact continuation.",
+                    error_type="session_mismatch",
+                )
+            cli = executor.config.cli
+            if saved_sessions.get(cli) != session_id:
+                self.session_manager.save_session(
+                    agent_name, cli, session_id, self.issue_name, phase_name
+                )
+                saved_sessions[cli] = session_id
+            if previous_observer is not None:
+                previous_observer(session_id)
+
+        executor.on_session_observed = save_observed_session
+        try:
+            return invoke()
+        finally:
+            executor.on_session_observed = previous_observer
+
     def _try_backup_agents(
         self,
         primary_error: "AgentExecutionError",
@@ -671,6 +719,7 @@ class AgentManager:
         continuation: Optional[SessionContinuation] = None,
         backup_context_callback: Optional[Callable[[AgentExecutionError], str]] = None,
         execution_control: AgentExecutionControl | None = None,
+        saved_sessions: Dict[AgentCLI, str] | None = None,
     ) -> "AgentResponse":
         """Try backup agents in order until one succeeds or all fail.
 
@@ -700,6 +749,8 @@ class AgentManager:
             AgentExecutionError: Raised when all agents (primary + backups) fail
         """
         config = primary_executor.config
+        if saved_sessions is None:
+            saved_sessions = {}
         requires_takeover_context = bool(continuation and continuation.is_exact)
 
         if requires_takeover_context and backup_context_callback is None:
@@ -801,12 +852,18 @@ class AgentManager:
                         if execution_control is not None
                         else {}
                     )
-                    agent_response = backup_executor.execute(
-                        backup_prompt,
-                        allowed_tools,
-                        allowed_directories,
-                        streaming_output_file,
-                        **control_kwargs,
+                    agent_response = self._execute_with_session_persistence(
+                        backup_executor,
+                        lambda: backup_executor.execute(
+                            backup_prompt,
+                            allowed_tools,
+                            allowed_directories,
+                            streaming_output_file,
+                            **control_kwargs,
+                        ),
+                        agent_name=config.name,
+                        phase_name=phase_name,
+                        saved_sessions=saved_sessions,
                     )
                     if agent_response.cli is None:
                         agent_response.cli = entry.cli
@@ -950,10 +1007,20 @@ class AgentManager:
         if current is None:
             raise AgentNotFoundError("No current agent selected")
 
-        response, token_usage = current.execute(prompt)
+        saved_sessions: Dict[AgentCLI, str] = {}
+        response, token_usage = self._execute_with_session_persistence(
+            current,
+            lambda: current.execute(prompt),
+            agent_name=self.current_agent_name,
+            phase_name=None,
+            saved_sessions=saved_sessions,
+        )
 
         # Save session ID if it was created during execution
-        if current.config.session_id and self.current_agent_name:
+        if (
+            current.config.session_id and self.current_agent_name
+            and saved_sessions.get(current.config.cli) != current.config.session_id
+        ):
             self.session_manager.save_session(
                 self.current_agent_name,
                 current.config.cli,

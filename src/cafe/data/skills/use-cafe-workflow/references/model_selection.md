@@ -203,6 +203,13 @@ exercise native subagents and cannot satisfy that check. Resolve missing
 evidence before confirming the chain; do not silently activate a fallback that
 cannot perform the required delegation.
 
+The user's explicit capability confirmation covering the intended setup and
+delegation satisfies the native-subagent check without a fresh native probe,
+unless changed settings or contradictory evidence require reassessment. Apply
+that coverage to each primary and fallback; do not extrapolate to uncovered
+entries. This does not replace the exact-model availability, authentication,
+or fallback smoke checks above.
+
 ### Reuse successful preflight evidence
 
 Use `scripts/preflight_cache.py` to run or reuse the model probe. The cache is
