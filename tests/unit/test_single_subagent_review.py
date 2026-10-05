@@ -140,3 +140,21 @@ def test_provider_observations_bind_native_invocation_to_prior_checkpoint():
     assert observations[0]["reviewer_id"] == "tool-native-1"
     assert observations[0]["terminal"] == "result"
     assert adapter.native_review_observations(records[:1])[0]["terminal"] is None
+
+
+def test_native_findings_cannot_be_downgraded_by_parent(execution_context, review):
+    from cafe.core.execution_checkpoints import require_current_review
+    invocation = review["invocations"][0]
+    actual = {**invocation, "terminal": "result", "receipt_id": review["checkpoint"]["receipt_id"],
+              "observed_at": review["checkpoint"]["observed_at"],
+              "findings": [{"severity": "blocking", "detail": "Independent defect"}]}
+    host = {"version": 1, "parent_id": "parent", "observations": [actual]}
+    with pytest.raises(ValueError):
+        require_current_review(execution_context, review, native_observations=host)
+    invocation["findings"] = actual["findings"]
+    with pytest.raises(ValueError):
+        require_current_review(execution_context, review, native_observations=host)
+    # A fresh independent zero-blocker conclusion, rather than unilateral editing.
+    actual["findings"] = []
+    invocation["findings"] = []
+    require_current_review(execution_context, review, native_observations=host)

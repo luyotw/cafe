@@ -602,6 +602,14 @@ class ExecutionRequirements(BaseModel):
     review_evidence_artifact: Optional[str] = None
     delivery_evidence_artifact: Optional[str] = None
 
+    @field_validator("review_evidence_artifact", "delivery_evidence_artifact")
+    @classmethod
+    def _literal_evidence_path(cls, value):
+        if value is not None and (not value or Path(value).is_absolute() or
+                any(part in {"", ".", ".."} for part in value.split("/")) or "\\" in value):
+            raise ValueError("execution evidence must use a literal relative path")
+        return value
+
     @model_validator(mode="after")
     def _review_requires_checkpoint(self):
         if self.review_policy and ("before_review" not in self.checkpoints or not self.review_evidence_artifact):

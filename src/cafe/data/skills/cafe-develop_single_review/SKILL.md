@@ -73,3 +73,8 @@ terminal evidence or exhausted budget uses the existing human handoff.
 Write the evidence file only when it truthfully covers the current content.
 The runtime independently recomputes scope and content before accepting an
 advancing handoff. Nonblocking findings alone permit advancement.
+
+The native reviewer must return one JSON object with exactly `findings` and
+`targeted_tests`. Each finding has `severity` (`blocking` or `nonblocking`) and
+`detail`. Copy that independent conclusion into the invocation evidence without
+rewriting it. Host-observed conclusions are compared before advancement.

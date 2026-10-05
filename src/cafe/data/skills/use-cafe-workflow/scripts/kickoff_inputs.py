@@ -467,6 +467,8 @@ def discover_kickoff(
     from cafe.manager.api import confirmed_contract_snapshot
 
     confirmed = confirmed_contract_snapshot(project_root / ".cafe/issues" / issue_name)
+    if confirmed and confirmed.get("contract_mode") == "compact":
+        request = {**request, "playbook_id": confirmed["execution"]["playbook_id"]}
     early_catalog = catalog_owner.discover_index(
         **catalog_args, lightweight=True, selected_id=request.get("playbook_id"))
     early_selected = next((item for item in early_catalog["candidates"]

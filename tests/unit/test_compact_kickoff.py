@@ -37,6 +37,14 @@ def compact_request(tmp_path, monkeypatch):
         ],
         check=True,
     )
+    (root / ".gitignore").write_text(".cafe/\n")
+    subprocess.run(["git", "-C", str(root), "add", ".gitignore"], check=True)
+    subprocess.run(["git", "-C", str(root), "-c", "user.name=Test", "-c",
+                    "user.email=test@example.org", "commit", "-qm", "ignore workflow data"], check=True)
+    subprocess.run(["git", "-C", str(root), "checkout", "-qb", "feature"], check=True)
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+    subprocess.run(["git", "-C", str(root), "remote", "add", "origin", str(remote)], check=True)
     skills = root / ".cafe/skills/plain"
     skills.mkdir(parents=True)
     (skills / "SKILL.md").write_text("---\nname: plain\ndescription: Test\n---\n")

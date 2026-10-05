@@ -49,8 +49,8 @@ def discover(
         config_dir or Path.home() / ".config/cafe/kickoff",
         repository_root=catalog_args["project_root"],
     )
-    saved = preferences.effective("phase.chains").value or {}
-    if "phases" not in inputs:
+    saved = preferences.effective("phase.chains").value or {} if not confirmed else {}
+    if "phases" not in inputs and not confirmed:
         from cafe.utils.phase_config import load_phase_step_model
 
         chains = []
@@ -67,14 +67,25 @@ def discover(
                     dict(zip(("cli", "model"), v.split(":", 1))) for v in explicit or preferred
                 ]
             else:
-                phase = load_phase_step_model(
-                    step_name=name,
-                    local_path=catalog_args["project_root"] / ".cafe/config/phases.yaml",
-                )
-                chain = [{"cli": cli, "model": model_name} for cli, model_name in phase.clis]
+                try:
+                    phase = load_phase_step_model(
+                        step_name=name, local_path=catalog_args["project_root"] / ".cafe/phases.yaml")
+                    chain = [{"cli": cli, "model": model_name} for cli, model_name in phase.clis]
+                except ValueError:
+                    chain = []
             chains.append({"name": name, "chain": chain})
         inputs["phases"] = chains
     if confirmed:
+        from collections.abc import Mapping
+
+        def thaw(value):
+            if isinstance(value, Mapping):
+                return {k: thaw(v) for k, v in value.items()}
+            if isinstance(value, (tuple, list)):
+                return [thaw(v) for v in value]
+            return value
+
+        confirmed = thaw(confirmed)
         inputs = {
             "files": list(confirmed["file_scope"]["paths"]),
             "phases": [dict(p) for p in confirmed["phases"]],
@@ -100,6 +111,9 @@ def discover(
     ]
     native_required = any(step.execution.review_policy for step in model.steps.values())
     evidence_gaps = []
+    if confirmed and confirmed["execution"]["graph_digest"] != graph_digest:
+        evidence_gaps.append({"owner": "user", "requirement": "selected_graph_changed"})
+        graph_digest = confirmed["execution"]["graph_digest"]
     if native_required:
         from cafe.agents.executor import AgentExecutor
         from cafe.core.types import AgentConfig, AgentCLI
@@ -171,6 +185,8 @@ def assemble(request, *, discovery):
     ]
     missing.extend(discovery.get("evidence_gaps", []))
     for phase in inputs.get("phases", []):
+        if not phase.get("chain"):
+            missing.append({"owner": "user", "requirement": "phase_chain:" + phase["name"]})
         for entry in phase["chain"]:
             if not any(
                 m["status"] == "hit"
@@ -190,6 +206,7 @@ def assemble(request, *, discovery):
         try:
             confirmed = discovery.get("confirmed")
             from cafe.manager.file_scope import prepare_file_scope
+            from cafe.manager.delivery import prepare_compact_delivery
 
             proposal = {
                 "contract_mode": "compact",
@@ -204,7 +221,9 @@ def assemble(request, *, discovery):
                 },
                 "phases": inputs["phases"],
                 "review_configuration": inputs["review_configuration"],
-                "delivery_contract": inputs["delivery_contract"],
+                "delivery_contract": (inputs["delivery_contract"] if confirmed else
+                    prepare_compact_delivery(root, inputs["delivery_contract"],
+                                             issue_name=request["issue_name"])),
                 "locales": {
                     "conversation": {
                         "value": request.get("conversation_locale", "en-US"),
@@ -262,7 +281,8 @@ def render(values):
     groups = {
         "files": proposal["file_scope"]["paths"],
         "execution": {"phases": proposal["phases"], "review": proposal["review_configuration"]},
-        "delivery": proposal["delivery_contract"],
+        "delivery": {k: v for k, v in proposal["delivery_contract"].items()
+                     if k != "remote_identity"},
     }
     output = "\n\n".join(
         f"## {name}\n\n{json.dumps(value, ensure_ascii=False, indent=2)}"

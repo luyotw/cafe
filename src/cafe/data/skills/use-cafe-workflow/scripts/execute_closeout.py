@@ -275,7 +275,15 @@ def main() -> int:
             command["status"] = "unknown"
             _write(path, record)
             try:
-                result = subprocess.run(command["argv"], cwd=record["worktree"], check=False)
+                from cafe.manager._store import load_contract, select_authority_directory
+                authority = {}
+                if select_authority_directory(args.issue_dir).name != "driver":
+                    authority, _ = load_contract(args.issue_dir)
+                if authority.get("contract_mode") == "compact":
+                    from cafe.manager.delivery import run_compact_closeout_command
+                    result = run_compact_closeout_command(args.issue_dir, Path(record["worktree"]), command["argv"])
+                else:
+                    result = subprocess.run(command["argv"], cwd=record["worktree"], check=False)
             except OSError as exc:
                 raise ValueError("closeout command outcome is unknown; inspect read-only") from exc
             command["status"] = "succeeded" if result.returncode == 0 else "failed"

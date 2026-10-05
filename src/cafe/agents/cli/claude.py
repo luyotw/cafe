@@ -533,4 +533,19 @@ class ClaudeCLI(AbstractCLI):
                     observed = invocations[item["tool_use_id"]]
                     if not observed["background"] and not item.get("is_error", False):
                         observed.update(terminal="result", exit_status=0)
+                        payload = item.get("content", "")
+                        if isinstance(payload, list):
+                            payload = "\n".join(v.get("text", "") for v in payload if isinstance(v, dict))
+                        if isinstance(payload, str) and len(payload.encode()) <= 128 * 1024:
+                            decoder = json.JSONDecoder()
+                            conclusions = []
+                            for match in re.finditer(r"\{", payload):
+                                try:
+                                    conclusion, _ = decoder.raw_decode(payload[match.start():])
+                                except ValueError:
+                                    continue
+                                if isinstance(conclusion, dict) and set(conclusion) == {"findings", "targeted_tests"}:
+                                    conclusions.append(conclusion)
+                            if len(conclusions) == 1:
+                                observed.update(conclusions[0])
         return list(invocations.values())

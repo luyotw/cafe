@@ -7,6 +7,8 @@
 set -euo pipefail
 
 OUTPUT_FILE=""
+REMOTE="origin"
+EXPLICIT_REMOTE=""
 BASE_BRANCH=""
 SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../../../.." && pwd)"
@@ -52,6 +54,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --output) OUTPUT_FILE="$2"; shift 2 ;;
     --base)   BASE_BRANCH="$2"; shift 2 ;;
+    --remote) REMOTE="$2"; EXPLICIT_REMOTE=1; shift 2 ;;
     --help)
       echo "Usage: bash scripts/sync_pr.sh --output OUTPUT_FILE [--base BASE_BRANCH]"
       echo ""
@@ -194,11 +197,18 @@ PY
   echo "posted: todo_comment" >&2
 }
 
+# Resolve the explicitly selected remote before any mutation.
+if [[ -n "$EXPLICIT_REMOTE" ]]; then
+  REPO_URL=$(git remote get-url "$REMOTE")
+  GH_REPO=$(gh repo view "$REPO_URL" --json nameWithOwner --jq .nameWithOwner)
+  export GH_REPO
+fi
+
 # Push branch
 ensure_clean_worktree
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 echo "Pushing branch: $BRANCH" >&2
-if ! git push --set-upstream origin "$BRANCH" 2>&1 >&2; then
+if ! git push --set-upstream "$REMOTE" "$BRANCH" 2>&1 >&2; then
   echo "Error: failed to push branch '$BRANCH' to origin." >&2
   exit 1
 fi

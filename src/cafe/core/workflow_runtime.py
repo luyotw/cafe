@@ -591,7 +591,8 @@ class BlackboardWorkflowRuntime:
     def _is_baton_driven_step(self, current_step: str) -> bool:
         return resolve_step_behavior(self.playbook, current_step).completion == "baton" or bool(
             self._required_capability_ids(current_step)
-        )
+        ) or bool(self.steps.get(current_step, {}).get("execution", {}).get("review_policy")
+                  or "before_delivery" in self.steps.get(current_step, {}).get("execution", {}).get("checkpoints", []))
 
     def _default_pause_intent(self, current_step: str, status_code: str) -> HandoffIntent:
         step_def = self.steps.get(current_step, {})

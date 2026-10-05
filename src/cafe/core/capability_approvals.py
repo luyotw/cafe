@@ -309,6 +309,7 @@ class CapabilityApprovalService:
         repo_root: Path,
         output_file: Path,
         timeout_sec: float = 600.0,
+        before_dispatch=None,
     ) -> dict[str, Any]:
         """Resume only the approved unchanged request behind its one-attempt fence."""
         with self.store.transaction():
@@ -320,6 +321,7 @@ class CapabilityApprovalService:
                 repo_root=repo_root,
                 output_file=output_file,
                 timeout_sec=timeout_sec,
+                before_dispatch=before_dispatch,
             )
 
     def _resume_locked(
@@ -332,6 +334,7 @@ class CapabilityApprovalService:
         repo_root: Path,
         output_file: Path,
         timeout_sec: float,
+        before_dispatch=None,
     ) -> dict[str, Any]:
         current = self.inspect(task_id)
         if correlation_id != current["correlation_id"]:
@@ -405,6 +408,8 @@ class CapabilityApprovalService:
                 event_type="capability_policy_rejected",
             )
 
+        if before_dispatch is not None:
+            before_dispatch()
         started_at = self._now().astimezone().isoformat()
         current["state"] = "attempt_started"
         current["attempt"] = {"state": "started", "started_at": started_at}

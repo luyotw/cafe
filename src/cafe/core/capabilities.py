@@ -729,6 +729,9 @@ def run_pr_publish_capability(
     if base_arg:
         cmd.extend(["--base", base_arg])
 
+    if args.get("remote"):
+        cmd.extend(["--remote", str(args["remote"])])
+
     # Package-owned publishers need the same dependencies as this CAFE process,
     # rather than an unrelated project venv or the first python3 on PATH.
     publish_env = os.environ.copy()

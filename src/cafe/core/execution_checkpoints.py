@@ -112,6 +112,9 @@ def require_current_review(context, evidence, *, native_observations=None):
                 actual.get("configuration") != context["review_configuration"] or
                 actual.get("terminal") != "result" or actual.get("exit_status") != 0):
             raise ValueError("review is not associated with a successful checkpointed native invocation")
+        if (actual.get("findings") != reviewer.get("findings") or
+                actual.get("targeted_tests") != reviewer.get("targeted_tests")):
+            raise ValueError("review conclusion differs from the independent native result")
         if datetime.fromisoformat(actual["observed_at"]) < datetime.fromisoformat(receipt["observed_at"]):
             raise ValueError("native invocation preceded its checkpoint")
     if (

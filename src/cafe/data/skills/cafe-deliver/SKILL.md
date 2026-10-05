@@ -37,7 +37,9 @@ review, or scope violation requires the existing focused user handoff. Do not
 re-ask an unchanged already-granted decision. Mandatory host approvals remain
 human-owned. Preserve normal Git hooks and unrelated existing changes.
 
-On acceptance, report readiness through the ordinary baton. The Manager reports
+On acceptance, use the active graph's declared terminal readiness outcome.
+For streamlined, write the explicit terminal baton
+`{"version":1,"to_owner":"done","to_step":"done","intent":"workflow_complete"}`. The Manager reports
 verified PR URL/source/target or pushed SHA/branch separately after execution;
 partial failure and unknown outcome never count as delivered. Merge, force
 push, issue closure and cleanup are outside this contract.

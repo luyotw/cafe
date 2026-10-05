@@ -9,6 +9,8 @@ arguments:
       type: string
     base:
       type: string
+    remote:
+      type: string
 outputs:
   required:
     - pr_url
