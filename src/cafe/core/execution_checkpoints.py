@@ -167,20 +167,8 @@ def require_verified_review(context, evidence):
 def guard_execution_delivery(context, request, *, issue_dir, output_dir):
     """Check resolved scope/endpoint before an existing workflow publication hook."""
     import subprocess
-    endpoint = context["delivery_endpoint"]
-    args = request.get("args", {})
-    if (endpoint["route"] != "pr" or args.get("base") != endpoint["target_branch"]
-            or args.get("remote") != endpoint["remote"]):
-        raise ValueError("publication request differs from resolved delivery endpoint")
-    root = Path(context["root"])
-    def git(*argv):
-        return subprocess.run(["git", "-C", str(root), *argv], capture_output=True,
-            text=True, check=True, timeout=20).stdout.strip()
-    if git("symbolic-ref", "--short", "HEAD") != endpoint["source_branch"]:
-        raise ValueError("publication source branch changed")
-    from cafe.core.git_delivery import remote_identity
-    if remote_identity(root, endpoint["remote"], endpoint["route"]) != endpoint["remote_identity"]:
-        raise ValueError("publication remote endpoint changed")
+    from cafe.core.git_delivery import require_publication_target
+    require_publication_target(context, request.get("args", {}))
     command = list(context["checkpoint_command"]) + ["--boundary", "before_delivery",
         "--round-id", "publication", "--parent-id", "publication-hook", "--output",
         str(output_dir / "delivery_checkpoint.json")]

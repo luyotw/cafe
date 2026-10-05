@@ -1365,6 +1365,8 @@ class GitHubPRCreator(NoOpHook):
             guard = None
             if resolved_context is not None and request.get("capability") == CAPABILITY_PR_PUBLISH_ID:
                 from cafe.core.execution_checkpoints import guard_execution_delivery
+                from cafe.core.git_delivery import bind_publication_request
+                request = bind_publication_request(resolved_context, request)
                 guard = lambda: guard_execution_delivery(
                     resolved_context, request, issue_dir=issue_dir, output_dir=output_file.parent)
             run = run_capability_request(

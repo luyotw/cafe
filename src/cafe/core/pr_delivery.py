@@ -1,7 +1,9 @@
 """Capability-owned publication of an already resolved delivery endpoint."""
 
 from pathlib import Path
-from cafe.core.git_delivery import git_text as _git
+from cafe.core.git_delivery import (
+    git_text as _git, bind_publication_request, require_publication_target,
+)
 from cafe.core.packet_io import canonical_json
 
 
@@ -27,6 +29,7 @@ def publish_resolved_pr(issue_dir: Path, root: Path, output: Path, *, context, b
             "credentials": ["gh"], "permissions": {
                 "writes": [target, ".git", issue_dir.relative_to(root).as_posix()],
                 "network": ["github.com", "api.github.com"]}}
+        request = bind_publication_request(context, request)
         path = issue_dir / "delivery_result.json"
         if path.exists():
             raise ValueError("PR delivery already attempted; reconcile read-only instead of replaying")
@@ -50,13 +53,15 @@ def publish_resolved_pr(issue_dir: Path, root: Path, output: Path, *, context, b
             nonlocal repository
             before_dispatch()
             # Credential-bearing repository lookup follows the capability gate.
-            push_url = _git(root, "remote", "get-url", "--push", endpoint["remote"])
+            require_publication_target(context, request["args"])
+            push_url = request["args"]["push_url"]
             repository = subprocess.run(["gh", "repo", "view", push_url, "--json",
                 "nameWithOwner", "--jq", ".nameWithOwner"], cwd=root, capture_output=True,
                 text=True, check=True, timeout=20).stdout.strip()
             if len(repository.split("/")) != 2 or any(not part for part in repository.split("/")):
                 raise ValueError("authorized repository identity could not be resolved")
             before_dispatch()
+            require_publication_target(context, request["args"])
         record = {"delivered": False, "status": "unknown", "authority_digest": context["authority_digest"],
                   "commit": _git(root, "rev-parse", "HEAD")}
         atomic_write_bytes(path, canonical_json(record))

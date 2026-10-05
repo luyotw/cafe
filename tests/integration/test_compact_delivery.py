@@ -416,3 +416,136 @@ def test_native_review_binds_effective_git_filter_contents(compact_request, tmp_
         assert git(root, "show", "HEAD:app.py") == 'value = "unreviewed"'
         assert json.loads((issue / "delivery_result.json").read_text())["delivered"]
     assert (root / "app.py").read_text() == 'value = "reviewed"\n'
+
+
+@pytest.mark.parametrize("consumer", ["owner", "approval", "generic"])
+@pytest.mark.parametrize("drift", ["none", "push", "fetch", "head", "rewrite"])
+def test_actual_publication_pins_target_through_last_repository_lookup(
+    compact_request, tmp_path, monkeypatch, consumer, drift
+):
+    import os
+    from types import SimpleNamespace
+    from tests.integration.test_compact_workflow import native_context
+    from cafe.manager.delivery import publish_compact_pr
+    from cafe.core.capabilities import load_capability_registry, default_capability_definition_dirs
+    from cafe.core.capability_approvals import CapabilityApprovalService
+    from cafe.core.hooks.native import GitHubPRCreator
+    from cafe.core.status_codes import PhaseStatusCode
+    root = Path(compact_request["project_root"])
+    other = tmp_path / "unapproved.git"
+    git(tmp_path, "init", "--bare", "-q", str(other))
+    authorized = git(root, "remote", "get-url", "--push", "origin")
+    if drift == "fetch":
+        git(root, "remote", "set-url", "--push", "origin", authorized)
+    elif drift == "rewrite":
+        git(root, "remote", "set-url", "origin", "cafe-original:")
+        git(root, "config", "url." + authorized + ".insteadOf", "cafe-original:")
+        git(root, "config", "url." + str(other) + ".insteadOf", authorized)
+    root, issue, _, context = native_context(compact_request, tmp_path, monkeypatch)
+    git(root, "config", "user.name", "Test")
+    git(root, "config", "user.email", "test@example.org")
+    (root / "app.py").write_text('value = "reviewed"\n')
+    git(root, "add", "app.py")
+    git(root, "commit", "-qm", "reviewed implementation")
+    authorized = git(root, "remote", "get-url", "--push", "origin")
+    native_delivery_ready(root, issue, context)
+    head = git(root, "rev-parse", "HEAD")
+    output = issue / "deliver/iteration_001/pr.md"
+    output.parent.mkdir(parents=True)
+    output.write_text("# Change\n\nEvidence\n")
+    binary = tmp_path / "github-bin"
+    binary.mkdir()
+    log = tmp_path / "github-calls.jsonl"
+    gh = binary / "gh"
+    gh.write_text("#!" + sys.executable + '\n' + '''import json, os, sys, subprocess
+from pathlib import Path
+args = sys.argv[1:]
+log = Path(os.environ["TEST_GH_LOG"])
+previous = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+count = 1 + sum(call["args"][:2] == ["repo", "view"] for call in previous)
+with log.open("a") as output:
+    output.write(json.dumps({"args": args}) + "\\n")
+if args[:2] == ["repo", "view"]:
+    if count == int(os.environ["TEST_LAST_LOOKUP"]):
+        root = os.environ["TEST_ROOT"]
+        if os.environ["TEST_DRIFT"] == "push":
+            subprocess.run(["git", "-C", root, "remote", "set-url", "--push", "origin", os.environ["TEST_OTHER"]], check=True)
+        elif os.environ["TEST_DRIFT"] == "fetch":
+            subprocess.run(["git", "-C", root, "remote", "set-url", "origin", "https://github.com/other/fetch.git"], check=True)
+        elif os.environ["TEST_DRIFT"] == "head":
+            Path(root, "app.py").write_text('value = "unreviewed"\\n')
+            subprocess.run(["git", "-C", root, "add", "app.py"], check=True)
+            subprocess.run(["git", "-C", root, "commit", "-qm", "late unreviewed contents"], check=True)
+    print("example/project")
+elif args[:2] == ["pr", "view"]:
+    if args[2].startswith("https://"):
+        print(json.dumps({"url": args[2], "headRefName": "feature", "baseRefName": "main",
+            "headRefOid": os.environ["TEST_HEAD"], "state": "OPEN",
+            "headRepository": {"nameWithOwner": "example/project"}}))
+    else:
+        sys.exit(1)
+elif args[:2] == ["pr", "create"]:
+    print("https://github.com/example/project/pull/1")
+else:
+    sys.exit(2)
+''')
+    gh.chmod(0o755)
+    for key, value in {"TEST_GH_LOG": str(log), "TEST_LAST_LOOKUP": "1" if consumer == "generic" else "2",
+                       "TEST_ROOT": str(root), "TEST_OTHER": str(other), "TEST_HEAD": head,
+                       "TEST_DRIFT": drift}.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("PATH", str(binary) + os.pathsep + os.environ["PATH"])
+    if consumer == "generic":
+        request_file = output.parent / "request.json"
+        request_file.write_text(json.dumps({"capability": "cafe.pr.publish", "args": {
+            "output": output.relative_to(root).as_posix(), "base": "main", "remote": "origin"}}))
+        phase = SimpleNamespace(issue_dir=issue, phase_dir=output.parent.parent, iteration=1,
+            git_ops=SimpleNamespace(get_repo_root=lambda: root))
+        def invoke_generic():
+            return GitHubPRCreator().run(stage="publish_output", phase=phase, step_name="custom-publish",
+            step_def={"capability_requests": ["cafe.pr.publish"], "behavior": {"publish_confirmation": True}},
+            output_file=output, capability_request_file=request_file, status_code=PhaseStatusCode.CONFIRMED,
+            validated_pr_auto_create=True, execution_context=context)
+        if drift in {"none", "rewrite"}:
+            invoke_generic()
+        else:
+            with pytest.raises(RuntimeError):
+                invoke_generic()
+            before = log.read_text()
+            with pytest.raises(ValueError):
+                invoke_generic()
+            assert log.read_text() == before
+    else:
+        registry = dict(load_capability_registry(default_capability_definition_dirs(root)))
+        approval = {}
+        if consumer == "approval":
+            registry["cafe.pr.publish"] = registry["cafe.pr.publish"].model_copy(update={"approval": "required"})
+            pending = publish_compact_pr(issue, root, output, registry=registry)
+            assert pending["needs_human_task"] and not log.exists()
+            service = CapabilityApprovalService(issue_dir=issue, workflow_id="workflow", step="delivery", iteration=1)
+            task = service.inspect(pending["task_id"])
+            service.record_decision(pending["task_id"], {"decision": "approve", "workflow_id": "workflow",
+                "task_id": pending["task_id"], "request_fingerprint": task["fingerprint"],
+                "correlation_id": task["correlation_id"]})
+            approval = {"approval_task_id": pending["task_id"], "correlation_id": task["correlation_id"]}
+        try:
+            result = publish_compact_pr(issue, root, output, registry=registry, **approval)
+        except ValueError:
+            result = json.loads((issue / "delivery_result.json").read_text())
+        if drift in {"none", "rewrite"}:
+            assert result["delivered"]
+        else:
+            assert not result["delivered"] and result["status"] == "unknown"
+            before = log.read_text()
+            with pytest.raises(ValueError):
+                publish_compact_pr(issue, root, output, registry=registry, **approval)
+            assert log.read_text() == before
+    assert not git(other, "for-each-ref", "--format=%(objectname)", "refs/heads/feature")
+    observed = git(Path(authorized), "for-each-ref", "--format=%(objectname)", "refs/heads/feature")
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    if drift in {"none", "rewrite"}:
+        assert observed.split()[0] == head
+        assert any(call["args"][:2] == ["pr", "create"] for call in calls)
+    else:
+        assert not observed
+        assert not any(call["args"][:2] == ["pr", "create"] for call in calls)

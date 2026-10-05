@@ -732,6 +732,11 @@ def run_pr_publish_capability(
     if args.get("remote"):
         cmd.extend(["--remote", str(args["remote"])])
 
+    from cafe.core.git_delivery import PUBLICATION_TARGET_FIELDS
+    for field in PUBLICATION_TARGET_FIELDS:
+        if field in args:
+            cmd.extend(["--" + field.replace("_", "-"), str(args[field])])
+
     # Package-owned publishers need the same dependencies as this CAFE process,
     # rather than an unrelated project venv or the first python3 on PATH.
     publish_env = os.environ.copy()

@@ -10,6 +10,10 @@ OUTPUT_FILE=""
 REMOTE="origin"
 EXPLICIT_REMOTE=""
 BASE_BRANCH=""
+PUSH_URL=""
+REMOTE_IDENTITY=""
+SOURCE_BRANCH=""
+HEAD_OID=""
 SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../../../.." && pwd)"
 
@@ -55,6 +59,10 @@ while [[ $# -gt 0 ]]; do
     --output) OUTPUT_FILE="$2"; shift 2 ;;
     --base)   BASE_BRANCH="$2"; shift 2 ;;
     --remote) REMOTE="$2"; EXPLICIT_REMOTE=1; shift 2 ;;
+    --push-url) PUSH_URL="$2"; shift 2 ;;
+    --remote-identity) REMOTE_IDENTITY="$2"; shift 2 ;;
+    --source-branch) SOURCE_BRANCH="$2"; shift 2 ;;
+    --head-oid) HEAD_OID="$2"; shift 2 ;;
     --help)
       echo "Usage: bash scripts/sync_pr.sh --output OUTPUT_FILE [--base BASE_BRANCH]"
       echo ""
@@ -197,21 +205,49 @@ PY
   echo "posted: todo_comment" >&2
 }
 
+# A bound target is all-or-nothing; legacy requests keep their existing path.
+if [[ -n "$PUSH_URL$REMOTE_IDENTITY$SOURCE_BRANCH$HEAD_OID" ]]; then
+  if [[ -z "$PUSH_URL" || -z "$REMOTE_IDENTITY" || -z "$SOURCE_BRANCH" || -z "$HEAD_OID" || -z "$EXPLICIT_REMOTE" ]]; then
+    echo "Error: incomplete bound publication target." >&2
+    exit 1
+  fi
+fi
+
 # Resolve the explicitly selected remote before any mutation.
 if [[ -n "$EXPLICIT_REMOTE" ]]; then
-  REPO_URL=$(git remote get-url --push "$REMOTE")
+  REPO_URL=${PUSH_URL:-$(git remote get-url --push "$REMOTE")}
   REPOSITORY=$(gh repo view "$REPO_URL" --json nameWithOwner --jq .nameWithOwner)
   # Pin the capability-authorized GitHub host as well as owner/repository.
   GH_REPO="github.com/$REPOSITORY"
   export GH_REPO
 fi
 
-# Push branch
+# Push exactly the reviewed source to the already authorized destination.
 ensure_clean_worktree
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
+if [[ -n "$PUSH_URL" ]]; then
+  "$PYTHON_BIN" - "$REMOTE" "$PUSH_URL" "$REMOTE_IDENTITY" <<'PYTHON'
+from pathlib import Path
+import sys
+from cafe.core.git_delivery import remote_configuration, configuration_identity
+configuration = remote_configuration(Path.cwd(), sys.argv[1], "pr")
+if configuration["push"] != sys.argv[2] or configuration_identity(configuration, "pr") != sys.argv[3]:
+    raise SystemExit("Error: confirmed publication endpoint changed before push.")
+PYTHON
+  if [[ "$BRANCH" != "$SOURCE_BRANCH" || "$(git rev-parse HEAD)" != "$HEAD_OID" ]]; then
+    echo "Error: confirmed publication source changed before push." >&2
+    exit 1
+  fi
+  # Git applies URL rewrites once. A fresh, exact transport alias prevents a
+  # second rewrite of the resolved URL without modifying persisted Git config.
+  PINNED_ALIAS="cafe-pinned-$("$PYTHON_BIN" -c 'import uuid; print(uuid.uuid4().hex)'):"
+  PUSH_COMMAND=(git -c "url.$PUSH_URL.insteadOf=$PINNED_ALIAS" push "$PINNED_ALIAS" "$HEAD_OID:refs/heads/$SOURCE_BRANCH")
+else
+  PUSH_COMMAND=(git push --set-upstream "$REMOTE" "$BRANCH")
+fi
 echo "Pushing branch: $BRANCH" >&2
-if ! git push --set-upstream "$REMOTE" "$BRANCH" 2>&1 >&2; then
-  echo "Error: failed to push branch '$BRANCH' to origin." >&2
+if ! "${PUSH_COMMAND[@]}" 2>&1 >&2; then
+  echo "Error: failed to push branch '$BRANCH' to '$REMOTE'." >&2
   exit 1
 fi
 
