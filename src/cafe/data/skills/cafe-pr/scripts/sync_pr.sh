@@ -11,22 +11,40 @@ BASE_BRANCH=""
 SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../../../.." && pwd)"
 
+usable_python() {
+  "$1" -c 'import sys
+if sys.version_info < (3, 10):
+    raise SystemExit(1)
+import yaml' >/dev/null 2>&1
+}
+
 resolve_python_bin() {
-  if [[ -x "$REPO_ROOT/.venv/bin/python" ]]; then
+  # The host pins its interpreter; an invalid explicit runtime must not fall back.
+  if [[ -n "${CAFE_PYTHON:-}" ]]; then
+    if usable_python "$CAFE_PYTHON"; then
+      echo "$CAFE_PYTHON"
+      return 0
+    fi
+    echo "Error: CAFE_PYTHON must provide Python 3.10+ with PyYAML." >&2
+    return 1
+  fi
+  # Direct script invocation can use a local environment only after validation.
+  if [[ -x "$REPO_ROOT/.venv/bin/python" ]] && usable_python "$REPO_ROOT/.venv/bin/python"; then
     echo "$REPO_ROOT/.venv/bin/python"
     return 0
   fi
-  local repo_root
+  local repo_root candidate
   if repo_root=$(git rev-parse --show-toplevel 2>/dev/null); then
-    if [[ -x "$repo_root/.venv/bin/python" ]]; then
+    if [[ -x "$repo_root/.venv/bin/python" ]] && usable_python "$repo_root/.venv/bin/python"; then
       echo "$repo_root/.venv/bin/python"
       return 0
     fi
   fi
-  if command -v python3 >/dev/null 2>&1; then
-    command -v python3
+  if candidate=$(command -v python3) && usable_python "$candidate"; then
+    echo "$candidate"
     return 0
   fi
+  echo "Error: Python 3.10+ with PyYAML is required; select the CAFE runtime with CAFE_PYTHON." >&2
   return 1
 }
 
@@ -64,7 +82,6 @@ if [[ ! -f "$OUTPUT_FILE" ]]; then
 fi
 
 if ! PYTHON_BIN=$(resolve_python_bin); then
-  echo "Error: python3 is required." >&2
   exit 1
 fi
 

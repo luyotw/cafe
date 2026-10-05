@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -727,6 +728,10 @@ def run_pr_publish_capability(
     if base_arg:
         cmd.extend(["--base", base_arg])
 
+    # Package-owned publishers need the same dependencies as this CAFE process,
+    # rather than an unrelated project venv or the first python3 on PATH.
+    publish_env = os.environ.copy()
+    publish_env["CAFE_PYTHON"] = sys.executable
     try:
         result = subprocess.run(
             cmd,
@@ -735,6 +740,7 @@ def run_pr_publish_capability(
             text=True,
             check=False,
             timeout=timeout_sec,
+            env=publish_env,
         )
     except subprocess.TimeoutExpired:
         receipt = _base_receipt(
