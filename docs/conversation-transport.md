@@ -238,7 +238,7 @@ subtotals. Default zeros in `TokenUsage` do not certify missing counters.
 call reports those fields. A known zero remains zero. No prompt, response,
 message ID, session journal, per-call history, or raw event is added to this field.
 
-One-shot accounting uses the existing executor/provider result exactly once per
+One-shot accounting uses the executor/provider result exactly once per
 physical attempt, including compact partial evidence on errors. The existing
 caller-owned session recovery remains unchanged: unsuccessful attempts and the
 successful retry each contribute once; the successful response is not replayed
@@ -255,6 +255,24 @@ newly emitted group cannot make subsequent admission fail its own schema;
 concurrent corruption produces an explicit accounting error
 without an unchecked schema exception or provider replay. Interactive launch reports
 that target gap while retaining its native terminal behavior.
+
+Codex `exec resume` reports session-cumulative token counters. Before each
+physical invocation, its adapter reads a bounded token baseline from the exact
+provider session journal under the child process's `CODEX_HOME` (default
+`~/.codex`). The journal's `session_meta` identity must match the resume ID, and
+stdout must report that same thread. The adapter subtracts the baseline before
+executor, iteration or chat accounting; multiple completion snapshots are
+projected to per-turn deltas. It retains neither conversation content nor raw
+native records. Missing, ambiguous, malformed or changed sources, or decreasing
+counters leave usage unknown rather than billing session history again. Fresh
+sessions keep their stdout counters. This does not infer a model or USD cost.
+
+Successful one-shot calls with both reported input and output token counters
+display an informational notice when optional provider details are unavailable.
+Absent model, USD cost or optional cache/reasoning fields still remain unknown
+and contribute incomplete billing coverage in `cafe status`; they do not by
+themselves produce an accounting warning. Missing core token counters, failed
+attempts, interactive coverage gaps and publication errors still warn.
 
 Interactive execution still inherits stdin/stdout/stderr directly. Its optional
 `on_accounting` observer receives compact native results after exit. Claude's

@@ -20,6 +20,170 @@ def groups(metadata):
     return json.loads(metadata.read_text())["chat_usage"]
 
 
+def codex_chat(phase_chat, monkeypatch):
+    """Bind a resumed chat to an isolated, exact provider session journal."""
+    issue, target = phase_chat
+    config = Path.cwd() / ".cafe/phases.yaml"
+    data = yaml.safe_load(config.read_text())
+    data["implementation"]["clis"] = [{"cli": "codex", "model": "selected"}]
+    config.write_text(yaml.safe_dump(data))
+    session = "01a10a7d-c447-7032-a913-d78a3919d35e"
+    SessionManager().save_session("David", AgentCLI.CODEX, session, "x", "implementation")
+    native = Path.cwd() / "native"
+    monkeypatch.setenv("CODEX_HOME", str(native))
+    journal = native / "sessions/2026/10/05" / f"rollout-test-{session}.jsonl"
+    journal.parent.mkdir(parents=True)
+    journal.write_text(json.dumps({"type": "session_meta", "payload": {"id": session}}) + "\n")
+    return issue, target, session, journal
+
+
+def append_codex_totals(journal, usage):
+    with journal.open("a") as handle:
+        handle.write(json.dumps({
+            "type": "event_msg", "payload": {
+                "type": "token_count", "info": {"total_token_usage": usage},
+            },
+        }) + "\n")
+
+
+@pytest.mark.parametrize("input_tokens,output_tokens", [(3, 2), (0, 0)])
+def test_codex_token_recording_does_not_warn_about_unreported_billing_details(
+    phase_chat, provider_process, capsys, input_tokens, output_tokens
+):
+    _issue, target = phase_chat
+    config = Path.cwd() / ".cafe/phases.yaml"
+    data = yaml.safe_load(config.read_text())
+    data["implementation"]["clis"] = [{"cli": "codex", "model": "selected"}]
+    config.write_text(yaml.safe_dump(data))
+    provider_process([
+        {"type": "thread.started", "thread_id": "new"},
+        {"type": "turn.completed", "usage": {
+            "input_tokens": input_tokens, "output_tokens": output_tokens,
+            "cached_input_tokens": 0,
+        }},
+    ])
+    assert chat.launch_chat_session(
+        "developer", "x", phase_name="implementation", prompt="hello"
+    ) == 0
+    output = capsys.readouterr().out
+    assert "Chat accounting incomplete" not in output
+    assert "Chat token usage recorded" in output
+    (group,) = groups(target)
+    assert group["stats"] == {
+        "input_tokens": input_tokens, "output_tokens": output_tokens, "cache_read_input_tokens": 0,
+    }
+    assert group["reported_model"] is None
+    assert "total_cost_usd" in group["unknown_fields"]
+    assert group["incomplete_calls"] == 1  # Billing coverage is still incomplete.
+
+
+@pytest.mark.parametrize("usage", [{"input_tokens": 3}, {"output_tokens": 0}, {}])
+def test_missing_core_chat_counters_still_warn(phase_chat, provider_process, capsys, usage):
+    provider_process([init("new"), dict(type="result", usage=usage)])
+    assert chat.launch_chat_session(
+        "developer", "x", phase_name="implementation", prompt="hello"
+    ) == 0
+    assert "Chat accounting incomplete" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("returncode", [0, 7])
+def test_resumed_codex_chat_records_only_each_physical_invocation_delta(
+    phase_chat, monkeypatch, provider_process, capsys, returncode
+):
+    issue, target, session, journal = codex_chat(phase_chat, monkeypatch)
+    baseline = dict(input_tokens=100, output_tokens=10, cached_input_tokens=50,
+                    reasoning_output_tokens=2, cache_write_input_tokens=0)
+    append_codex_totals(journal, baseline)
+    for input_total, output_total, cached_total, reasoning_total in [(128, 17, 60, 4), (160, 20, 64, 5)]:
+        totals = dict(input_tokens=input_total, output_tokens=output_total,
+                      cached_input_tokens=cached_total, reasoning_output_tokens=reasoning_total,
+                      cache_write_input_tokens=0)
+        launch = provider_process([
+            {"type": "thread.started", "thread_id": session},
+            {"type": "item.completed", "item": {"type": "agent_message", "text": "reply"}},
+            {"type": "turn.completed", "usage": totals},
+        ], returncode=returncode)
+        launch.reset_mock()
+        process = launch.return_value
+
+        def run(command, **kwargs):
+            assert kwargs["env"]["CODEX_HOME"] == str(journal.parents[4])
+            append_codex_totals(journal, totals)  # Provider updates its journal before exit.
+            return process
+
+        launch.side_effect = run
+        assert chat.launch_chat_session(
+            "developer", "x", phase_name="implementation", prompt="hello"
+        ) == (1 if returncode else 0)
+        assert launch.call_count == 1
+        output = capsys.readouterr().out
+        assert ("Chat accounting incomplete" in output) == bool(returncode)
+    (group,) = groups(target)
+    assert group["stats"] == dict(input_tokens=60, output_tokens=10, cache_read_input_tokens=14,
+                                  reasoning_output_tokens=3, cache_write_input_tokens=0)
+    assert group["calls"] == 2
+    assert group["reported_model"] is None
+    assert "total_cost_usd" in group["unknown_fields"]
+    assert json.loads(target.read_text())["stats"]["input_tokens"] == 60
+    service = StatusService(issues_root=issue.parent)
+    assert service.load_iteration_statuses("x", "implementation")[0]["stats"]["input_tokens"] == 0
+
+
+@pytest.mark.parametrize("gap", [
+    "missing", "identity", "duplicate", "symlink", "malformed", "truncated",
+    "replaced", "rewritten", "decreased", "counter", "empty",
+])
+def test_ambiguous_codex_resume_totals_are_unknown_instead_of_billing_history(
+    phase_chat, monkeypatch, provider_process, capsys, gap
+):
+    _issue, target, session, journal = codex_chat(phase_chat, monkeypatch)
+    append_codex_totals(journal, dict(input_tokens=100, output_tokens=10))
+    if gap == "missing":
+        journal.unlink()
+    elif gap == "identity":
+        journal.write_text(journal.read_text().replace(session, "another-session"))
+    elif gap == "duplicate":
+        duplicate = journal.parent / f"rollout-duplicate-{session}.jsonl"
+        duplicate.write_bytes(journal.read_bytes())
+    elif gap == "symlink":
+        outside = Path.cwd() / "outside.jsonl"
+        journal.rename(outside)
+        journal.symlink_to(outside)
+    elif gap == "malformed":
+        with journal.open("a") as handle:
+            handle.write('{"broken":')
+    elif gap == "counter":
+        append_codex_totals(journal, dict(input_tokens=True, output_tokens=10))
+    elif gap == "empty":
+        journal.write_text(journal.read_text().splitlines()[0] + "\n")
+    totals = dict(input_tokens=90 if gap == "decreased" else 130, output_tokens=13)
+    launch = provider_process([
+        {"type": "thread.started", "thread_id": session},
+        {"type": "turn.completed", "usage": totals},
+    ])
+    process = launch.return_value
+
+    def run(command, **kwargs):
+        if gap == "truncated":
+            journal.write_text("")
+        elif gap == "replaced":
+            journal.rename(journal.with_suffix(".old"))
+            journal.write_text("")
+        elif gap == "rewritten":
+            original = journal.read_text()
+            journal.write_text(original.replace('100', '101'))
+        return process
+
+    launch.side_effect = run
+    assert chat.launch_chat_session(
+        "developer", "x", phase_name="implementation", prompt="hello"
+    ) == 0
+    assert launch.call_count == 1
+    (group,) = groups(target)
+    assert group["stats"] == {} and group["incomplete_calls"] == 1
+    assert "Chat accounting incomplete" in capsys.readouterr().out
+
+
 @pytest.fixture
 def terminal(monkeypatch):
     original = subprocess.run
@@ -260,13 +424,43 @@ def test_interactive_without_native_reader_is_durably_incomplete(
     data["implementation"]["clis"] = [{"cli": cli, "model": "selected"}]
     config.write_text(yaml.safe_dump(data))
     terminal(lambda command, **kwargs: subprocess.CompletedProcess(command, 7 if failure else 0))
-    assert chat.launch_chat_session("developer", "x", phase_name="implementation") == (
-        7 if failure else 0
+    # Exercise native accounting independently of the phase-chat initial-context
+    # admission contract. These CLIs expose a terminal but no native usage reader.
+    from cafe.agents.executor import AgentExecutor
+    from cafe.agents.transport import ConversationTransport
+    from cafe.core.types import AgentConfig
+
+    transport = ConversationTransport(
+        AgentExecutor(AgentConfig(name="David", cli=AgentCLI(cli), model="selected"))
     )
+    result = transport.open_interactive_session(
+        on_accounting=chat._chat_usage_sink(
+            _issue, "implementation", cli=cli, requested_model="selected", mode="interactive"
+        )
+    )
+    assert result.returncode == (7 if failure else 0)
     (group,) = groups(target)
     assert group["cli"] == cli and group["requested_model"] == "selected"
     assert group["reported_model"] is None and group["stats"] == {}
     assert group["calls"] == 1 and group["incomplete_calls"] == 1
+
+
+@pytest.mark.parametrize("cli", ["copilot", "gemini", "cursor-agent"])
+def test_phase_chat_rejects_missing_initial_context_before_cost_accounting(
+    phase_chat, terminal, cli, capsys
+):
+    _issue, target = phase_chat
+    config = Path.cwd() / ".cafe/phases.yaml"
+    data = yaml.safe_load(config.read_text())
+    data["implementation"]["clis"] = [{"cli": cli, "model": "selected"}]
+    config.write_text(yaml.safe_dump(data))
+    launches = []
+    terminal(lambda command, **kwargs: launches.append(command))
+
+    assert chat.launch_chat_session("developer", "x", phase_name="implementation") == 1
+    assert launches == []
+    assert "runtime initial context" in capsys.readouterr().out
+    assert "chat_usage" not in json.loads(target.read_text())
 
 
 def test_native_malformed_tail_keeps_verified_partial_usage(phase_chat, terminal, monkeypatch):
