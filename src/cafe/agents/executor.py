@@ -1595,7 +1595,8 @@ class AgentExecutor:
                                 raise_startup_error()
                             break
 
-                        if self.config.native_review_configuration and len(native_observed_at) < 512:
+                        if (self.config.native_review_configuration and len(native_observed_at) < 512
+                                and ('"tool_use"' in line or '"tool_result"' in line)):
                             from datetime import datetime, timezone
                             native_observed_at[id(line)] = datetime.now(timezone.utc).isoformat()
                         line_bytes = len(line.encode("utf-8", errors="replace"))

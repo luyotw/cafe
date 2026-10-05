@@ -163,3 +163,40 @@ def test_uncertain_pr_publication_is_retained_and_never_replayed(compact_request
     assert json.loads((issue / "delivery_result.json").read_text())["status"] == "unknown"
     with pytest.raises(ValueError):
         publish_compact_pr(issue, root, output)
+
+
+def test_existing_custom_publication_hook_checks_scope_before_dispatch(compact_request, compact_proposal, monkeypatch):
+    from types import SimpleNamespace
+    import cafe.core.capabilities as capabilities
+    from cafe.core.hooks.native import GitHubPRCreator
+    from cafe.core.status_codes import PhaseStatusCode
+    from cafe.manager.file_scope import execution_scope_projection
+    root = Path(compact_request["project_root"])
+    issue = root / ".cafe/issues/sample"
+    activate(issue, compact_proposal)
+    context = execution_scope_projection(issue, root)
+    output = issue / "custom-publish/iteration_001/output.md"
+    output.parent.mkdir(parents=True)
+    output.write_text("# Change\n\nEvidence\n")
+    request_file = output.parent / "request.json"
+    request_file.write_text(json.dumps({"capability": "cafe.pr.publish", "args": {
+        "output": output.relative_to(root).as_posix(), "base": "main", "remote": "origin"}}))
+    phase = SimpleNamespace(issue_dir=issue, phase_dir=output.parent.parent, iteration=1,
+        git_ops=SimpleNamespace(get_repo_root=lambda: root))
+    invocations = []
+    def transport(**kwargs):
+        invocations.append(kwargs["request"])
+        return {"pr_url": "https://github.com/example/project/pull/1", "pr_number": "1"}, None
+    monkeypatch.setitem(capabilities.HOST_CAPABILITY_ADAPTERS, "sync_pr", transport)
+    hook = GitHubPRCreator()
+    arguments = {"stage": "publish_output", "phase": phase, "step_name": "custom-publish",
+        "step_def": {"capability_requests": ["cafe.pr.publish"], "behavior": {"publish_confirmation": True}},
+        "output_file": output, "capability_request_file": request_file,
+        "status_code": PhaseStatusCode.CONFIRMED, "validated_pr_auto_create": True,
+        "execution_context": context}
+    hook.run(**arguments)
+    assert len(invocations) == 1
+    (root / "outside.py").write_text("unapproved change after implementation")
+    with pytest.raises(ValueError):
+        hook.run(**arguments)
+    assert len(invocations) == 1

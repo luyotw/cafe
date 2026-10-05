@@ -17,7 +17,7 @@ from _kickoff_test_support import load_kickoff_module, SCRIPT_ROOT
 def compact_request(tmp_path, monkeypatch):
     from cafe.utils import config
 
-    monkeypatch.setattr(config, "get_global_cafe_dir", lambda: tmp_path / "global")
+    monkeypatch.setattr(config, "get_global_cafe_dir", lambda **kwargs: tmp_path / "global")
     root = tmp_path / "repo"
     root.mkdir()
     subprocess.run(["git", "init", "-q", str(root)], check=True)

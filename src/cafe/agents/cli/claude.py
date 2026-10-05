@@ -510,6 +510,8 @@ class ClaudeCLI(AbstractCLI):
                 record = json.loads(line)
             except (ValueError, TypeError):
                 continue
+            if not isinstance(record, dict) or not isinstance(record.get("message", {}), dict):
+                continue
             content = record.get("message", {}).get("content", [])
             if not isinstance(content, list):
                 continue

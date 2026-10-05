@@ -1237,6 +1237,7 @@ def run_capability_request(
     capability_request: Mapping[str, Any],
     output_file: Path,
     timeout_sec: float = 600.0,
+    before_dispatch=None,
     trusted_human_task_notification: bool = False,
     notification_presentation: NotificationPresentation | None = None,
 ) -> PrPublishRun:
@@ -1322,6 +1323,7 @@ def run_capability_request(
         output_file=output_file,
         timeout_sec=timeout_sec,
         correlation_id=correlation_id,
+        before_dispatch=before_dispatch,
         notification_presentation=(
             notification_presentation if cap_id == CAPABILITY_SLACK_HUMAN_TASK_ID else None
         ),
@@ -1335,6 +1337,7 @@ def dispatch_revalidated_capability_request(
     output_file: Path,
     timeout_sec: float = 600.0,
     correlation_id: Optional[str] = None,
+    before_dispatch=None,
     notification_presentation: NotificationPresentation | None = None,
 ) -> PrPublishRun:
     """Dispatch one exact evaluation after its caller has established authorization."""
@@ -1371,6 +1374,8 @@ def dispatch_revalidated_capability_request(
             {"notification_presentation": notification_presentation}
             if manifest.implementation == "notify_slack_human_task" else {}
         )
+        if before_dispatch is not None:
+            before_dispatch()
         outputs, event = adapter(
             repo_root=repo_root,
             request=request,

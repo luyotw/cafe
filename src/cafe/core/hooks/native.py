@@ -1361,11 +1361,18 @@ class GitHubPRCreator(NoOpHook):
         events: list[dict[str, Any]] = []
         context_updates: dict[str, str] = {}
         for request in requests:
+            resolved_context = kwargs.get("execution_context")
+            guard = None
+            if resolved_context is not None and request.get("capability") == CAPABILITY_PR_PUBLISH_ID:
+                from cafe.core.execution_checkpoints import guard_execution_delivery
+                guard = lambda: guard_execution_delivery(
+                    resolved_context, request, issue_dir=issue_dir, output_dir=output_file.parent)
             run = run_capability_request(
                 repo_root=repo_root,
                 registry=registry,
                 capability_request=request,
                 output_file=output_file,
+                **({"before_dispatch": guard} if guard is not None else {}),
             )
             decision = run.receipt.get("decision")
             requires_approval = (
@@ -1414,6 +1421,7 @@ class GitHubPRCreator(NoOpHook):
                     registry=registry,
                     repo_root=repo_root,
                     output_file=output_file,
+                    **({"before_dispatch": guard} if guard is not None else {}),
                 )
                 execution = receipt.get("execution")
                 run_receipt = dict(execution) if isinstance(execution, dict) else receipt

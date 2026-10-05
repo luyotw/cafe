@@ -643,6 +643,8 @@ class GenericWorkflowStepExecutor(Phase):
                 raise ValueError("execution_checkpoint_blocked: " + json.dumps(receipt["findings"]))
             instructions = "Resolved execution checkpoint context:\n" + json.dumps(execution_context)
             extra_prompt = (extra_prompt + "\n" if extra_prompt else "") + instructions
+        self._resolved_execution_chains = (execution_context.get("phase_chains", {})
+                                           if execution_context is not None else {})
         hybrid_portion = step_def.get("hybrid_portion")
         is_hybrid_portion = isinstance(hybrid_portion, Mapping)
         baton_path = self.issue_dir / "next_step.txt"
@@ -1280,6 +1282,7 @@ class GenericWorkflowStepExecutor(Phase):
                 "iteration_dir": iteration_dir,
                 "output_file": output_file,
                 "questions_xml_file": questions_xml_file,
+                "execution_context": execution_context,
                 "authoritative_inputs": context.get("authoritative_inputs", {}),
                 "capability_request_file": capability_request_file if capability_ids else None,
                 "publish_request_file": (
@@ -2732,6 +2735,16 @@ class GenericWorkflowStepExecutor(Phase):
         return local_path, repo_path
 
     def _resolve_step_phase_config(self, step_name: str):
+        resolved = getattr(self, "_resolved_execution_chains", {}).get(step_name)
+        if resolved is not None:
+            from cafe.utils.phase_config import PhaseStepModelResolution
+            if not resolved:
+                raise ValueError("resolved execution chain is empty")
+            role = self.playbook["steps"][step_name]["role"]
+            name = self.role_agent_map.get(role) or self.playbook.get("roles", {}).get(role, {}).get("default_agent")
+            return PhaseStepModelResolution(name=name, role=role,
+                clis=tuple((entry["cli"], entry["model"]) for entry in resolved), model=resolved[0]["model"],
+                source="resolved_execution_context", chain=("resolved_execution_context",))
         local_path, repo_path = self._resolve_phase_config_paths()
         return load_phase_step_model(
             step_name=step_name,

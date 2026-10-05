@@ -344,7 +344,8 @@ def validate_compact_action(issue_dir: Path, root: Path) -> dict:
     if (readiness.get("authority_digest") != context["authority_digest"]
             or readiness.get("endpoint") != endpoint):
         raise ValueError("delivery readiness no longer matches confirmed authority")
-    require_verified_review(context, load_review_evidence(issue_dir / "execution_review.json"))
+    if context.get("review_policy") == "single_native":
+        require_verified_review(context, load_review_evidence(issue_dir / "execution_review.json"))
     require_checkpoint(context, readiness.get("checkpoint"), "before_delivery")
     fresh = checkpoint(context, "before_delivery", round_id="delivery-action", parent_id="manager")
     require_checkpoint(context, fresh, "before_delivery")

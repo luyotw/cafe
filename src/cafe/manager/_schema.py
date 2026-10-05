@@ -128,7 +128,8 @@ def validate_compact_proposal(proposal):
     for field in ("cli", "model", "provider_version"):
         _string(review[field], "review_configuration." + field)
     phases = _validate_phases(raw["phases"])
-    if not any(e["cli"] == review["cli"] and e["model"] == review["model"]
+    if not any(e["cli"] == review["cli"] and (review["model_behavior"] == "independent_override"
+                    or e["model"] == review["model"])
                for p in phases for e in p["chain"]):
         raise ValueError("review configuration must belong to the selected chain")
     delivery = normalize_delivery_contract(raw["delivery_contract"])

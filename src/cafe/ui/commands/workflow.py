@@ -903,6 +903,8 @@ def workflow(
                 open_pr=open_pr,
                 extra_allowed_directories=add_dir_values,
                 stream_agent_output=not mute_agent_output,
+                **({"execution_chain": execution_context["phase_chains"][phase_name]}
+                   if execution_context is not None else {}),
             )
 
         # Mutable holder so wrapped_executor can swap executors when the active
@@ -932,6 +934,8 @@ def workflow(
                 config_manager,
                 active_step=step_name,
                 active_role=step_role if isinstance(step_role, str) else None,
+                **({"execution_chain": execution_context["phase_chains"][step_name]}
+                   if execution_context is not None else {}),
             )
             if missing_clis:
                 console.print(

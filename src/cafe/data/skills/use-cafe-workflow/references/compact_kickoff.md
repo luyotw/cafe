@@ -34,3 +34,14 @@ validation. Reuse unchanged granted authority and retain mandatory host
 decisions. Report a verified PR URL or pushed commit/branch; readiness, failed
 push and uncertain publication do not establish delivery. Merge and issue
 closure are outside compact delivery authority.
+
+After user confirmation, prepare the declared workflow non-interactively in
+the inspected current checkout (do not create a different worktree). Use the
+selected graph's prepare inputs and capability-owned settings. For a graph
+that declares `cafe.pr.publish`, PR delivery supplies its `--auto-create-pr`
+prepare choice; mandatory host approval is still separate. Bind the rendered
+`.proposal.json` to that prepared identity with
+`scripts/activate_compact.py --issue-dir <issue> --proposal-file <proposal>
+--confirmed-by user --confirmed-at <actual timezone-aware confirmation time>`.
+Then use `run_workflow.py` with fresh contract facts. The owning projection
+passes the confirmed phase chains and current scope into the generic worker.

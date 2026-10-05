@@ -3722,30 +3722,7 @@ class BlackboardWorkflowRuntime:
             })
         self._flush_phase_terminal()
 
-    def _handle_post_contract(
-        self,
-        *,
-        current_step: str,
-        status_code: str,
-        runtime: str,
-        update_contract_on_transition: bool,
-    ) -> Optional[PostContractResult]:
-        post_contract = self._load_step_handoff_contract(current_step=current_step)
-        if post_contract is None:
-            return None
-        if (
-            post_contract.to_owner == HandoffOwner.AGENT
-            and post_contract.to_step == current_step
-            and not self._is_declared_agent_self_loop(
-                current_step=current_step,
-                contract=post_contract,
-            )
-        ):
-            return None
-
-        resolved_status_code = (
-            post_contract.status_code or f"BATON_{post_contract.intent.value.upper()}"
-        )
+    def _execution_completion_gate(self, *, current_step, post_contract, runtime):
         execution = self.steps[current_step].get("execution", {})
         advancing = (post_contract.to_owner == HandoffOwner.DONE or
                      post_contract.to_owner == HandoffOwner.AGENT and post_contract.to_step != current_step)
@@ -3756,7 +3733,8 @@ class BlackboardWorkflowRuntime:
                 if self.execution_context is None or iteration is None:
                     raise ValueError("delivery requires current resolved execution evidence")
                 readiness = load_review_evidence(iteration / execution["delivery_evidence_artifact"])
-                require_verified_review(self.execution_context, load_review_evidence(self.issue_dir / "execution_review.json"))
+                if self.execution_context.get("review_policy") == "single_native":
+                    require_verified_review(self.execution_context, load_review_evidence(self.issue_dir / "execution_review.json"))
                 require_checkpoint(self.execution_context, readiness.get("checkpoint"), "before_delivery")
                 if (readiness.get("authority_digest") != self.execution_context["authority_digest"] or
                         readiness.get("endpoint") != self.execution_context["delivery_endpoint"]):
@@ -3783,6 +3761,35 @@ class BlackboardWorkflowRuntime:
                 result = self._emit_pause(current_step=current_step, status_code="NATIVE_REVIEW_BLOCKED",
                     runtime=runtime, reason=str(exc), pause_intent=HandoffIntent.NEED_CLARIFICATION)
                 return PostContractResult(status_code="NATIVE_REVIEW_BLOCKED", terminal_result=result)
+        return None
+
+    def _handle_post_contract(
+        self,
+        *,
+        current_step: str,
+        status_code: str,
+        runtime: str,
+        update_contract_on_transition: bool,
+    ) -> Optional[PostContractResult]:
+        post_contract = self._load_step_handoff_contract(current_step=current_step)
+        if post_contract is None:
+            return None
+        if (
+            post_contract.to_owner == HandoffOwner.AGENT
+            and post_contract.to_step == current_step
+            and not self._is_declared_agent_self_loop(
+                current_step=current_step,
+                contract=post_contract,
+            )
+        ):
+            return None
+
+        resolved_status_code = (
+            post_contract.status_code or f"BATON_{post_contract.intent.value.upper()}"
+        )
+        gate = self._execution_completion_gate(current_step=current_step, post_contract=post_contract, runtime=runtime)
+        if gate is not None:
+            return gate
         if post_contract.to_owner == HandoffOwner.USER:
             result = self._emit_pause(
                 current_step=current_step,
@@ -4208,6 +4215,11 @@ class BlackboardWorkflowRuntime:
 
         contract = result.contract
         status_code = result.status_code
+        gate = self._execution_completion_gate(
+            current_step=current_step, post_contract=contract, runtime=runtime
+        )
+        if gate is not None:
+            return gate.terminal_result
         self._patch_reconciled_iteration_metadata(result)
 
         # Reconciliation validates the baton directly from disk.  Publish that
@@ -4887,6 +4899,11 @@ class BlackboardWorkflowRuntime:
                     reason=feedback_delivery_rejection,
                     delivery=feedback_delivery,
                 )
+
+            gate = self._execution_completion_gate(
+                current_step=current_step, post_contract=contract, runtime=runtime_label)
+            if gate is not None:
+                return gate.terminal_result
 
             if next_step == "done":
                 return self._emit_complete(

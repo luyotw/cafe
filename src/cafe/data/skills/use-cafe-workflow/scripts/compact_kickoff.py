@@ -12,6 +12,7 @@ from cafe.core.playbook import (
     confirmation_gate_steps,
     mandatory_confirmation_gate_steps,
     load_playbook_file,
+    execution_graph_digest,
 )
 from cafe.skills.loader import SkillLoader
 from _kickoff_store import VersionedJsonStore
@@ -32,12 +33,16 @@ def discover(
     loader = SkillLoader(
         **{k: catalog_args[k] for k in ("project_root", "global_root", "builtin_root")}
     )
-    loaded = load_playbook_file(
-        Path(candidate["path"]), source=candidate["source"], skill_loader=loader, strict=True
-    )
+    try:
+        loaded = load_playbook_file(
+            Path(candidate["path"]), source=candidate["source"], skill_loader=loader, strict=True
+        )
+    except (OSError, ValueError) as exc:
+        return {"contract_mode": "compact", "status": "invalid",
+                "diagnostics": ["selected_graph_invalid: " + str(exc)[:500]]}
     model = loaded.model
     graph = model.model_dump(mode="json")
-    graph_digest = hashlib.sha256(json.dumps(graph, sort_keys=True).encode()).hexdigest()
+    graph_digest = execution_graph_digest(graph)
     selected_candidate = {
         **candidate,
         "steps": graph["steps"],
@@ -99,6 +104,9 @@ def discover(
     ).read()
     records = request.get("model_assessments", []) or list(cached_models.values())
     identities = {(e["cli"], e["model"]) for p in inputs.get("phases", []) for e in p["chain"]}
+    if inputs.get("review_configuration"):
+        review = inputs["review_configuration"]
+        identities.add((review["cli"], review["model"]))
     models = [
         assess_model_evidence(
             record,
@@ -176,6 +184,9 @@ def discover(
 
 def assemble(request, *, discovery):
     root = Path(request["project_root"]).resolve()
+    if discovery.get("status") == "invalid":
+        return {"contract_mode": "compact", "status": "invalid", "proposal": None,
+                "formatter_inputs": None, "diagnostics": discovery["diagnostics"]}
     inputs = dict(discovery.get("inputs", {}))
     candidate = discovery.get("selected_candidate", {})
     missing = [
@@ -200,6 +211,12 @@ def assemble(request, *, discovery):
                         "requirement": f"model:{entry['cli']}:{entry['model']}",
                     }
                 )
+    review = inputs.get("review_configuration")
+    if review and not any(m["status"] == "hit" and
+            m["identity"]["provider"] == review["cli"] and m["identity"]["model"] == review["model"]
+            for m in discovery.get("models", [])):
+        missing.append({"owner": "selected_evidence",
+                        "requirement": f"review_model:{review['cli']}:{review['model']}"})
     proposal = None
     diagnostics = []
     if not missing:
@@ -216,7 +233,7 @@ def assemble(request, *, discovery):
                     else prepare_file_scope(root, inputs["files"])
                 ),
                 "execution": {
-                    "playbook_id": request["playbook_id"],
+                    "playbook_id": candidate["id"],
                     "graph_digest": discovery["graph_digest"],
                 },
                 "phases": inputs["phases"],

@@ -78,3 +78,7 @@ The native reviewer must return one JSON object with exactly `findings` and
 `targeted_tests`. Each finding has `severity` (`blocking` or `nonblocking`) and
 `detail`. Copy that independent conclusion into the invocation evidence without
 rewriting it. Host-observed conclusions are compared before advancement.
+
+For another correction round, use the explicit declared self-loop baton with
+`version: 1`, `to_owner: agent`, `to_step: <current step>` and
+`intent: manual_handoff`. Outcome-only success is reserved for `await_agent`.

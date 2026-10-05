@@ -102,6 +102,8 @@ def require_current_review(context, evidence, *, native_observations=None):
     if not isinstance(invocations, list) or len(invocations) != 1:
         raise ValueError("review requires exactly one native invocation per round")
     reviewer = invocations[0]
+    if not isinstance(reviewer, dict):
+        raise ValueError("native reviewer evidence is invalid")
     if native_observations is not None:
         observed = native_observations.get("observations", [])
         if len(observed) != 1 or native_observations.get("parent_id") != receipt["parent_id"]:
@@ -162,3 +164,32 @@ def require_verified_review(context, evidence):
     if not isinstance(evidence, dict) or not isinstance(evidence.get("native_observations"), dict):
         raise ValueError("host-observed native review evidence is missing")
     return require_current_review(context, evidence, native_observations=evidence["native_observations"])
+
+
+def guard_execution_delivery(context, request, *, issue_dir, output_dir):
+    """Check resolved scope/endpoint before an existing workflow publication hook."""
+    import hashlib
+    import subprocess
+    endpoint = context["delivery_endpoint"]
+    args = request.get("args", {})
+    if (endpoint["route"] != "pr" or args.get("base") != endpoint["target_branch"]
+            or args.get("remote", "origin") != endpoint["remote"]):
+        raise ValueError("publication request differs from resolved delivery endpoint")
+    root = Path(context["root"])
+    def git(*argv):
+        return subprocess.run(["git", "-C", str(root), *argv], capture_output=True,
+            text=True, check=True, timeout=20).stdout.strip()
+    if git("symbolic-ref", "--short", "HEAD") != endpoint["source_branch"]:
+        raise ValueError("publication source branch changed")
+    remote = git("remote", "get-url", "--push", "--all", endpoint["remote"])
+    if "\n" in remote or hashlib.sha256(remote.encode()).hexdigest() != endpoint["remote_identity"]:
+        raise ValueError("publication remote endpoint changed")
+    command = list(context["checkpoint_command"]) + ["--boundary", "before_delivery",
+        "--round-id", "publication", "--parent-id", "publication-hook", "--output",
+        str(output_dir / "delivery_checkpoint.json")]
+    observed = subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
+    if observed.returncode != 0:
+        raise ValueError("publication scope checkpoint failed")
+    require_checkpoint(context, json.loads(observed.stdout), "before_delivery")
+    if context.get("review_policy") == "single_native":
+        require_verified_review(context, load_review_evidence(issue_dir / "execution_review.json"))

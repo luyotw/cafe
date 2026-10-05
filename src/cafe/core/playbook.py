@@ -2087,3 +2087,11 @@ def _collect_tool_warnings(step_name: str, allowed_tools: List[str]) -> List[str
             )
 
     return warnings
+
+
+def execution_graph_digest(graph: Mapping[str, Any]) -> str:
+    """Bind execution declarations separately from the confirmed contract form."""
+    import hashlib
+    import json
+    execution = {key: value for key, value in graph.items() if key != "contract"}
+    return hashlib.sha256(json.dumps(execution, sort_keys=True).encode()).hexdigest()
