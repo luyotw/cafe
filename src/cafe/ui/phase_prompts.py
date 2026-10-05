@@ -4,15 +4,16 @@ This module provides reusable UI interaction functions for spec/plan phases and 
 """
 
 from pathlib import Path
-from typing import Optional, Any, Dict, List, Tuple
+from typing import List, Optional, Tuple
+
 import yaml
 
 from cafe.core.prepare_fields import PrepareField
-from cafe.core.types import SpecRigor
 from cafe.ui.display import Display
-from cafe.ui.inquirer_prompts import prompt_list, prompt_text, prompt_confirm
-from cafe.utils.github import GitHubOps, GitHubError
+from cafe.ui.inquirer_prompts import prompt_confirm, prompt_list, prompt_text
 from cafe.utils.git_utils import is_github_repo
+from cafe.utils.github import GitHubError, GitHubOps
+from cafe.utils.yaml_utils import safe_load
 
 
 def prompt_for_input_method(
@@ -206,7 +207,7 @@ def prompt_and_save_auto_create(config_file: Path, config_key: str) -> bool:
     try:
         if config_file.exists():
             with open(config_file, "r", encoding="utf-8") as f:
-                config_data = yaml.safe_load(f) or {}
+                config_data = safe_load(f) or {}
         else:
             config_data = {}
     except Exception:

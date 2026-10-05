@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Optional
-
-import yaml
 
 from cafe.catalogs.resolver import (
     CatalogEntry,
@@ -18,6 +18,7 @@ from cafe.catalogs.resolver import (
 from cafe.core.runtime_locales import owner_catalog_renderer
 from cafe.skills.contracts import SkillWorkflowDeclaration
 from cafe.skills.exceptions import SkillDiscoveryError
+from cafe.utils.yaml_utils import safe_load
 
 _logger = logging.getLogger(__name__)
 
@@ -101,7 +102,16 @@ def read_skill_frontmatter(skill_file: Path) -> Dict[str, object]:
     frontmatter = "".join(frontmatter_lines)
     if not frontmatter.strip():
         return {}
-    data = yaml.safe_load(frontmatter) or {}
+    # Read the current header on every call. Cache only parsing by exact content,
+    # never by path, so same-path publications and overrides remain fresh.
+    if len(frontmatter) <= 32 * 1024:
+        return deepcopy(_parse_frontmatter(frontmatter))
+    return _parse_frontmatter.__wrapped__(frontmatter)
+
+
+@lru_cache(maxsize=128)
+def _parse_frontmatter(frontmatter: str) -> Dict[str, object]:
+    data = safe_load(frontmatter) or {}
     return data if isinstance(data, dict) else {}
 
 

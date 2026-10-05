@@ -33,11 +33,10 @@ def _reexec_with_cafe_python() -> None:
 
 
 try:
-    import yaml  # type: ignore[import-untyped]
-
     from cafe.core.audit_events import AuditEventStore
     from cafe.core.runtime_locales import render_text
     from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
+    from cafe.utils.yaml_utils import safe_load
 except ModuleNotFoundError:
     _reexec_with_cafe_python()
     raise
@@ -718,7 +717,7 @@ def _issue_playbook_id(issue_dir: Path) -> str | None:
         return str(blackboard["playbook_id"])
     issue_config = issue_dir / "issue.yaml"
     if issue_config.is_file():
-        raw = yaml.safe_load(issue_config.read_text(encoding="utf-8")) or {}
+        raw = safe_load(issue_config.read_text(encoding="utf-8")) or {}
         if isinstance(raw, Mapping) and isinstance(raw.get("playbook_id"), str):
             return str(raw["playbook_id"])
     return None

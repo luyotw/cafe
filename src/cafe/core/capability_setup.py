@@ -26,6 +26,7 @@ from cafe.utils.issue_config import (
     resolve_issue_config_path,
     write_issue_config_atomic,
 )
+from cafe.utils.yaml_utils import safe_load
 
 
 def resolve_setup_choices(
@@ -140,7 +141,7 @@ def _load_effective_playbook(config: Mapping[str, Any], config_path: Path) -> Pl
     if path is None:
         raise ValueError(f"playbook is unavailable: {name}")
     try:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        raw = safe_load(path.read_text(encoding="utf-8"))
         return PlaybookDefinition.model_validate(normalize_playbook_yaml(raw))
     except (OSError, yaml.YAMLError, ValueError) as exc:
         raise ValueError(f"playbook is invalid: {name}") from exc

@@ -7,6 +7,7 @@ from typing import Dict, List, Tuple
 import yaml
 
 from cafe.core.types import AgentCLI
+from cafe.utils.yaml_utils import safe_load
 
 
 def check_available_clis() -> List[str]:
@@ -48,7 +49,7 @@ def parse_agent_file(file_path: Path) -> Dict[str, str]:
         if len(parts) >= 3:
             frontmatter_content = parts[1]
             try:
-                frontmatter = yaml.safe_load(frontmatter_content)
+                frontmatter = safe_load(frontmatter_content)
                 if isinstance(frontmatter, dict):
                     name = frontmatter.get("name", name)
                     description = frontmatter.get("description", description)

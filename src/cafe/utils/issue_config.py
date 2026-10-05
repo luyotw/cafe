@@ -13,6 +13,7 @@ from typing import Any, Dict, Iterator, Mapping, Optional
 import yaml
 
 from cafe.core.packet_io import atomic_write_bytes
+from cafe.utils.yaml_utils import safe_load
 
 
 def read_issue_config(config_path: Path) -> Optional[Dict[str, Any]]:
@@ -21,7 +22,7 @@ def read_issue_config(config_path: Path) -> Optional[Dict[str, Any]]:
         return None
     try:
         with open(config_path, encoding="utf-8") as f:
-            config_data = yaml.safe_load(f)
+            config_data = safe_load(f)
         return config_data if config_data else None
     except (yaml.YAMLError, OSError):
         return None
@@ -30,7 +31,7 @@ def read_issue_config(config_path: Path) -> Optional[Dict[str, Any]]:
 def read_issue_config_strict(config_path: Path) -> Dict[str, Any]:
     """Read mutable issue authority without hiding malformed or nonmapping data."""
     try:
-        loaded = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        loaded = safe_load(config_path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as exc:
         raise ValueError("issue.yaml is unreadable") from exc
     if not isinstance(loaded, dict):

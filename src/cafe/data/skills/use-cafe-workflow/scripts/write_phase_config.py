@@ -15,6 +15,7 @@ import yaml
 from cafe.catalogs.resolver import CatalogResolver
 from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
 from cafe.utils.phase_config import load_phase_step_model
+from cafe.utils.yaml_utils import safe_load
 from cafe.workflow_execution.phase_bindings import (
     default_agent_for_step,
     phase_config_paths_for_project,
@@ -64,7 +65,7 @@ def _load_issue_mapping(issue_config: Path) -> Mapping[str, Any]:
     if not issue_config.is_file():
         raise ValueError(f"issue config is missing: {issue_config}")
     try:
-        raw = yaml.safe_load(issue_config.read_text(encoding="utf-8")) or {}
+        raw = safe_load(issue_config.read_text(encoding="utf-8")) or {}
     except (OSError, yaml.YAMLError) as exc:
         raise ValueError(f"issue config is unreadable: {issue_config}: {exc}") from exc
     if not isinstance(raw, Mapping):

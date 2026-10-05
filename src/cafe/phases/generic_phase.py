@@ -12,11 +12,9 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import yaml
 
-from cafe.constraints import Context, resolve, render_prompt
-from cafe.constraints.context import context_for_tools
-from cafe.skills.exceptions import SkillDiscoveryError
-from cafe.skills.workflow_composition import resolve_step_workflow_composition
 from cafe.catalogs.resolver import global_catalog_lock
+from cafe.constraints import Context, render_prompt, resolve
+from cafe.constraints.context import context_for_tools
 from cafe.core.blackboard import BlackboardState, BlackboardStore, HandoffIntent
 from cafe.core.capabilities import (
     CAPABILITY_ISSUE_COMMENT_ID,
@@ -42,8 +40,11 @@ from cafe.core.status_codes import (
     effective_step_status_codes,
 )
 from cafe.core.types import AgentCLI
+from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.loader import SkillLoader, canonical_skill_name
 from cafe.skills.native_bridge import NativeSkillBridge
+from cafe.skills.workflow_composition import resolve_step_workflow_composition
+from cafe.utils.yaml_utils import safe_load
 
 AgentExecutor = Callable[[str], str]
 CompletionValidator = Callable[..., tuple[str, Optional[PhaseStatusCode], bool]]
@@ -1020,7 +1021,7 @@ class GenericPhase:
             )
         try:
             issue_config = (
-                yaml.safe_load((issue_dir / "issue.yaml").read_text(encoding="utf-8")) or {}
+                safe_load((issue_dir / "issue.yaml").read_text(encoding="utf-8")) or {}
             )
             phase_config = issue_config.get(phase_name) or {}
             issue_id = str((issue_config.get("spec") or {}).get("issue_id") or "").strip()
