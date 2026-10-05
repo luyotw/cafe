@@ -25,6 +25,7 @@ import yaml
 
 from cafe.agents.executor import AgentExecutionControl, AgentExecutionError, AgentExecutor
 from cafe.agents.transport import ConversationTransport
+from cafe.constraints import execution_context, numeric_limit
 from cafe.core.audit_events import AuditEventStore
 from cafe.core.conversation_locale import DEFAULT_CONVERSATION_LOCALE
 from cafe.core.human_task_notifications import (
@@ -1564,9 +1565,9 @@ def _acquire_v3_session(
                 allowed_directories=[],
                 execution_control=AgentExecutionControl(
                     working_directory=Path(temporary),
-                    max_duration_seconds=60,
-                    max_output_bytes=64 * 1024,
-                    max_output_lines=128,
+                    max_duration_seconds=numeric_limit("callback.attempt-budget", "duration", execution_context(consumers=["callback"]), expected_unit="seconds"),
+                    max_output_bytes=numeric_limit("callback.attempt-budget", "output-bytes", execution_context(consumers=["callback"]), expected_unit="bytes"),
+                    max_output_lines=numeric_limit("callback.attempt-budget", "output-lines", execution_context(consumers=["callback"]), expected_unit="lines"),
                 ),
             )
     except Exception as exc:
@@ -2309,9 +2310,9 @@ def _deliver_v3_callback(
                 allowed_tools=["Read", "Grep", "Glob", "Bash"],
                 allowed_directories=[str(repository_root)],
                 execution_control=AgentExecutionControl(
-                    max_duration_seconds=60,
-                    max_output_bytes=64 * 1024,
-                    max_output_lines=128,
+                    max_duration_seconds=numeric_limit("callback.attempt-budget", "duration", execution_context(consumers=["callback"]), expected_unit="seconds"),
+                    max_output_bytes=numeric_limit("callback.attempt-budget", "output-bytes", execution_context(consumers=["callback"]), expected_unit="bytes"),
+                    max_output_lines=numeric_limit("callback.attempt-budget", "output-lines", execution_context(consumers=["callback"]), expected_unit="lines"),
                 ),
             )
             accepted = result.accepted is True

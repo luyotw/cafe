@@ -16,6 +16,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
+from cafe.constraints.context import context_for_tools
+from cafe.core.workflow_tools import normalize_allowed_tools, runtime_granted_tools
+from cafe.skills.execution_profile import resolve_execution_profile
 from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import (
     ArtifactEntry,
@@ -70,6 +73,7 @@ from cafe.core.route_catalog import (
 from cafe.core.session_continuation import (
     SessionContinuation,
     exact_continuation_from_context,
+    pre_invocation_recovery_evidence,
 )
 from cafe.core.status_codes import (
     PhaseStatusCode,
@@ -651,7 +655,13 @@ class GenericWorkflowStepExecutor(Phase):
         self._session_recovery = None
         self._delta_packet_metadata = None
         iteration_dir = self._get_iteration_dir(self.iteration)
+        new_iteration = not iteration_dir.exists()
         iteration_dir.mkdir(parents=True, exist_ok=True)
+        if new_iteration:
+            self._persist_agent_invocation_marker(
+                iteration_dir=iteration_dir,
+                agent_invoked=False,
+            )
         portion_baton_path = (
             iteration_dir / "hybrid_portion_baton.json" if is_hybrid_portion else None
         )
@@ -787,10 +797,23 @@ class GenericWorkflowStepExecutor(Phase):
             questions_xml_file=questions_xml_file,
             baton_path=portion_baton_path,
         )
+        constraint_profile = resolve_execution_profile(
+            self._get_skill_loader(), skill_name, iteration=self.iteration,
+            workflow_skills=workflow_skill_names, step_name=step_name,
+        )
+        constraint_context = context_for_tools(
+            effective_agent_config.cli, allowed_tools=allowed_tools,
+            workloads=constraint_profile.workloads, capabilities=constraint_profile.capabilities,
+            modes=constraint_profile.modes,
+            structured=True, consumers=(["authority", "single-chain"]
+                if len(runtime_agent_clis) == 1 else ["authority"]),
+        )
+        context["constraint_context"] = constraint_context.model_dump(mode="json")
         phase_specific_data = {
             "step_name": step_name,
             "skill_name": skill_name,
             "playbook_id": self.playbook.get("playbook", {}).get("id"),
+            "constraint_context": constraint_context.model_dump(mode="json"),
         }
         if self._session_recovery is not None:
             phase_specific_data["session_recovery"] = dict(self._session_recovery)
@@ -2056,6 +2079,9 @@ class GenericWorkflowStepExecutor(Phase):
         if not isinstance(context_data, dict):
             return
         iteration_dir.mkdir(parents=True, exist_ok=True)
+        # A preparation retry must not erase evidence of an earlier invocation.
+        if context_data.get("agent_invoked") is True and not agent_invoked:
+            return
         context_data["agent_invoked"] = agent_invoked
         context_file.write_text(
             json.dumps(context_data, ensure_ascii=False, indent=2),
@@ -2156,6 +2182,10 @@ class GenericWorkflowStepExecutor(Phase):
         if not isinstance(raw, dict):
             raise ValueError("Invalid persisted context packet decision")
         if "effective_inputs" not in raw:
+            # The early preparation marker precedes the first packet decision;
+            # it is not a persisted decision that can be reused or is missing.
+            if raw == {"agent_invoked": False}:
+                return None
             if require_persisted_packet_decision:
                 raise ValueError("Invalid persisted context packet decision")
             return None
@@ -2420,11 +2450,7 @@ class GenericWorkflowStepExecutor(Phase):
         current_data = self._load_current_iteration_data()
         configured_clis = self._configured_clis_for_agent(agent_name)
 
-        if is_interrupted_iteration(
-            iteration=self.iteration,
-            previous_iteration_data=previous_data,
-            current_iteration_data=current_data,
-        ):
+        if isinstance(current_data, dict):
             recovery = self._selected_fresh_session_recovery(
                 workflow_id=workflow_id,
                 current_data=current_data,
@@ -2433,6 +2459,11 @@ class GenericWorkflowStepExecutor(Phase):
             if recovery is not None:
                 self._session_recovery = recovery
                 return SessionContinuation.new()
+        if is_interrupted_iteration(
+            iteration=self.iteration,
+            previous_iteration_data=previous_data,
+            current_iteration_data=current_data,
+        ):
             exact = exact_continuation_from_context(
                 current_data,
                 configured_clis=configured_clis,
@@ -2523,6 +2554,31 @@ class GenericWorkflowStepExecutor(Phase):
         }
         if any(recovery.get(key) != value for key, value in expected_binding.items()):
             raise RuntimeError("Fresh-session recovery result does not match this workflow run")
+
+        if "preparation" in recovery:
+            if current_data.get("session_recovery") == dict(recovery):
+                if current_data.get("agent_invoked") is True:
+                    if (
+                        exact_continuation_from_context(
+                            current_data,
+                            configured_clis=configured_clis,
+                        )
+                        is None
+                    ):
+                        raise RuntimeError(
+                            "The attempted session identity was not saved or is invalid"
+                        )
+                    return None  # The authorized first invocation already began.
+            evidence = pre_invocation_recovery_evidence(
+                current_data,
+                issue_dir=self.issue_dir,
+                workflow_id=workflow_id,
+                task_id=latest.id,
+                step_name=self.phase_name,
+            )
+            if evidence is None or evidence != recovery["preparation"]:
+                raise RuntimeError("Fresh-session recovery has no matching preparation evidence")
+            return dict(recovery)
 
         previous = recovery.get("previous")
         if not isinstance(previous, Mapping):
@@ -2722,31 +2778,7 @@ class GenericWorkflowStepExecutor(Phase):
 
     @staticmethod
     def _normalize_allowed_tools(raw_tools: List[str]) -> List[str]:
-        tool_name_map = {
-            "Read": "read",
-            "Edit": "edit",
-            "Write": "write",
-            "Grep": "grep",
-            "Glob": "glob",
-            "LS": "ls",
-            "Ls": "ls",
-            "Bash": "bash",
-            "WebFetch": "web_fetch",
-            "WebSearch": "web_search",
-        }
-        normalized = []
-        for tool in raw_tools:
-            if not tool:
-                continue
-            if "(" in tool:
-                tool_name, remainder = tool.split("(", 1)
-                normalized_name = tool_name_map.get(
-                    tool_name, tool_name[:1].lower() + tool_name[1:]
-                )
-                normalized.append(f"{normalized_name}({remainder}")
-                continue
-            normalized.append(tool_name_map.get(tool, tool[:1].lower() + tool[1:]))
-        return normalized
+        return normalize_allowed_tools(raw_tools)
 
     def _build_allowed_tools(
         self,
@@ -2787,14 +2819,8 @@ class GenericWorkflowStepExecutor(Phase):
             add_writable_file(questions_xml_file)
 
         grants = resolve_step_behavior(self.playbook, step_name).runtime_tool_grants
-        if "web_research" in grants:
-            add("web_fetch")
-            add("web_search")
-        if "git_inspection" in grants:
-            add("bash(git log)")
-            add("bash(git diff)")
-            add("bash(git show)")
-            add("bash(git status)")
+        for tool in runtime_granted_tools(grants):
+            add(tool)
 
         return allowed_tools
 

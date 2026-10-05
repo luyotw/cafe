@@ -379,9 +379,20 @@ class ExecutionProfile(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     workload: ExecutionWorkload = "general"
+    requested_workloads: Tuple[str, ...] = ()
+    capabilities: Tuple[str, ...] = ()
+    modes: Tuple[str, ...] = ()
     reasoning: ExecutionReasoning = "standard"
     risk_domains: Tuple[str, ...] = ()
     fallback_strength: FallbackStrength = "equivalent"
+
+    @field_validator("requested_workloads", "capabilities", "modes")
+    @classmethod
+    def _validate_constraint_tags(cls, value: Tuple[str, ...]) -> Tuple[str, ...]:
+        import re
+        if len(set(value)) != len(value) or any(not re.fullmatch(r"[a-z][a-z0-9_.-]*", tag) for tag in value):
+            raise ValueError("constraint tags must be unique lowercase identifiers")
+        return value
 
     @field_validator("risk_domains")
     @classmethod

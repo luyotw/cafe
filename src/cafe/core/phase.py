@@ -13,6 +13,9 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Optional
 
 logger = logging.getLogger(__name__)
 
+from cafe.constraints import Context
+from cafe.constraints.evidence import snapshot, compare_snapshot
+
 if TYPE_CHECKING:
     from cafe.core.git import GitOperations
 
@@ -840,6 +843,14 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         requested_continuation = self._current_session_continuation()
         initial_phase_data = dict(phase_specific_data or {})
         initial_phase_data["session_continuation"] = requested_continuation.to_dict()
+        prior_data = self._load_current_iteration_data() or {}
+        constraint_freshness = "unknown"
+        raw_context = initial_phase_data.get("constraint_context")
+        if raw_context:
+            current_evidence = snapshot(Context.model_validate(raw_context))
+            constraint_freshness = compare_snapshot(prior_data.get("runtime_constraints"), current_evidence)
+            initial_phase_data["runtime_constraints"] = current_evidence
+            initial_phase_data["constraint_freshness"] = constraint_freshness
         self._save_user_input(
             user_input=user_input,
             phase_specific_data=initial_phase_data,
@@ -990,6 +1001,8 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             return [dict(attempt) for attempt in attempts if isinstance(attempt, dict)]
 
         try:
+            if constraint_freshness == "material_change" and not prior_data.get("end_time"):
+                raise AgentExecutionError("Applicable runtime constraints changed; review current limits through existing recovery before retrying.", error_type="constraints_changed")
             execute_kwargs = {
                 "allowed_tools": allowed_tools,
                 "allowed_directories": allowed_directories,
@@ -1016,6 +1029,10 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             ):
                 execute_kwargs["backup_context_callback"] = backup_context_callback
 
+            raw_constraints = (phase_specific_data or {}).get("constraint_context")
+            if raw_constraints and "constraint_context" in execute_signature.parameters:
+                execute_kwargs["constraint_context"] = Context.model_validate(raw_constraints)
+
             response, token_usage, permission_denials, cli_command_args, streaming_log, model = (
                 self.agent_manager.execute(
                     agent_name,
@@ -1024,6 +1041,14 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                 )
             )
             failed_attempts = get_failed_attempts()
+            constraints_getter = getattr(self.agent_manager, "get_last_constraints", None)
+            latest_constraints = constraints_getter() if callable(constraints_getter) else None
+            if isinstance(latest_constraints, dict):
+                context_path = self._resolve_iteration_context_file(iteration_dir)
+                metadata = json.loads(context_path.read_text(encoding="utf-8"))
+                metadata["runtime_constraints"] = latest_constraints
+                context_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+
 
             actual_agent_cli = getattr(self.agent_manager, "get_last_cli", lambda: None)()
             if (
@@ -1069,7 +1094,6 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
 
         except Exception as e:
             # Agent execution failed - attempt recovery
-            from cafe.agents.executor import AgentExecutionError
             from cafe.core.types import CriticalPhaseError
 
             from cafe.agents.diagnostics import sanitize_error_excerpt
@@ -1114,6 +1138,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                     "cli_not_found",
                     "cli_unavailable",
                     "model_not_found",
+                    "constraints_changed",
                 )
             )
 

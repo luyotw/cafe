@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Any, Optional, Sequence
 
+from cafe.core.audit_events import AuditEventStore
 from cafe.core.types import AgentCLI
 
 
@@ -83,3 +86,60 @@ def exact_continuation_from_context(
     if configured_clis is not None and cli not in configured_clis:
         return None
     return SessionContinuation.resume_exact(cli, session_id)
+
+
+def pre_invocation_recovery_evidence(
+    context: dict[str, Any],
+    *,
+    issue_dir: Path,
+    workflow_id: str,
+    task_id: str,
+    step_name: str,
+) -> Optional[dict[str, Any]]:
+    """Identify preparation failures without inventing a prior provider identity."""
+    if ("agent_invoked" in context and context["agent_invoked"] is not False) or any(
+        key in context
+        for key in (
+            "cli",
+            "session_id",
+            "session_continuation",
+            "failed_attempts",
+            "response",
+            "start_time",
+            "stats",
+            "streaming_log",
+        )
+    ):
+        return None
+
+    # Older runtimes wrote the invocation marker after checklist preparation.
+    # Accept only the specific, workflow/task-bound audit evidence for that gap.
+    if set(context) <= {"effective_inputs", "workflow_completion_trusted", "agent_invoked"}:
+        audit = AuditEventStore(issue_dir)
+        try:
+            task = audit.latest_record(
+                workflow_id,
+                {"agent_execution_task_materialized"},
+                step=step_name,
+            )
+            failure = audit.latest_record(workflow_id, {"step_interrupted"}, step=step_name)
+        except (OSError, ValueError):
+            task = failure = None
+        if (
+            task is not None
+            and failure is not None
+            and task["data"].get("task_id") == task_id
+            and task["sequence"] > failure["sequence"]
+            and failure["data"].get("reason") == "agent_error"
+            and failure["data"].get("attempt") == 1
+            and re.fullmatch(
+                rf"Step {re.escape(repr(step_name))}, skill '[^']+', "
+                r"workflow\.checklist\.[^\n]+: unresolved placeholders \[[^\n]+\]",
+                str(failure["data"].get("detail", "")),
+            )
+        ):
+            return {"kind": "checklist_preparation_failed", "event_id": failure["event_id"]}
+
+    if context.get("agent_invoked") is False:
+        return {"kind": "agent_not_invoked"}
+    return None

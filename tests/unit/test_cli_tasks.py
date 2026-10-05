@@ -279,6 +279,151 @@ def test_fresh_session_recovery_after_unobserved_new_session(tmp_path, monkeypat
         assert receipt is None
 
 
+@pytest.mark.parametrize("legacy", [False, True])
+def test_fresh_session_recovers_preparation_failure_without_provider_identity(
+    tmp_path,
+    monkeypatch,
+    legacy,
+):
+    issue_dir, iteration_dir, task = _legacy_interrupted_task_repo(tmp_path, monkeypatch)
+    context = {"effective_inputs": {}, "workflow_completion_trusted": False}
+    if not legacy:
+        context["agent_invoked"] = False
+    (iteration_dir / "iteration.json").write_text(json.dumps(context))
+    (iteration_dir / "error.json").unlink()
+    blackboards = BlackboardStore(issue_dir)
+    state = blackboards.load_or_create("spec")
+    blackboards.record_event(
+        state,
+        "step_interrupted",
+        {
+            "step": "spec",
+            "attempt": 1,
+            "reason": "agent_error",
+            "detail": "Step 'spec', skill 'cafe-spec', workflow.checklist.variants[0].sections[0]: "
+            "unresolved placeholders ['optional_input']",
+        },
+    )
+    blackboards.record_event(
+        state,
+        "agent_execution_task_materialized",
+        {
+            "step": "spec",
+            "task_id": task.id,
+        },
+    )
+    result = runner.invoke(
+        app,
+        [
+            "task",
+            "complete",
+            task.id,
+            "--result",
+            '{"decision":"retry_fresh_session"}',
+            "--no-resume",
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    receipt = HumanTaskRecordStore(issue_dir).get_result(task.id)
+    recovery = receipt.payload["session_continuation"]
+    assert recovery["step"] == "spec" and recovery["iteration"] == 1
+    assert recovery["preparation"]["kind"] == "checklist_preparation_failed"
+    assert "previous" not in recovery
+    assert json.loads((iteration_dir / "iteration.json").read_text()) == context
+    assert (
+        iteration_dir / "user_input.md"
+    ).read_text() == "Keep the previously confirmed requirement."
+    assert BlackboardStore(issue_dir).load_or_create("spec").current_step == "spec"
+
+
+@pytest.mark.parametrize(
+    "context",
+    [
+        {},
+        {"agent_invoked": True},
+        {"agent_invoked": 0},
+        {"agent_invoked": False, "cli": "invalid-cli"},
+        {"agent_invoked": False, "session_id": "lost-cli"},
+        {"agent_invoked": False, "response": "provider output"},
+    ],
+)
+def test_preparation_recovery_rejects_ambiguous_or_invoked_context(
+    tmp_path,
+    monkeypatch,
+    context,
+):
+    issue_dir, iteration_dir, task = _legacy_interrupted_task_repo(tmp_path, monkeypatch)
+    (iteration_dir / "iteration.json").write_text(json.dumps(context))
+    result = runner.invoke(
+        app,
+        [
+            "task",
+            "complete",
+            task.id,
+            "--result",
+            '{"decision":"retry_fresh_session"}',
+            "--no-resume",
+            "--json",
+        ],
+    )
+    assert result.exit_code != 0
+    records = HumanTaskRecordStore(issue_dir)
+    assert records.get_task(task.id).status is HumanTaskStatus.PENDING
+    assert records.get_result(task.id) is None
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"detail": "provider failed before reporting a session"},
+        {"attempt": 2},
+        {"step": "other-step"},
+        {"task_id": "other-task"},
+    ],
+)
+def test_legacy_preparation_recovery_requires_correlated_first_attempt_audit(
+    tmp_path,
+    monkeypatch,
+    change,
+):
+    issue_dir, iteration_dir, task = _legacy_interrupted_task_repo(tmp_path, monkeypatch)
+    (iteration_dir / "iteration.json").write_text(json.dumps({"effective_inputs": {}}))
+    boards = BlackboardStore(issue_dir)
+    state = boards.load_or_create("spec")
+    failure = {
+        "step": "spec",
+        "attempt": 1,
+        "reason": "agent_error",
+        "detail": "Step 'spec', skill 'cafe-spec', workflow.checklist.variants[0].sections[0]: "
+        "unresolved placeholders ['optional_input']",
+    }
+    failure.update({k: v for k, v in change.items() if k != "task_id"})
+    boards.record_event(state, "step_interrupted", failure)
+    boards.record_event(
+        state,
+        "agent_execution_task_materialized",
+        {
+            "step": "spec",
+            "task_id": change.get("task_id", task.id),
+        },
+    )
+    result = runner.invoke(
+        app,
+        [
+            "task",
+            "complete",
+            task.id,
+            "--result",
+            '{"decision":"retry_fresh_session"}',
+            "--no-resume",
+            "--json",
+        ],
+    )
+    assert result.exit_code != 0
+    assert HumanTaskRecordStore(issue_dir).get_result(task.id) is None
+
+
 def test_json_failure_is_one_document_and_nonzero(tmp_path: Path, monkeypatch) -> None:
     """Test List U7/I6: integrations receive one actionable error envelope."""
     _task_repo(tmp_path, monkeypatch)

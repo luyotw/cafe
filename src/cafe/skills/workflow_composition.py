@@ -54,6 +54,8 @@ class ComposedExecutionRequirements:
     risk_domains: tuple[str, ...]
     fallback_strength: str
     uses_default: bool
+    capabilities: tuple[str, ...] = ()
+    modes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -146,7 +148,11 @@ def _execution_requirements(
         if contributor.declaration.execution_profile is not None
     )
     return ComposedExecutionRequirements(
-        workloads=tuple(dict.fromkeys(profile.workload for profile in profiles)),
+        workloads=tuple(dict.fromkeys(
+            tag for profile in profiles for tag in (profile.requested_workloads or (profile.workload,))
+        )),
+        capabilities=tuple(dict.fromkeys(tag for profile in profiles for tag in profile.capabilities)),
+        modes=tuple(dict.fromkeys(tag for profile in profiles for tag in profile.modes)),
         reasoning=max(profiles, key=lambda profile: _REASONING_RANK[profile.reasoning]).reasoning,
         risk_domains=tuple(
             dict.fromkeys(risk for profile in profiles for risk in profile.risk_domains)

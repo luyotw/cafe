@@ -12,6 +12,9 @@ from cafe.agents.diagnostics import (
     is_transient_same_cli_error,
     sanitize_error_excerpt,
 )
+from cafe.constraints import Context, resolve, replace_prompt_block, material_digest
+from cafe.constraints.context import context_for_tools
+from cafe.constraints.resolver import PROVIDERS
 from cafe.agents.executor import AgentExecutionControl, AgentExecutionError, AgentExecutor
 from cafe.agents.transport_types import _validated_evidence_scalar
 from cafe.core.session import SessionManager, SessionStore
@@ -425,6 +428,7 @@ class AgentManager:
         continuation: Optional[SessionContinuation] = None,
         backup_context_callback: Optional[Callable[[AgentExecutionError], str]] = None,
         execution_control: AgentExecutionControl | None = None,
+        constraint_context: Context | None = None,
     ) -> Tuple[str, TokenUsage, List, Optional[List[str]], List[str], Optional[str]]:
         """Execute prompt with specified agent.
 
@@ -470,6 +474,17 @@ class AgentManager:
         else:
             executor = base_executor
 
+        if constraint_context is None:
+            constraint_context = context_for_tools(executor.config.cli, allowed_tools=allowed_tools,
+                                                  structured=bool(streaming_output_file), consumers=["authority"])
+        consumers = set(constraint_context.consumers)
+        chain = executor.config.clis or executor.config.backup_clis
+        if not chain or len(chain) == 1:
+            consumers.add("single-chain")
+        else:
+            consumers.discard("single-chain")
+        constraint_context = constraint_context.model_copy(update={"consumers": sorted(consumers)})
+
         # Show prompt if enabled
         if self.show_prompt:
             print(f"\n{'=' * 80}")
@@ -497,7 +512,7 @@ class AgentManager:
                 agent_response = self._execute_with_session_persistence(
                     executor,
                     lambda: executor.execute(
-                        attempt_prompt,
+                        self._constraint_prompt(attempt_prompt, executor, constraint_context, allowed_tools, streaming_output_file),
                         allowed_tools,
                         allowed_directories,
                         streaming_output_file,
@@ -571,6 +586,7 @@ class AgentManager:
                         backup_context_callback=backup_context_callback,
                         execution_control=execution_control,
                         saved_sessions=saved_sessions,
+                        constraint_context=constraint_context,
                     )
                     break  # Backup succeeded, exit loop
                 else:
@@ -640,6 +656,7 @@ class AgentManager:
         phase_name: Optional[str] = None,
         continuation: Optional[SessionContinuation] = None,
         execution_control: AgentExecutionControl | None = None,
+        constraint_context: Context | None = None,
     ) -> Optional[List[str]]:
         """Preview CLI command args before execution starts."""
         executor = AgentExecutor(
@@ -707,6 +724,23 @@ class AgentManager:
         finally:
             executor.on_session_observed = previous_observer
 
+    def _constraint_prompt(self, prompt, executor, context, allowed_tools, streaming_output_file):
+        cli = executor.config.cli.value
+        if context is None:
+            context = context_for_tools(cli, allowed_tools=allowed_tools,
+                                        structured=bool(streaming_output_file), consumers=["authority"])
+        else:
+            context = context.model_copy(update={"cli": cli, "provider": PROVIDERS[cli]})
+        view = resolve(context)
+        rendered = replace_prompt_block(prompt, view)
+        self._last_constraints = {"version": 1, "context": view.context.model_dump(mode="json"),
+                                  "digest": material_digest(view)}
+        return rendered
+
+    def get_last_constraints(self):
+        """Latest actual-attempt evidence for neutral iteration persistence."""
+        return getattr(self, "_last_constraints", None)
+
     def _try_backup_agents(
         self,
         primary_error: "AgentExecutionError",
@@ -719,6 +753,7 @@ class AgentManager:
         continuation: Optional[SessionContinuation] = None,
         backup_context_callback: Optional[Callable[[AgentExecutionError], str]] = None,
         execution_control: AgentExecutionControl | None = None,
+        constraint_context: Context | None = None,
         saved_sessions: Dict[AgentCLI, str] | None = None,
     ) -> "AgentResponse":
         """Try backup agents in order until one succeeds or all fail.
@@ -855,7 +890,7 @@ class AgentManager:
                     agent_response = self._execute_with_session_persistence(
                         backup_executor,
                         lambda: backup_executor.execute(
-                            backup_prompt,
+                            self._constraint_prompt(backup_prompt, backup_executor, constraint_context, allowed_tools, streaming_output_file),
                             allowed_tools,
                             allowed_directories,
                             streaming_output_file,
@@ -1010,7 +1045,7 @@ class AgentManager:
         saved_sessions: Dict[AgentCLI, str] = {}
         response, token_usage = self._execute_with_session_persistence(
             current,
-            lambda: current.execute(prompt),
+            lambda: current.execute(self._constraint_prompt(prompt, current, None, None, None)),
             agent_name=self.current_agent_name,
             phase_name=None,
             saved_sessions=saved_sessions,

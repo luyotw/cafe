@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from cafe.skills.execution_profile import (
     resolve_execution_profile,
 )
@@ -117,3 +119,36 @@ def test_workflow_contributor_profile_is_aggregated_without_empty_overlay_defaul
     assert profile.risk_domains == ("state-change", "integration")
     assert profile.fallback_strength == "equivalent_or_stronger"
     assert not profile.uses_default
+
+
+def test_custom_workload_refinement_is_composed_not_inferred_from_step_name(tmp_path):
+    """U2/I1: requested workload tags refine broad profiles across custom names."""
+    _write_skill(tmp_path, "bespoke", """  execution_profile:
+    workload: content
+    requested_workloads: [short-docs]
+    capabilities: [technical-writing]
+""")
+    profile = resolve_execution_profile(SkillLoader(project_root=tmp_path), "bespoke", step_name="arbitrary")
+    assert profile.workloads == ("short-docs",)
+    assert profile.capabilities == ("technical-writing",)
+
+
+@pytest.mark.parametrize("field", ["requested_workloads", "capabilities", "modes"])
+@pytest.mark.parametrize("tags", [("Build",), ("with space",), ("short-docs", "short-docs")])
+def test_declared_constraint_tags_are_validated_before_resolution(tags, field):
+    """U1/U2: declaration validation rejects malformed or duplicate refinements."""
+    from pydantic import ValidationError
+
+    from cafe.skills.contracts import ExecutionProfile
+    with pytest.raises(ValidationError):
+        ExecutionProfile(**{field: tags})
+
+
+def test_opaque_modes_compose_across_primary_and_overlay(tmp_path):
+    for name, modes in [("primary", "bespoke-mode"), ("overlay", "other-mode, bespoke-mode")]:
+        _write_skill(tmp_path, name, f"  execution_profile:\n    modes: [{modes}]\n")
+    profile = resolve_execution_profile(
+        SkillLoader(project_root=tmp_path), "primary", workflow_skills=["overlay"],
+        step_name="arbitrary",
+    )
+    assert profile.modes == ("bespoke-mode", "other-mode")

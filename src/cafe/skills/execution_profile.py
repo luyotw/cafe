@@ -22,6 +22,8 @@ class ResolvedExecutionProfile:
     risk_domains: tuple[str, ...]
     fallback_strength: str
     uses_default: bool
+    capabilities: tuple[str, ...] = ()
+    modes: tuple[str, ...] = ()
 
 
 def resolve_execution_profile(
@@ -41,6 +43,8 @@ def resolve_execution_profile(
     uses_default = False
     composed_skill_names: list[str] = []
     workloads: list[str] = []
+    capabilities: list[str] = []
+    modes: list[str] = []
     reasonings: list[str] = []
     fallbacks: list[str] = []
     risks: list[str] = []
@@ -56,6 +60,8 @@ def resolve_execution_profile(
         )
         requirements = composition.execution_requirements
         uses_default = uses_default or requirements.uses_default
+        capabilities.extend(tag for tag in requirements.capabilities if tag not in capabilities)
+        modes.extend(tag for tag in requirements.modes if tag not in modes)
         workloads.extend(
             workload for workload in requirements.workloads if workload not in workloads
         )
@@ -67,6 +73,8 @@ def resolve_execution_profile(
     return ResolvedExecutionProfile(
         skill_names=tuple(composed_skill_names),
         workloads=tuple(workloads),
+        capabilities=tuple(capabilities),
+        modes=tuple(modes),
         reasoning=reasoning,
         risk_domains=tuple(risks),
         fallback_strength=fallback_strength,

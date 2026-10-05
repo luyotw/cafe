@@ -8,6 +8,7 @@ from typing import Any, Mapping
 from cafe.core.packet_io import canonical_json
 
 from ._schema import freshness_semantic_facts
+from .constraints import validate_evidence
 
 
 class Freshness(str, Enum):
@@ -34,4 +35,16 @@ def compare_freshness(contract: Mapping[str, Any], fresh_facts: Mapping[str, Any
         live = canonical_json(dict(live_semantics))
     except (TypeError, ValueError):
         return Freshness.UNKNOWN
-    return Freshness.SAME_SEMANTICS if live == expected else Freshness.MATERIAL_CHANGE
+    if live != expected:
+        return Freshness.MATERIAL_CHANGE
+    recorded = contract.get("provenance", {}).get("runtime_constraints")
+    refreshed = fresh_facts.get("runtime_constraints")
+    if recorded is None or refreshed is None:
+        return Freshness.UNKNOWN
+    try:
+        validate_evidence(recorded)
+        validate_evidence(refreshed)
+    except ValueError:
+        return Freshness.UNKNOWN
+    return (Freshness.SAME_SEMANTICS if canonical_json(recorded) == canonical_json(refreshed)
+            else Freshness.MATERIAL_CHANGE)

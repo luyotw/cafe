@@ -166,9 +166,14 @@ class ConversationTransport:
         environment_overrides=None,
         on_accounting=None,
         read_only: bool = False,
+        require_initial_context: bool = False,
     ) -> TransportResult:
         self._admit("open_interactive_session", required_evidence)
         strategy = self.executor._get_cli_strategy()
+        if require_initial_context and not strategy.supports_initial_context():
+            error = AgentExecutionError("Native interactive transport cannot deliver runtime initial context; use one-shot chat.", error_type="unsupported_initial_context")
+            error.transport_result = TransportResult(accepted=False, failure_code="unsupported_initial_context")
+            raise error
         environment = strategy.build_environment()
         if environment_overrides:
             environment.update(
