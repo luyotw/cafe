@@ -32,6 +32,10 @@ constraints inspection and declaration capabilities alongside fixes.
 - Allow joint-planning checklist preparation without a prior plan artifact.
 - Pin host-owned PR publishing to the running CAFE Python and validate script
   interpreters before external mutations.
+- Distinguish recorded chat token usage with unavailable provider details from
+  incomplete token accounting.
+- Record resumed Codex invocation token deltas from a verified exact-session
+  baseline instead of charging cumulative session totals to the current call.
 
 See [the v0.7.3 release notes](docs/releases/v0.7.3.md) for constraints inspection,
 workflow recovery, publishing environments, and upgrade guidance.
