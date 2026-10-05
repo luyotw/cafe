@@ -946,7 +946,16 @@ def test_execute_step_validates_existing_checklist_when_confirmed_without_agent_
             events=[{"type": "review_confirmed", "step": "spec"}],
         )
     )
-    executor._resolve_skill_name = MagicMock(return_value="spec_revise")
+    from cafe.core.types import AgentCLI, AgentConfig
+    from cafe.skills.loader import SkillLoader
+
+    executor.generic_phase.skill_loader = SkillLoader(
+        project_root=tmp_path, global_root=tmp_path / "global"
+    )
+    agent_config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
+    executor.agent_manager.get_agent.return_value.config = agent_config
+    executor.agent_manager.get_execution_config.return_value = agent_config
+    executor._resolve_skill_name = MagicMock(return_value="cafe-spec")
     executor._resolve_agent_name = MagicMock(return_value="Roger")
     executor._apply_step_agent_model = MagicMock()
     executor._build_context = MagicMock(return_value={})

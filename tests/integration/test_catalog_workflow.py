@@ -214,6 +214,8 @@ def test_mixed_catalog_cli_failure_rolls_back_the_complete_selection(
             project_root=project,
             canonical_root=project,
             global_root=global_root,
+            # Mutable checkout bytecode is outside this transaction journey.
+            builtin_root=tmp_path / "builtin",
         ),
         failure_injector=fail,
     )

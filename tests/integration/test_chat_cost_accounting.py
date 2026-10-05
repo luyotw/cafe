@@ -260,13 +260,43 @@ def test_interactive_without_native_reader_is_durably_incomplete(
     data["implementation"]["clis"] = [{"cli": cli, "model": "selected"}]
     config.write_text(yaml.safe_dump(data))
     terminal(lambda command, **kwargs: subprocess.CompletedProcess(command, 7 if failure else 0))
-    assert chat.launch_chat_session("developer", "x", phase_name="implementation") == (
-        7 if failure else 0
+    # Exercise native accounting independently of the phase-chat initial-context
+    # admission contract. These CLIs expose a terminal but no native usage reader.
+    from cafe.agents.executor import AgentExecutor
+    from cafe.agents.transport import ConversationTransport
+    from cafe.core.types import AgentConfig
+
+    transport = ConversationTransport(
+        AgentExecutor(AgentConfig(name="David", cli=AgentCLI(cli), model="selected"))
     )
+    result = transport.open_interactive_session(
+        on_accounting=chat._chat_usage_sink(
+            _issue, "implementation", cli=cli, requested_model="selected", mode="interactive"
+        )
+    )
+    assert result.returncode == (7 if failure else 0)
     (group,) = groups(target)
     assert group["cli"] == cli and group["requested_model"] == "selected"
     assert group["reported_model"] is None and group["stats"] == {}
     assert group["calls"] == 1 and group["incomplete_calls"] == 1
+
+
+@pytest.mark.parametrize("cli", ["copilot", "gemini", "cursor-agent"])
+def test_phase_chat_rejects_missing_initial_context_before_cost_accounting(
+    phase_chat, terminal, cli, capsys
+):
+    _issue, target = phase_chat
+    config = Path.cwd() / ".cafe/phases.yaml"
+    data = yaml.safe_load(config.read_text())
+    data["implementation"]["clis"] = [{"cli": cli, "model": "selected"}]
+    config.write_text(yaml.safe_dump(data))
+    launches = []
+    terminal(lambda command, **kwargs: launches.append(command))
+
+    assert chat.launch_chat_session("developer", "x", phase_name="implementation") == 1
+    assert launches == []
+    assert "runtime initial context" in capsys.readouterr().out
+    assert "chat_usage" not in json.loads(target.read_text())
 
 
 def test_native_malformed_tail_keeps_verified_partial_usage(phase_chat, terminal, monkeypatch):
