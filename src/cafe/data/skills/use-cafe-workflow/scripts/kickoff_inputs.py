@@ -319,7 +319,7 @@ def _compact_candidate(candidate: Any) -> dict[str, Any]:
             steps[step_id] = {key: step[key] for key in step_fields if key in step}
             omitted_step_fields[step_id] = sorted(set(step) - set(step_fields))
     candidate_fields = (
-        "id", "eligible", "source", "fingerprint", "applicability", "behavior", "roles",
+        "id", "contract_mode", "eligible", "source", "fingerprint", "applicability", "behavior", "roles",
         "profiles", "skills", "native_subagent_steps", "confirmation_gates", "mandatory_confirmation_gates",
         "capability_requirements", "capability_setup", "diagnostics",
     )
@@ -457,12 +457,27 @@ def discover_kickoff(
     from cafe.catalogs.resolver import CatalogResolver
 
     resolver = CatalogResolver(project_root=project_root)
-    catalog = _load_local_module("kickoff_catalog").discover_index(
+    catalog_owner = _load_local_module("kickoff_catalog")
+    catalog_args = dict(
         project_root=project_root,
         global_root=resolver.global_root,
         builtin_root=resolver.builtin_root,
         cache_file=(cache_dir or _default_cache_root()) / "catalog-v1.json",
     )
+    from cafe.manager.api import confirmed_contract_snapshot
+
+    confirmed = confirmed_contract_snapshot(project_root / ".cafe/issues" / issue_name)
+    early_catalog = catalog_owner.discover_index(
+        **catalog_args, lightweight=True, selected_id=request.get("playbook_id"))
+    early_selected = next((item for item in early_catalog["candidates"]
+                           if item["id"] == request.get("playbook_id")), None)
+    mode = (confirmed.get("contract_mode", "full") if confirmed else
+            early_selected.get("contract_mode", "full") if early_selected else "full")
+    if mode == "compact":
+        return _load_local_module("compact_kickoff").discover(
+            request, catalog_args=catalog_args, early_catalog=early_catalog,
+            confirmed=confirmed, config_dir=config_dir, cache_dir=cache_dir)
+    catalog = catalog_owner.discover_index(**catalog_args) if early_selected else early_catalog
     preference_store = _load_local_module("kickoff_preferences").PreferenceStore(
         config_dir or _default_config_root(), repository_root=project_root
     )
@@ -531,6 +546,7 @@ def discover_kickoff(
         (item for item in catalog.get("candidates", []) if item.get("id") == selected), None
     ) if isinstance(selected, str) else None
     return {
+        "contract_mode": mode,
         "stage": "discovery", "status": "partial" if catalog.get("diagnostics") else "ready",
         "preferences": preferences, "catalog": catalog, "selected_candidate": selected_candidate,
         "delivery": delivery, "models": models, "diagnostics": list(catalog.get("diagnostics", [])),
@@ -834,6 +850,8 @@ def assemble_kickoff(
     if not isinstance(request, dict) or request.get("schema_version") != 1:
         return {"status": "invalid", "selected_playbook": None, "diagnostics": ["unsupported_request_schema"], "missing_decisions": [], "formatter_inputs": None}
     request = normalize_request_identity(request)
+    if discovery and discovery.get("contract_mode") == "compact":
+        return _load_local_module("compact_kickoff").assemble(request, discovery=discovery)
     selected = request.get("playbook_id")
     if not isinstance(selected, str) or not selected.strip():
         selected = None
@@ -997,6 +1015,8 @@ def assemble_kickoff(
 
 def render_kickoff(values: dict[str, Any], *, preference_store=None,
                    preference_templates=None, issue_id="") -> dict[str, Any]:
+    if isinstance(values, dict) and values.get("contract_mode") == "compact":
+        return _load_local_module("compact_kickoff").render(values)
     normalized = values if isinstance(values, dict) and values.get("status") in {"ready", "incomplete", "invalid"} else normalize_formatter_inputs(values)
     if normalized.get("status") != "ready":
         return {

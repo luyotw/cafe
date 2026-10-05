@@ -208,7 +208,7 @@ def _request_command(args: argparse.Namespace) -> int:
         raw_fields = request.get("formatter_inputs", {})
         explicit = request.get("current_explicit_inputs", {})
         report_files = request.get("preflight_files", {})
-        for kind in ("update", "catalog"):
+        for kind in (() if assembled.get("contract_mode") == "compact" else ("update", "catalog")):
             if (isinstance(raw_fields, dict) and raw_fields.get(kind + "_preflight") is not None
                     or isinstance(explicit, dict) and explicit.get(kind + "_preflight") is not None
                     or isinstance(report_files, dict) and report_files.get(kind)):
@@ -225,6 +225,13 @@ def _request_command(args: argparse.Namespace) -> int:
                 "owner": "references/kickoff.md#complete-runtime-and-catalog-preflight",
             })
         if args.command in {"draft", "assemble"}:
+            if assembled.get("contract_mode") == "compact":
+                draft_request = {**request, "compact_inputs": assembled["formatter_draft"]}
+                if args.draft_output is not None:
+                    with args.draft_output.open("x" if args.command == "draft" else "w", encoding="utf-8") as handle:
+                        handle.write(json.dumps(draft_request, ensure_ascii=False, indent=2) + "\n")
+                _json({**assembled, "storage": storage, "continuation": followup})
+                return 0 if assembled["status"] == "ready" else 3
             draft_request = kickoff_inputs.preparation_template(request, assembled.get("formatter_draft") or {}, assembled.get("generated_inputs"))
             if args.draft_output is not None:
                 if args.command != "draft" and args.draft_output.resolve() == args.request_file.resolve():
@@ -287,6 +294,13 @@ def _request_command(args: argparse.Namespace) -> int:
         if args.output is not None:
             if rendered.get("status") == "rendered":
                 offer = rendered["preference_offer"]
+                if offer is None:
+                    atomic_write_text(args.output, rendered["output"])
+                    proposal_file = args.output.with_suffix(".proposal.json")
+                    atomic_write_text(proposal_file, json.dumps(rendered["proposal"], ensure_ascii=False, indent=2) + "\n")
+                    _json({"stage": "render", "status": "rendered", "contract_mode": "compact",
+                           "output_file": str(args.output.resolve()), "proposal_file": str(proposal_file.resolve())})
+                    return 0
                 offer_file = args.output.resolve().with_name(args.output.name + f".preferences-{offer['offer_id']}.json")
                 atomic_write_text(offer_file, json.dumps(offer, ensure_ascii=False, indent=2) + "\n")
                 atomic_write_text(args.output, rendered["output"])
