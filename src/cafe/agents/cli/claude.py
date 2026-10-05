@@ -500,3 +500,37 @@ class ClaudeCLI(AbstractCLI):
                  "tools": ["Read", "Glob", "Grep"],
                  "model": "inherit" if behavior == "inherits_parent" else configuration["model"]}
         return [*command, "--agents", json.dumps({"cafe_reviewer": agent})]
+
+    def native_review_observations(self, output_lines: List[str], *, observed_at=None) -> List[dict]:
+        """Retain bounded protocol metadata, never reviewer text or tool payloads."""
+        from datetime import datetime, timezone
+        invocations = {}
+        for line in output_lines:
+            try:
+                record = json.loads(line)
+            except (ValueError, TypeError):
+                continue
+            content = record.get("message", {}).get("content", [])
+            if not isinstance(content, list):
+                continue
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                args = item.get("input", {})
+                if (item.get("type") == "tool_use" and item.get("name") in {"Agent", "Task"}
+                        and isinstance(args, dict) and args.get("subagent_type") == "cafe_reviewer"):
+                    marker = re.search(r"CAFE_REVIEW_CHECKPOINT:([A-Za-z0-9-]+)", str(args.get("prompt", "")))
+                    invocation_id = item.get("id")
+                    if not isinstance(invocation_id, str) or len(invocations) >= 16:
+                        continue
+                    invocations[invocation_id] = {
+                        "reviewer_id": invocation_id, "receipt_id": marker.group(1) if marker else None,
+                        "configuration": self.config.native_review_configuration,
+                        "observed_at": (observed_at.get(id(line)) if observed_at is not None else datetime.now(timezone.utc).isoformat()),
+                        "terminal": None, "exit_status": None,
+                        "background": args.get("run_in_background", False)}
+                if item.get("type") == "tool_result" and item.get("tool_use_id") in invocations:
+                    observed = invocations[item["tool_use_id"]]
+                    if not observed["background"] and not item.get("is_error", False):
+                        observed.update(terminal="result", exit_status=0)
+        return list(invocations.values())

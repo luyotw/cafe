@@ -1343,6 +1343,7 @@ class AgentExecutor:
                 print(f"{'=' * 80}")
 
             output_lines = []
+            native_observed_at = {}
             response_text = ""
             streaming_log: List[str] = []  # Record all streaming fragments
             token_usage = TokenUsage()
@@ -1594,6 +1595,9 @@ class AgentExecutor:
                                 raise_startup_error()
                             break
 
+                        if self.config.native_review_configuration and len(native_observed_at) < 512:
+                            from datetime import datetime, timezone
+                            native_observed_at[id(line)] = datetime.now(timezone.utc).isoformat()
                         line_bytes = len(line.encode("utf-8", errors="replace"))
                         retained_output_lines += 1
                         retained_output_bytes += line_bytes
@@ -2173,6 +2177,8 @@ class AgentExecutor:
                 ),
                 permission_denials=permission_denials,
                 streaming_log=final_streaming_log,
+                native_review_observations=cli_strategy.native_review_observations(
+                    output_lines, observed_at=native_observed_at),
                 model=model,
                 cli=self.config.cli,
                 session_id=self.config.session_id,

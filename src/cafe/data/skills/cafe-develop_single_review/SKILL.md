@@ -41,6 +41,12 @@ Use the provider-native reviewer type supplied in the resolved execution
 context (`cafe_reviewer` for the integrated Claude projection). Its available
 tools are Read, Glob and Grep; supply Git diffs and targeted results from the
 parent. Do not substitute a general-purpose agent that inherits write tools.
+Include `CAFE_REVIEW_CHECKPOINT:<receipt_id>` in the native reviewer task prompt
+and use the actual parent provider session ID for the checkpoint. Use the
+provider's Agent tool-use ID as `reviewer_id`; the host captures the matching
+synchronous tool result and verifies it against the phase-owned evidence.
+Background-only progress cannot establish completion. Never write or fabricate
+the host-owned `native_invocations.json` metadata.
 The reviewer covers correctness, completeness, unnecessary changes,
 architectural placement and tests. It may inspect but must not edit, commit,
 change workflow state or perform external mutations. Self-review is ineligible.

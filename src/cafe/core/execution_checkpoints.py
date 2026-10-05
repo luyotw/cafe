@@ -91,7 +91,7 @@ def load_execution_context(path: Path):
     return context
 
 
-def require_current_review(context, evidence):
+def require_current_review(context, evidence, *, native_observations=None):
     """Accept exactly one independent terminal invocation of current content."""
     if not isinstance(evidence, dict) or evidence.get("version") != 1:
         raise ValueError("native review evidence is missing")
@@ -102,6 +102,18 @@ def require_current_review(context, evidence):
     if not isinstance(invocations, list) or len(invocations) != 1:
         raise ValueError("review requires exactly one native invocation per round")
     reviewer = invocations[0]
+    if native_observations is not None:
+        observed = native_observations.get("observations", [])
+        if len(observed) != 1 or native_observations.get("parent_id") != receipt["parent_id"]:
+            raise ValueError("native invocation evidence is missing or differs from the parent")
+        actual = observed[0]
+        if (actual.get("receipt_id") != receipt["receipt_id"] or
+                actual.get("reviewer_id") != reviewer.get("reviewer_id") or
+                actual.get("configuration") != context["review_configuration"] or
+                actual.get("terminal") != "result" or actual.get("exit_status") != 0):
+            raise ValueError("review is not associated with a successful checkpointed native invocation")
+        if datetime.fromisoformat(actual["observed_at"]) < datetime.fromisoformat(receipt["observed_at"]):
+            raise ValueError("native invocation preceded its checkpoint")
     if (
         not isinstance(reviewer, dict)
         or not reviewer.get("reviewer_id")
@@ -140,3 +152,10 @@ def load_review_evidence(path: Path):
     if path.is_symlink() or path.stat().st_size > 256 * 1024:
         raise ValueError("native review evidence must be a bounded regular file")
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def require_verified_review(context, evidence):
+    """Consumers require host-observed invocation proof, not parent-only claims."""
+    if not isinstance(evidence, dict) or not isinstance(evidence.get("native_observations"), dict):
+        raise ValueError("host-observed native review evidence is missing")
+    return require_current_review(context, evidence, native_observations=evidence["native_observations"])

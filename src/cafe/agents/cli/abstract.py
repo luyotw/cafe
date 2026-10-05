@@ -38,6 +38,9 @@ class AbstractCLI(ABC):
             raise ValueError("selected provider lacks a verified read-only native review projection")
         return command
 
+    def native_review_observations(self, output_lines: List[str], *, observed_at=None) -> List[dict]:
+        return []
+
     def prepare_response_accounting(self, command, environment):
         """Optionally project provider counters to this physical invocation.
 

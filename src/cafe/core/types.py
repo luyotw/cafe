@@ -119,6 +119,7 @@ class AgentResponse(BaseModel):
     permission_denials: List["PermissionDenial"] = Field(default_factory=list)
     cli_command_args: Optional[List[str]] = None  # CLI command arguments (excluding prompt)
     streaming_log: List[str] = Field(default_factory=list)  # Streaming fragment history
+    native_review_observations: List[Dict[str, Any]] = Field(default_factory=list)
     model: Optional[str] = None  # Model name
     cli: Optional[AgentCLI] = None  # Actual CLI that produced this response
     session_id: Optional[str] = None  # Actual session id after execution, if any

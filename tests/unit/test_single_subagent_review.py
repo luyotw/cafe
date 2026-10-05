@@ -121,3 +121,22 @@ def test_public_agent_manager_projects_read_only_native_reviewer(monkeypatch, tm
     manager.register_agent(AgentConfig(name="operator", cli=AgentCLI.CLAUDE, model="test"))
     manager.execute("operator", "fixture", native_review_configuration=configuration)
     assert len(seen) == 1
+
+
+def test_provider_observations_bind_native_invocation_to_prior_checkpoint():
+    import json
+    from cafe.agents.cli.claude import ClaudeCLI
+    from cafe.core.types import AgentConfig, AgentCLI
+    adapter = ClaudeCLI(AgentConfig(name="parent", cli=AgentCLI.CLAUDE,
+        native_review_configuration={"read_only": True}))
+    records = [json.dumps({"type": "assistant", "message": {"content": [{
+        "type": "tool_use", "name": "Agent", "id": "tool-native-1", "input": {
+            "subagent_type": "cafe_reviewer", "prompt": "CAFE_REVIEW_CHECKPOINT:receipt-1"}}]}}),
+        json.dumps({"type": "user", "message": {"content": [{"type": "tool_result",
+            "tool_use_id": "tool-native-1", "is_error": False, "content": "terminal findings"}]}})]
+    observations = adapter.native_review_observations(records)
+    assert len(observations) == 1
+    assert observations[0]["receipt_id"] == "receipt-1"
+    assert observations[0]["reviewer_id"] == "tool-native-1"
+    assert observations[0]["terminal"] == "result"
+    assert adapter.native_review_observations(records[:1])[0]["terminal"] is None

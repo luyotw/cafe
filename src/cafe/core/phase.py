@@ -1044,6 +1044,13 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                 )
             )
             failed_attempts = get_failed_attempts()
+            if native_review_configuration is not None:
+                observer = getattr(self.agent_manager, "get_last_native_review_observations", None)
+                observations = observer() if callable(observer) else []
+                from cafe.core.packet_io import atomic_write_bytes, canonical_json
+                atomic_write_bytes(iteration_dir / "native_invocations.json", canonical_json({
+                    "version": 1, "parent_id": self.agent_manager.get_last_session_id(),
+                    "observations": observations}))
             constraints_getter = getattr(self.agent_manager, "get_last_constraints", None)
             latest_constraints = constraints_getter() if callable(constraints_getter) else None
             if isinstance(latest_constraints, dict):

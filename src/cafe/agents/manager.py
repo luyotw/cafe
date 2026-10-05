@@ -450,6 +450,7 @@ class AgentManager:
             AgentExecutionError: If all agents (primary + backups) fail
         """
         self._failed_attempts = []
+        self._last_native_review_observations = []
         saved_sessions: Dict[AgentCLI, str] = {}
         base_executor = self.get_agent(agent_name)
 
@@ -606,6 +607,7 @@ class AgentManager:
         reported_model = agent_response.model
         model = reported_model
         actual_cli = agent_response.cli or executor.config.cli
+        self._last_native_review_observations = agent_response.native_review_observations
         actual_session_id = agent_response.session_id
         if model is None and actual_cli == executor.config.cli:
             model = executor.config.model
@@ -1112,6 +1114,9 @@ class AgentManager:
     def get_last_cli(self) -> Optional[AgentCLI]:
         """Get the actual CLI that produced the last response."""
         return self._last_cli
+
+    def get_last_native_review_observations(self):
+        return list(getattr(self, "_last_native_review_observations", []))
 
     def get_last_session_id(self) -> Optional[str]:
         """Get the actual session id from the last response, if any."""

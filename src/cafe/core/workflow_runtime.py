@@ -3749,13 +3749,13 @@ class BlackboardWorkflowRuntime:
         advancing = (post_contract.to_owner == HandoffOwner.DONE or
                      post_contract.to_owner == HandoffOwner.AGENT and post_contract.to_step != current_step)
         if advancing and "before_delivery" in execution.get("checkpoints", []):
-            from cafe.core.execution_checkpoints import load_review_evidence, require_current_review, require_checkpoint
+            from cafe.core.execution_checkpoints import load_review_evidence, require_verified_review, require_checkpoint
             try:
                 iteration = self._latest_iteration_dir(current_step)
                 if self.execution_context is None or iteration is None:
                     raise ValueError("delivery requires current resolved execution evidence")
                 readiness = load_review_evidence(iteration / execution["delivery_evidence_artifact"])
-                require_current_review(self.execution_context, load_review_evidence(self.issue_dir / "execution_review.json"))
+                require_verified_review(self.execution_context, load_review_evidence(self.issue_dir / "execution_review.json"))
                 require_checkpoint(self.execution_context, readiness.get("checkpoint"), "before_delivery")
                 if (readiness.get("authority_digest") != self.execution_context["authority_digest"] or
                         readiness.get("endpoint") != self.execution_context["delivery_endpoint"]):
@@ -3773,7 +3773,9 @@ class BlackboardWorkflowRuntime:
                 if self.execution_context is None or iteration is None:
                     raise ValueError("native review requires current resolved execution evidence")
                 evidence = load_review_evidence(iteration / execution["review_evidence_artifact"])
-                require_current_review(self.execution_context, evidence)
+                observations = load_review_evidence(iteration / "native_invocations.json")
+                require_current_review(self.execution_context, evidence, native_observations=observations)
+                evidence["native_observations"] = observations
                 from cafe.core.packet_io import atomic_write_bytes, canonical_json
                 atomic_write_bytes(self.issue_dir / "execution_review.json", canonical_json(evidence))
             except (OSError, ValueError, KeyError, TypeError) as exc:

@@ -708,6 +708,12 @@ class GenericWorkflowStepExecutor(Phase):
         valid_intents = self._resolve_valid_intents(step_def)
         agent_name = self._resolve_agent_name(step_name, step_def)
         self._step_agent_name = agent_name
+        if execution_context is not None and step_def.get("execution", {}).get("review_policy"):
+            from cafe.core.types import AgentCLI
+            parent_session_file = self.agent_manager.session_manager.get_session_file(
+                agent_name, AgentCLI(execution_context["review_configuration"]["cli"]),
+                self.issue_name, step_name)
+            extra_prompt = (extra_prompt or "") + "\nRead the host-persisted active parent session ID from: " + str(parent_session_file.resolve())
         self._session_continuation = self._select_session_continuation(
             agent_name=agent_name,
             step_def=step_def,
