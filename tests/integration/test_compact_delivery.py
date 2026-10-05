@@ -348,3 +348,71 @@ def test_endpoint_change_during_repository_lookup_blocks_external_dispatch(compa
         publish_compact_pr(issue, root, output)
     assert not calls
     assert json.loads((issue / "delivery_result.json").read_text())["status"] == "unknown"
+
+
+def native_delivery_ready(root, issue, context):
+    """Use real checkpoints and the provider parser; replace only native transport."""
+    from cafe.agents.cli.claude import ClaudeCLI
+    from cafe.core.types import AgentConfig, AgentCLI
+    from cafe.core.execution_checkpoints import checkpoint, require_verified_review
+    from cafe.core.packet_io import canonical_json
+    make_ready(root, issue)
+    receipt = checkpoint(context, "before_review", round_id="review-round", parent_id="parent")
+    assert receipt["passed"]
+    blob = git(root, "hash-object", "-w", "--path=app.py", "app.py")
+    assert git(root, "cat-file", "-p", blob)
+    conclusion = {"findings": [], "targeted_tests": ["effective Git implementation inspected"]}
+    adapter = ClaudeCLI(AgentConfig(name="parent", cli=AgentCLI.CLAUDE, model="test",
+                                  native_review_configuration=context["review_configuration"]))
+    stream = [json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use",
+        "name": "Agent", "id": "child", "input": {"subagent_type": "cafe_reviewer",
+            "prompt": "CAFE_REVIEW_CHECKPOINT:" + receipt["receipt_id"]}}]}}),
+        json.dumps({"type": "user", "message": {"content": [{"type": "tool_result",
+            "tool_use_id": "child", "content": json.dumps(conclusion)}]}})]
+    evidence = {"version": 1, "round_id": receipt["round_id"], "checkpoint": receipt,
+        "invocations": [{"reviewer_id": "child", "parent_id": "parent",
+            "configuration": context["review_configuration"], "terminal": "result", "exit_status": 0,
+            "result_reference": "child", **conclusion}],
+        "native_observations": {"version": 1, "parent_id": "parent",
+            "observations": adapter.native_review_observations(stream)}}
+    (issue / "execution_review.json").write_bytes(canonical_json(evidence))
+    require_verified_review(context, evidence)
+    return evidence
+
+
+@pytest.mark.parametrize("change_after_review", [False, True])
+def test_native_review_binds_effective_git_filter_contents(compact_request, tmp_path, monkeypatch, change_after_review):
+    from tests.integration.test_compact_workflow import native_context
+    from cafe.core.execution_checkpoints import require_verified_review
+    compact_request["compact_inputs"]["delivery_contract"] = {"schema_version": 4,
+        "route": "direct", "remote": "origin", "branch": "feature", "effects": ["commit", "push"]}
+    root, issue, _, context = native_context(compact_request, tmp_path, monkeypatch)
+    git(root, "config", "user.name", "Test")
+    git(root, "config", "user.email", "test@example.org")
+    (root / "app.py").write_text('value = "reviewed"\n')
+    def configure_filter():
+        (root / ".git/info/attributes").write_text("app.py filter=reviewtest\n")
+        git(root, "config", "filter.reviewtest.clean", "sed 's/reviewed/unreviewed/g'")
+    if not change_after_review:
+        configure_filter()
+    evidence = native_delivery_ready(root, issue, context)
+    if change_after_review:
+        configure_filter()
+    try:
+        require_verified_review(context, evidence)
+        current_review = True
+    except ValueError:
+        current_review = False
+    assert closeout(root, issue, "--initialize").returncode == 0
+    commit = closeout(root, issue, "--execute", "--stage", "deliver", "--index", "0")
+    push = closeout(root, issue, "--execute", "--stage", "deliver", "--index", "1")
+    if change_after_review:
+        assert not current_review
+        assert commit.returncode != 0 and push.returncode != 0
+        assert not git(root, "ls-remote", "origin", "refs/heads/feature")
+        assert not (issue / "delivery_result.json").exists()
+    else:
+        assert current_review and commit.returncode == 0 and push.returncode == 0
+        assert git(root, "show", "HEAD:app.py") == 'value = "unreviewed"'
+        assert json.loads((issue / "delivery_result.json").read_text())["delivered"]
+    assert (root / "app.py").read_text() == 'value = "reviewed"\n'

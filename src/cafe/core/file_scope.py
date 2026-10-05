@@ -231,6 +231,8 @@ def content_snapshot(root: Path, changes: ChangeCollection, approved_paths) -> s
         value = {"working": path_content(root, path)}
         if path in approved:
             working = working_git_entry(root, path)
+            # Bind clean filters/attributes through the effective blob they produce.
+            value["effective"] = working
             # Normal staging/commit of reviewed bytes is stable. Divergent new
             # staged/committed blobs are additional content requiring review.
             if index.get(path) not in (working, head.get(path), baseline.get(path)):
