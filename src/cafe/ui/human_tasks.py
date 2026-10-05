@@ -42,8 +42,11 @@ from cafe.core.human_tasks import (
     resolve_step_human_task as _resolve_step_human_task,
 )
 from cafe.core.phase_state_mixin import next_runnable_iteration_number
-from cafe.core.session_continuation import exact_continuation_from_context
 from cafe.core.playbook import resolve_step_attempt_limit
+from cafe.core.session_continuation import (
+    exact_continuation_from_context,
+    pre_invocation_recovery_evidence,
+)
 from cafe.core.workflow_feedback import WorkflowFeedbackError, WorkflowFeedbackLedger
 from cafe.skills.loader import SkillLoader
 
@@ -1638,6 +1641,25 @@ def _fresh_session_recovery_payload(
     iteration_dir = issue_dir / step_name / f"iteration_{iteration:03d}"
     iteration_data = _load_recovery_json(iteration_dir / "iteration.json")
     prior_cli = iteration_data.get("cli")
+    preparation = pre_invocation_recovery_evidence(
+        iteration_data,
+        issue_dir=issue_dir,
+        workflow_id=workflow_id,
+        task_id=task_id,
+        step_name=step_name,
+    )
+    if preparation is not None:
+        return {
+            "schema_version": 1,
+            "policy": "new",
+            "reason": "user_selected_fresh_session",
+            "next_action": "resume_same_step_same_iteration",
+            "workflow_id": workflow_id,
+            "human_task_id": task_id,
+            "step": step_name,
+            "iteration": iteration,
+            "preparation": preparation,
+        }
     prior_session_id = iteration_data.get("session_id")
     if not isinstance(prior_cli, str) or not prior_cli.strip():
         raise ValueError("Fresh-session recovery requires the interrupted CLI identity.")

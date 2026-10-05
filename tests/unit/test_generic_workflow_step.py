@@ -843,6 +843,145 @@ def test_pre_agent_hook_completion_persists_agent_invocation_marker(
     assert context["agent_invoked"] is False
 
 
+def test_checklist_preparation_failure_records_no_agent_invocation(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    manager = FakeAgentManager("confirmed")
+    executor = _minimal_spec_executor(tmp_path, agent_manager=manager)
+
+    def fail(**_kwargs):
+        raise ValueError("unresolved optional checklist input")
+
+    monkeypatch.setattr(executor, "_generate_checklist", fail)
+    state = BlackboardStore(executor.issue_dir).load_or_create("spec")
+    with pytest.raises(ValueError, match="optional checklist"):
+        executor.execute_step("spec", executor.playbook["steps"]["spec"], state)
+    saved = json.loads((executor.issue_dir / "spec/iteration_001/iteration.json").read_text())
+    assert saved["agent_invoked"] is False
+    assert "cli" not in saved and "session_id" not in saved
+    assert manager.execute_call_count == 0
+
+
+def test_preparation_cannot_clear_prior_agent_invocation_marker(tmp_path):
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    current = executor.issue_dir / "spec/iteration_001"
+    current.mkdir(parents=True)
+    path = current / "iteration.json"
+    path.write_text(json.dumps({"agent_invoked": True}))
+    executor._persist_agent_invocation_marker(iteration_dir=current, agent_invoked=False)
+    assert json.loads(path.read_text())["agent_invoked"] is True
+
+
+@pytest.mark.parametrize("tampered", [False, True])
+def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
+    tmp_path,
+    monkeypatch,
+    tampered,
+):
+    from typer.testing import CliRunner
+
+    from cafe.ui.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_name = "spec"
+    executor.phase_dir = executor.issue_dir / "spec"
+    executor.iteration = 1
+    current = executor.phase_dir / "iteration_001"
+    current.mkdir(parents=True)
+    path = current / "iteration.json"
+    path.write_text(json.dumps({"agent_invoked": False}))
+    (executor.issue_dir / "issue.yaml").write_text("playbook: standard\n")
+    boards = BlackboardStore(executor.issue_dir)
+    state = boards.load_or_create("spec", playbook_id="standard")
+    boards.set_current_step(state, "user")
+    boards.update_handoff_contract(
+        state,
+        from_step="spec",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.MANUAL_HANDOFF,
+        status_code="INTERRUPTED",
+        source="workflow.agent_execution_interrupted",
+    )
+    policy, binding = agent_execution_interrupted_human_task(step_name="spec")
+    records = HumanTaskRecordStore(executor.issue_dir)
+    task = records.materialize(
+        workflow_id=state.workflow_id,
+        step="spec",
+        iteration=1,
+        trigger="agent_execution_interrupted",
+        policy_id=policy.id,
+        prompt=policy.prompt,
+        expected_result=policy.model_dump(mode="json"),
+        continuations=binding.outcomes,
+        assignee_type="user",
+        handoff_key=":".join(
+            (
+                "user-handoff",
+                state.workflow_id,
+                "spec",
+                "manual_handoff",
+                state.handoff_contract.created_at,
+            )
+        ),
+    )
+    completed = CliRunner().invoke(
+        app,
+        [
+            "task",
+            "complete",
+            task.id,
+            "--result",
+            '{"decision":"retry_fresh_session"}',
+            "--no-resume",
+            "--json",
+        ],
+    )
+    assert completed.exit_code == 0, completed.stdout
+    if tampered:
+        path.write_text(json.dumps({"agent_invoked": True}))
+        with pytest.raises(RuntimeError, match="matching preparation evidence"):
+            executor._select_session_continuation(
+                agent_name="Roger",
+                step_def=executor.playbook["steps"]["spec"],
+                workflow_id=state.workflow_id,
+            )
+        return
+    continuation = executor._select_session_continuation(
+        agent_name="Roger",
+        step_def=executor.playbook["steps"]["spec"],
+        workflow_id=state.workflow_id,
+    )
+    assert continuation.policy is SessionContinuationPolicy.NEW
+    recovery = records.get_result(task.id).payload["session_continuation"]
+    path.write_text(
+        json.dumps(
+            {
+                "agent_invoked": True,
+                "cli": "codex",
+                "session_id": "first-session",
+                "session_recovery": recovery,
+            }
+        )
+    )
+    continuation = executor._select_session_continuation(
+        agent_name="Roger",
+        step_def=executor.playbook["steps"]["spec"],
+        workflow_id=state.workflow_id,
+    )
+    assert continuation.policy is SessionContinuationPolicy.RESUME_EXACT
+    assert continuation.session_id == "first-session"
+    data = json.loads(path.read_text())
+    data.pop("session_id")
+    path.write_text(json.dumps(data))
+    with pytest.raises(RuntimeError, match="attempted session identity"):
+        executor._select_session_continuation(
+            agent_name="Roger",
+            step_def=executor.playbook["steps"]["spec"],
+            workflow_id=state.workflow_id,
+        )
+
+
 def test_agent_invocation_marker_is_true_before_agent_control_returns(
     tmp_path: Path,
     monkeypatch,

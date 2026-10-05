@@ -70,6 +70,7 @@ from cafe.core.route_catalog import (
 from cafe.core.session_continuation import (
     SessionContinuation,
     exact_continuation_from_context,
+    pre_invocation_recovery_evidence,
 )
 from cafe.core.status_codes import (
     PhaseStatusCode,
@@ -651,7 +652,13 @@ class GenericWorkflowStepExecutor(Phase):
         self._session_recovery = None
         self._delta_packet_metadata = None
         iteration_dir = self._get_iteration_dir(self.iteration)
+        new_iteration = not iteration_dir.exists()
         iteration_dir.mkdir(parents=True, exist_ok=True)
+        if new_iteration:
+            self._persist_agent_invocation_marker(
+                iteration_dir=iteration_dir,
+                agent_invoked=False,
+            )
         portion_baton_path = (
             iteration_dir / "hybrid_portion_baton.json" if is_hybrid_portion else None
         )
@@ -2056,6 +2063,9 @@ class GenericWorkflowStepExecutor(Phase):
         if not isinstance(context_data, dict):
             return
         iteration_dir.mkdir(parents=True, exist_ok=True)
+        # A preparation retry must not erase evidence of an earlier invocation.
+        if context_data.get("agent_invoked") is True and not agent_invoked:
+            return
         context_data["agent_invoked"] = agent_invoked
         context_file.write_text(
             json.dumps(context_data, ensure_ascii=False, indent=2),
@@ -2156,6 +2166,10 @@ class GenericWorkflowStepExecutor(Phase):
         if not isinstance(raw, dict):
             raise ValueError("Invalid persisted context packet decision")
         if "effective_inputs" not in raw:
+            # The early preparation marker precedes the first packet decision;
+            # it is not a persisted decision that can be reused or is missing.
+            if raw == {"agent_invoked": False}:
+                return None
             if require_persisted_packet_decision:
                 raise ValueError("Invalid persisted context packet decision")
             return None
@@ -2420,11 +2434,7 @@ class GenericWorkflowStepExecutor(Phase):
         current_data = self._load_current_iteration_data()
         configured_clis = self._configured_clis_for_agent(agent_name)
 
-        if is_interrupted_iteration(
-            iteration=self.iteration,
-            previous_iteration_data=previous_data,
-            current_iteration_data=current_data,
-        ):
+        if isinstance(current_data, dict):
             recovery = self._selected_fresh_session_recovery(
                 workflow_id=workflow_id,
                 current_data=current_data,
@@ -2433,6 +2443,11 @@ class GenericWorkflowStepExecutor(Phase):
             if recovery is not None:
                 self._session_recovery = recovery
                 return SessionContinuation.new()
+        if is_interrupted_iteration(
+            iteration=self.iteration,
+            previous_iteration_data=previous_data,
+            current_iteration_data=current_data,
+        ):
             exact = exact_continuation_from_context(
                 current_data,
                 configured_clis=configured_clis,
@@ -2523,6 +2538,31 @@ class GenericWorkflowStepExecutor(Phase):
         }
         if any(recovery.get(key) != value for key, value in expected_binding.items()):
             raise RuntimeError("Fresh-session recovery result does not match this workflow run")
+
+        if "preparation" in recovery:
+            if current_data.get("session_recovery") == dict(recovery):
+                if current_data.get("agent_invoked") is True:
+                    if (
+                        exact_continuation_from_context(
+                            current_data,
+                            configured_clis=configured_clis,
+                        )
+                        is None
+                    ):
+                        raise RuntimeError(
+                            "The attempted session identity was not saved or is invalid"
+                        )
+                    return None  # The authorized first invocation already began.
+            evidence = pre_invocation_recovery_evidence(
+                current_data,
+                issue_dir=self.issue_dir,
+                workflow_id=workflow_id,
+                task_id=latest.id,
+                step_name=self.phase_name,
+            )
+            if evidence is None or evidence != recovery["preparation"]:
+                raise RuntimeError("Fresh-session recovery has no matching preparation evidence")
+            return dict(recovery)
 
         previous = recovery.get("previous")
         if not isinstance(previous, Mapping):
