@@ -101,7 +101,6 @@ class NativeSkillBridge:
             raise SkillDiscoveryError(
                 f"CLI skill directory escapes the project root: {skills_root}"
             )
-        self._ensure_cli_dir_git_excluded(cli)
         return skills_root
 
     def get_installed_skill_name(self, name: str) -> str:
@@ -230,6 +229,7 @@ class NativeSkillBridge:
             with os.fdopen(file_descriptor, "w", encoding="utf-8") as temporary_file:
                 temporary_file.write(json.dumps(sorted(names)) + "\n")
             temporary_manifest.replace(manifest)
+            self._ensure_managed_skills_git_excluded(cli, names)
         finally:
             if temporary_manifest.exists():
                 temporary_manifest.unlink()
@@ -266,18 +266,22 @@ class NativeSkillBridge:
         managed.add(name)
         self._write_managed_skills(cli, managed)
 
-    def _ensure_cli_dir_git_excluded(self, cli: AgentCLI) -> None:
-        """Best-effort: add the CLI's top-level injection dir to git's local
-        excludes so these CAFE-managed native-skill dirs never count as
-        uncommitted changes.
+    def _ensure_managed_skills_git_excluded(self, cli: AgentCLI, names: set[str]) -> None:
+        """Locally exclude runtime helpers, preserving visibility of user skills.
 
-        An untracked dir like ``.codex/`` otherwise makes ``git status`` dirty,
-        which blocks chat-handoff consumption in the workflow runner. We write to
-        ``.git/info/exclude`` (worktree-local, does not touch the tracked
-        ``.gitignore``). Failures are swallowed — this is a convenience only.
+        Exclude individual managed paths: a project's .gitignore may reopen the
+        native skills directory and override a top-level CLI directory rule.
+        Tracked files remain subject to Git's normal dirty-worktree checks.
         """
-        top = Path(self.CLI_SKILL_DIRS[cli]).parts[0]  # e.g. ".codex"
-        entry = f"/{top}/"
+        native = self.CLI_SKILL_DIRS[cli]
+        top = Path(native).parts[0]
+
+        # Names are literal directory names, not Git ignore patterns.
+        def literal(value: str) -> str:
+            return "".join("\\" + char if char in "\\*?[] " else char for char in value)
+
+        entries = [f"/{native}/{self.MANAGED_SKILLS_MANIFEST}"]
+        entries.extend(f"/{native}/{literal(name)}/" for name in sorted(names))
         try:
             result = subprocess.run(
                 ["git", "-C", str(self.project_root), "rev-parse", "--git-path", "info/exclude"],
@@ -291,14 +295,32 @@ class NativeSkillBridge:
             if not exclude_path.is_absolute():
                 exclude_path = self.project_root / exclude_path
             existing = exclude_path.read_text(encoding="utf-8") if exclude_path.exists() else ""
-            if any(line.strip() == entry for line in existing.splitlines()):
-                return
-            exclude_path.parent.mkdir(parents=True, exist_ok=True)
-            with exclude_path.open("a", encoding="utf-8") as handle:
-                if existing and not existing.endswith("\n"):
-                    handle.write("\n")
-                handle.write(f"# CAFE native-skill CLI dir (auto-excluded)\n{entry}\n")
-        except Exception:
+            # Remove only the exact legacy block written by this bridge.
+            lines = existing.splitlines(keepends=True)
+            kept: list[str] = []
+            index = 0
+            while index < len(lines):
+                if (
+                    lines[index].rstrip("\r\n") == "# CAFE native-skill CLI dir (auto-excluded)"
+                    and index + 1 < len(lines)
+                    and lines[index + 1].rstrip("\r\n") == f"/{top}/"
+                ):
+                    index += 2
+                    continue
+                kept.append(lines[index])
+                index += 1
+            updated = "".join(kept)
+            missing = [entry for entry in entries if entry not in updated.splitlines()]
+            if missing:
+                if updated and not updated.endswith("\n"):
+                    updated += "\n"
+                updated += "# CAFE managed native skills (auto-excluded)\n"
+                updated += "\n".join(missing) + "\n"
+            if updated != existing:
+                exclude_path.parent.mkdir(parents=True, exist_ok=True)
+                exclude_path.write_text(updated, encoding="utf-8")
+        except (OSError, subprocess.SubprocessError):
+            # Best effort only; Git's clean-worktree gate remains authoritative.
             return
 
     def install_skills(
