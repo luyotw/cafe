@@ -9,6 +9,198 @@ from cafe.core.types import AgentConfig, AgentCLI
 from cafe.core.session import SessionManager
 
 
+class TestImmediateSessionPersistence:
+    def test_backup_session_is_saved_once_under_its_own_cli(self):
+        from cafe.core.types import AgentResponse, CliEntry, TokenUsage
+
+        store = MagicMock(spec=SessionManager)
+        store.load_session.return_value = None
+        manager = AgentManager(session_manager=store, issue_name="early-session")
+        manager.register_agent(AgentConfig(
+            name="Morgan", cli=AgentCLI.CLAUDE,
+            clis=[CliEntry(cli=AgentCLI.CLAUDE), CliEntry(cli=AgentCLI.CODEX)],
+        ))
+        executors = []
+
+        def execute(executor, *args, **kwargs):
+            executors.append(executor)
+            if executor.config.cli == AgentCLI.CLAUDE:
+                raise AgentExecutionError("missing", error_type="cli_not_found")
+            executor.on_session_observed("backup-session")
+            executor.on_session_observed("backup-session")
+            store.save_session.assert_called_once_with(
+                "Morgan", AgentCLI.CODEX, "backup-session", "early-session", "synthesize"
+            )
+            return AgentResponse(
+                response="done", token_usage=TokenUsage(), cli=AgentCLI.CODEX,
+                session_id="backup-session",
+            )
+
+        with patch.object(AgentExecutor, "execute", new=execute):
+            result = manager.execute("Morgan", "fixture", phase_name="synthesize")
+        assert result[0] == "done"
+        assert store.save_session.call_count == 1
+        assert all(executor.on_session_observed is None for executor in executors)
+
+    @pytest.mark.parametrize("outcome", ["success", "rate_limit", "incomplete_stream"])
+    def test_provider_sees_saved_session_before_finishing(
+        self, tmp_path, monkeypatch, outcome
+    ):
+        import sys
+
+        from cafe.agents.executor import AgentExecutionControl
+
+        monkeypatch.chdir(tmp_path)
+        manager = AgentManager(issue_name="early-session", stream_agent_output=False)
+        manager.register_agent(AgentConfig(name="Morgan", cli=AgentCLI.CODEX))
+        session_file = manager.session_manager.get_session_file(
+            "Morgan", AgentCLI.CODEX, "early-session", "synthesize"
+        ).resolve()
+        script = (
+            "import json,sys,time; from pathlib import Path; "
+            "print(json.dumps({'type':'thread.started','thread_id':'fixture-session'}),"
+            "flush=True); "
+            f"path=Path({str(session_file)!r}); deadline=time.monotonic()+2\n"
+            "while time.monotonic()<deadline:\n"
+            "    try:\n"
+            "        if json.loads(path.read_text())['session_id']=='fixture-session': break\n"
+            "    except (FileNotFoundError,json.JSONDecodeError): pass\n"
+            "    time.sleep(.01)\n"
+            "else: raise RuntimeError('session was not saved before provider completion')\n"
+        )
+        if outcome == "success":
+            script += "print(json.dumps({'type':'turn.completed','usage':{}}),flush=True)\n"
+        elif outcome == "rate_limit":
+            script += "sys.stderr.write('API rate limit reached\\n'); sys.exit(1)\n"
+        executor = manager.get_agent("Morgan")
+        with (
+            patch.object(AgentExecutor, "_build_controlled_command", return_value=(
+                [sys.executable, "-u", "-c", script], tmp_path
+            )),
+            patch.object(
+                manager.session_manager, "save_session",
+                wraps=manager.session_manager.save_session,
+            ) as save,
+            patch("cafe.agents.manager.time.sleep"),
+        ):
+            arguments = dict(
+                phase_name="synthesize",
+                streaming_output_file=str(tmp_path / "stream.jsonl"),
+                execution_control=AgentExecutionControl(max_duration_seconds=3),
+            )
+            if outcome == "success":
+                manager.execute("Morgan", "fixture", **arguments)
+                assert not manager.get_failed_attempts()
+            else:
+                with pytest.raises(AgentExecutionError) as caught:
+                    manager.execute("Morgan", "fixture", **arguments)
+                assert caught.value.error_type == outcome
+                assert [item["session_id"] for item in manager.get_failed_attempts()] == [
+                    "fixture-session"
+                ] * 3
+            save.assert_called_once_with(
+                "Morgan", AgentCLI.CODEX, "fixture-session", "early-session", "synthesize"
+            )
+        assert executor.on_session_observed is None
+
+    @pytest.mark.parametrize("fail", [False, True])
+    def test_observer_is_restored_after_attempt(self, fail):
+        from cafe.core.types import AgentResponse, TokenUsage
+
+        store = MagicMock(spec=SessionManager)
+        store.load_session.return_value = None
+        manager = AgentManager(session_manager=store)
+        manager.register_agent(AgentConfig(name="Morgan", cli=AgentCLI.CODEX))
+        executor = manager.get_agent("Morgan")
+        previous = MagicMock()
+        executor.on_session_observed = previous
+
+        def execute(*args, **kwargs):
+            executor.on_session_observed("fixture-session")
+            store.save_session.assert_called_once_with(
+                "Morgan", AgentCLI.CODEX, "fixture-session", None, "synthesize"
+            )
+            if fail:
+                raise AgentExecutionError("stopped", error_type="pipe_read_error")
+            return AgentResponse(
+                response="done", token_usage=TokenUsage(), cli=AgentCLI.CODEX,
+                session_id="fixture-session",
+            )
+
+        with (
+            patch.object(manager, "get_execution_config", return_value=executor.config),
+            patch.object(executor, "execute", side_effect=execute),
+        ):
+            if fail:
+                with pytest.raises(AgentExecutionError):
+                    manager.execute("Morgan", "fixture", phase_name="synthesize")
+            else:
+                manager.execute("Morgan", "fixture", phase_name="synthesize")
+        assert executor.on_session_observed is previous
+        previous.assert_called_once_with("fixture-session")
+        assert store.save_session.call_count == 1
+
+    def test_exact_wrong_session_does_not_overwrite_saved_session(self, tmp_path, monkeypatch):
+        import sys
+
+        from cafe.core.session_continuation import SessionContinuation
+
+        monkeypatch.chdir(tmp_path)
+        manager = AgentManager(issue_name="exact-session", stream_agent_output=False)
+        manager.register_agent(AgentConfig(name="Morgan", cli=AgentCLI.CODEX))
+        manager.session_manager.save_session(
+            "Morgan", AgentCLI.CODEX, "expected", "exact-session", "synthesize"
+        )
+        script = (
+            "import json; "
+            "print(json.dumps({'type':'thread.started','thread_id':'wrong'}),flush=True); "
+            "print(json.dumps({'type':'turn.completed','usage':{}}),flush=True)"
+        )
+        with (
+            patch.object(AgentExecutor, "_build_controlled_command", return_value=(
+                [sys.executable, "-u", "-c", script], tmp_path
+            )),
+            patch.object(manager.session_manager, "save_session") as save,
+        ):
+            with pytest.raises(AgentExecutionError) as caught:
+                manager.execute(
+                    "Morgan", "fixture", phase_name="synthesize",
+                    continuation=SessionContinuation.resume_exact(AgentCLI.CODEX, "expected"),
+                )
+        assert caught.value.error_type == "session_mismatch"
+        save.assert_not_called()
+        assert manager.session_manager.load_session(
+            "Morgan", AgentCLI.CODEX, "exact-session", "synthesize"
+        ).session_id == "expected"
+        assert "session_id" not in manager.get_failed_attempts()[0]
+
+    def test_session_write_failure_stops_without_retry(self, tmp_path):
+        import sys
+
+        store = MagicMock(spec=SessionManager)
+        store.load_session.return_value = None
+        store.save_session.side_effect = OSError("token=private-fixture")
+        manager = AgentManager(session_manager=store, stream_agent_output=False)
+        manager.register_agent(AgentConfig(name="Morgan", cli=AgentCLI.CODEX))
+        script = (
+            "import json,time; "
+            "print(json.dumps({'type':'thread.started','thread_id':'observed'}),flush=True); "
+            "time.sleep(10)"
+        )
+        with (
+            patch.object(AgentExecutor, "_build_controlled_command", return_value=(
+                [sys.executable, "-u", "-c", script], tmp_path
+            )),
+            patch("cafe.agents.manager.time.sleep") as retry_sleep,
+        ):
+            with pytest.raises(AgentExecutionError) as caught:
+                manager.execute("Morgan", "fixture", phase_name="synthesize")
+        assert caught.value.error_type == "session_persistence_error"
+        assert not any(call.args[0] >= 30 for call in retry_sleep.call_args_list)
+        assert store.save_session.call_count == 1
+        assert "private-fixture" not in manager.get_failed_attempts()[0]["error_excerpt"]
+
+
 class TestAgentManagerBasics:
     """Test basic AgentManager functionality."""
 

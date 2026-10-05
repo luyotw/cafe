@@ -33,6 +33,38 @@ def test_incomplete_native_stream_retains_verified_thread():
     assert record["session_id"] == "observed-thread"
 
 
+@pytest.mark.parametrize("error_type", [
+    "rate_limit", "provider_overloaded", "cli_unavailable", "pipe_read_error", None,
+])
+def test_other_provider_failures_retain_verified_session(error_type):
+    error = AgentExecutionError("interrupted", error_type=error_type)
+    error.transport_result = TransportResult(
+        observed_session_id="observed-thread", failure_code=error_type or "execution_failed"
+    )
+    record = build_failed_attempt(cli=AgentCLI.CODEX, chain_role="primary", attempt=1, error=error)
+    assert record["session_id"] == "observed-thread"
+
+
+@pytest.mark.parametrize("session_id", [None, "", "  ", {}, [], "x" * 513])
+def test_failed_attempt_drops_invalid_session_scalar(session_id):
+    error = AgentExecutionError("limited", error_type="rate_limit")
+    error.transport_result = TransportResult(
+        observed_session_id=session_id, failure_code="rate_limit"
+    )
+    record = build_failed_attempt(cli=AgentCLI.CODEX, chain_role="primary", attempt=1, error=error)
+    assert "session_id" not in record
+
+
+@pytest.mark.parametrize("failure", [
+    "conflicting_session_evidence", "invalid_evidence", "model_mismatch", "session_mismatch",
+])
+def test_failure_with_untrusted_identity_never_exposes_resumable_session(failure):
+    error = AgentExecutionError("mismatch", error_type=failure)
+    error.transport_result = TransportResult(observed_session_id="untrusted", failure_code=None)
+    record = build_failed_attempt(cli=AgentCLI.CODEX, chain_role="primary", attempt=1, error=error)
+    assert "session_id" not in record
+
+
 def test_sanitized_excerpt_preserves_reason_without_sensitive_values() -> None:
     """Durable excerpts normalize useful context while redacting credentials."""
     error = AgentExecutionError(
