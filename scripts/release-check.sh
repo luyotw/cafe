@@ -93,6 +93,24 @@ for playbook in subagent-flow subagent-flow-qa; do
     "$SMOKE_VENV/bin/cafe" playbook validate "$playbook" --strict >/dev/null
 done
 
+echo "Verifying packaged runtime constraints and generated documentation..."
+"$SMOKE_VENV/bin/python" - "$SMOKE_VENV/bin/cafe" <<'PYCONSTRAINTS'
+import json
+import subprocess
+import sys
+
+for arguments in (
+    ["constraints", "list", "--json"],
+    ["constraints", "show", "agent.stdout-idle", "--cli", "codex",
+     "--platform", "linux", "--operation", "managed", "--capability", "long-command", "--json"],
+):
+    result = subprocess.run([sys.argv[1], *arguments], capture_output=True, text=True, check=True)
+    payload = json.loads(result.stdout)
+    if not any(entry["id"] == "agent.stdout-idle" for entry in payload["entries"]):
+        raise SystemExit("Installed constraints registry is missing the stdout idle contract")
+PYCONSTRAINTS
+"$SMOKE_VENV/bin/cafe" constraints docs check "$PROJECT_ROOT/docs/known-constraints.md"
+
 "$SMOKE_VENV/bin/cafe" audit >/dev/null
 "$SMOKE_VENV/bin/cafe" skill validate --strict >/dev/null
 

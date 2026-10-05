@@ -4,6 +4,36 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.7.3] - 2026-10-05
+
+This release uses the explicitly requested `0.7.3` version and includes new
+constraints inspection and declaration capabilities alongside fixes.
+
+### Added
+
+- Publish a canonical typed runtime constraints registry, scoped resolver,
+  bounded guidance, and generated Known Constraints documentation.
+- Add read-only `cafe constraints list`, `show`, and `docs render/check`
+  commands with scoped JSON inspection and issue/step context.
+
+### Changed
+
+- Deliver applicable constraints through execution, retries/fallbacks, chat,
+  inspection, and Manager contexts, including declared workload and opaque modes.
+- Source existing numeric limits from the registry and track material applicable
+  changes through semantic fingerprints and existing freshness/resume evidence.
+
+### Fixed
+
+- Recover preparation errors before agent invocation through task-bound evidence
+  without inventing a prior provider session.
+- Allow joint-planning checklist preparation without a prior plan artifact.
+- Pin host-owned PR publishing to the running CAFE Python and validate script
+  interpreters before external mutations.
+
+See [the v0.7.3 release notes](docs/releases/v0.7.3.md) for constraints inspection,
+workflow recovery, publishing environments, and upgrade guidance.
+
 ## [0.7.2] - 2026-10-05
 
 ### Fixed

@@ -528,7 +528,7 @@ Versioning policy, while roadmap stages describe product direction independently
 - [Roadmap](docs/roadmap.md)
 - [Versioning policy](docs/versioning.md)
 - [Changelog](CHANGELOG.md)
-- [Latest release notes](docs/releases/v0.7.2.md)
+- [Latest release notes](docs/releases/v0.7.3.md)
 - [Strategic positioning](docs/positioning.md)
 - [Known runtime constraints](docs/known-constraints.md)
 
