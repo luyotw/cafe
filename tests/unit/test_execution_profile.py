@@ -117,3 +117,15 @@ def test_workflow_contributor_profile_is_aggregated_without_empty_overlay_defaul
     assert profile.risk_domains == ("state-change", "integration")
     assert profile.fallback_strength == "equivalent_or_stronger"
     assert not profile.uses_default
+
+
+def test_custom_workload_refinement_is_composed_not_inferred_from_step_name(tmp_path):
+    """U2/I1: requested workload tags refine broad profiles across custom names."""
+    _write_skill(tmp_path, "bespoke", """  execution_profile:
+    workload: content
+    requested_workloads: [short-docs]
+    capabilities: [technical-writing]
+""")
+    profile = resolve_execution_profile(SkillLoader(project_root=tmp_path), "bespoke", step_name="arbitrary")
+    assert profile.workloads == ("short-docs",)
+    assert profile.capabilities == ("technical-writing",)

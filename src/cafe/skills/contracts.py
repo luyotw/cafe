@@ -379,11 +379,13 @@ class ExecutionProfile(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     workload: ExecutionWorkload = "general"
+    requested_workloads: Tuple[str, ...] = ()
+    capabilities: Tuple[str, ...] = ()
     reasoning: ExecutionReasoning = "standard"
     risk_domains: Tuple[str, ...] = ()
     fallback_strength: FallbackStrength = "equivalent"
 
-    @field_validator("risk_domains")
+    @field_validator("risk_domains", "requested_workloads", "capabilities")
     @classmethod
     def _validate_risk_domains(cls, value: Tuple[str, ...]) -> Tuple[str, ...]:
         cleaned = tuple(_safe_token(item, field_name="risk domain") for item in value)
