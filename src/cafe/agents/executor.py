@@ -1266,6 +1266,9 @@ class AgentExecutor:
         Raises:
             AgentExecutionError: If execution fails
         """
+        accounting = self._get_cli_strategy().prepare_response_accounting(
+            cmd, os.environ if env is None else env
+        )
         try:
             process = subprocess.Popen(
                 cmd,
@@ -1431,6 +1434,9 @@ class AgentExecutor:
                                                    model=result[3] if len(result) > 3 else None,
                                                    permission_denials=result[2],
                                                    usage_available=bool(result[1].model_fields_set))
+                    if accounting is not None:
+                        parsed.token_usage = accounting(parsed.token_usage, output_lines)
+                        parsed.usage_available = bool(parsed.token_usage.model_fields_set)
                     for name in ("duration_ms", "duration_api_ms"):
                         value = getattr(token_usage, name)
                         if value is not None:

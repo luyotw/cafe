@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from cafe.agents.cli.abstract import AbstractCLI
 from cafe.agents.cli.codex_stream_activity import CodexStreamActivity
+from cafe.agents.cli.codex_usage import prepare_resumed_usage
 from cafe.agents.stream_activity import StreamActivity
 from cafe.core.types import PermissionDenial, TokenUsage
 from cafe.utils.git_utils import get_git_dir
@@ -38,6 +39,9 @@ class CodexCLI(AbstractCLI):
         if cmd and Path(cmd[0]).stem == "codex" and "exec" in cmd:
             return CodexStreamActivity()
         return None
+
+    def prepare_response_accounting(self, command, environment):
+        return prepare_resumed_usage(command, environment, selected_session=self.config.session_id)
 
     def build_environment(self) -> dict[str, str]:
         """Build an isolated child environment while preserving provider configuration.

@@ -584,14 +584,22 @@ def _chat_usage_sink(issue_dir: Path, step_name: str, *, cli, requested_model, m
         except (OSError, ValueError):
             print("\n⚠️  Chat accounting incomplete: usage publication failed.\n")
             raise
-        if mode == "interactive" or any(
-            result.reported_model is None
-            or result.usage is None
-            or not set(CHAT_USAGE_FIELDS).issubset(result.usage.model_fields_set)
+        if mode == "interactive" or not results or any(
+            result.usage is None
+            or not {"input_tokens", "output_tokens"}.issubset(result.usage.model_fields_set)
             or result.failure_code
             for result in results
         ):
             print("\n⚠️  Chat accounting incomplete; see chat usage coverage in cafe status.\n")
+        elif any(
+            result.reported_model is None
+            or not set(CHAT_USAGE_FIELDS).issubset(result.usage.model_fields_set)
+            for result in results
+        ):
+            print(
+                "\nℹ️  Chat token usage recorded; some provider details are unavailable. "
+                "See chat usage coverage in cafe status.\n"
+            )
 
     return record
 
