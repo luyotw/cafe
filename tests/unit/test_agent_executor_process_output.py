@@ -276,3 +276,26 @@ def test_diagnostic_write_failure_preserves_provider_error(tmp_path, monkeypatch
     assert "Failed to save stderr diagnostics: OSError" in diagnostic_output
     assert "private-fixture" not in diagnostic_output
     assert "private-fixture" not in (tmp_path / "stream.jsonl").read_text()
+
+
+def test_managed_process_consumes_registry_post_output_wait(tmp_path, monkeypatch):
+    """U6: changing canonical numeric truth reaches real process enforcement."""
+    from cafe.constraints import resolver
+    from cafe.constraints.registry import parse_registry
+    from cafe.constraints import load_registry
+    data = load_registry().model_dump(mode="json")
+    entry = next(e for e in data["entries"] if e["id"] == "agent.post-output-exit")
+    entry["variants"][0]["boundary"]["limits"][0]["value"] = 7
+    monkeypatch.setattr(resolver, "load_registry", lambda: parse_registry(json.dumps(data)))
+    import subprocess
+    original_wait = subprocess.Popen.wait
+    waits=[]
+    def wait(process, timeout=None):
+        waits.append(timeout)
+        return original_wait(process, timeout=timeout)
+    monkeypatch.setattr(subprocess.Popen, "wait", wait)
+    run_fixture(tmp_path, """
+        import json
+        print(json.dumps({'type':'turn.completed','usage':{'input_tokens':1,'output_tokens':1}}), flush=True)
+    """)
+    assert 7 in waits

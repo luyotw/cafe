@@ -19,6 +19,7 @@ from cafe.agents.transport_types import (
     _has_evidence_conflict,
     _validated_evidence_scalar,
 )
+from cafe.constraints import execution_context, numeric_limit
 from cafe.core.types import AgentCLI, AgentConfig, AgentResponse, PermissionDenial, TokenUsage
 
 
@@ -1380,10 +1381,9 @@ class AgentExecutor:
             import time
 
             use_idle_timeout = sys.platform != "win32"
-            # Gemini needs longer timeout (10 min), others use 5 min
-            idle_timeout = (
-                600 if self.config.cli == AgentCLI.GEMINI else 300
-            )  # seconds - timeout if no new output
+            limit_context = execution_context(self.config.cli, capabilities=["long-command"])
+            idle_timeout = (numeric_limit("agent.stdout-idle", "idle", limit_context)
+                            if use_idle_timeout else None)
             last_output_time = time.time() if use_idle_timeout else None
             idle_timeout_triggered = False  # Track if we exited due to idle timeout
             # A workflow-backed structured stream must end in an explicit completion
@@ -1998,7 +1998,7 @@ class AgentExecutor:
                 # Timeout starts after all output has been read from stdout
                 # If timeout, terminate and treat as success if we got output
                 try:
-                    returncode = process.wait(timeout=300)
+                    returncode = process.wait(timeout=numeric_limit("agent.post-output-exit", "exit-wait", limit_context))
                     # Only read stderr after process completes normally
                     stderr_output = process_output.stderr_text()
                 except subprocess.TimeoutExpired:

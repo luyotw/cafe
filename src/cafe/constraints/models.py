@@ -17,7 +17,7 @@ from pydantic import (
 
 Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 Tag = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_.-]*$", min_length=1)]
-CLI = Literal["codex", "claude", "gemini", "copilot"]
+CLI = Literal["codex", "claude", "gemini", "copilot", "cursor-agent"]
 Platform = Literal["linux", "darwin", "win32"]
 Surface = Literal["phase", "chat", "inspection"]
 Operation = Literal["managed", "interactive", "event-driver"]

@@ -29,7 +29,8 @@
             "clis": [
               "codex",
               "claude",
-              "copilot"
+              "copilot",
+              "cursor-agent"
             ]
           },
           "boundary": {
