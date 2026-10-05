@@ -1109,3 +1109,51 @@ def test_handoff_retry_never_substitutes_a_missing_original_session(journey, mod
         "exact producing session" in e.data.get("detail", "")
         for e in j.runtime.blackboard.events if e.event_type == "step_interrupted"
     )
+
+
+@pytest.mark.parametrize("mode", ["baton", "legacy"])
+def test_preparation_recovery_runs_new_session_then_corrects_handoff_before_publication(
+    journey, monkeypatch, mode
+):
+    """Exercise real persisted recovery through invocation, re-entry and publication."""
+    from cafe.core.blackboard import BlackboardStore
+    from cafe.core.session_continuation import SessionContinuationPolicy
+    from cafe.ui.human_tasks import apply_human_task_payload
+
+    j = journey([(CORRECTED, "invalid_intent"), CORRECTED], mode=mode, workspace=True)
+    generate = j.executor._generate_checklist
+
+    def unavailable(**kwargs):
+        raise ValueError("preparation input unavailable")
+
+    monkeypatch.setattr(j.executor, "_generate_checklist", unavailable)
+    interrupted = j.runtime.run(start_step="inspect_custom")
+    assert not interrupted.completed and not j.manager.calls
+    records = HumanTaskRecordStore(j.issue)
+    task = records.tasks()[0]
+    state = BlackboardStore(j.issue).load_or_create("inspect_custom")
+    application = apply_human_task_payload(
+        issue_dir=j.issue, playbook_data=j.playbook, blackboard=state,
+        from_step="inspect_custom", trigger=task.trigger,
+        raw_payload={"task": task.policy_id, "decision": "retry_fresh_session",
+                     "human_task_id": task.id}, source="test",
+    )
+    assert application.rejection is None
+    recovery = records.get_result(task.id).payload["session_continuation"]
+    assert "preparation" in recovery and "previous" not in recovery
+    monkeypatch.setattr(j.executor, "_generate_checklist", generate)
+    resumed = j.reconstruct()
+    result = resumed.run()
+    assert result.completed
+    assert len(j.manager.calls) == 2
+    assert j.manager.calls[0][2].policy is SessionContinuationPolicy.NEW
+    assert j.manager.calls[1][2].is_exact
+    assert j.manager.calls[1][2].session_id == "exact-report-session"
+    saved = json.loads((j.iteration / "iteration.json").read_text())
+    assert saved["session_recovery"] == recovery
+    assert saved["session_id"] == "exact-report-session"
+    assert j.effects.count("after") == 1 and j.manager.deliveries == 1
+    assert not any(t.status.value == "pending" for t in records.tasks())
+    # Another runtime reconstruction must not repeat the external effect.
+    assert j.reconstruct().run().completed
+    assert j.effects.count("after") == 1 and j.manager.deliveries == 1

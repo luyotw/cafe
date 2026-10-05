@@ -41,6 +41,18 @@ def test_manual_subset_approval_publishes_only_previewed_project_content(
     monkeypatch.chdir(project)
     monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_root)
     _write_project_catalog(project)
+    # This project-publication journey must not fingerprint checkout bytecode
+    # that other workers can change between preview and approval.
+    monkeypatch.setattr(
+        "cafe.ui.commands.catalog._build_catalog_service",
+        lambda: CatalogSyncService(
+            CatalogResolver(
+                project_root=project,
+                global_root=global_root,
+                builtin_root=tmp_path / "builtin",
+            )
+        ),
+    )
     preview = runner.invoke(app, ["catalog", "check", "--json"])
     payload = json.loads(preview.stdout)
 
@@ -76,6 +88,17 @@ def test_changed_project_after_preview_requires_a_fresh_cli_comparison(
     monkeypatch.chdir(project)
     monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_root)
     _write_project_catalog(project)
+    # Isolate the approval token so only the intentional project edit changes it.
+    monkeypatch.setattr(
+        "cafe.ui.commands.catalog._build_catalog_service",
+        lambda: CatalogSyncService(
+            CatalogResolver(
+                project_root=project,
+                global_root=global_root,
+                builtin_root=tmp_path / "builtin",
+            )
+        ),
+    )
     preview = runner.invoke(app, ["catalog", "check", "--json"])
     token = json.loads(preview.stdout)["comparison_token"]
     playbook = project / ".cafe" / "playbooks" / "standard.yaml"
