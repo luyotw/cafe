@@ -1,5 +1,12 @@
 # Running And Inspecting A Workflow
 
+## Compact route
+
+Compact launch forwards a digest/revision-bound generic execution context after
+a successful resume checkpoint. Scope expansion uses the existing user HumanTask
+and contract replacement; regenerate the projection before continuing. Do not
+reuse stale checkpoint or review receipts after content/authority changes.
+
 Read this reference after kickoff and whenever starting, resuming, inspecting,
 or retrying ordinary workflow work. Read `model_selection.md` before the first
 execution and whenever agent work remains.

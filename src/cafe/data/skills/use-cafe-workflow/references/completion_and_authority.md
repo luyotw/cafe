@@ -1,5 +1,19 @@
 # Completion And Action Authority
 
+## Compact route
+
+For confirmed compact delivery, verify terminal readiness and worker quiescence,
+then complete the recorded route without asking again for unchanged initial
+effects. PR: use `scripts/deliver_compact.py --issue-dir <issue> --root <worktree>
+--pr-output <material>`; host-required approval returns an existing HumanTask ID
+and correlation ID, whose verified result is resumed with `--approval-task-id`
+and `--correlation-id`. Direct: initialize and execute the exact `deliver` argv
+through `scripts/execute_closeout.py`. Both adapters recheck current scope, review
+and endpoint immediately before action. Report only verified returned PR or
+pushed branch/SHA evidence; failed/unknown attempts cannot be replayed. This
+initial authority grants no merge, issue closure or cleanup. The remaining
+closeout instructions keep their existing authority boundaries.
+
 ## Complete the declared workflow
 
 1. Read the active effective graph and durable runtime state. Verify the runtime

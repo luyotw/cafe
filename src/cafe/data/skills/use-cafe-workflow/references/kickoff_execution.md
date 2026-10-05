@@ -1,5 +1,12 @@
 # Kickoff execution and direct formatter reference
 
+## Compact route
+
+For compact proposals, activate the same Manager authority only after user
+confirmation. Preserve exact paths, baseline, execution and delivery decisions.
+Run the owning scope adapter before launch/resume; a failed checkpoint requires
+the existing focused handoff. No full-only questionnaire is added.
+
 Read the preparation policy in `kickoff.md` first. These are the unchanged
 operating instructions for direct formatter invocation and for preparation,
 activation or polling after the required confirmation. A proposal-only session

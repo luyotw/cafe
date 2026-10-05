@@ -1,5 +1,12 @@
 # Reusable kickoff inputs
 
+## Compact route
+
+Resolve the selected or confirmed `contract.mode` before the full request
+template. Compact `draft/discover/assemble/render` uses `compact_inputs` with
+`files`, `phases`, `review_configuration` and `delivery_contract`; exactly three
+decision groups are rendered. Follow `compact_kickoff.md` for this route.
+
 `prepare_kickoff.py` discovers reusable evidence, assembles one editable request,
 and passes completed inputs to the existing kickoff formatter. It does not
 activate a workflow or execute proposed delivery actions.
