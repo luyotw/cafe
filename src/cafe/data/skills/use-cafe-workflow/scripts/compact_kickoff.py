@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 
 from cafe.core.playbook import (
@@ -12,6 +13,8 @@ from cafe.core.playbook import (
 )
 from cafe.skills.loader import SkillLoader
 from _kickoff_store import VersionedJsonStore
+from kickoff_preferences import PreferenceStore
+from kickoff_models import assess_model_evidence
 
 
 def discover(request, *, catalog_args, early_catalog, confirmed=None,
@@ -34,16 +37,46 @@ def discover(request, *, catalog_args, early_catalog, confirmed=None,
                           "confirmation_gates": list(confirmation_gate_steps(model)),
                           "mandatory_confirmation_gates": list(mandatory_confirmation_gate_steps(model))}
     inputs = dict(request.get("compact_inputs", {}))
+    preferences = PreferenceStore(config_dir or Path.home() / ".config/cafe/kickoff",
+                                  repository_root=catalog_args["project_root"])
+    saved = preferences.effective("phase.chains").value or {}
+    if "phases" not in inputs:
+        from cafe.utils.phase_config import load_phase_step_model
+
+        chains = []
+        overrides = request.get("formatter_inputs", {}).get("phase_chain", [])
+        for name, step in model.steps.items():
+            if step.assignee_type not in {"agent", "hybrid"}:
+                continue
+            explicit = next((v.split("=", 1)[1].split(",") for v in overrides
+                             if v.startswith(name + "=")), None)
+            preferred = saved.get("steps", {}).get(name, saved.get("roles", {}).get(step.role))
+            if explicit or preferred:
+                chain = [dict(zip(("cli", "model"), v.split(":", 1))) for v in explicit or preferred]
+            else:
+                phase = load_phase_step_model(step_name=name,
+                    local_path=catalog_args["project_root"] / ".cafe/config/phases.yaml")
+                chain = [{"cli": cli, "model": model_name} for cli, model_name in phase.clis]
+            chains.append({"name": name, "chain": chain})
+        inputs["phases"] = chains
     if confirmed:
         inputs = {"files": list(confirmed["file_scope"]["paths"]),
                   "phases": [dict(p) for p in confirmed["phases"]],
                   "review_configuration": dict(confirmed["review_configuration"]),
                   "delivery_contract": dict(confirmed["delivery_contract"])}
+    cached_models = VersionedJsonStore((cache_dir or Path.home() / ".cache/cafe/kickoff/v1") /
+        "models-v1.json", schema_version=1, collection="evidence").read()
+    records = request.get("model_assessments", []) or list(cached_models.values())
+    identities = {(e["cli"], e["model"]) for p in inputs.get("phases", []) for e in p["chain"]}
+    models = [assess_model_evidence(record, now=datetime.now(timezone.utc),
+              current_sources=request.get("current_model_sources"),
+              contradictions=request.get("model_contradictions")) for record in records
+              if (record.get("provider"), record.get("model")) in identities]
     return {"stage": "discovery", "contract_mode": "compact", "status": "ready",
             "catalog": {"candidates": [selected_candidate], "diagnostics": diagnostics, "reuse": {}},
             "selected_candidate": selected_candidate, "diagnostics": diagnostics,
             "inputs": inputs, "graph_digest": graph_digest, "confirmed": confirmed,
-            "preferences": {}, "delivery": {}, "models": []}
+            "preferences": {}, "delivery": {}, "models": models}
 
 
 def assemble(request, *, discovery):
@@ -53,16 +86,21 @@ def assemble(request, *, discovery):
     missing = [{"owner": "user", "requirement": key} for key in
                ("files", "phases", "review_configuration", "delivery_contract")
                if not inputs.get(key)]
+    for phase in inputs.get("phases", []):
+        for entry in phase["chain"]:
+            if not any(m["status"] == "hit" and m["identity"]["provider"] == entry["cli"]
+                       and m["identity"]["model"] == entry["model"] for m in discovery.get("models", [])):
+                missing.append({"owner": "selected_evidence", "requirement":
+                                f"model:{entry['cli']}:{entry['model']}"})
     proposal = None
     diagnostics = []
     if not missing:
         try:
-            baseline = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root,
-                capture_output=True, text=True, check=True, timeout=10).stdout.strip()
             confirmed = discovery.get("confirmed")
+            from cafe.manager.file_scope import prepare_file_scope
             proposal = {
                 "contract_mode": "compact", "file_scope": dict(confirmed["file_scope"]) if confirmed else
-                    {"paths": inputs["files"], "baseline_commit": baseline, "preexisting": []},
+                    prepare_file_scope(root, inputs["files"]),
                 "execution": {"playbook_id": request["playbook_id"],
                               "graph_digest": discovery["graph_digest"]},
                 "phases": inputs["phases"], "review_configuration": inputs["review_configuration"],
@@ -74,13 +112,17 @@ def assemble(request, *, discovery):
                     "mandatory_human_stops": candidate.get("mandatory_confirmation_gates", [])},
                 "reactive_user_handoffs": {"need_permission": "user_required",
                     "need_clarification": "user_required", "alignment_checkpoint": "user_required"},
-                "proactive_review": [], "manager": {"mode": "unattended"},
+                "proactive_review": {"phase_decisions": [{"phase": p["name"],
+                    "decision": "not_required"} for p in inputs["phases"]]},
+                "manager": {"mode": "unattended"},
                 "checkout": {"kind": "current_checkout"},
             }
             expected_phases = {name for name, step in candidate["steps"].items()
                                if step.get("assignee_type", "agent") in {"agent", "hybrid"}}
             if {p["name"] for p in inputs["phases"]} != expected_phases:
                 raise ValueError("phase chains must match the selected graph")
+            from cafe.manager._schema import validate_compact_proposal
+            proposal = validate_compact_proposal(proposal)
         except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
             diagnostics.append(str(exc))
     status = "incomplete" if missing else "invalid" if diagnostics else "ready"

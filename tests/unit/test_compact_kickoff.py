@@ -3,6 +3,7 @@
 import json
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -37,7 +38,13 @@ def compact_request(tmp_path, monkeypatch):
         "steps": {"build": {"role": "operator", "skill": "plain",
                              "on": {"await_agent": "_done"}}},
     }))
+    now = datetime.now(timezone.utc).isoformat()
     return {"schema_version": 1, "project_root": str(root), "issue_name": "sample",
+            "model_assessments": [{"provider": "codex", "model": "test", "version": "test-v1",
+                "assessed_at": now, "sources": [{"url": "https://example.org/provider",
+                    "retrieved_at": now, "fingerprint": "fixture"}],
+                "workloads": ["implementation"], "reasoning": "standard",
+                "capability_bands": {"implementation": "strong"}, "limitations": ["Test fixture"]}],
             "playbook_id": "selected", "compact_inputs": {
                 "files": ["app.py", "tests/test_app.py"],
                 "phases": [{"name": "build", "chain": [{"cli": "codex", "model": "test"}]}],

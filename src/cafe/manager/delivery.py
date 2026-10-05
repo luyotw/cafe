@@ -205,6 +205,8 @@ def normalize_delivery_contract(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("Delivery Contract must be a mapping")
     version = value.get("schema_version")
+    if version == 4:
+        return validate_compact_delivery(value)
     if version == 1:
         return DeliveryContractV1.model_validate(value).model_dump(mode="json")
     if version == 2:
@@ -212,6 +214,30 @@ def normalize_delivery_contract(value: Any) -> dict[str, Any]:
     if version == 3:
         return DeliveryContractV3.model_validate(value).model_dump(mode="json")
     raise ValueError("unsupported Delivery Contract version")
+
+
+def validate_compact_delivery(value):
+    """Literal compact endpoint and effects, with no full outcome questionnaire."""
+    route = value.get("route")
+    endpoint = {"source_branch", "target_branch"} if route == "pr" else {"branch"}
+    required = {"schema_version", "route", "remote", "effects"} | endpoint
+    if route not in {"pr", "direct"} or set(value) not in (required, required | {"closeout_plan"}):
+        raise ValueError("compact delivery endpoint is incomplete")
+    for field in endpoint | {"remote"}:
+        token = value[field]
+        if (not isinstance(token, str) or not token or token.startswith("-") or
+                any(c.isspace() for c in token) or ".." in token or any(c in token for c in "~^:?*[\\")):
+            raise ValueError("compact delivery requires literal remote and branches")
+    effects = ["create_pr"] if route == "pr" else ["commit", "push"]
+    if value["effects"] != effects:
+        raise ValueError("compact delivery effects do not match its route")
+    result = dict(value)
+    if "closeout_plan" in value:
+        result["closeout_plan"] = DeliveryCloseoutPlan.model_validate(value["closeout_plan"]).model_dump(mode="json")
+        validate_closeout_plan_policy(result["closeout_plan"], allow_squash=False)
+        if result["closeout_plan"]["cleanup"]:
+            raise ValueError("compact delivery grants no cleanup authority")
+    return result
 
 
 def validate_closeout_plan_policy(
