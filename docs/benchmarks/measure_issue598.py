@@ -49,6 +49,21 @@ def validate_observation(record):
         raise ValueError('artifact digest differs')
 
 
+def validate_comparison(records):
+    """Keep cache/route pairs matched without imposing a speedup threshold."""
+    expected = {(route, cache, mode) for route in ('pr', 'direct')
+                for cache in ('fresh', 'reused') for mode in ('full', 'compact')}
+    indexed = {(r['route'], r['cache'], r['mode']): r for r in records}
+    if len(records) != len(expected) or set(indexed) != expected:
+        raise ValueError('all eight distinct preparation conditions are required')
+    for route in ('pr', 'direct'):
+        for cache in ('fresh', 'reused'):
+            full, compact = (indexed[(route, cache, mode)] for mode in ('full', 'compact'))
+            for field in ('provider_version', 'model', 'repository_baseline', 'selected_graph_sha256'):
+                if not full.get(field) or full[field] != compact.get(field):
+                    raise ValueError('preparation conditions differ: ' + field)
+
+
 class Observation:
     def __init__(self, root, trace):
         self.root, self.trace = root, trace
@@ -111,13 +126,30 @@ def fixtures(base):
     root.mkdir()
     trace = base / 'trace'
     trace.mkdir()
-    (trace / 'sitecustomize.py').write_text('''import json, os, sys
-p = os.environ.get("CAFE_MEASUREMENT_TRACE")
-def audit(event, args):
-    if p and event == "subprocess.Popen":
-        with open(p, "a") as f:
-            f.write(json.dumps({"argv": args[1], "cwd": str(args[2])}, default=str) + "\\n")
-sys.addaudithook(audit)
+    (trace / 'sitecustomize.py').write_text('''import json, os, subprocess
+trace = os.environ.get("CAFE_MEASUREMENT_TRACE")
+def record(value):
+    if trace:
+        with open(trace, "a") as f:
+            f.write(json.dumps(value, default=str) + "\\n")
+class ObservedPopen(subprocess.Popen):
+    def __init__(self, args, *pos, **kwargs):
+        self._recorded_exit = False
+        super().__init__(args, *pos, **kwargs)
+        record({"kind": "start", "pid": self.pid, "argv": args, "cwd": str(kwargs.get("cwd"))})
+    def _record_exit(self):
+        if self.returncode is not None and not self._recorded_exit:
+            self._recorded_exit = True
+            record({"kind": "exit", "pid": self.pid, "exit_code": self.returncode})
+    def wait(self, *args, **kwargs):
+        result = super().wait(*args, **kwargs)
+        self._record_exit()
+        return result
+    def poll(self):
+        result = super().poll()
+        self._record_exit()
+        return result
+subprocess.Popen = ObservedPopen
 ''')
     ob = Observation(root, trace)
     ob.run(['git', 'init', '-q'])
@@ -207,13 +239,23 @@ def observe(route, cache, mode, base):
             raise RuntimeError(json.dumps(result.get('missing_decisions')))
     rendered = result['render']
     elapsed = time.monotonic() - started; ob.active = False
+    if ob.run(['git', 'rev-parse', 'HEAD']).strip() != baseline or ob.run(['git', 'status', '--porcelain']):
+        raise ValueError('preparation changed benchmark task contents or history')
+    if (ob.root / '.cafe/issues').exists():
+        raise ValueError('preparation activated a workflow')
     artifact = {'proposal': rendered.get('proposal'), 'rendered_text': rendered.get('output')}
     events = [json.loads(line) for line in (ob.trace / 'events.jsonl').read_text().splitlines()]
+    nested = [e for e in events if e['kind'] == 'start']
+    exits = {e['pid']: e['exit_code'] for e in events if e['kind'] == 'exit'}
+    for event in nested:
+        if event['pid'] not in exits:
+            raise ValueError('nested child lacks observed exit status')
+        event['exit_code'] = exits[event['pid']]
     record = {'route': route, 'cache': cache, 'mode': mode, 'started_at': started_at,
               'elapsed_seconds': elapsed, 'repository_baseline': baseline, 'provider_version': version, 'model': MODEL,
               'terminal': rendered['status'], 'children': ob.children, 'reference_and_repository_reads': ob.reads,
-              'network': ob.network, 'nested_subprocesses': events,
-              'tool_count': len(ob.children) + len(ob.reads) + len(events),
+              'network': ob.network, 'nested_subprocesses': nested,
+              'tool_count': len(ob.children) + len(ob.reads) + len(nested),
               'artifact': artifact, 'artifact_sha256': digest(json.dumps(artifact, sort_keys=True).encode()),
               'selected_graph_sha256': digest(json.dumps({k: v for k, v in graph.items() if k != 'contract'}, sort_keys=True).encode()),
               'model_evidence': evidence, 'preflight_reports': {k: json.loads(Path(v['file']).read_text()) for k, v in (reports or {}).items()}}
@@ -240,6 +282,8 @@ def main():
                     records.append(observe(route, cache, mode, base))
                     args.output.write_text(json.dumps({'schema_version': 1, 'revision': revision,
                         'recorder_sha256': digest(Path(__file__).read_bytes()), 'records': records}, indent=2) + '\n')
+    if not args.only:
+        validate_comparison(records)
     return 0
 
 
