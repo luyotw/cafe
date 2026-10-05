@@ -454,10 +454,12 @@ class BlackboardWorkflowRuntime:
         executor: Any,
         automatic_registry: Optional[AutomaticExecutorRegistry] = None,
         workflow_event_callback: Callable[[Mapping[str, Any]], None] | None = None,
+        execution_context: Mapping[str, Any] | None = None,
     ) -> None:
         self.issue_dir = issue_dir
         self.playbook = playbook
         self.executor = executor
+        self.execution_context = dict(execution_context) if execution_context is not None else None
         self.automatic_registry = automatic_registry or default_automatic_executor_registry()
 
         playbook_meta = playbook["playbook"]
@@ -2597,6 +2599,13 @@ class BlackboardWorkflowRuntime:
         self._agent_baton_snapshot = self._baton_file_snapshot()
 
         try:
+            if self.execution_context is not None:
+                from cafe.core.execution_checkpoints import checkpoint
+                receipt = checkpoint(self.execution_context, "resume",
+                    round_id=f"{current_step}:{attempt_count}", parent_id="runtime")
+                self.blackboard_store.record_event(self.blackboard, "execution_checkpoint", receipt)
+                if not receipt["passed"]:
+                    raise ValueError("execution_checkpoint_blocked: " + json.dumps(receipt["findings"]))
             execute_kwargs = {
                 "extra_prompt": extra_prompt,
                 "same_invocation_retry": same_invocation_retry,
@@ -2604,6 +2613,8 @@ class BlackboardWorkflowRuntime:
                     current_step=current_step, path=path
                 ),
             }
+            if self.execution_context is not None:
+                execute_kwargs["execution_context"] = self.execution_context
             try:
                 execute_parameters = inspect.signature(self.executor).parameters
             except (TypeError, ValueError):
@@ -3734,6 +3745,41 @@ class BlackboardWorkflowRuntime:
         resolved_status_code = (
             post_contract.status_code or f"BATON_{post_contract.intent.value.upper()}"
         )
+        execution = self.steps[current_step].get("execution", {})
+        advancing = (post_contract.to_owner == HandoffOwner.DONE or
+                     post_contract.to_owner == HandoffOwner.AGENT and post_contract.to_step != current_step)
+        if advancing and "before_delivery" in execution.get("checkpoints", []):
+            from cafe.core.execution_checkpoints import load_review_evidence, require_current_review, require_checkpoint
+            try:
+                iteration = self._latest_iteration_dir(current_step)
+                if self.execution_context is None or iteration is None:
+                    raise ValueError("delivery requires current resolved execution evidence")
+                readiness = load_review_evidence(iteration / execution["delivery_evidence_artifact"])
+                require_current_review(self.execution_context, load_review_evidence(self.issue_dir / "execution_review.json"))
+                require_checkpoint(self.execution_context, readiness.get("checkpoint"), "before_delivery")
+                if (readiness.get("authority_digest") != self.execution_context["authority_digest"] or
+                        readiness.get("endpoint") != self.execution_context["delivery_endpoint"]):
+                    raise ValueError("delivery readiness differs from the confirmed endpoint")
+                from cafe.core.packet_io import atomic_write_bytes, canonical_json
+                atomic_write_bytes(self.issue_dir / "execution_delivery.json", canonical_json(readiness))
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                result = self._emit_pause(current_step=current_step, status_code="DELIVERY_READINESS_BLOCKED",
+                    runtime=runtime, reason=str(exc), pause_intent=HandoffIntent.NEED_CLARIFICATION)
+                return PostContractResult(status_code="DELIVERY_READINESS_BLOCKED", terminal_result=result)
+        if advancing and execution.get("review_policy") == "single_native":
+            from cafe.core.execution_checkpoints import load_review_evidence, require_current_review
+            try:
+                iteration = self._latest_iteration_dir(current_step)
+                if self.execution_context is None or iteration is None:
+                    raise ValueError("native review requires current resolved execution evidence")
+                evidence = load_review_evidence(iteration / execution["review_evidence_artifact"])
+                require_current_review(self.execution_context, evidence)
+                from cafe.core.packet_io import atomic_write_bytes, canonical_json
+                atomic_write_bytes(self.issue_dir / "execution_review.json", canonical_json(evidence))
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                result = self._emit_pause(current_step=current_step, status_code="NATIVE_REVIEW_BLOCKED",
+                    runtime=runtime, reason=str(exc), pause_intent=HandoffIntent.NEED_CLARIFICATION)
+                return PostContractResult(status_code="NATIVE_REVIEW_BLOCKED", terminal_result=result)
         if post_contract.to_owner == HandoffOwner.USER:
             result = self._emit_pause(
                 current_step=current_step,
@@ -5416,6 +5462,22 @@ class BlackboardWorkflowRuntime:
         start_step: Optional[str] = None,
         single_step: bool = False,
     ) -> PlaybookRunResult:
+        declared = any(step.get("execution", {}).get("checkpoints") for step in self.steps.values())
+        if self.execution_context is not None or declared:
+            from cafe.core.execution_checkpoints import checkpoint
+            current_step = self.blackboard.current_step
+            if current_step not in self.steps:
+                current_step = self.start_step
+            try:
+                if self.execution_context is None:
+                    raise ValueError("declared scope checkpoints require resolved execution context")
+                receipt = checkpoint(self.execution_context, "resume", round_id="runtime-entry", parent_id="runtime")
+                self.blackboard_store.record_event(self.blackboard, "execution_checkpoint", receipt)
+                if not receipt["passed"]:
+                    raise ValueError(json.dumps(receipt["findings"]))
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                return self._emit_pause(current_step=current_step, status_code="EXECUTION_CHECKPOINT_BLOCKED",
+                    runtime="execution_checkpoints", reason=str(exc), pause_intent=HandoffIntent.NEED_CLARIFICATION)
         if self._workflow_event_callback is not None:
             # Capture eligibility once; a failed open callback cannot be
             # selected again by events emitted later in this invocation.

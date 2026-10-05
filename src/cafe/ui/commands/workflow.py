@@ -596,6 +596,8 @@ def _print_workflow_event_display(event: Any) -> None:
 
 
 def workflow(
+    execution_context_file: Optional[Path] = typer.Option(
+        None, "--execution-context-file", help="Resolved generic execution checkpoint context"),
     playbook: Optional[str] = typer.Option(None, "--playbook", help="Playbook name"),
     issue: Optional[str] = typer.Option(None, "--issue", help="Issue directory name"),
     start_step: Optional[str] = typer.Option(
@@ -670,6 +672,11 @@ def workflow(
 ) -> None:
     """Run playbook workflow using the new generic runner."""
     user_input = _normalize_cli_user_input(user_input)
+    execution_context_file = execution_context_file if isinstance(execution_context_file, Path) else None
+    execution_context = None
+    if execution_context_file is not None:
+        from cafe.core.execution_checkpoints import load_execution_context
+        execution_context = load_execution_context(execution_context_file)
     # Validation happens before any state is touched so a rejected locale input
     # leaves no partial workflow behind.
     start_locale_value = _normalize_cli_user_input(conversation_locale)
@@ -810,6 +817,8 @@ def workflow(
             try:
                 record = launch_store.start()
                 child_args = ["--playbook", selected_playbook]
+                if execution_context_file is not None:
+                    child_args.extend(["--execution-context-file", str(execution_context_file.resolve())])
                 if callback_binding is not None:
                     child_args.extend(["--on-workflow-event", callback_binding.callback_id])
                 if mute_agent_output:
@@ -911,6 +920,7 @@ def workflow(
             blackboard_state: object,
             extra_prompt: Optional[str] = None,
             same_invocation_retry: bool = False,
+            execution_context: Optional[Dict] = None,
         ) -> Any:
             iteration = next_runnable_iteration_number(issue_dir / step_name)
             console.print(f"[dim]Executing[/dim] step={step_name} iteration={iteration:03d}")
@@ -934,6 +944,8 @@ def workflow(
             assert step_executor is not None
             execute_kwargs = {"extra_prompt": extra_prompt}
             execute_signature = inspect.signature(step_executor.execute_step)
+            if execution_context is not None:
+                execute_kwargs["execution_context"] = execution_context
             if "same_invocation_retry" in execute_signature.parameters or any(
                 parameter.kind == inspect.Parameter.VAR_KEYWORD
                 for parameter in execute_signature.parameters.values()
@@ -1234,6 +1246,7 @@ def workflow(
                 issue_dir=issue_dir,
                 playbook=playbook_data,
                 executor=wrapped_executor,
+                execution_context=execution_context,
                 workflow_event_callback=(
                     (
                         lambda event: dispatch_workflow_event_callback(

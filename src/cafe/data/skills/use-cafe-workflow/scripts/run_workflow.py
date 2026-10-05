@@ -542,6 +542,17 @@ def run(
         )
         if digest != entry.contract_sha256:
             raise ValueError("Manager contract changed during entry validation")
+        execution_context_file = None
+        if contract.get("contract_mode") == "compact":
+            from cafe.manager.file_scope import execution_scope_projection
+            from cafe.core.execution_checkpoints import checkpoint
+            from cafe.core.packet_io import atomic_write_bytes, canonical_json
+            context = execution_scope_projection(issue_dir, project_root)
+            receipt = checkpoint(context, "resume", round_id="manager-entry", parent_id="manager-launch")
+            if not receipt["passed"]:
+                raise ValueError("execution_checkpoint_blocked: " + json.dumps(receipt["findings"]))
+            execution_context_file = issue_dir / "execution_context.json"
+            atomic_write_bytes(execution_context_file, canonical_json(context))
         manager = contract.get("manager", contract.get("driver"))
         confirmed_mode = manager.get("mode") if isinstance(manager, Mapping) else None
         if confirmed_mode != mode:
@@ -611,6 +622,8 @@ def run(
         "--mute-agent-output",
     ]
     worker = "foreground" if mode == "attached" else "background"
+    if execution_context_file is not None:
+        command.extend(["--execution-context-file", str(execution_context_file.resolve())])
     if mode != "attached":
         command.append("--background")
     if mode == "event-driven":

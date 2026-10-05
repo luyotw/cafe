@@ -483,3 +483,20 @@ class ClaudeCLI(AbstractCLI):
     def create_session(self) -> str:
         """Claude sessions are created by the real prompt execution."""
         return ""
+    def project_native_review(self, command: List[str]) -> List[str]:
+        configuration = self.config.native_review_configuration
+        if configuration is None:
+            return command
+        if (configuration.get("cli") != "claude" or configuration.get("read_only") is not True or
+                configuration.get("checkpoint_interface") != "parent_command"):
+            raise ValueError("unsupported native reviewer configuration")
+        behavior = configuration.get("model_behavior")
+        if behavior == "inherits_parent" and configuration.get("model") != self.config.model:
+            raise ValueError("inherited reviewer model differs from the effective parent")
+        if behavior not in {"inherits_parent", "independent_override"}:
+            raise ValueError("unsupported native reviewer model behavior")
+        agent = {"description": "Independent read-only implementation reviewer",
+                 "prompt": "Review correctness, completeness, unnecessary changes, architecture and tests. Never modify files or workflow state. Return explicit blocking/nonblocking findings.",
+                 "tools": ["Read", "Glob", "Grep"],
+                 "model": "inherit" if behavior == "inherits_parent" else configuration["model"]}
+        return [*command, "--agents", json.dumps({"cafe_reviewer": agent})]

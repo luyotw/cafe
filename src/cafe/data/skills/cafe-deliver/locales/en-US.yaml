@@ -1,0 +1,5 @@
+human_task.cafe_develop.clarification_feedback.prompt: Provide the missing delivery
+  or scope decision.
+human_task.cafe_develop.permission_answers.prompt: Provide the required delivery permission
+  decision.
+notification.step_labels.pr: Delivery readiness

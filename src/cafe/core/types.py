@@ -90,6 +90,7 @@ class AgentConfig(BaseModel):
     clis: List["CliEntry"] = Field(default_factory=list)
     backup_clis: List["AgentCLI"] = Field(default_factory=list)
     models_config: Dict[str, Dict[str, str]] = Field(default_factory=dict)
+    native_review_configuration: Optional[Dict[str, Any]] = None
 
 
 class TokenUsage(BaseModel):

@@ -617,6 +617,7 @@ class AgentExecutor:
             else cli_strategy.build_command
         )
         cmd = builder(prompt, allowed_tools, allowed_directories)
+        cmd = cli_strategy.project_native_review(cmd)
         process_cwd = None
         if execution_control is not None and execution_control.working_directory is not None:
             process_cwd = execution_control.working_directory.expanduser().resolve()

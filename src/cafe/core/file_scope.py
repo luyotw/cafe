@@ -18,10 +18,16 @@ def validate_scope_paths(paths):
         raise ValueError("scope paths must be a bounded nonempty file list")
     seen = set()
     for path in paths:
-        if (not isinstance(path, str) or not path or path.startswith("/") or
-            any(c in path for c in "\\\x00*?[]") or path.endswith("/") or
-            any(p in {"", ".", ".."} for p in path.split("/")) or
-            PurePosixPath(path).as_posix() != path or path in seen):
+        if (
+            not isinstance(path, str)
+            or not path
+            or path.startswith("/")
+            or any(c in path for c in "\\\x00*?[]")
+            or path.endswith("/")
+            or any(p in {"", ".", ".."} for p in path.split("/"))
+            or PurePosixPath(path).as_posix() != path
+            or path in seen
+        ):
             raise ValueError("scope approval requires distinct literal repository-relative files")
         seen.add(path)
     return list(paths)
@@ -40,8 +46,9 @@ class ScopeResult:
 
 
 def _git(root, *args):
-    result = subprocess.run(["git", "-C", str(root), *args],
-                            capture_output=True, check=True, timeout=20)
+    result = subprocess.run(
+        ["git", "-C", str(root), *args], capture_output=True, check=True, timeout=20
+    )
     if len(result.stdout) > 8 * 1024 * 1024:
         raise ValueError("change evidence exceeds its bounded inspection limit")
     return result.stdout.decode("utf-8", errors="surrogateescape")
@@ -77,8 +84,9 @@ def collect_changes(root: Path, baseline_commit: str) -> ChangeCollection:
     try:
         resolved = _git(root, "rev-parse", "--verify", baseline_commit + "^{commit}").strip()
         _git(root, "merge-base", "--is-ancestor", resolved, "HEAD")
-        tokens = _git(root, "log", "--format=", "--name-status", "-z", "-m", "-M",
-                      resolved + "..HEAD").split("\x00")
+        tokens = _git(
+            root, "log", "--format=", "--name-status", "-z", "-m", "-M", resolved + "..HEAD"
+        ).split("\x00")
         records = []
         index = 0
         while index < len(tokens):
@@ -89,11 +97,17 @@ def collect_changes(root: Path, baseline_commit: str) -> ChangeCollection:
             if status_token[0] not in "ACDMRTUXB" or index >= len(tokens):
                 raise ValueError("malformed committed path evidence")
             if status_token[0] in "RC":
-                old_path, path = tokens[index:index + 2]
+                old_path, path = tokens[index : index + 2]
                 index += 2
                 validate_scope_paths([old_path, path])
-                records.append({"origin": "committed", "state": status_token,
-                                "old_path": old_path, "path": path})
+                records.append(
+                    {
+                        "origin": "committed",
+                        "state": status_token,
+                        "old_path": old_path,
+                        "path": path,
+                    }
+                )
             else:
                 path = tokens[index]
                 index += 1
@@ -126,12 +140,18 @@ def compare_scope(changes: ChangeCollection, approved_paths, *, preexisting=()) 
                 if key not in record:
                     continue
                 path = validate_scope_paths([record[key]])[0]
-                retained = (record.get("origin") == "workspace" and any(
+                retained = record.get("origin") == "workspace" and any(
                     p.get("path") == path and p.get("content") == record.get(key + "_content")
-                    for p in preexisting))
+                    for p in preexisting
+                )
                 if path not in approved and not retained:
-                    findings.append({"path": path, "reason": "outside_approved_scope",
-                                     "origin": record.get("origin", "unknown")})
+                    findings.append(
+                        {
+                            "path": path,
+                            "reason": "outside_approved_scope",
+                            "origin": record.get("origin", "unknown"),
+                        }
+                    )
         unique = {json.dumps(f, sort_keys=True): f for f in findings}
         findings = tuple(unique[k] for k in sorted(unique))
         return ScopeResult(not findings, findings)
@@ -148,6 +168,5 @@ def content_snapshot(root: Path, changes: ChangeCollection, approved_paths) -> s
         paths.add(record["path"])
         if "old_path" in record:
             paths.add(record["old_path"])
-    payload = {"paths": {p: path_content(root, p) for p in sorted(paths)},
-               "committed": [r for r in changes.records if r.get("origin") == "committed"]}
+    payload = {"paths": {p: path_content(root, p) for p in sorted(paths)}}
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()

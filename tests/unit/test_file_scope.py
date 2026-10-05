@@ -7,8 +7,9 @@ import pytest
 
 
 def git(root, *args):
-    return subprocess.run(["git", "-C", str(root), *args], check=True,
-                          capture_output=True, text=True).stdout.strip()
+    return subprocess.run(
+        ["git", "-C", str(root), *args], check=True, capture_output=True, text=True
+    ).stdout.strip()
 
 
 @pytest.fixture
@@ -26,6 +27,7 @@ def repository(tmp_path):
 
 def test_restored_committed_path_remains_out_of_scope(repository):
     from cafe.core.file_scope import collect_changes, compare_scope
+
     root, baseline = repository
     (root / "outside").write_text("changed")
     git(root, "commit", "-am", "touch")
@@ -39,13 +41,16 @@ def test_restored_committed_path_remains_out_of_scope(repository):
 
 def test_worktree_staged_unstaged_untracked_deletion_and_rename(repository):
     from cafe.core.file_scope import collect_changes, compare_scope
+
     root, baseline = repository
     git(root, "mv", "outside", "destination")
     (root / "allowed").unlink()
     (root / "new file\nname").write_text("new")
     (root / "ignored").write_text("ignored")
     changes = collect_changes(root, baseline)
-    paths = {r["path"] for r in changes.records} | {r["old_path"] for r in changes.records if "old_path" in r}
+    paths = {r["path"] for r in changes.records} | {
+        r["old_path"] for r in changes.records if "old_path" in r
+    }
     assert {"outside", "destination", "allowed", "new file\nname"} <= paths
     assert "ignored" not in paths
     approval = ["allowed", "outside", "destination", "new file\nname"]
@@ -56,6 +61,7 @@ def test_worktree_staged_unstaged_untracked_deletion_and_rename(repository):
 
 def test_missing_or_nonancestor_baseline_fails_closed(repository):
     from cafe.core.file_scope import collect_changes, compare_scope
+
     root, baseline = repository
     result = compare_scope(collect_changes(root, "f" * 40), ["allowed"])
     assert not result.passed
@@ -64,6 +70,7 @@ def test_missing_or_nonancestor_baseline_fails_closed(repository):
 
 def test_current_content_fingerprint_covers_untracked_and_approved_paths(repository):
     from cafe.core.file_scope import collect_changes, content_snapshot
+
     root, baseline = repository
     (root / "new").write_text("one")
     first = content_snapshot(root, collect_changes(root, baseline), ["allowed", "new"])
@@ -73,6 +80,7 @@ def test_current_content_fingerprint_covers_untracked_and_approved_paths(reposit
 
 def test_malformed_evidence_cannot_pass():
     from cafe.core.file_scope import ChangeCollection, compare_scope
+
     result = compare_scope(ChangeCollection(records=({"path": "../escape"},)), ["allowed"])
     assert not result.passed
     assert result.findings[0]["reason"] == "malformed_evidence"

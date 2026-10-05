@@ -1009,6 +1009,9 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                 "streaming_output_file": str(streaming_jsonl_file),
             }
             execute_signature = inspect.signature(self.agent_manager.execute)
+            native_review_configuration = (phase_specific_data or {}).get("native_review_configuration")
+            if native_review_configuration is not None:
+                execute_kwargs["native_review_configuration"] = native_review_configuration
             if "phase_name" in execute_signature.parameters or any(
                 param.kind == inspect.Parameter.VAR_KEYWORD
                 for param in execute_signature.parameters.values()

@@ -1,0 +1,3 @@
+human_task.cafe_develop.clarification_feedback.prompt: 請提供缺少的交付或範圍決策。
+human_task.cafe_develop.permission_answers.prompt: 請提供必要的交付權限決策。
+notification.step_labels.pr: 交付就緒檢查

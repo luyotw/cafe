@@ -593,6 +593,22 @@ def _behavior_value(
     return fallback if value is None else value
 
 
+class ExecutionRequirements(BaseModel):
+    """Semantic boundaries, independent of contract form and step names."""
+
+    model_config = ConfigDict(extra="forbid")
+    checkpoints: List[Literal["before_review", "resume", "before_delivery"]] = Field(default_factory=list)
+    review_policy: Optional[Literal["single_native"]] = None
+    review_evidence_artifact: Optional[str] = None
+    delivery_evidence_artifact: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _review_requires_checkpoint(self):
+        if self.review_policy and ("before_review" not in self.checkpoints or not self.review_evidence_artifact):
+            raise ValueError("native review requires per-invocation checkpoints and evidence")
+        return self
+
+
 class StepConfig(BaseModel):
     """One playbook step."""
 
@@ -613,6 +629,7 @@ class StepConfig(BaseModel):
     workspace_artifact: Optional[str] = None
     workspace_input_artifact: Optional[str] = None
     initial_input: Optional[InitialInputDeclaration] = None
+    execution: ExecutionRequirements = Field(default_factory=ExecutionRequirements)
     template: Optional[str] = None
     allowed_tools: List[str] = Field(default_factory=list)
     capability_requests: List[str] = Field(default_factory=list)

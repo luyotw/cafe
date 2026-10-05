@@ -634,7 +634,15 @@ class GenericWorkflowStepExecutor(Phase):
         same_invocation_retry: bool = False,
         validated_pr_auto_create: Optional[bool] = None,
         validate_producer_handoff: Optional[Callable[[Path], None]] = None,
+        execution_context: Optional[Mapping[str, Any]] = None,
     ) -> StepExecutionResult:
+        if execution_context is not None:
+            from cafe.core.execution_checkpoints import checkpoint
+            receipt = checkpoint(execution_context, "resume", round_id=step_name, parent_id="phase-entry")
+            if not receipt["passed"]:
+                raise ValueError("execution_checkpoint_blocked: " + json.dumps(receipt["findings"]))
+            instructions = "Resolved execution checkpoint context:\n" + json.dumps(execution_context)
+            extra_prompt = (extra_prompt + "\n" if extra_prompt else "") + instructions
         hybrid_portion = step_def.get("hybrid_portion")
         is_hybrid_portion = isinstance(hybrid_portion, Mapping)
         baton_path = self.issue_dir / "next_step.txt"
@@ -815,6 +823,8 @@ class GenericWorkflowStepExecutor(Phase):
             "playbook_id": self.playbook.get("playbook", {}).get("id"),
             "constraint_context": constraint_context.model_dump(mode="json"),
         }
+        if execution_context is not None and step_def.get("execution", {}).get("review_policy"):
+            phase_specific_data["native_review_configuration"] = execution_context["review_configuration"]
         if self._session_recovery is not None:
             phase_specific_data["session_recovery"] = dict(self._session_recovery)
         require_status_code = self._step_requires_status_code(step_name)
