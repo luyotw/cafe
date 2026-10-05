@@ -20,7 +20,8 @@ def capture_constraints(policy):
             if cli:
                 entries["callback/" + cli] = snapshot(
                     context_for_tools(
-                        cli, operation="event-driver", consumers=["callback", "authority"]
+                        cli, operation="event-driver", consumers=["callback", "authority"],
+                        modes=[policy["manager"]["mode"]],
                     )
                 )
     return {"version": 1, "entries": entries}
@@ -49,10 +50,20 @@ def refresh_constraints(contract):
     if evidence is None:
         return None
     validate_evidence(evidence)
+    def current_context(item):
+        context = Context.model_validate(item["context"])
+        if context.operation == "event-driver" and "callback" in context.consumers:
+            # Old evidence may lack tags. Only this owning adapter interprets
+            # confirmed Manager mode; generic layers keep the tags opaque.
+            modes = set(context.modes) - {"attached", "unattended", "event-driven"}
+            modes.add(contract["manager"]["mode"])
+            context = context.model_copy(update={"modes": sorted(modes)})
+        return context
+
     return {
         "version": 1,
         "entries": {
-            name: snapshot(Context.model_validate(item["context"]))
+            name: snapshot(current_context(item))
             for name, item in evidence["entries"].items()
         },
     }

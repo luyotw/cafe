@@ -415,6 +415,7 @@ class GenericPhase:
             constraint_context = context_for_tools(
                 (context or {}).get("agent_cli", "codex"),
                 workloads=requirements.workloads, capabilities=requirements.capabilities,
+                modes=requirements.modes,
                 consumers=["authority"],
             )
         return ("\n".join(lines).strip() + "\n\n" + render_prompt(resolve(constraint_context))).strip()

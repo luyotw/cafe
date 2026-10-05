@@ -86,6 +86,7 @@ def issue_context(issue: str, step: str | None, cli: str | None = None) -> Conte
         ],
         workloads=profile.workloads,
         capabilities=profile.capabilities,
+        modes=profile.modes,
         structured=True,
         consumers=consumers,
     )

@@ -804,6 +804,7 @@ class GenericWorkflowStepExecutor(Phase):
         constraint_context = context_for_tools(
             effective_agent_config.cli, allowed_tools=allowed_tools,
             workloads=constraint_profile.workloads, capabilities=constraint_profile.capabilities,
+            modes=constraint_profile.modes,
             structured=True, consumers=(["authority", "single-chain"]
                 if len(runtime_agent_clis) == 1 else ["authority"]),
         )

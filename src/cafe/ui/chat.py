@@ -764,6 +764,7 @@ def _launch_chat_session(
     if extra_env:
         for key, value in extra_env.items():
             chat_env[str(key)] = str(value)
+    constraint_modes = ([chat_mode] if chat_mode else []) + (["read-only"] if read_only else [])
 
     if prompt is not None:
         executor.stream_output = True
@@ -784,7 +785,9 @@ def _launch_chat_session(
             def attempt():
                 try:
                     result = transport.run_one_shot(
-                        _chat_constraint_prompt(prompt, agent_cli, "managed"),
+                        _chat_constraint_prompt(
+                            prompt, agent_cli, "managed", modes=constraint_modes
+                        ),
                         environment_overrides=chat_env,
                         on_response=responses.append,
                         **({"read_only": True} if read_only else {}),
@@ -859,7 +862,9 @@ def _launch_chat_session(
             print(f"\n⚠️  Chat accounting incomplete: {error}\n")
             usage_sink = None
         result = transport.open_interactive_session(
-            _chat_constraint_prompt(initial_prompt or "", agent_cli, "interactive"),
+            _chat_constraint_prompt(
+                initial_prompt or "", agent_cli, "interactive", modes=constraint_modes
+            ),
             require_initial_context=True,
             environment_overrides=chat_env,
             on_accounting=usage_sink,
@@ -906,8 +911,10 @@ def _launch_chat_session(
     return result.returncode
 
 
-def _chat_constraint_prompt(prompt, cli, operation):
-    context = context_for_tools(cli, surface="chat", operation=operation, consumers=["authority"])
+def _chat_constraint_prompt(prompt, cli, operation, *, modes=()):
+    context = context_for_tools(
+        cli, surface="chat", operation=operation, consumers=["authority"], modes=modes
+    )
     return replace_prompt_block(prompt, resolve(context))
 
 

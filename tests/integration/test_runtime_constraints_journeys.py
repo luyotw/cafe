@@ -15,7 +15,7 @@ from cafe.phases.generic_phase import GenericPhase
 from cafe.skills.loader import SkillLoader
 
 
-def phase(tmp_path, workload="implementation"):
+def phase(tmp_path, workload="implementation", modes=()):
     root = tmp_path / "builtin" / "skills" / "bespoke"
     root.mkdir(parents=True)
     (root / "SKILL.md").write_text(
@@ -26,6 +26,7 @@ def phase(tmp_path, workload="implementation"):
         f"  execution_profile:\n"
         f"    workload: content\n"
         f"    requested_workloads: [{workload}]\n"
+        f"    modes: {json.dumps(list(modes))}\n"
         f"---\n"
         f"Body\n"
         f""

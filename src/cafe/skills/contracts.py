@@ -381,11 +381,12 @@ class ExecutionProfile(BaseModel):
     workload: ExecutionWorkload = "general"
     requested_workloads: Tuple[str, ...] = ()
     capabilities: Tuple[str, ...] = ()
+    modes: Tuple[str, ...] = ()
     reasoning: ExecutionReasoning = "standard"
     risk_domains: Tuple[str, ...] = ()
     fallback_strength: FallbackStrength = "equivalent"
 
-    @field_validator("requested_workloads", "capabilities")
+    @field_validator("requested_workloads", "capabilities", "modes")
     @classmethod
     def _validate_constraint_tags(cls, value: Tuple[str, ...]) -> Tuple[str, ...]:
         import re

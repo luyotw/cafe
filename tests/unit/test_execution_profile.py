@@ -133,11 +133,22 @@ def test_custom_workload_refinement_is_composed_not_inferred_from_step_name(tmp_
     assert profile.capabilities == ("technical-writing",)
 
 
+@pytest.mark.parametrize("field", ["requested_workloads", "capabilities", "modes"])
 @pytest.mark.parametrize("tags", [("Build",), ("with space",), ("short-docs", "short-docs")])
-def test_declared_constraint_tags_are_validated_before_resolution(tags):
+def test_declared_constraint_tags_are_validated_before_resolution(tags, field):
     """U1/U2: declaration validation rejects malformed or duplicate refinements."""
     from pydantic import ValidationError
 
     from cafe.skills.contracts import ExecutionProfile
     with pytest.raises(ValidationError):
-        ExecutionProfile(requested_workloads=tags)
+        ExecutionProfile(**{field: tags})
+
+
+def test_opaque_modes_compose_across_primary_and_overlay(tmp_path):
+    for name, modes in [("primary", "bespoke-mode"), ("overlay", "other-mode, bespoke-mode")]:
+        _write_skill(tmp_path, name, f"  execution_profile:\n    modes: [{modes}]\n")
+    profile = resolve_execution_profile(
+        SkillLoader(project_root=tmp_path), "primary", workflow_skills=["overlay"],
+        step_name="arbitrary",
+    )
+    assert profile.modes == ("bespoke-mode", "other-mode")
