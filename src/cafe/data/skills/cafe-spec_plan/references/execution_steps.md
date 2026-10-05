@@ -1,6 +1,6 @@
 ## Checklist
 
-[ ] Read {agent_file}, the initial request, current user decisions, and any authoritative {prior_plan_file}
+[ ] Read {agent_file}, the initial request, current user decisions, and any authoritative prior combined plan supplied in the phase context
 [ ] Before any reactive pause, save original input, guidance, known answers, and open questions in a valid provisional output; resume from it without manufacturing an empty Todo List
 [ ] Inspect only relevant repository evidence and configured principles/mandate boundaries
 [ ] Resolve material unknowns through user clarification without inventing requirements or authorization
