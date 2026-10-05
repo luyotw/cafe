@@ -10,6 +10,7 @@ from typing import Any, Mapping
 from cafe.core.packet_io import atomic_write_bytes, canonical_json
 
 from ._freshness import Freshness, compare_freshness
+from .constraints import refresh_constraints
 from ._schema import build_manager_settings_update, build_initial_contract
 from ._store import (
     ManagerContractMissingError,
@@ -93,7 +94,9 @@ def evaluate(
     fresh_facts: Mapping[str, Any],
 ) -> tuple[Freshness, dict[str, Any], str]:
     contract, digest = load_contract(issue_dir, issue_name=issue_name, workflow_id=workflow_id)
-    return compare_freshness(contract, fresh_facts), contract, digest
+    refreshed = dict(fresh_facts)
+    refreshed["runtime_constraints"] = refresh_constraints(contract)
+    return compare_freshness(contract, refreshed), contract, digest
 
 
 def event_callback_policy(

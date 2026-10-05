@@ -92,7 +92,8 @@ def test_oversized_applicable_contract_prevents_actual_attempt(tmp_path, monkeyp
     launch.assert_not_called()
 
 
-def test_custom_step_forwards_declared_workload_to_actual_execution(tmp_path, monkeypatch):
+@pytest.mark.parametrize("resume_change", [False, True])
+def test_custom_step_forwards_declared_workload_to_actual_execution(tmp_path, monkeypatch, resume_change):
     """I1/I2: removing declaration-to-attempt forwarding reintroduces idle noise."""
     from pathlib import Path
     from cafe.core.blackboard import BlackboardStore
@@ -137,3 +138,27 @@ def test_custom_step_forwards_declared_workload_to_actual_execution(tmp_path, mo
     assert 'agent.stdout-idle' not in captured[0]
     assert captured[0].count(START)==1
     assert manager.get_last_constraints()['context']['workloads']==['short-docs']
+
+    saved_path=issue/'scribe/iteration_001/iteration.json'
+    saved=json.loads(saved_path.read_text())
+    assert saved['runtime_constraints']['digest']==manager.get_last_constraints()['digest']
+    if resume_change:
+        saved.pop('end_time',None)
+        saved['workflow_completion_trusted']=False
+        saved_path.write_text(json.dumps(saved))
+        from cafe.constraints import load_registry,resolver
+        from cafe.constraints.registry import parse_registry
+        registry_data=load_registry().model_dump(mode='json')
+        selected=next(e for e in registry_data['entries'] if e['id']=='agent.structured-completion')
+        selected['mitigation']+=' Collect additional evidence.'
+        registry=parse_registry(json.dumps(registry_data))
+        monkeypatch.setattr(resolver,'load_registry',lambda:registry)
+        from cafe.core.types import CriticalPhaseError
+        with pytest.raises(CriticalPhaseError) as stopped:
+            executor._execute_agent_iteration('CustomAuthor','resume','workflow execute',[],
+                require_status_code=False,persist_status=False,
+                allowed_tools=['Bash'],phase_specific_data={'step_name':'scribe','constraint_context':saved['constraint_context']})
+        assert stopped.value.error_type=='constraints_changed'
+        assert len(captured)==1
+        refreshed=json.loads(saved_path.read_text())
+        assert refreshed['constraint_freshness']=='material_change'

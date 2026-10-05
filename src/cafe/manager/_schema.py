@@ -10,6 +10,7 @@ from typing import Any, Mapping
 from cafe.core.packet_io import canonical_json
 from cafe.core.types import AgentCLI
 
+from .constraints import capture_constraints, validate_evidence
 from .delivery import normalize_delivery_contract, validate_closeout_plan_policy
 
 SCHEMA_VERSION = 8
@@ -498,6 +499,7 @@ def build_initial_contract(
             "confirmed_by": _string(confirmed_by, "provenance.confirmed_by"),
             "confirmed_at": _aware_time(confirmed_at, "provenance.confirmed_at"),
             "proposal_digest": "",
+            "runtime_constraints": capture_constraints(policy),
         },
         **policy,
     }
@@ -560,8 +562,10 @@ def validate_contract(
         raise ValueError("previous contract digest is invalid")
     provenance_keys = {"kind", "confirmed_by", "confirmed_at", "proposal_digest"}
     provenance = _mapping(raw["provenance"], "provenance")
-    if set(provenance) != provenance_keys:
+    if set(provenance) not in (provenance_keys, provenance_keys | {"runtime_constraints"}):
         raise ValueError("contract provenance is invalid")
+    if "runtime_constraints" in provenance:
+        validate_evidence(provenance["runtime_constraints"])
     kind = _string(provenance["kind"], "provenance.kind")
     if kind not in {"initial", "user_reconfirmation"}:
         raise ValueError("contract provenance kind is invalid")

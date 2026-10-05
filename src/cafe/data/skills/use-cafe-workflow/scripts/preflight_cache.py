@@ -113,6 +113,9 @@ def _cache_lock(path: Path) -> Iterator[None]:
 
 
 def _cli_fingerprint(cli: str) -> dict[str, Any]:
+    from cafe.constraints.context import context_for_tools
+    from cafe.constraints.evidence import snapshot
+    from cafe.constraints.resolver import PROVIDERS
     executable = shutil.which(cli)
     if executable is None:
         raise PreflightCacheError(f"CLI is not installed: {cli}")
@@ -140,6 +143,8 @@ def _cli_fingerprint(cli: str) -> dict[str, Any]:
         "mtime_ns": stat.st_mtime_ns,
         "version_exit_code": version_exit_code,
         "version": version_text,
+        "runtime_constraints": (snapshot(context_for_tools(cli, structured=True, consumers=["authority"]))
+                                if cli in PROVIDERS else None),
     }
     return {**evidence, "digest": _json_digest(evidence)}
 
@@ -338,7 +343,9 @@ def _parse_chain(raw_entries: Sequence[str]) -> tuple[tuple[str, str], ...]:
     return tuple(chain)
 
 
-def _runtime_fingerprint() -> dict[str, Any]:
+def _runtime_fingerprint(chain=()) -> dict[str, Any]:
+    from cafe.constraints.context import context_for_tools
+    from cafe.constraints.evidence import snapshot
     import cafe.agents.executor as executor_module
     import cafe.agents.manager as manager_module
     import cafe.core.types as types_module
@@ -356,6 +363,7 @@ def _runtime_fingerprint() -> dict[str, Any]:
         "package_version": package_version,
         "modules": files,
         "smoke_protocol": SMOKE_PROTOCOL,
+        "runtime_constraints": {cli: snapshot(context_for_tools(cli, consumers=["authority"], structured=True)) for cli, _ in chain},
     }
     return {**evidence, "digest": _json_digest(evidence)}
 
@@ -425,7 +433,7 @@ def fallback_smoke(
     now: float,
 ) -> dict[str, Any]:
     chain = _parse_chain(raw_entries)
-    runtime = _runtime_fingerprint()
+    runtime = _runtime_fingerprint(chain)
     key = _json_digest(
         {
             "schema_version": SCHEMA_VERSION,

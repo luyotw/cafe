@@ -474,6 +474,17 @@ class AgentManager:
         else:
             executor = base_executor
 
+        if constraint_context is None:
+            constraint_context = context_for_tools(executor.config.cli, allowed_tools=allowed_tools,
+                                                  structured=bool(streaming_output_file), consumers=["authority"])
+        consumers = set(constraint_context.consumers)
+        chain = executor.config.clis or executor.config.backup_clis
+        if not chain or len(chain) == 1:
+            consumers.add("single-chain")
+        else:
+            consumers.discard("single-chain")
+        constraint_context = constraint_context.model_copy(update={"consumers": sorted(consumers)})
+
         # Show prompt if enabled
         if self.show_prompt:
             print(f"\n{'=' * 80}")
@@ -720,16 +731,9 @@ class AgentManager:
                                         structured=bool(streaming_output_file), consumers=["authority"])
         else:
             context = context.model_copy(update={"cli": cli, "provider": PROVIDERS[cli]})
-        chain = executor.config.clis or executor.config.backup_clis
-        consumers = set(context.consumers)
-        if not chain or len(chain) == 1:
-            consumers.add("single-chain")
-        else:
-            consumers.discard("single-chain")
-        context = context.model_copy(update={"consumers": sorted(consumers)})
         view = resolve(context)
         rendered = replace_prompt_block(prompt, view)
-        self._last_constraints = {"context": view.context.model_dump(mode="json"),
+        self._last_constraints = {"version": 1, "context": view.context.model_dump(mode="json"),
                                   "digest": material_digest(view)}
         return rendered
 
