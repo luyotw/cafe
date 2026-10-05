@@ -35,6 +35,22 @@ _ensure_src_on_path()
 
 
 @pytest.fixture
+def isolated_global_catalog(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Give catalog journeys their own global layer and lock, with real builtins."""
+    from cafe.utils import config
+
+    global_root = tmp_path / "catalog-user" / ".cafe"
+    global_root.parent.mkdir()
+
+    def get_global_cafe_dir(*, read_only: bool = False) -> Path:
+        if not read_only:
+            global_root.mkdir(exist_ok=True)
+        return global_root
+
+    monkeypatch.setattr(config, "get_global_cafe_dir", get_global_cafe_dir)
+
+
+@pytest.fixture
 def cached_builtin_skill_frontmatter(monkeypatch: pytest.MonkeyPatch) -> None:
     """Cache immutable packaged skill metadata without masking override files."""
     from cafe.skills.loader import SkillLoader

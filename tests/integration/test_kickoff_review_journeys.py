@@ -13,11 +13,12 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'unit'))
 from _kickoff_test_support import load_kickoff_module
 from test_kickoff_prefill import _project as _base_project
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_kickoff_preparation import _formatter_inputs
-import kickoff_inputs
 
-pytestmark = pytest.mark.release_extended
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import kickoff_inputs
+from test_kickoff_preparation import _formatter_inputs
+
+pytestmark = [pytest.mark.release_extended, pytest.mark.usefixtures("isolated_global_catalog")]
 
 
 @pytest.fixture(scope="module")
@@ -27,7 +28,10 @@ def review_catalog(tmp_path_factory):
 
     root = tmp_path_factory.mktemp("review-catalog-project")
     _project(root)
-    resolver = CatalogResolver(project_root=root)
+    resolver = CatalogResolver(
+        project_root=root,
+        global_root=tmp_path_factory.mktemp("review-global") / ".cafe",
+    )
     catalog = load_kickoff_module("kickoff_catalog").discover_index(
         project_root=root,
         global_root=resolver.global_root,
