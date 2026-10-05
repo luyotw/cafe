@@ -33,6 +33,14 @@ class AbstractCLI(ABC):
         """
         return None
 
+    def prepare_response_accounting(self, command, environment):
+        """Optionally project provider counters to this physical invocation.
+
+        Capture any native baseline before launch. The returned observer receives
+        parsed usage and stdout records, including partial results on failure.
+        """
+        return None
+
     @abstractmethod
     def build_command(
         self,
