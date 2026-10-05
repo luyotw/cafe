@@ -207,3 +207,42 @@ def test_scope_dimensions_are_all_applied_without_step_identity():
         assert "agent.stdout-idle" not in {
             e.id for e in resolve(altered, registry=registry).entries
         }
+
+
+@pytest.mark.parametrize(
+    "identity,quantity,bad_unit",
+    [
+        ("agent.stdout-idle", "idle", "bytes"),
+        ("agent.post-output-exit", "exit-wait", "lines"),
+        ("callback.attempt-budget", "duration", "bytes"),
+        ("callback.attempt-budget", "output-bytes", "seconds"),
+        ("callback.attempt-budget", "output-lines", "bytes"),
+    ],
+)
+def test_enforced_quantities_reject_incompatible_units(identity, quantity, bad_unit):
+    """U1/U6: declared dimensions cannot diverge from actual enforcement."""
+    data = seed()
+    entry = next(e for e in data["entries"] if e["id"] == identity)
+    limit = next(q for q in entry["variants"][0]["boundary"]["limits"] if q["name"] == quantity)
+    limit["unit"] = bad_unit
+    with pytest.raises(ValueError):
+        parse_registry(json.dumps(data))
+
+
+def test_numeric_accessor_checks_consumers_dimension():
+    from cafe.constraints import numeric_limit
+
+    assert numeric_limit("agent.stdout-idle", "idle", Context(), expected_unit="seconds") == 300
+    with pytest.raises(ValueError):
+        numeric_limit("agent.stdout-idle", "idle", Context(), expected_unit="bytes")
+
+
+def test_numeric_quantity_order_is_metadata_not_material_behavior():
+    """U5: canonical digest is independent of declarative quantity order."""
+    context = Context(consumers=["callback"])
+    before = material_digest(resolve(context))
+    data = seed()
+    entry = next(e for e in data["entries"] if e["id"] == "callback.attempt-budget")
+    entry["variants"][0]["boundary"]["limits"].reverse()
+    after = resolve(context, registry=parse_registry(json.dumps(data)))
+    assert material_digest(after) == before

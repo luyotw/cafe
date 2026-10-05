@@ -113,10 +113,12 @@ def resolve(
     )
 
 
-def numeric_limit(identity: str, quantity: str, context: Context) -> int:
+def numeric_limit(identity: str, quantity: str, context: Context, *, expected_unit: str) -> int:
     for entry in resolve(context).entries:
         if entry.id == identity and entry.boundary and entry.boundary.kind == "numeric":
             for limit in entry.boundary.limits:
                 if limit.name == quantity:
+                    if limit.unit != expected_unit:
+                        raise ValueError(f"Incompatible enforcement unit: {identity}/{quantity}")
                     return limit.value
     raise ValueError(f"No applicable numeric limit: {identity}/{quantity}")

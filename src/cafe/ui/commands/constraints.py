@@ -14,7 +14,8 @@ from cafe.constraints import Context, load_registry, material_digest, resolve
 from cafe.constraints.context import context_for_tools
 from cafe.constraints.rendering import render_docs
 from cafe.constraints.resolver import PROVIDERS
-from cafe.core.playbook import resolve_playbook_skills
+from cafe.core.playbook import resolve_playbook_skills, resolve_step_behavior
+from cafe.core.workflow_tools import normalize_allowed_tools, runtime_granted_tools
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.execution_profile import resolve_execution_profile
 from cafe.skills.loader import SkillLoader
@@ -79,7 +80,10 @@ def issue_context(issue: str, step: str | None, cli: str | None = None) -> Conte
         consumers.append("single-chain")
     return context_for_tools(
         effective_cli,
-        allowed_tools=definition.get("allowed_tools", None),
+        allowed_tools=[
+            *normalize_allowed_tools(definition.get("allowed_tools", [])),
+            *runtime_granted_tools(resolve_step_behavior(playbook, step).runtime_tool_grants),
+        ],
         workloads=profile.workloads,
         capabilities=profile.capabilities,
         structured=True,

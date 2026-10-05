@@ -176,6 +176,18 @@ class Entry(StrictModel):
         return self
 
 
+# Stable dimensional contracts consumed by existing CAFE enforcement sites.
+ENFORCED_UNITS = {
+    "agent.stdout-idle": {"idle": "seconds"},
+    "agent.post-output-exit": {"exit-wait": "seconds"},
+    "callback.attempt-budget": {
+        "duration": "seconds",
+        "output-bytes": "bytes",
+        "output-lines": "lines",
+    },
+}
+
+
 class Registry(StrictModel):
     schema_version: Annotated[int, Field(strict=True, ge=1, le=1)]
     entries: list[Entry] = Field(min_length=1)
@@ -185,6 +197,17 @@ class Registry(StrictModel):
         by_id = {e.id: e for e in self.entries}
         if len(by_id) != len(self.entries):
             raise ValueError("duplicate constraint IDs")
+
+        for entry in self.entries:
+            expected = ENFORCED_UNITS.get(entry.id)
+            if expected:
+                for variant in entry.variants:
+                    if (
+                        variant.boundary.kind != "numeric"
+                        or {quantity.name: quantity.unit for quantity in variant.boundary.limits}
+                        != expected
+                    ):
+                        raise ValueError(f"Invalid enforcement dimensions for {entry.id}")
 
         def visit(identity, ancestors):
             if identity in ancestors:

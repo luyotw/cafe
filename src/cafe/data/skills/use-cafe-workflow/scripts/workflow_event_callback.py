@@ -1565,9 +1565,9 @@ def _acquire_v3_session(
                 allowed_directories=[],
                 execution_control=AgentExecutionControl(
                     working_directory=Path(temporary),
-                    max_duration_seconds=numeric_limit("callback.attempt-budget", "duration", execution_context(consumers=["callback"])),
-                    max_output_bytes=numeric_limit("callback.attempt-budget", "output-bytes", execution_context(consumers=["callback"])),
-                    max_output_lines=numeric_limit("callback.attempt-budget", "output-lines", execution_context(consumers=["callback"])),
+                    max_duration_seconds=numeric_limit("callback.attempt-budget", "duration", execution_context(consumers=["callback"]), expected_unit="seconds"),
+                    max_output_bytes=numeric_limit("callback.attempt-budget", "output-bytes", execution_context(consumers=["callback"]), expected_unit="bytes"),
+                    max_output_lines=numeric_limit("callback.attempt-budget", "output-lines", execution_context(consumers=["callback"]), expected_unit="lines"),
                 ),
             )
     except Exception as exc:
@@ -2310,9 +2310,9 @@ def _deliver_v3_callback(
                 allowed_tools=["Read", "Grep", "Glob", "Bash"],
                 allowed_directories=[str(repository_root)],
                 execution_control=AgentExecutionControl(
-                    max_duration_seconds=numeric_limit("callback.attempt-budget", "duration", execution_context(consumers=["callback"])),
-                    max_output_bytes=numeric_limit("callback.attempt-budget", "output-bytes", execution_context(consumers=["callback"])),
-                    max_output_lines=numeric_limit("callback.attempt-budget", "output-lines", execution_context(consumers=["callback"])),
+                    max_duration_seconds=numeric_limit("callback.attempt-budget", "duration", execution_context(consumers=["callback"]), expected_unit="seconds"),
+                    max_output_bytes=numeric_limit("callback.attempt-budget", "output-bytes", execution_context(consumers=["callback"]), expected_unit="bytes"),
+                    max_output_lines=numeric_limit("callback.attempt-budget", "output-lines", execution_context(consumers=["callback"]), expected_unit="lines"),
                 ),
             )
             accepted = result.accepted is True

@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from cafe.constraints.context import context_for_tools
+from cafe.core.workflow_tools import normalize_allowed_tools, runtime_granted_tools
 from cafe.skills.execution_profile import resolve_execution_profile
 from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import (
@@ -2776,31 +2777,7 @@ class GenericWorkflowStepExecutor(Phase):
 
     @staticmethod
     def _normalize_allowed_tools(raw_tools: List[str]) -> List[str]:
-        tool_name_map = {
-            "Read": "read",
-            "Edit": "edit",
-            "Write": "write",
-            "Grep": "grep",
-            "Glob": "glob",
-            "LS": "ls",
-            "Ls": "ls",
-            "Bash": "bash",
-            "WebFetch": "web_fetch",
-            "WebSearch": "web_search",
-        }
-        normalized = []
-        for tool in raw_tools:
-            if not tool:
-                continue
-            if "(" in tool:
-                tool_name, remainder = tool.split("(", 1)
-                normalized_name = tool_name_map.get(
-                    tool_name, tool_name[:1].lower() + tool_name[1:]
-                )
-                normalized.append(f"{normalized_name}({remainder}")
-                continue
-            normalized.append(tool_name_map.get(tool, tool[:1].lower() + tool[1:]))
-        return normalized
+        return normalize_allowed_tools(raw_tools)
 
     def _build_allowed_tools(
         self,
@@ -2841,14 +2818,8 @@ class GenericWorkflowStepExecutor(Phase):
             add_writable_file(questions_xml_file)
 
         grants = resolve_step_behavior(self.playbook, step_name).runtime_tool_grants
-        if "web_research" in grants:
-            add("web_fetch")
-            add("web_search")
-        if "git_inspection" in grants:
-            add("bash(git log)")
-            add("bash(git diff)")
-            add("bash(git show)")
-            add("bash(git status)")
+        for tool in runtime_granted_tools(grants):
+            add(tool)
 
         return allowed_tools
 

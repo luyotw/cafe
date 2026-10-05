@@ -1382,7 +1382,7 @@ class AgentExecutor:
 
             use_idle_timeout = sys.platform != "win32"
             limit_context = execution_context(self.config.cli, capabilities=["long-command"])
-            idle_timeout = (numeric_limit("agent.stdout-idle", "idle", limit_context)
+            idle_timeout = (numeric_limit("agent.stdout-idle", "idle", limit_context, expected_unit="seconds")
                             if use_idle_timeout else None)
             last_output_time = time.time() if use_idle_timeout else None
             idle_timeout_triggered = False  # Track if we exited due to idle timeout
@@ -1998,7 +1998,7 @@ class AgentExecutor:
                 # Timeout starts after all output has been read from stdout
                 # If timeout, terminate and treat as success if we got output
                 try:
-                    returncode = process.wait(timeout=numeric_limit("agent.post-output-exit", "exit-wait", limit_context))
+                    returncode = process.wait(timeout=numeric_limit("agent.post-output-exit", "exit-wait", limit_context, expected_unit="seconds"))
                     # Only read stderr after process completes normally
                     stderr_output = process_output.stderr_text()
                 except subprocess.TimeoutExpired:

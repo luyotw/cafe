@@ -22,13 +22,16 @@ def material_projection(view: View) -> dict:
         for item in [scope, *variants]:
             for key in item:
                 item[key] = sorted(item[key])
+        boundary = e.boundary.model_dump(mode="json") if e.boundary else None
+        if boundary and boundary["kind"] == "numeric":
+            boundary["limits"] = sorted(boundary["limits"], key=lambda quantity: quantity["name"])
         entries.append(
             dict(
                 id=e.id,
                 enforcement=e.enforcement,
                 scope=scope,
                 applicability=sorted(variants, key=lambda v: json.dumps(v, sort_keys=True)),
-                boundary=e.boundary.model_dump(mode="json") if e.boundary else None,
+                boundary=boundary,
                 validity=e.validity,
                 trigger=r.trigger,
                 impact=r.impact,
