@@ -1511,14 +1511,18 @@ def close(
             # Step 1: Switch back to main repository
             try:
                 console.print("[dim]Switching to main repository...[/dim]")
-                # Find the main repository path (parent of .cafe/worktrees)
-                current_dir = Path.cwd()
-                main_repo = current_dir
-                while main_repo != main_repo.parent:
-                    git_dir = main_repo / ".git"
-                    if git_dir.exists() and git_dir.is_dir():
-                        break
-                    main_repo = main_repo.parent
+                # 基底分支可能已由另一個 linked worktree 持有；不可只找 .git 目錄。
+                worktrees = git_ops.list_worktrees()
+                main_repo = next(
+                    (
+                        Path(tree["path"]).resolve()
+                        for tree in worktrees
+                        if tree.get("branch") == base_branch
+                    ),
+                    _get_project_root(),
+                )
+                if not (main_repo / ".git").exists():
+                    raise ValueError(f"Cannot locate a valid checkout for {base_branch}")
 
                 os.chdir(str(main_repo))
                 console.print(f"[green]✓ Switched to main repository: {main_repo}[/green]")

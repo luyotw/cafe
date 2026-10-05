@@ -1,6 +1,7 @@
 """Tests for close CLI command."""
 
 from pathlib import Path
+import subprocess
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -12,6 +13,59 @@ from cafe.ui.cli import app
 from cafe.utils.github import GitHubError
 
 runner = CliRunner()
+
+
+@pytest.mark.parametrize("linked_base", [False, True])
+def test_close_external_worktree_uses_the_checkout_owning_base(tmp_path, monkeypatch, linked_base):
+    """真 Git 重現外部／巢狀 worktree，保留其他 checkout 並完成歸檔。"""
+    from cafe.core.git import GitOperations
+
+    def git(cwd, *args):
+        return subprocess.check_output(["git", "-C", str(cwd), *args], text=True).strip()
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-b", "main")
+    git(repo, "config", "user.email", "test@example.test")
+    git(repo, "config", "user.name", "Test")
+    (repo / ".gitignore").write_text(".cafe/\n")
+    git(repo, "add", ".gitignore")
+    git(repo, "commit", "-m", "baseline")
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    git(repo, "remote", "add", "origin", str(remote))
+    git(repo, "push", "-u", "origin", "main")
+    base = repo
+    if linked_base:
+        git(repo, "checkout", "-b", "other-work")
+        base = tmp_path / "linked-base"
+        git(repo, "worktree", "add", str(base), "main")
+    feature = (base / ".cafe/worktrees/fix-close") if linked_base else tmp_path / "external"
+    git(repo, "worktree", "add", "-b", "fix-close", str(feature))
+    issue = feature / ".cafe/issues/fix-close"
+    issue.mkdir(parents=True)
+    (issue / "issue.yaml").write_text(yaml.safe_dump({
+        "base_branch": "main", "feature_branch": "fix-close",
+        "worktree_path": str(feature), "pr": {"auto_create": True},
+    }))
+    (issue / "evidence.txt").write_text("preserve review evidence")
+    (feature / ".cafe/active_issue").write_text("fix-close\n")
+    monkeypatch.chdir(feature)
+    with patch("cafe.ui.cli.GitOperations", GitOperations), patch("cafe.ui.cli.GitHubOps") as gh:
+        gh.return_value.get_pr_for_branch.return_value = {"state": "MERGED"}
+        result = runner.invoke(app, ["close"])
+    assert result.exit_code == 0, result.output
+    assert Path.cwd() == base
+    assert not feature.exists()
+    assert git(base, "branch", "--show-current") == "main"
+    assert "refs/heads/fix-close" not in git(repo, "show-ref")
+    assert git(repo, "branch", "--show-current") == ("other-work" if linked_base else "main")
+    archives = list(home.glob(".cafe/projects/*/archived/fix-close/evidence.txt"))
+    assert len(archives) == 1
+    assert archives[0].read_text() == "preserve review evidence"
 
 
 @pytest.fixture
@@ -464,6 +518,26 @@ class TestCloseCommandWorktree:
         mock_git_ops.delete_branch.assert_called_once_with("test-worktree-issue")
         # 驗證 worktree 目錄被刪除
         mock_git_ops.remove_worktree.assert_called_once_with("worktrees/test-worktree-issue")
+
+    def test_close_missing_checkout_preserves_cwd_and_issue(
+        self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_worktree_config
+    ):
+        """定位失敗必須在切換目錄及任何清理之前停止。"""
+        mock_git_ops.get_current_branch.return_value = "test-worktree-issue"
+        mock_git_ops.list_worktrees.return_value = [
+            {"branch": "main", "path": str(temp_repo_dir / "missing-checkout")}
+        ]
+        result = runner.invoke(app, ["close"])
+        assert result.exit_code == 1
+        assert "Cannot locate a valid checkout" in result.output
+        assert "✓ Switched to main repository" not in result.output
+        assert Path.cwd() == temp_repo_dir
+        assert issue_with_worktree_config.exists()
+        mock_git_ops.checkout_branch.assert_not_called()
+        mock_git_ops.pull.assert_not_called()
+        mock_git_ops.delete_remote_branch_if_exists.assert_not_called()
+        mock_git_ops.remove_worktree.assert_not_called()
+        mock_git_ops.delete_branch.assert_not_called()
 
     def test_archive_only_removes_the_matching_worktree_inventory_pointer(
         self, temp_repo_dir, monkeypatch, mock_git_ops, mock_github_ops_no_pr
