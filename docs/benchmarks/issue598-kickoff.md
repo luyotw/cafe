@@ -6,10 +6,10 @@ Compact preparation required fewer operations and less elapsed time in all four 
 
 | Delivery | Evidence condition | Full seconds | Compact seconds | Full operations | Compact operations |
 | --- | --- | ---: | ---: | ---: | ---: |
-| PR, `feature` → `main` | Fresh | 5.633 | 1.280 | 146 | 53 |
-| PR, `feature` → `main` | Valid reused | 2.795 | 1.100 | 139 | 50 |
-| Direct, exact `feature` branch | Fresh | 4.104 | 1.296 | 146 | 53 |
-| Direct, exact `feature` branch | Valid reused | 2.701 | 1.144 | 139 | 50 |
+| PR, `feature` → `main` | Fresh | 5.871 | 1.675 | 146 | 57 |
+| PR, `feature` → `main` | Valid reused | 3.492 | 1.450 | 139 | 54 |
+| Direct, exact `feature` branch | Fresh | 5.261 | 1.675 | 146 | 55 |
+| Direct, exact `feature` branch | Valid reused | 2.921 | 1.097 | 139 | 52 |
 
 Times are rounded only in this table. The raw records retain monotonic elapsed measurements. No numerical speedup or operation-count threshold was used as a gate. These observed reductions support the preparation-cost acceptance criterion for the measured conditions.
 
@@ -17,7 +17,7 @@ Times are rounded only in this table. The raw records retain monotonic elapsed m
 
 [Raw observation records](issue598-kickoff-records.json) retain complete proposals and rendered text, artifact SHA-256 values, source retrieval dates/fingerprints, complete preflight reports, every top-level command and exit status, reference/repository reads, and nested subprocess start/exit evidence. [Durable stdout](issue598-kickoff-observation.log) records observable progress and each separate `rendered` terminal result. The outer recorder exited 0 after all eight observations and paired-identity validation; that evidence is recorded independently in `run_evidence`. All observed top-level and nested children exited 0.
 
-The measured source revision is `f2d70cd7bdcdfb75bb0a69378242a8486ca6e8d8`. The [recorder](measure_issue598.py) SHA-256 is `327fd7a6f82a6c99b78a9ea8d7683df3d4ba72fa6707cf3a844f98f4ddd82f84`. The implementation's final selected-chain preparation check is included in ancestor `cb28f10b78983b36db8beb9be6e5a401acccffc5`.
+The measured source revision is `a64d864887b4afcfbb016b31108f96cf2faa47b4`. The [recorder](measure_issue598.py) SHA-256 is `327fd7a6f82a6c99b78a9ea8d7683df3d4ba72fa6707cf3a844f98f4ddd82f84`. This revision includes the reviewed Git-content, repository-identity, artifact-capacity and capability-boundary corrections. The selected-chain preparation check is included in ancestor `cb28f10b78983b36db8beb9be6e5a401acccffc5`.
 
 Run from an environment with the repository interpreter, installed `claude`, `curl` and `rg`:
 
@@ -46,9 +46,13 @@ An operation is one top-level subprocess, one explicit reference/repository read
 | Form / condition | Top-level subprocesses | Explicit reads | Nested subprocesses | Total |
 | --- | ---: | ---: | ---: | ---: |
 | Full / fresh | 11 | 9 | 126 | 146 |
-| Compact / fresh | 9 | 6 | 38 | 53 |
+| Compact PR / fresh | 9 | 6 | 42 | 57 |
+| Compact direct / fresh | 9 | 6 | 40 | 55 |
 | Full / reused | 6 | 9 | 124 | 139 |
-| Compact / reused | 6 | 6 | 38 | 50 |
+| Compact PR / reused | 6 | 6 | 42 | 54 |
+| Compact direct / reused | 6 | 6 | 40 | 52 |
+
+Compact PR includes both fetch and push endpoint identity. Both compact routes capture the staged blob identity of retained user work. These required checks are included in the measured window and operation counts.
 
 Fresh means empty case-specific preference/evidence stores and no prepared model/preflight records. Actual model-document retrieval and CLI version observation occur inside both windows. Full additionally executes its required actual update/catalog checks. Compact performs its relevant selected graph, scope, model/native configuration and endpoint checks without full-only preparation.
 
