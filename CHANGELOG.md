@@ -20,6 +20,8 @@ constraints inspection and declaration capabilities alongside fixes.
 
 - Deliver applicable constraints through execution, retries/fallbacks, chat,
   inspection, and Manager contexts, including declared workload and opaque modes.
+- Require initial-context delivery for interactive phase chat; unsupported native
+  adapters use one-shot chat with `--prompt`.
 - Source existing numeric limits from the registry and track material applicable
   changes through semantic fingerprints and existing freshness/resume evidence.
 
