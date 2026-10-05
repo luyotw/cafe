@@ -59,7 +59,8 @@ def validate_comparison(records):
     for route in ('pr', 'direct'):
         for cache in ('fresh', 'reused'):
             full, compact = (indexed[(route, cache, mode)] for mode in ('full', 'compact'))
-            for field in ('provider_version', 'model', 'repository_baseline', 'selected_graph_sha256'):
+            for field in ('provider_version', 'model', 'repository_baseline', 'selected_graph_sha256',
+                          'phase_chains', 'review_configuration', 'native_projection'):
                 if not full.get(field) or full[field] != compact.get(field):
                     raise ValueError('preparation conditions differ: ' + field)
 
@@ -199,6 +200,15 @@ def observe(route, cache, mode, base):
     if evidence is None:
         evidence = ob.evidence()
     phases = [{'name': phase, 'chain': [{'cli': 'claude', 'model': MODEL}]} for phase in ('develop', 'deliver')]
+    review_configuration = {'cli': 'claude', 'model': MODEL, 'provider_version': version,
+        'read_only': True, 'model_behavior': 'inherits_parent', 'checkpoint_interface': 'parent_command'}
+    from cafe.agents.executor import AgentExecutor
+    from cafe.core.types import AgentConfig, AgentCLI
+    preview = AgentExecutor(AgentConfig(name='matched-native-projection', cli=AgentCLI.CLAUDE,
+        model=MODEL, native_review_configuration=review_configuration)).preview_cli_command_args(
+            'configuration projection only', allowed_tools=['Agent'])
+    native_projection = json.loads(preview[preview.index('--agents') + 1])
+
     endpoint = ({'schema_version': 4, 'route': 'pr', 'remote': 'origin', 'source_branch': 'feature',
                  'target_branch': 'main', 'effects': ['create_pr']} if route == 'pr' else
                 {'schema_version': 4, 'route': 'direct', 'remote': 'origin', 'branch': 'feature', 'effects': ['commit', 'push']})
@@ -206,8 +216,7 @@ def observe(route, cache, mode, base):
                'playbook_id': 'benchmark', 'model_assessments': [evidence], 'conversation_locale': 'zh-TW'}
     if mode == 'compact':
         request['compact_inputs'] = {'files': ['src/app.py', 'tests/test_app.py'], 'phases': phases,
-            'review_configuration': {'cli': 'claude', 'model': MODEL, 'provider_version': version,
-                'read_only': True, 'model_behavior': 'inherits_parent', 'checkpoint_interface': 'parent_command'},
+            'review_configuration': review_configuration,
             'delivery_contract': endpoint}
     else:
         if reports is None:
@@ -252,7 +261,8 @@ def observe(route, cache, mode, base):
             raise ValueError('nested child lacks observed exit status')
         event['exit_code'] = exits[event['pid']]
     record = {'route': route, 'cache': cache, 'mode': mode, 'started_at': started_at,
-              'elapsed_seconds': elapsed, 'repository_baseline': baseline, 'provider_version': version, 'model': MODEL,
+              'elapsed_seconds': elapsed, 'repository_baseline': baseline, 'provider_version': version, 'model': MODEL, 'phase_chains': phases, 'review_configuration': review_configuration,
+              'native_projection': native_projection,
               'terminal': rendered['status'], 'children': ob.children, 'reference_and_repository_reads': ob.reads,
               'network': ob.network, 'nested_subprocesses': nested,
               'tool_count': len(ob.children) + len(ob.reads) + len(nested),

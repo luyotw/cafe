@@ -43,7 +43,8 @@ def test_proposal_without_confirmable_scope_never_counts(compact_proposal):
         observation.validate_observation(complete_record(proposal))
 
 
-@pytest.mark.parametrize('changed', ['provider_version', 'model', 'repository_baseline', 'selected_graph_sha256'])
+@pytest.mark.parametrize('changed', ['provider_version', 'model', 'repository_baseline', 'selected_graph_sha256',
+                                    'phase_chains', 'review_configuration', 'native_projection'])
 def test_unmatched_execution_or_repository_identity_is_not_a_comparison(compact_proposal, changed):
     records = []
     for route in ('pr', 'direct'):
@@ -52,7 +53,8 @@ def test_unmatched_execution_or_repository_identity_is_not_a_comparison(compact_
                 record = complete_record(compact_proposal)
                 # The paired validator accepts already validated observation records.
                 record.update(route=route, cache=cache, mode=mode, provider_version='installed',
-                              model='pinned', repository_baseline='baseline', selected_graph_sha256='graph')
+                              model='pinned', repository_baseline='baseline', selected_graph_sha256='graph',
+                              phase_chains='fixed', review_configuration='fixed', native_projection='fixed')
                 records.append(record)
     records[1][changed] = 'different'
     with pytest.raises(ValueError):
