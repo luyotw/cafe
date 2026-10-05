@@ -165,7 +165,7 @@ class TestLaunchChatSession:
         result = launch_chat_session("developer", "issue123")
 
         assert result == 0
-        assert mock_run.call_args.args[0] == ["codex", "--model", "gpt-5.3-codex"]
+        assert mock_run.call_args.args[0][:-1] == ["codex", "--model", "gpt-5.3-codex"]
         registered_config = agent_manager.register_agent.call_args.args[0]
         assert registered_config.cli == AgentCLI.CODEX
         assert registered_config.model == "gpt-5.3-codex"
@@ -238,7 +238,7 @@ class TestLaunchChatSession:
         assert output.count("One-shot response") == 1
         assert executor.stream_output is True
         assert process.call_count == 1
-        assert "Status?" in process.call_args.args[0]
+        assert any("Status?" in arg for arg in process.call_args.args[0])
         assert process.call_args.kwargs["env"]["CAFE_ISSUE_NAME"] == "issue123"
         agent_manager.session_manager.save_session.assert_called_once_with(
             "David", AgentCLI.CLAUDE, "session-new", "issue123"
@@ -385,7 +385,7 @@ class TestLaunchChatSession:
         result = launch_chat_session("developer", "issue123")
 
         assert result == 0
-        assert mock_run.call_args.args[0] == ["codex", "--model", "gpt-5.4"]
+        assert mock_run.call_args.args[0][:-1] == ["codex", "--model", "gpt-5.4"]
         assert mock_run.call_args.kwargs["env"]["CODEX_HOME"] == codex_home
         agent_manager.session_manager.save_session.assert_called_once_with(
             "Nick",
@@ -420,7 +420,7 @@ class TestLaunchChatSession:
         result = launch_chat_session("developer", "issue123")
 
         assert result == 0
-        assert mock_run.call_args.args[0] == ["codex", "--model", "gpt-5.4", "resume", "sess-codex"]
+        assert mock_run.call_args.args[0][:-1] == ["codex", "--model", "gpt-5.4", "resume", "sess-codex"]
         assert mock_run.call_args.kwargs["env"]["CODEX_HOME"] == codex_home
         agent_manager.session_manager.save_session.assert_called_once_with(
             "Nick",
@@ -760,7 +760,7 @@ def test_launch_chat_session_uses_active_phase_chain(
         result = launch_chat_session("researcher", "research-1")
 
     assert result == 0
-    assert mock_run.call_args.args[0] == ["claude", "--model", "sonnet"]
+    assert mock_run.call_args.args[0][:-1] == ["claude", "--model", "sonnet"]
     registered_config = agent_manager.register_agent.call_args.args[0]
     assert registered_config.name == "Morgan"
     assert registered_config.cli == AgentCLI.CLAUDE

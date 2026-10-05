@@ -16,6 +16,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
+from cafe.constraints.context import context_for_tools
+from cafe.skills.execution_profile import resolve_execution_profile
 from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import (
     ArtifactEntry,
@@ -794,10 +796,21 @@ class GenericWorkflowStepExecutor(Phase):
             questions_xml_file=questions_xml_file,
             baton_path=portion_baton_path,
         )
+        constraint_profile = resolve_execution_profile(
+            self._get_skill_loader(), skill_name, iteration=self.iteration,
+            workflow_skills=workflow_skill_names, step_name=step_name,
+        )
+        constraint_context = context_for_tools(
+            effective_agent_config.cli, allowed_tools=allowed_tools,
+            workloads=constraint_profile.workloads, capabilities=constraint_profile.capabilities,
+            structured=True, consumers=["authority"],
+        )
+        context["constraint_context"] = constraint_context.model_dump(mode="json")
         phase_specific_data = {
             "step_name": step_name,
             "skill_name": skill_name,
             "playbook_id": self.playbook.get("playbook", {}).get("id"),
+            "constraint_context": constraint_context.model_dump(mode="json"),
         }
         if self._session_recovery is not None:
             phase_specific_data["session_recovery"] = dict(self._session_recovery)

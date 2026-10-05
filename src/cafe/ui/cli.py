@@ -13,6 +13,7 @@ from typer.core import TyperGroup
 
 from cafe.ui.inquirer_prompts import prompt_checkbox, prompt_confirm, prompt_list, prompt_multiline, prompt_text  # noqa: F401 — backward-compat re-export for test patch targets
 from cafe.ui.menu import InteractiveMenu
+from cafe.ui.commands.constraints import constraints_app
 from cafe.ui.commands import lifecycle as lifecycle_commands
 from cafe.ui.commands import issues as issues_commands
 from cafe.ui.commands import templates as template_commands
@@ -813,6 +814,7 @@ workflow = workflow_commands.workflow
 
 
 # Template management commands
+app.add_typer(constraints_app, name="constraints")
 app.add_typer(template_commands.template_app, name="template")
 app.add_typer(task_commands.task_app, name="task")
 

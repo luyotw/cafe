@@ -517,7 +517,9 @@ def test_exact_primary_fallback_is_a_fresh_context_takeover(
         )
 
     assert response == "fallback"
-    assert attempts[0] == (AgentCLI.CODEX, "exact-codex", "primary prompt", True)
+    assert attempts[0][:2] == (AgentCLI.CODEX, "exact-codex")
+    assert attempts[0][2].endswith("primary prompt")
+    assert attempts[0][3] is True
     assert all(attempt == attempts[0] for attempt in attempts[:3])
     backup_cli, backup_session, backup_prompt, backup_exact = attempts[3]
     assert backup_cli == AgentCLI.GEMINI

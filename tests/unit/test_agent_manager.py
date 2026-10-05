@@ -331,7 +331,9 @@ class TestAgentExecution:
 
             assert response == "Agent response"
             assert streaming_log == []
-            mock_execute.assert_called_once_with("Test prompt", None, None, None)
+            mock_execute.assert_called_once()
+            assert mock_execute.call_args.args[0].endswith("Test prompt")
+            assert mock_execute.call_args.args[1:] == (None, None, None)
 
     def test_execute_returns_tuple_with_token_usage(self) -> None:
         """Test that execute returns a 6-tuple (response, token_usage, permission_denials, cli_command_args, streaming_log, model)."""
@@ -440,9 +442,8 @@ class TestAgentExecution:
         stream_path = str(tmp_path / "stream.jsonl")
 
         def execute(executor, prompt, tools, directories, stream, **kwargs):
-            assert (prompt, tools, directories, stream) == (
-                "continue saved work", allowed_tools, allowed_directories, stream_path
-            )
+            assert prompt.endswith("continue saved work")
+            assert (tools, directories, stream) == (allowed_tools, allowed_directories, stream_path)
             if executor.config.cli != AgentCLI.CODEX:
                 assert chain_role == "fallback"
                 other_attempts.append(executor.config.cli)

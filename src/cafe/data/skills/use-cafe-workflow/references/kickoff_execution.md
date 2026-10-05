@@ -295,3 +295,23 @@ ordinary Manager-entry or task-decision authority. Their validated event-transpo
 settings may still be read through the existing bounded callback projection;
 that is not activation or an upgrade. Malformed predecessors are never silently
 overwritten.
+
+### Refresh runtime constraints
+
+Before kickoff, retry/resume or diagnosis, refresh the package-owned view with
+`cafe constraints list --cli <effective-cli> --consumer authority --json`.
+For an existing issue use `cafe constraints list --issue <issue> --step <step>
+--json`; inspect every configured CLI alternative rather than assuming that the
+primary's limits apply to a fallback. For callback handling include
+`--consumer callback --operation event-driver`. Use `cafe constraints show <ID>
+--json` for source, detection, mitigation and history. This is read-only evidence,
+not authority to alter a chain, answer a HumanTask, stop a worker or run a command.
+
+An agent's fenced JSON `kind=constraint_assistance` in its existing output or
+handoff is the exact Manager-assisted request. Require unique non-empty
+`constraint_ids` and non-empty `workload`, `reason`, `requested_support` and
+`completion_evidence`. Refresh the same applicable constraints, verify the IDs,
+and route support through existing HumanTask/capability/worker controls. Never
+execute the request or advance the workflow solely because this declaration
+exists. Progress visibility is separate from exit status and completion proof.
+Record the IDs in interruption/recovery communication.

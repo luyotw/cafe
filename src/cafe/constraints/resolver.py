@@ -9,7 +9,7 @@ from pydantic import Field
 from .models import Boundary, Context, Entry, Registry, Scope, StrictModel
 from .registry import load_registry
 
-PROVIDERS = {"codex": "openai", "claude": "anthropic", "gemini": "google", "copilot": "github"}
+PROVIDERS = {"codex": "openai", "claude": "anthropic", "gemini": "google", "copilot": "github", "cursor-agent": "cursor"}
 
 
 class EffectiveEntry(StrictModel):

@@ -12,6 +12,10 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import yaml
 
+from cafe.constraints import Context, resolve, render_prompt
+from cafe.constraints.context import context_for_tools
+from cafe.skills.exceptions import SkillDiscoveryError
+from cafe.skills.workflow_composition import resolve_step_workflow_composition
 from cafe.catalogs.resolver import global_catalog_lock
 from cafe.core.blackboard import BlackboardState, BlackboardStore, HandoffIntent
 from cafe.core.capabilities import (
@@ -392,7 +396,28 @@ class GenericPhase:
                 "Before a successful handoff, complete ALL applicable primary and overlay checklist gates and revalidate their Todo evidence. Do not delete or rewrite required gates to mark completion. Existing clarification, permission and manual handoff routes remain available."
             )
 
-        return "\n".join(lines).strip()
+        supplied = (context or {}).get("constraint_context")
+        if supplied:
+            constraint_context = Context.model_validate(supplied)
+        else:
+            try:
+                composition = resolve_step_workflow_composition(
+                    self.skill_loader, primary_skill=skill_name,
+                    step_name=str((context or {}).get("step_name", "<constraints>")),
+                    workflow_skills=(context or {}).get("workflow_skills", ()),
+                )
+                requirements = composition.execution_requirements
+            except SkillDiscoveryError:
+                # Standalone prompt previews may lack a skill declaration. Missing
+                # metadata never proves a short workload; execution validates skills.
+                from cafe.skills.workflow_composition import ComposedExecutionRequirements
+                requirements = ComposedExecutionRequirements((), "standard", (), "equivalent", True)
+            constraint_context = context_for_tools(
+                (context or {}).get("agent_cli", "codex"),
+                workloads=requirements.workloads, capabilities=requirements.capabilities,
+                consumers=["authority"],
+            )
+        return ("\n".join(lines).strip() + "\n\n" + render_prompt(resolve(constraint_context))).strip()
 
     @classmethod
     def extract_goto_target(cls, response: str) -> Optional[str]:

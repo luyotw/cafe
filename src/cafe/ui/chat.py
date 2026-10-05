@@ -6,6 +6,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from cafe.constraints import resolve, replace_prompt_block
+from cafe.constraints.context import context_for_tools
 from cafe.agents.executor import AgentExecutionError
 from cafe.agents.transport import ConversationTransport
 from cafe.agents.transport_types import TransportResult
@@ -782,7 +784,7 @@ def _launch_chat_session(
             def attempt():
                 try:
                     result = transport.run_one_shot(
-                        prompt,
+                        _chat_constraint_prompt(prompt, agent_cli, "managed"),
                         environment_overrides=chat_env,
                         on_response=responses.append,
                         **({"read_only": True} if read_only else {}),
@@ -857,7 +859,8 @@ def _launch_chat_session(
             print(f"\n⚠️  Chat accounting incomplete: {error}\n")
             usage_sink = None
         result = transport.open_interactive_session(
-            initial_prompt,
+            _chat_constraint_prompt(initial_prompt or "", agent_cli, "interactive"),
+            require_initial_context=True,
             environment_overrides=chat_env,
             on_accounting=usage_sink,
             **({"read_only": True} if read_only else {}),
@@ -901,6 +904,11 @@ def _launch_chat_session(
         _warn_if_chat_handoff_missing(issue_dir, _current_step, _valid_steps)
 
     return result.returncode
+
+
+def _chat_constraint_prompt(prompt, cli, operation):
+    context = context_for_tools(cli, surface="chat", operation=operation, consumers=["authority"])
+    return replace_prompt_block(prompt, resolve(context))
 
 
 def launch_chat_session(

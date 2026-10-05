@@ -114,3 +114,11 @@ reason.
   iteration, or prove completion. Apply its conclusion only through an existing
   legal task, input, correction, or authorization path; otherwise retain the
   pause.
+
+Before diagnosing an interruption or requesting a retry, refresh `cafe
+constraints list --issue <issue> --step <step> --json` and inspect the reported
+constraint IDs. Re-resolve the effective CLI on each configured alternative.
+Apply the shared registry's detection and mitigation guidance; do not substitute
+remembered numeric limits. Follow the `constraint_assistance` handling contract
+in `kickoff_execution.md` without granting new execution, cancellation or
+HumanTask authority.

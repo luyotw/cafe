@@ -331,6 +331,10 @@ class AbstractCLI(ABC):
         """Build process environment for this CLI."""
         return dict(os.environ)
 
+    def supports_initial_context(self) -> bool:
+        """Whether native interactive launch can carry an initial context."""
+        return self.config.cli.value in {"codex", "claude"}
+
     def build_interactive_command(self, initial_prompt: Optional[str] = None) -> List[str]:
         """Build the command used for a user-owned interactive chat session.
 
