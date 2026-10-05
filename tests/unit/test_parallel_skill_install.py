@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from cafe.core.types import AgentCLI
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
@@ -97,9 +99,8 @@ def test_parallel_workflow_installs_do_not_write_global_home_skills(tmp_path: Pa
         assert global_home_skill.read_text(encoding="utf-8") == marker
 
 
-def test_install_skill_git_excludes_cli_dir(tmp_path: Path) -> None:
-    """CAFE-managed CLI injection dir is added to .git/info/exclude so it does
-    not make the worktree dirty (which would block chat-handoff consumption)."""
+def test_install_skill_git_excludes_managed_paths(tmp_path: Path) -> None:
+    """Runtime helpers stay clean without excluding the entire CLI directory."""
     import subprocess
 
     global_root = tmp_path / "global" / "skills"
@@ -115,7 +116,8 @@ def test_install_skill_git_excludes_cli_dir(tmp_path: Path) -> None:
     bridge.install_skill("cafe-plan", AgentCLI.CODEX)
 
     exclude = (project / ".git" / "info" / "exclude").read_text(encoding="utf-8")
-    assert "/.codex/" in exclude.splitlines()
+    assert "/.codex/skills/cafe-plan/" in exclude.splitlines()
+    assert "/.codex/" not in exclude.splitlines()
 
     status = subprocess.run(
         ["git", "status", "--porcelain"], cwd=project, capture_output=True, text=True
@@ -141,7 +143,8 @@ def test_install_skill_git_exclude_is_idempotent(tmp_path: Path) -> None:
     bridge.install_skill("cafe-plan", AgentCLI.CODEX)
 
     exclude = (project / ".git" / "info" / "exclude").read_text(encoding="utf-8")
-    assert exclude.splitlines().count("/.codex/") == 1
+    assert exclude.splitlines().count("/.codex/skills/cafe-plan/") == 1
+    assert exclude.splitlines().count("/.codex/skills/.cafe-managed-skills.json") == 1
 
 
 def test_install_skill_no_git_is_noop(tmp_path: Path) -> None:
@@ -158,3 +161,64 @@ def test_install_skill_no_git_is_noop(tmp_path: Path) -> None:
     # Must not raise even though there is no .git
     bridge.install_skill("cafe-plan", AgentCLI.CODEX)
     assert (project / ".codex" / "skills" / "cafe-plan" / "SKILL.md").exists()
+
+
+@pytest.mark.parametrize("cli", list(NativeSkillBridge.CLI_SKILL_DIRS))
+@pytest.mark.parametrize("linked_worktree", [False, True])
+def test_managed_skills_stay_clean_with_reopened_skills_directory(
+    tmp_path: Path, cli: AgentCLI, linked_worktree: bool
+) -> None:
+    """Real Git: project allowlists must not expose runtime helpers or hide user work."""
+    import subprocess
+
+    def git(root, *args):
+        return subprocess.run(
+            ["git", "-C", str(root), *args], check=True, capture_output=True, text=True
+        ).stdout
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init")
+    native = NativeSkillBridge.CLI_SKILL_DIRS[cli]
+    top = Path(native).parts[0]
+    ignore = f".cafe/\n!/{top}/\n/{top}/*\n!/{native}/\n"
+    (repo / ".gitignore").write_text(ignore)
+    tracked = Path(native) / "user-skill" / "SKILL.md"
+    (repo / tracked).parent.mkdir(parents=True)
+    (repo / tracked).write_text("user-owned\n")
+    git(repo, "add", ".")
+    git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "base")
+    project = tmp_path / "linked" if linked_worktree else repo
+    if linked_worktree:
+        git(repo, "worktree", "add", "-b", "linked", str(project))
+    exclude = repo / ".git" / "info" / "exclude"
+    # Migrate only CAFE's marked legacy rule; preserve unrelated local rules.
+    exclude.write_text(
+        f"# user rule\n/local-only/\n# CAFE native-skill CLI dir (auto-excluded)\n/{top}/\n"
+    )
+    bridge = _bridge_for_project(
+        tmp_path, project_root=project, global_root=tmp_path / "global", home_dir=tmp_path / "home"
+    )
+    bridge.synchronize_skills(["cafe-plan"], cli, install=False)
+    assert git(project, "status", "--porcelain") == ""
+    bridge.install_skill("cafe-plan", cli)
+    assert git(project, "status", "--porcelain") == ""
+    # Enter another phase, including stale helper removal.
+    builtin = tmp_path / "builtin" / "skills" / "cafe-pr"
+    builtin.mkdir()
+    (builtin / "SKILL.md").write_text("---\nname: cafe-pr\ndescription: test PR\n---\nPR\n")
+    bridge.skill_loader.discover()
+    bridge.synchronize_skills(["cafe-pr"], cli)
+    assert git(project, "status", "--porcelain") == ""
+    assert not (project / native / "cafe-plan").exists()
+    assert (project / native / "cafe-pr" / "SKILL.md").is_file()
+    (project / tracked).write_text("user edit\n")
+    other = Path(native) / "another-user-skill" / "SKILL.md"
+    (project / other).parent.mkdir()
+    (project / other).write_text("new user skill\n")
+    status = git(project, "status", "--porcelain", "--untracked-files=all")
+    assert str(tracked) in status and str(other) in status
+    assert "cafe-pr" not in status and ".cafe-managed-skills.json" not in status
+    assert (project / ".gitignore").read_text() == ignore
+    assert "/local-only/" in exclude.read_text().splitlines()
+    assert f"/{top}/" not in exclude.read_text().splitlines()
