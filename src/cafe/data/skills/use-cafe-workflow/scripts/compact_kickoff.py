@@ -123,8 +123,7 @@ def discover(
         evidence_gaps.append({"owner": "user", "requirement": "selected_graph_changed"})
         graph_digest = confirmed["execution"]["graph_digest"]
     if native_required:
-        from cafe.agents.executor import AgentExecutor
-        from cafe.core.types import AgentConfig, AgentCLI
+        from cafe.agents.executor import validate_native_review_projection
 
         configuration = inputs.get("review_configuration")
         if configuration:
@@ -138,20 +137,11 @@ def discover(
                 ).stdout.strip()
                 if version != configuration["provider_version"]:
                     raise ValueError("selected provider version evidence changed")
-                selected_model = next(
-                    e["model"]
-                    for p in inputs["phases"]
-                    for e in p["chain"]
-                    if e["cli"] == configuration["cli"]
+                validate_native_review_projection(
+                    {phase["name"]: phase["chain"] for phase in inputs.get("phases", [])},
+                    [name for name, step in model.steps.items() if step.execution.review_policy],
+                    configuration,
                 )
-                AgentExecutor(
-                    AgentConfig(
-                        name="native-review-probe",
-                        cli=AgentCLI(configuration["cli"]),
-                        model=selected_model,
-                        native_review_configuration=configuration,
-                    )
-                ).preview_cli_command_args("configuration projection only", allowed_tools=["Agent"])
             except (
                 OSError,
                 ValueError,

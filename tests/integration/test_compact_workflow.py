@@ -255,3 +255,20 @@ def test_public_step_factory_keeps_confirmed_chain_when_defaults_are_broken(comp
         phase_name="build", execution_chain=context["phase_chains"]["build"], stream_agent_output=False)
     engine.agent_manager.execute("operator", "bounded provider fixture", phase_name="build")
     assert dispatched == [("codex", "test")]
+
+
+def test_native_preparation_checks_explicit_backup_before_confirmation(compact_request, tmp_path, monkeypatch):
+    from tests.unit._kickoff_test_support import load_kickoff_module
+    native_context(compact_request, tmp_path, monkeypatch)
+    compact_request['issue_name'] = 'unconfirmed-backup'
+    compact_request['compact_inputs']['phases'][0]['chain'].append({'cli': 'codex', 'model': 'other'})
+    other = deepcopy(compact_request['model_assessments'][0])
+    other['model'] = 'other'
+    other['provider'] = 'codex'
+    compact_request['model_assessments'].append(other)
+    owner = load_kickoff_module('kickoff_inputs')
+    discovered = owner.discover_kickoff(compact_request, config_dir=tmp_path / 'prefs', cache_dir=tmp_path / 'cache')
+    assembled = owner.assemble_kickoff(compact_request, discovery=discovered)
+    assert assembled['status'] == 'incomplete'
+    assert any('native_review_configuration' in gap['requirement'] for gap in assembled['missing_decisions'])
+    assert assembled['proposal'] is None

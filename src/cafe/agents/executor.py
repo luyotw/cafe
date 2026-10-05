@@ -2244,3 +2244,15 @@ class AgentExecutor:
                 if streaming_file_handle is not None and not streaming_file_handle.closed:
                     streaming_file_handle.close()
                 process_output.close()
+
+
+def validate_native_review_projection(phase_chains, step_names, configuration):
+    """Verify every explicitly selected parent can project the confirmed reviewer."""
+    for name in step_names:
+        chain = phase_chains.get(name)
+        if not chain:
+            raise ValueError("native review requires a selected execution chain")
+        for parent in chain:
+            AgentExecutor(AgentConfig(name="native-review-probe", cli=AgentCLI(parent["cli"]),
+                model=parent["model"], native_review_configuration=configuration)).preview_cli_command_args(
+                    "configuration projection only", allowed_tools=["Agent"])
