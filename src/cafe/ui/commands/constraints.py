@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import List, Optional
 
 import typer
-import yaml
 
 from cafe.constraints import Context, load_registry, material_digest, resolve
 from cafe.constraints.context import context_for_tools
@@ -20,6 +19,7 @@ from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.execution_profile import resolve_execution_profile
 from cafe.skills.loader import SkillLoader
 from cafe.utils.phase_config import load_phase_step_model
+from cafe.utils.yaml_utils import safe_load
 
 constraints_app = typer.Typer(
     help="Inspect package-owned runtime constraints; no authority is granted."
@@ -32,7 +32,7 @@ def _bounded_mapping(path: Path, *, yaml_format=False):
     if path.stat().st_size > 1_048_576:
         raise ValueError("Issue context exceeds bounded inspection capacity")
     text = path.read_text(encoding="utf-8")
-    data = yaml.safe_load(text) if yaml_format else json.loads(text)
+    data = safe_load(text) if yaml_format else json.loads(text)
     if not isinstance(data, dict):
         raise ValueError("Issue context must be a mapping")
     return data

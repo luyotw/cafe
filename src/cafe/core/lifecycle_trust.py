@@ -6,13 +6,19 @@ import os
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from cafe.core.execution_boundary import EffectiveBoundary, ExecutionClass, ScriptLaunchRequest, TrustSource, snapshot_script
+from cafe.core.execution_boundary import (
+    EffectiveBoundary,
+    ExecutionClass,
+    ScriptLaunchRequest,
+    TrustSource,
+    snapshot_script,
+)
 from cafe.core.sandbox_execution import SandboxExecutor, SandboxRunResult
+from cafe.utils.yaml_utils import safe_load
 
 
 class LifecycleDeclaration(BaseModel):
@@ -61,7 +67,7 @@ class LifecycleTrustStore:
     def list(self) -> tuple[LifecycleDeclaration, ...]:
         if not self.path.exists():
             return ()
-        payload = yaml.safe_load(self.path.read_text(encoding="utf-8")) or {}
+        payload = safe_load(self.path.read_text(encoding="utf-8")) or {}
         return tuple(LifecycleDeclaration.model_validate(item) for item in payload.get("declarations", []))
 
     def get(self, declaration_id: str) -> LifecycleDeclaration | None:

@@ -38,6 +38,7 @@ from cafe.core.session import SessionStore
 from cafe.core.task_inbox import TaskInboxError, TaskInboxService
 from cafe.core.types import AgentCLI, AgentConfig, SessionData
 from cafe.core.workflow_runtime import resolve_human_task_notification_repository_root
+from cafe.utils.yaml_utils import SafeLoader
 
 try:
     import fcntl
@@ -63,7 +64,7 @@ _HOST_SESSION_KIND = "codex"
 _CONTRACT_CALLBACK_CONFIG_SCHEMA = 4
 
 
-class _ExactSafeLoader(yaml.SafeLoader):
+class _ExactSafeLoader(SafeLoader):
     """Safe YAML loader that rejects duplicate mapping keys."""
 
 

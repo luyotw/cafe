@@ -26,6 +26,7 @@ from cafe.utils.github import (
     GitHubError,
     GitHubOps,
 )
+from cafe.utils.yaml_utils import safe_load
 
 
 def _get_previous_iteration_status(phase: Any) -> Optional[str]:
@@ -840,9 +841,7 @@ class InitialInputProviderResolver(NoOpHook):
         if not config_file.exists():
             return {}
         try:
-            import yaml  # type: ignore[import-untyped]
-
-            data = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
+            data = safe_load(config_file.read_text(encoding="utf-8")) or {}
         except Exception:
             return {}
         return data if isinstance(data, dict) else {}
@@ -1066,9 +1065,7 @@ class GitHubIssueFetcher(NoOpHook):
         if not config_file.exists():
             return None, None
         try:
-            import yaml
-
-            data = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
+            data = safe_load(config_file.read_text(encoding="utf-8")) or {}
         except Exception:
             return None, None
         spec = data.get("spec", {})
@@ -1082,7 +1079,7 @@ class GitHubIssueFetcher(NoOpHook):
 
         try:
             data = (
-                yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
+                safe_load(config_file.read_text(encoding="utf-8")) or {}
                 if config_file.exists()
                 else {}
             )
@@ -1582,9 +1579,7 @@ class PRCommentPoster(NoOpHook):
         if not issue_yaml.exists():
             return True
         try:
-            import yaml
-
-            data = yaml.safe_load(issue_yaml.read_text(encoding="utf-8")) or {}
+            data = safe_load(issue_yaml.read_text(encoding="utf-8")) or {}
             pr_cfg = data.get("pr") or {}
             value = pr_cfg.get("post_todo_list")
             if value is None:

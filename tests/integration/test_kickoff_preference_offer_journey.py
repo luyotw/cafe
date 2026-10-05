@@ -1,15 +1,18 @@
 """Final rendered contracts carry the exact optional project preference offer."""
 
-import json
 import hashlib
+import json
 import sys
 from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("isolated_global_catalog")
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "unit"))
 from _kickoff_test_support import load_kickoff_module
 from test_kickoff_prefill import _project
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_kickoff_preparation import _formatter_inputs
 

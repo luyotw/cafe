@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 import yaml
 
 from cafe.core.status_codes import PhaseStatusCode
+from cafe.utils.yaml_utils import safe_load
 
 if TYPE_CHECKING:
     from cafe.core.git import GitOperations
@@ -186,7 +187,7 @@ class PhaseStateMixin:
 
         try:
             with open(config_path, "r", encoding="utf-8") as f:
-                config_data = yaml.safe_load(f)
+                config_data = safe_load(f)
             return config_data if config_data else None
         except (yaml.YAMLError, IOError):
             return None
@@ -317,8 +318,9 @@ class PhaseStateMixin:
 
 def ensure_agent_file_exists(agent_name: str, agent_role: str, cafe_dir: Path = Path(".cafe")) -> None:
     """Check if agent md file exists, if not report error and prompt user to reset."""
-    from cafe.agents.manager import AgentManager
     from rich.console import Console
+
+    from cafe.agents.manager import AgentManager
 
     agent_file = cafe_dir / AgentManager.AGENTS_DIR / agent_role / f"{agent_name}.md"
 

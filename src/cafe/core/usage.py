@@ -15,6 +15,7 @@ import yaml
 from cafe.core.types import TokenUsage
 from cafe.core.workspace_lock import workspace_execution_lock
 from cafe.utils.issue_config import issue_config_lock
+from cafe.utils.yaml_utils import safe_load
 
 
 def merge_token_usage_stats(existing: Any, incoming: TokenUsage) -> Dict[str, Any]:
@@ -83,7 +84,7 @@ def _read_usage_file(parent_fd, name, *, issue_metadata=False):
         if not stat.S_ISREG(info.st_mode):
             raise ValueError("usage target must be a regular file")
         try:
-            data = yaml.safe_load(handle) if issue_metadata else json.load(handle)
+            data = safe_load(handle) if issue_metadata else json.load(handle)
         except yaml.YAMLError as error:
             raise ValueError("invalid accounting metadata") from error
         return data, _inode(info)

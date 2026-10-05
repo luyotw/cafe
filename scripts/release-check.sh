@@ -9,32 +9,72 @@ set -euo pipefail
 PROJECT_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$PROJECT_ROOT"
 
+REPORT_ROOT="${CAFE_TEST_REPORT_DIR:-$PROJECT_ROOT/.cafe/reports}"
+mkdir -p "$REPORT_ROOT"
+REPORT_ROOT=$(cd "$REPORT_ROOT" && pwd)
+export CAFE_TEST_REPORT_DIR
+CAFE_TEST_REPORT_DIR=$(mktemp -d "$REPORT_ROOT/release-check.XXXXXXXX")
+TIMINGS_REPORT="$CAFE_TEST_REPORT_DIR/timings.json"
+REPORT_TOOL="$PROJECT_ROOT/scripts/release-report.py"
+RELEASE_STARTED=$(python3 "$REPORT_TOOL" clock)
+STAGE_NAME=""
+STAGE_STARTED=""
+RELEASE_TEMP_DIR=""
+python3 "$REPORT_TOOL" init --report "$TIMINGS_REPORT"
+
+finish_stage() {
+    if [ -n "$STAGE_NAME" ]; then
+        python3 "$REPORT_TOOL" stage --report "$TIMINGS_REPORT" \
+            --name "$STAGE_NAME" --started "$STAGE_STARTED" --status "$1"
+    fi
+}
+
+start_stage() {
+    finish_stage 0
+    STAGE_NAME="$1"
+    STAGE_STARTED=$(python3 "$REPORT_TOOL" clock)
+}
+
+finish_release() {
+    local release_status=$?
+    trap - EXIT
+    finish_stage "$release_status" || true
+    python3 "$REPORT_TOOL" finish --report "$TIMINGS_REPORT" \
+        --started "$RELEASE_STARTED" --status "$release_status" \
+        --latest "$REPORT_ROOT/release-check-latest.json" || true
+    if [ -n "$RELEASE_TEMP_DIR" ]; then
+        rm -rf -- "$RELEASE_TEMP_DIR"
+    fi
+    exit "$release_status"
+}
+trap finish_release EXIT
+
+# Apply before tests too: verification must not sync globally installed skills.
+export CAFE_SKIP_GLOBAL_SKILL_SYNC=1
+
+start_stage coverage
 echo "Running release coverage gate (representative kickoff journeys)..."
 CAFE_RELEASE_FAST_TESTS=1 ./scripts/test-coverage.sh
 
+start_stage extended
 echo "Running the remaining kickoff journeys without coverage instrumentation..."
 ./scripts/test-extended-kickoff.sh
 
-# Release verification must not mutate the caller's globally installed skills.
-export CAFE_SKIP_GLOBAL_SKILL_SYNC=1
-
+start_stage contracts
 echo "Running builtin contract validation..."
 uv run cafe audit >/dev/null
 uv run cafe skill validate --strict >/dev/null
 
+start_stage lint
 echo "Running critical lint checks..."
 uv run ruff check src tests --select E9,F63,F7,F82
 
 RELEASE_TEMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/cafe-release.XXXXXX")
-cleanup() {
-    rm -rf -- "$RELEASE_TEMP_DIR"
-}
-trap cleanup EXIT
-
 DIST_DIR="$RELEASE_TEMP_DIR/dist"
 SMOKE_VENV="$RELEASE_TEMP_DIR/venv"
 SMOKE_CWD="$RELEASE_TEMP_DIR/smoke"
 
+start_stage build
 echo "Building wheel and source distribution..."
 uv build --out-dir "$DIST_DIR"
 
@@ -44,6 +84,7 @@ if [ "${#wheels[@]}" -ne 1 ] || [ ! -f "${wheels[0]}" ]; then
     exit 1
 fi
 
+start_stage install
 echo "Installing wheel in a clean environment..."
 uv venv "$SMOKE_VENV" >/dev/null
 uv pip install --python "$SMOKE_VENV/bin/python" "${wheels[0]}" >/dev/null
@@ -52,6 +93,7 @@ uv pip check --python "$SMOKE_VENV/bin/python"
 mkdir -p "$SMOKE_CWD"
 cd "$SMOKE_CWD"
 
+start_stage package_checks
 expected_version=$(
     "$SMOKE_VENV/bin/python" - "$PROJECT_ROOT/pyproject.toml" <<'PY'
 import sys

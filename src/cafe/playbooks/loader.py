@@ -11,6 +11,7 @@ import yaml
 from cafe.catalogs.resolver import CatalogKind, CatalogResolver, global_catalog_lock
 from cafe.core.playbook import LoadedPlaybook, load_playbook_file
 from cafe.skills.loader import SkillLoader
+from cafe.utils.yaml_utils import safe_load
 
 
 def apply_issue_playbook_overrides(
@@ -20,7 +21,7 @@ def apply_issue_playbook_overrides(
     if not issue_config_path.is_file():
         return playbook
     try:
-        loaded_issue_config = yaml.safe_load(
+        loaded_issue_config = safe_load(
             issue_config_path.read_text(encoding="utf-8")
         )
     except (OSError, yaml.YAMLError) as exc:

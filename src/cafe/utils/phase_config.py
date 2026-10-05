@@ -6,8 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Optional
 
-import yaml
-
+from cafe.utils.yaml_utils import safe_load
 
 SOURCE_WORKTREE = "worktree"
 SOURCE_REPO = "repo"
@@ -55,7 +54,7 @@ def _validation_error(source: str, *, step: str, field: str, detail: str) -> Val
 def _load_yaml_file(path: Path) -> Mapping:
     """Load YAML from `path` and validate top-level mapping shape."""
     try:
-        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+        payload = safe_load(path.read_text(encoding="utf-8"))
     except Exception as exc:  # pragma: no cover - defensive parse guard
         raise _validation_error(
             path.as_posix(),
