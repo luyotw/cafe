@@ -181,7 +181,7 @@ def test_uncertain_pr_publication_is_retained_and_never_replayed(compact_request
         publish_compact_pr(issue, root, output)
 
 
-@pytest.mark.parametrize("drift", ["scope", "fetch_url"])
+@pytest.mark.parametrize("drift", ["scope", "fetch_url", "omitted_remote"])
 def test_existing_custom_publication_hook_checks_scope_before_dispatch(compact_request, compact_proposal, monkeypatch, drift):
     from types import SimpleNamespace
     import cafe.core.capabilities as capabilities
@@ -216,8 +216,12 @@ def test_existing_custom_publication_hook_checks_scope_before_dispatch(compact_r
     assert len(invocations) == 1
     if drift == "scope":
         (root / "outside.py").write_text("unapproved change after implementation")
-    else:
+    elif drift == "fetch_url":
         git(root, "remote", "set-url", "origin", "https://github.com/other/unapproved.git")
+    else:
+        changed_request = json.loads(request_file.read_text())
+        changed_request["args"].pop("remote")
+        request_file.write_text(json.dumps(changed_request))
     with pytest.raises(ValueError):
         hook.run(**arguments)
     assert len(invocations) == 1
@@ -284,8 +288,11 @@ def test_owned_publication_uses_real_publisher_and_authorized_push_repository(co
     gh.write_text("#!" + sys.executable + '\n' + '''import json, os, sys
 args = sys.argv[1:]
 repository = os.environ.get("GH_REPO", "example/project")
+host = os.environ.get("GH_HOST", "github.com")
+if repository.startswith("github.com/"):
+    host, repository = repository.split("/", 1)
 with open(os.environ["TEST_GH_LOG"], "a") as output:
-    output.write(json.dumps({"args": args, "repository": repository}) + "\\n")
+    output.write(json.dumps({"args": args, "repository": repository, "host": host}) + "\\n")
 if args[:2] == ["repo", "view"]:
     print("other/fetch-only" if "fetch-only" in args[2] else "example/project")
 elif args[:2] == ["pr", "view"]:
@@ -296,19 +303,21 @@ elif args[:2] == ["pr", "view"]:
     else:
         sys.exit(1)
 elif args[:2] == ["pr", "create"]:
-    print("https://github.com/" + repository + "/pull/1")
+    print("https://" + host + "/" + repository + "/pull/1")
 else:
     sys.exit(2)
 ''')
     gh.chmod(0o755)
     monkeypatch.setenv("PATH", str(binary) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("GH_REPO", "other/unapproved")
+    monkeypatch.setenv("GH_HOST", "unapproved.example")
     monkeypatch.setenv("TEST_GH_LOG", str(log))
     monkeypatch.setenv("TEST_HEAD", git(root, "rev-parse", "HEAD"))
     result = publish_compact_pr(issue, root, output)
     assert result["delivered"] and result["pr"]["url"] == "https://github.com/example/project/pull/1"
     calls = [json.loads(line) for line in log.read_text().splitlines()]
     assert all(call["args"][2] == push_url for call in calls if call["args"][:2] == ["repo", "view"])
-    assert [call["repository"] for call in calls if call["args"][:2] == ["pr", "create"]] == ["example/project"]
+    assert [(call["host"], call["repository"]) for call in calls if call["args"][:2] == ["pr", "create"]] == [("github.com", "example/project")]
     assert git(root, "ls-remote", push_url, "refs/heads/feature").split()[0] == result["commit"]
 
 

@@ -170,7 +170,7 @@ def guard_execution_delivery(context, request, *, issue_dir, output_dir):
     endpoint = context["delivery_endpoint"]
     args = request.get("args", {})
     if (endpoint["route"] != "pr" or args.get("base") != endpoint["target_branch"]
-            or args.get("remote", "origin") != endpoint["remote"]):
+            or args.get("remote") != endpoint["remote"]):
         raise ValueError("publication request differs from resolved delivery endpoint")
     root = Path(context["root"])
     def git(*argv):

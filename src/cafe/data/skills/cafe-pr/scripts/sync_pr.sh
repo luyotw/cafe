@@ -200,7 +200,9 @@ PY
 # Resolve the explicitly selected remote before any mutation.
 if [[ -n "$EXPLICIT_REMOTE" ]]; then
   REPO_URL=$(git remote get-url --push "$REMOTE")
-  GH_REPO=$(gh repo view "$REPO_URL" --json nameWithOwner --jq .nameWithOwner)
+  REPOSITORY=$(gh repo view "$REPO_URL" --json nameWithOwner --jq .nameWithOwner)
+  # Pin the capability-authorized GitHub host as well as owner/repository.
+  GH_REPO="github.com/$REPOSITORY"
   export GH_REPO
 fi
 
