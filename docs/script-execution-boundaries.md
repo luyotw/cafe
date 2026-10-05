@@ -51,7 +51,7 @@ This inventory is executable documentation: the unit contract discovers every `s
 | `src/cafe/catalogs/resolver.py::_run_git` | Internal fixed Git root discovery query |
 | `src/cafe/install/bootstrap.py::_run` | Internal installer command family |
 | `src/cafe/skills/global_installer.py::_discover_git_roots` | Internal fixed Git root discovery query |
-| `src/cafe/skills/native_bridge.py::_ensure_cli_dir_git_excluded` | Internal fixed Git command |
+| `src/cafe/skills/native_bridge.py::_ensure_managed_skills_git_excluded` | Internal fixed Git command |
 | `src/cafe/agents/transport.py::open_interactive_session` | Internal agent CLI transport |
 | `src/cafe/updates/service.py::_run_pip` | Explicit approved package installation |
 | `src/cafe/ui/cli.py::_reexec_repo_entrypoint` | Internal fixed Python re-exec |
