@@ -872,10 +872,12 @@ def test_preparation_cannot_clear_prior_agent_invocation_marker(tmp_path):
 
 
 @pytest.mark.parametrize("tampered", [False, True])
+@pytest.mark.parametrize("legacy_workspace", [False, True])
 def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
     tmp_path,
     monkeypatch,
     tampered,
+    legacy_workspace,
 ):
     from typer.testing import CliRunner
 
@@ -889,7 +891,12 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
     current = executor.phase_dir / "iteration_001"
     current.mkdir(parents=True)
     path = current / "iteration.json"
-    path.write_text(json.dumps({"agent_invoked": False}))
+    path.write_text(
+        json.dumps(
+            {"effective_inputs": {}, "workflow_completion_trusted": False}
+            if legacy_workspace else {"agent_invoked": False}
+        )
+    )
     (executor.issue_dir / "issue.yaml").write_text("playbook: standard\n")
     boards = BlackboardStore(executor.issue_dir)
     state = boards.load_or_create("spec", playbook_id="standard")
@@ -925,6 +932,19 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
             )
         ),
     )
+    if legacy_workspace:
+        boards.record_event(
+            state,
+            "step_interrupted",
+            {
+                "step": "spec", "attempt": 1, "reason": "agent_error",
+                "detail": "workspace artifact 'workspace' is stale or contradictory: "
+                "workspace worktree is dirty; refresh it or resolve the conflict before retrying",
+            },
+        )
+        boards.record_event(
+            state, "agent_execution_task_materialized", {"step": "spec", "task_id": task.id}
+        )
     completed = CliRunner().invoke(
         app,
         [

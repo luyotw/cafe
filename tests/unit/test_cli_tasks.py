@@ -280,10 +280,12 @@ def test_fresh_session_recovery_after_unobserved_new_session(tmp_path, monkeypat
 
 
 @pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("failure_kind", ["checklist", "workspace"])
 def test_fresh_session_recovers_preparation_failure_without_provider_identity(
     tmp_path,
     monkeypatch,
     legacy,
+    failure_kind,
 ):
     issue_dir, iteration_dir, task = _legacy_interrupted_task_repo(tmp_path, monkeypatch)
     context = {"effective_inputs": {}, "workflow_completion_trusted": False}
@@ -300,8 +302,13 @@ def test_fresh_session_recovers_preparation_failure_without_provider_identity(
             "step": "spec",
             "attempt": 1,
             "reason": "agent_error",
-            "detail": "Step 'spec', skill 'cafe-spec', workflow.checklist.variants[0].sections[0]: "
-            "unresolved placeholders ['optional_input']",
+            "detail": (
+                "Step 'spec', skill 'cafe-spec', workflow.checklist.variants[0].sections[0]: "
+                "unresolved placeholders ['optional_input']"
+                if failure_kind == "checklist"
+                else "workspace artifact 'workspace' is stale or contradictory: "
+                "workspace worktree is dirty; refresh it or resolve the conflict before retrying"
+            ),
         },
     )
     blackboards.record_event(
@@ -328,7 +335,7 @@ def test_fresh_session_recovers_preparation_failure_without_provider_identity(
     receipt = HumanTaskRecordStore(issue_dir).get_result(task.id)
     recovery = receipt.payload["session_continuation"]
     assert recovery["step"] == "spec" and recovery["iteration"] == 1
-    assert recovery["preparation"]["kind"] == "checklist_preparation_failed"
+    assert recovery["preparation"]["kind"] == f"{failure_kind}_preparation_failed"
     assert "previous" not in recovery
     assert json.loads((iteration_dir / "iteration.json").read_text()) == context
     assert (
@@ -373,6 +380,7 @@ def test_preparation_recovery_rejects_ambiguous_or_invoked_context(
     assert records.get_result(task.id) is None
 
 
+@pytest.mark.parametrize("failure_kind", ["checklist", "workspace"])
 @pytest.mark.parametrize(
     "change",
     [
@@ -380,12 +388,14 @@ def test_preparation_recovery_rejects_ambiguous_or_invoked_context(
         {"attempt": 2},
         {"step": "other-step"},
         {"task_id": "other-task"},
+        {"reason": "agent_rate_limit"},
     ],
 )
 def test_legacy_preparation_recovery_requires_correlated_first_attempt_audit(
     tmp_path,
     monkeypatch,
     change,
+    failure_kind,
 ):
     issue_dir, iteration_dir, task = _legacy_interrupted_task_repo(tmp_path, monkeypatch)
     (iteration_dir / "iteration.json").write_text(json.dumps({"effective_inputs": {}}))
@@ -395,8 +405,13 @@ def test_legacy_preparation_recovery_requires_correlated_first_attempt_audit(
         "step": "spec",
         "attempt": 1,
         "reason": "agent_error",
-        "detail": "Step 'spec', skill 'cafe-spec', workflow.checklist.variants[0].sections[0]: "
-        "unresolved placeholders ['optional_input']",
+        "detail": (
+            "Step 'spec', skill 'cafe-spec', workflow.checklist.variants[0].sections[0]: "
+            "unresolved placeholders ['optional_input']"
+            if failure_kind == "checklist"
+            else "workspace artifact 'workspace' is stale or contradictory: "
+            "workspace worktree is dirty; refresh it or resolve the conflict before retrying"
+        ),
     }
     failure.update({k: v for k, v in change.items() if k != "task_id"})
     boards.record_event(state, "step_interrupted", failure)
