@@ -6,6 +6,7 @@ from threading import Event, Thread
 from unittest.mock import patch
 
 import pytest
+import yaml
 
 from cafe.catalogs.resolver import (
     CatalogKind,
@@ -607,3 +608,28 @@ def test_synchronize_skills_can_reconcile_without_reinstalling_desired_skills(
     assert installed == []
     install_skill.assert_not_called()
     assert not (native_skills / "cafe-stale").exists()
+
+
+def test_frontmatter_reuse_preserves_fresh_content_and_independent_nested_results(tmp_path):
+    from cafe.skills.loader import read_skill_frontmatter
+
+    skill = tmp_path / 'SKILL.md'
+    skill.write_text('---\nname: example\nworkflow: {rules: [original]}\n---\nbody\n')
+    first = read_skill_frontmatter(skill)
+    first['workflow']['rules'].append('caller mutation')
+    assert read_skill_frontmatter(skill)['workflow']['rules'] == ['original']
+    skill.write_text('---\nname: example\nworkflow: {rules: [updated]}\n---\nbody\n')
+    assert read_skill_frontmatter(skill)['workflow']['rules'] == ['updated']
+    skill.write_text('---\nname: example\nworkflow: [\n---\nbody\n')
+    with pytest.raises(yaml.YAMLError):
+        read_skill_frontmatter(skill)
+
+
+def test_large_frontmatter_results_are_independent_without_retaining_large_headers(tmp_path):
+    from cafe.skills.loader import read_skill_frontmatter
+
+    skill = tmp_path / 'SKILL.md'
+    skill.write_text('---\nname: example\nnotes: ' + 'x' * (33 * 1024) + '\nworkflow: {rules: [original]}\n---\n')
+    first = read_skill_frontmatter(skill)
+    first['workflow']['rules'].append('caller mutation')
+    assert read_skill_frontmatter(skill)['workflow']['rules'] == ['original']

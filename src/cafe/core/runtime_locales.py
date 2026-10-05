@@ -13,6 +13,7 @@ from typing import Callable, Mapping
 import yaml
 
 from cafe.core.conversation_locale import SUPPORTED_TEXT_LOCALES, select_text_locale
+from cafe.utils.yaml_utils import SafeLoader
 
 _MESSAGE_KEY = re.compile(r"[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*\Z")
 _PLACEHOLDER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
@@ -22,7 +23,7 @@ class LocaleCatalogError(ValueError):
     """Packaged runtime copy or its interpolation arguments violate the contract."""
 
 
-class _CatalogLoader(yaml.SafeLoader):
+class _CatalogLoader(SafeLoader):
     """Reject duplicate keys instead of silently replacing authored messages."""
 
     def construct_mapping(self, node, deep=False):

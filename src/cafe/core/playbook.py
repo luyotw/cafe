@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Mapping, Optional, Union
 
-import yaml
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -38,6 +37,7 @@ from cafe.skills.workflow_composition import (
     resolve_step_workflow_composition,
 )
 from cafe.templates.manager import TemplateManager
+from cafe.utils.yaml_utils import safe_load
 
 DONE_TARGET = "_done"
 SCRIPT_HOOK_STAGES = {"before_execute", "after_execute"}
@@ -1337,7 +1337,7 @@ def load_playbook_file(
     strict: bool = False,
 ) -> LoadedPlaybook:
     """Load one playbook file and apply schema + semantic validation."""
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    data = safe_load(path.read_text(encoding="utf-8"))
     if data is None:
         raise ValueError(f"Playbook is empty: {path}")
     data = normalize_playbook_yaml(data)

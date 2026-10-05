@@ -16,6 +16,8 @@ from typing import Callable, Iterable, Iterator, Optional
 
 import yaml
 
+from cafe.utils.yaml_utils import safe_load
+
 
 class CatalogValidationError(ValueError):
     """Raised when the highest-precedence catalog entry is invalid."""
@@ -353,7 +355,7 @@ def read_valid_agent_definition(path: Path, key: str) -> str:
     if end < 0:
         raise CatalogValidationError(f"Invalid agent {key}: unterminated frontmatter")
     try:
-        metadata = yaml.safe_load(text[4:end])
+        metadata = safe_load(text[4:end])
     except yaml.YAMLError as exc:
         raise CatalogValidationError(f"Invalid agent {key}: malformed frontmatter") from exc
     expected_name = key.split("/", 1)[1]
@@ -451,7 +453,7 @@ class CatalogResolver:
             if not path.is_file():
                 raise CatalogValidationError(f"Playbook is not a file: {path}")
             try:
-                document = yaml.safe_load(path.read_text(encoding="utf-8"))
+                document = safe_load(path.read_text(encoding="utf-8"))
             except (OSError, UnicodeError, yaml.YAMLError) as exc:
                 raise CatalogValidationError(f"Invalid playbook {key}: {exc}") from exc
             if not isinstance(document, dict):

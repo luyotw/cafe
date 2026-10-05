@@ -57,6 +57,17 @@ Before changing package metadata:
 The release gate runs coverage with representative kickoff CLI journeys, then
 runs the remaining kickoff journeys without coverage instrumentation. It also
 validates contracts, builds distributions, and checks a clean wheel install.
+The coverage suite defaults to eight work-stealing workers; the extended suite
+uses four workers and isolated test catalogs. Set `CAFE_TEST_WORKERS` or
+`CAFE_EXTENDED_TEST_WORKERS` to a non-negative integer (`0` for serial execution)
+to adjust either suite.
+
+Every release check keeps its logs, separate suite duration reports, and stage
+timings in a unique directory under `.cafe/reports`. The latest completed run is
+summarized in `.cafe/reports/release-check-latest.json`, including failure status.
+Set `CAFE_TEST_REPORT_DIR` to choose a different report root. Earlier run reports
+are retained so retries cannot overwrite the evidence used for a comparison.
+
 Run `./scripts/test-coverage.sh` when changing kickoff discovery or catalog
 behavior to instrument the complete regression suite with coverage.
 

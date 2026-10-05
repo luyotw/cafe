@@ -1,11 +1,14 @@
 """Configuration management for CAFE."""
 
+import json
+import subprocess
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-import subprocess
+
 import yaml
-import json
-import time
+
+from cafe.utils.yaml_utils import safe_load
 
 
 class ConfigError(Exception):
@@ -158,7 +161,7 @@ class ConfigManager:
             issue_config = self.config_dir / "issues" / branch / "config.yaml"
             if issue_config.exists():
                 with open(issue_config, "r") as f:
-                    return yaml.safe_load(f)
+                    return safe_load(f)
         except Exception as exc:
             if self.read_only:
                 raise ConfigError("Cannot resolve the read-only issue configuration") from exc
@@ -191,7 +194,7 @@ class ConfigManager:
 
         try:
             with open(self.config_file, "r") as f:
-                self._config = yaml.safe_load(f)
+                self._config = safe_load(f)
             if issue_config:
                 self._config = self._deep_merge(self._config, issue_config)
             return self._config

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from _kickoff_store import VersionedJsonStore
 
 from cafe.catalogs.resolver import CatalogKind, CatalogResolver, content_digest
 from cafe.core.capabilities import default_capability_definition_dirs, load_capability_registry
@@ -21,15 +22,16 @@ from cafe.core.playbook import (
     resolve_playbook_skills,
 )
 from cafe.playbooks.loader import PlaybookLoader
-from cafe.skills.execution_profile import resolve_execution_profile
 from cafe.skills.exceptions import SkillDiscoveryError
+from cafe.skills.execution_profile import resolve_execution_profile
 from cafe.skills.loader import SkillLoader
 from cafe.skills.selectors import skill_selector_names
 from cafe.skills.workflow_composition import resolve_step_workflow_composition
-from _kickoff_store import VersionedJsonStore
+from cafe.utils.yaml_utils import safe_load
 
 SCHEMA_VERSION = 2
 _DEPENDENCY_FILES = (
+    "src/cafe/utils/yaml_utils.py",
     "src/cafe/catalogs/resolver.py",
     "src/cafe/playbooks/loader.py",
     "src/cafe/skills/loader.py",
@@ -99,7 +101,7 @@ def _candidate_details(
     candidate_id: str, path: Path, source: str, project_root: Path,
     validated_model: PlaybookDefinition, skill_loader: SkillLoader,
 ) -> dict[str, Any]:
-    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    raw = safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise ValueError("Playbook root must be a mapping")
     playbook = raw.get("playbook", {})
@@ -253,7 +255,7 @@ def discover_index(
     for candidate_id in names:
         try:
             entry = resolver.resolve(CatalogKind.PLAYBOOK, candidate_id)
-            raw = yaml.safe_load(entry.path.read_text(encoding="utf-8"))
+            raw = safe_load(entry.path.read_text(encoding="utf-8"))
             model = PlaybookDefinition.model_validate(normalize_playbook_yaml(raw))
             dependencies = _dependency_closure(model, skill_loader, skill_dependencies)
             fingerprint = _digest(
