@@ -585,3 +585,79 @@ def test_final_event_uses_current_decision_and_proof_identity(
     assert state.current_step != "done"
     assert not journey.service().completion_allowed(completed=True)
     assert not any(e.event_type == "workflow_completed" for e in state.events)
+
+
+@pytest.mark.parametrize("entry", ["verify", "workflow"])
+@pytest.mark.parametrize("failure", ["stalled", "failed"])
+def test_complete_github_inspection_is_bounded_and_reaps_child(
+    tmp_path, monkeypatch, entry, failure
+):
+    """U4/I2/I7/I13: actual gh I/O failure persists evidence and stays incomplete."""
+    import os
+    import sys
+    from tests.integration.integration_fixture import create_journey
+    from cafe.ui.cli import app
+    from typer.testing import CliRunner
+
+    journey = create_journey(tmp_path / "github-budget", monkeypatch)
+    journey.complete("ship")
+    journey.select("github_pr")
+    journey.runtime().run(start_step="destination")
+    journey.complete("confirm")
+    journey.runtime().run()
+    journey.complete("performed")
+    fixture = journey.root / ".cafe/testing-gh"
+    fixture.mkdir()
+    log = fixture / "requests.jsonl"
+    script = fixture / "gh"
+    script.write_text(
+        f"#!{sys.executable}\n"
+        "import json,os,sys,time\n"
+        f"with open({str(log)!r}, 'a') as output: output.write(json.dumps(sys.argv[1:])+'\\n')\n"
+        # A redundant availability probe would stall before any durable failure.
+        "if sys.argv[1:] == ['--version']: time.sleep(60)\n"
+        + ("time.sleep(60)\n" if failure == "stalled" else "sys.exit(1)\n")
+    )
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fixture) + os.pathsep + os.environ["PATH"])
+    original_run, original_popen = subprocess.run, subprocess.Popen
+    children = []
+
+    def launch(*args, **kwargs):
+        process = original_popen(*args, **kwargs)
+        if args[0][0] == "gh":
+            children.append(process)
+        return process
+
+    def bounded(argv, **kwargs):
+        if argv[0] == "gh":
+            assert 0 < kwargs.get("timeout", 0) <= 30
+            # Scale only the process deadline at the I/O boundary. The native
+            # production request must supply its supported finite budget first.
+            kwargs["timeout"] = 0.25
+        return original_run(argv, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", launch)
+    monkeypatch.setattr(subprocess, "run", bounded)
+    args = (
+        ["integration", "verify", "--issue", "delivery", "--json"]
+        if entry == "verify"
+        else ["workflow", "--issue", "delivery", "--execute"]
+    )
+    result = CliRunner().invoke(app, args)
+    if isinstance(result.exception, AssertionError):
+        raise result.exception
+    assert result.exit_code == (1 if entry == "verify" else 0), (result.stdout, result.exception)
+    service = journey.service()
+    attempt = service.records.read()["attempts"][-1]
+    assert not attempt["success"] and attempt["observed"]["unavailable"]
+    assert attempt["reason"] and service.status()["next_action"]
+    assert service.status()["report"]["outcome"] == "performed"
+    assert journey.state().current_step != "done"
+    assert not service.completion_allowed(completed=True)
+    assert [json.loads(line) for line in log.read_text().splitlines()] == [
+        ["api", "--method", "GET", "repos/owner/repo/pulls/17"]
+    ]
+    assert len(children) == 1
+    assert children[0].returncode is not None and children[0].returncode != 0
+    assert children[0].poll() == children[0].returncode

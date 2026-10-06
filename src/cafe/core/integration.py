@@ -480,7 +480,7 @@ class IntegrationService:
         source_changed = False
         try:
             if selection.target == "github_pr":
-                observed = GitHubOps().observe_integration(selection.repository, selection.pr)
+                observed = GitHubOps.observe_integration(selection.repository, selection.pr)
                 success, reason = evaluate_github(selection, observed)
             else:
                 operations = GitOperations(selection.repository)

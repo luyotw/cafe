@@ -67,8 +67,14 @@ class GitHubOps:
         # gh auth status returns 0 if authenticated, 1 if not
         return result.returncode == 0
 
-    def observe_integration(self, repository: str, pr: int) -> Dict[str, Any]:
-        """Read the exact PR through GitHub's fixed REST endpoint, never mutate it."""
+    @staticmethod
+    def observe_integration(repository: str, pr: int) -> Dict[str, Any]:
+        """Read the exact PR without the legacy instance availability probe.
+
+        This fixed inspection needs no instance state. The timed API invocation
+        also detects unavailable gh/authentication, keeping its entire closure
+        bounded without changing initialization for unrelated consumers.
+        """
         if (not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository)
                 or isinstance(pr, bool) or not isinstance(pr, int) or pr < 1):
             raise GitHubError("Explicit repository and positive PR number required")
