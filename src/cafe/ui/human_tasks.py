@@ -18,6 +18,7 @@ from cafe.core.blackboard import (
     HandoffOwner,
 )
 from cafe.core.capability_approvals import CapabilityApprovalService
+from cafe.core.integration import integration_service
 from cafe.core.human_task_records import (
     HumanTask,
     HumanTaskCorrelationError,
@@ -1172,6 +1173,16 @@ def _apply_human_task_payload(
                     reason=rejection.message,
                 )
                 return HumanTaskApplication(target=None, policy=policy, rejection=rejection)
+
+    integration = integration_service(issue_dir, playbook_data, blackboard)
+    if integration is not None and durable_task is not None and durable_result is not None:
+        try:
+            integration.apply_result(durable_task, durable_result)
+        except (OSError, ValueError) as exc:
+            return _durable_task_routing_rejection(
+                issue_dir=issue_dir, blackboard=blackboard, task_id=durable_task.id,
+                message=str(exc),
+            )
 
     if binding.feedback_delivery is not None:
         agent_input = ""

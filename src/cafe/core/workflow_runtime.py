@@ -57,6 +57,7 @@ from cafe.core.human_tasks import (
     agent_execution_interrupted_human_task,
     resolve_step_human_task,
 )
+from cafe.core.integration import integration_service
 from cafe.core.packet_io import atomic_write_bytes, sha256_bytes
 from cafe.core.playbook import (
     resolve_step_attempt_limit,
@@ -2017,13 +2018,20 @@ class BlackboardWorkflowRuntime:
             if existing_task is not None:
                 handoff_key = existing_task.handoff_key
 
+        integration = integration_service(self.issue_dir, self.playbook, self.blackboard)
+        integration_prompt = policy.prompt
+        if integration is not None:
+            integration_prompt, integration_key = integration.task_context(current_step, policy.id, integration_prompt)
+            if integration_key is not None:
+                handoff_key = integration_key
+
         materialization = records.materialize_with_status(
             workflow_id=self.blackboard.workflow_id,
             step=current_step,
             iteration=iteration,
             trigger=trigger,
             policy_id=policy.id,
-            prompt=policy.prompt,
+            prompt=integration_prompt,
             expected_result=policy.model_dump(mode="json"),
             continuations=binding.outcomes,
             assignee_type="human",
@@ -2038,6 +2046,8 @@ class BlackboardWorkflowRuntime:
             ),
         )
         task = materialization.task
+        if integration is not None:
+            integration.associate(task)
         self._notify_new_human_task(task)
         self._replaced_user_handoff = None
         if cursor is not None:
@@ -3388,13 +3398,20 @@ class BlackboardWorkflowRuntime:
             )
         )
 
+        integration = integration_service(self.issue_dir, self.playbook, self.blackboard)
+        integration_prompt = prompt
+        if integration is not None:
+            integration_prompt, integration_key = integration.task_context(current_step, policy.id, integration_prompt)
+            if integration_key is not None:
+                handoff_key = integration_key
+
         materialization = records.materialize_with_status(
             workflow_id=self.blackboard.workflow_id,
             step=current_step,
             iteration=iteration,
             trigger=trigger,
             policy_id=policy.id,
-            prompt=prompt,
+            prompt=integration_prompt,
             expected_result=policy.model_dump(mode="json"),
             continuations=binding.outcomes,
             assignee_type="user",
@@ -3409,6 +3426,8 @@ class BlackboardWorkflowRuntime:
             ),
         )
         task = materialization.task
+        if integration is not None:
+            integration.associate(task)
         self._notify_new_human_task(task)
         if materialization.created:
             self.blackboard_store.record_event(
