@@ -100,3 +100,84 @@ def test_status_never_inspects_or_reconciles_and_corruption_fails_closed(journey
     journey.service().records.file_path.write_text('{"schema_version":99}')
     result = runner.invoke(app, ["integration", "status", "--issue", "delivery", "--json"])
     assert result.exit_code != 0 and json.loads(result.stdout)["state"] != "verified"
+
+
+@pytest.mark.parametrize("target", ["local_branch", "github_pr"])
+def test_documented_journey_survives_real_cli_process_restarts(journey, target):
+    """I13/I7/I8: use the actual app in fresh processes with durable records."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    from tests.integration.integration_fixture import install_github_process_fixture
+
+    env = dict(
+        os.environ,
+        PYTHONPATH=str(Path(__file__).resolve().parents[2] / "src"),
+        CAFE_SKIP_GLOBAL_SKILL_SYNC="1",
+    )
+    if target == "github_pr":
+        fixture = install_github_process_fixture(journey.root, journey.source)
+        env["PATH"] = str(fixture) + os.pathsep + env["PATH"]
+
+    def process(*args, success=True):
+        result = subprocess.run(
+            [sys.executable, "-c", "from cafe.ui.cli import app; app()", *args],
+            cwd=journey.root,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert (result.returncode == 0) == success, result.stdout + result.stderr
+        return result.stdout
+
+    def complete(decision):
+        task = journey.pending()
+        process(
+            "task",
+            "complete",
+            task.id,
+            "--result",
+            json.dumps(dict(task=task.policy_id, human_task_id=task.id, decision=decision)),
+            "--no-resume",
+        )
+
+    complete("ship")
+    args = [
+        "integration",
+        "select",
+        "--issue",
+        "delivery",
+        "--target",
+        target,
+        "--repository",
+        str(journey.root) if target == "local_branch" else "owner/repo",
+        "--target-branch",
+        "main",
+        "--json",
+    ]
+    args += ["--feature-branch", "feature"] if target == "local_branch" else ["--pr", "17"]
+    assert json.loads(process(*args))["status"]["state"] == "pending_confirmation"
+    complete("confirm")
+    process("workflow", "--issue", "delivery", "--execute")
+    complete("performed")
+    assert (
+        json.loads(process("integration", "status", "--issue", "delivery", "--json"))["state"]
+        == "reported_pending_verification"
+    )
+    process("integration", "verify", "--issue", "delivery", "--json", success=False)
+    if target == "local_branch":
+        journey.human_integrate()
+    else:
+        state = json.loads((fixture / "pr.json").read_text())
+        state.update(state="closed", merged=True, merge_commit_sha="c" * 40)
+        (fixture / "pr.json").write_text(json.dumps(state))
+    assert json.loads(process("integration", "verify", "--issue", "delivery", "--json"))["attempt"][
+        "success"
+    ]
+    process("workflow", "--issue", "delivery", "--execute")
+    assert json.loads(process("integration", "status", "--issue", "delivery", "--json"))[
+        "completed"
+    ]
+    assert journey.state().current_step == "done"

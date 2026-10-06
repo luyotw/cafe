@@ -259,3 +259,73 @@ def create_journey(root: Path, monkeypatch):
     journey = Journey()
     journey.runtime().run(start_step="verdict")
     return journey
+
+
+def install_github_process_fixture(root: Path, source: str) -> Path:
+    """Model an external GitHub PR for separate-process CLI/QA observations."""
+    import sys
+
+    fixture_dir = root / "github-fixture"
+    fixture_dir.mkdir()
+    state = fixture_dir / "pr.json"
+    state.write_text(
+        json.dumps(
+            dict(
+                number=17,
+                state="open",
+                merged=False,
+                merge_commit_sha=None,
+                head=dict(sha=source),
+                base=dict(ref="main", repo=dict(full_name="owner/repo")),
+            )
+        )
+    )
+    executable = fixture_dir / "gh"
+    executable.write_text(f"#!{sys.executable}\n" + """import json, pathlib, sys
+root = pathlib.Path(__file__).resolve().parent
+if sys.argv[1:] == ["--version"]:
+    print("gh version fixture")
+    sys.exit(0)
+if sys.argv[1:] != ["api", "--method", "GET", "repos/owner/repo/pulls/17"]:
+    sys.exit(9)
+with (root / "requests.jsonl").open("a") as log:
+    log.write(json.dumps(sys.argv[1:]) + "\\n")
+print((root / "pr.json").read_text())
+""")
+    executable.chmod(0o755)
+    return fixture_dir
+
+
+if __name__ == "__main__":
+    import argparse
+    import pytest
+
+    parser = argparse.ArgumentParser(
+        description="Create an isolated pre-review QA delivery fixture"
+    )
+    parser.add_argument("directory", type=Path)
+    parser.add_argument("--github-fixture", action="store_true")
+    args = parser.parse_args()
+    if args.directory.exists():
+        parser.error("Choose a new scratch directory")
+    patch = pytest.MonkeyPatch()
+    journey = create_journey(args.directory.resolve(), patch)
+    fixture = (
+        install_github_process_fixture(journey.root, journey.source)
+        if args.github_fixture
+        else None
+    )
+    print(
+        json.dumps(
+            dict(
+                repository=str(journey.root),
+                issue="delivery",
+                review_task=journey.pending().id,
+                review_policy="judge",
+                approved_source=journey.source,
+                github_fixture=str(fixture) if fixture else None,
+            ),
+            indent=2,
+        )
+    )
+    patch.undo()

@@ -6,6 +6,10 @@ one optional, fixed-destination [Slack notification path](human-task-slack-notif
 for newly materialized tasks. It does not provide scheduling, reminders,
 bidirectional Slack interaction, or a general task-management service.
 
+For opt-in human delivery with durable destination proof, see
+[Verified post-review integration](post-review-integration.md). Task completion
+remains distinct from verified delivery.
+
 ## Files and ownership
 
 Each workflow instance stores its durable state below `.cafe/issues/<issue>/`:
