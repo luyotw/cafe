@@ -419,7 +419,7 @@ def test_native_review_binds_effective_git_filter_contents(compact_request, tmp_
 
 
 @pytest.mark.parametrize("consumer", ["owner", "approval", "generic"])
-@pytest.mark.parametrize("drift", ["none", "push", "fetch", "head", "rewrite"])
+@pytest.mark.parametrize("drift", ["none", "push", "fetch", "head", "rewrite", "replacement"])
 def test_actual_publication_pins_target_through_last_repository_lookup(
     compact_request, tmp_path, monkeypatch, consumer, drift
 ):
@@ -450,6 +450,20 @@ def test_actual_publication_pins_target_through_last_repository_lookup(
     authorized = git(root, "remote", "get-url", "--push", "origin")
     native_delivery_ready(root, issue, context)
     head = git(root, "rev-parse", "HEAD")
+    if drift == "replacement":
+        # The local replacement view passes current-content review; publication
+        # must validate the original object that real Git sends to the remote.
+        env = {**os.environ, "GIT_INDEX_FILE": str(root / ".git/publication-candidate-index")}
+        def candidate_git(*args, input=None):
+            return subprocess.run(["git", "-C", str(root), *args], env=env, input=input,
+                capture_output=True, text=True, check=True, timeout=20).stdout.strip()
+        candidate_git("read-tree", head)
+        blob = candidate_git("hash-object", "-w", "--stdin", input='value = "unreviewed"\n')
+        candidate_git("update-index", "--cacheinfo", "100644," + blob + ",app.py")
+        selected = candidate_git("commit-tree", candidate_git("write-tree"), "-p", head,
+                                 "-m", "unreviewed publication candidate")
+        git(root, "replace", selected, head)
+        git(root, "update-ref", "HEAD", selected)
     output = issue / "deliver/iteration_001/pr.md"
     output.parent.mkdir(parents=True)
     output.write_text("# Change\n\nEvidence\n")
@@ -509,12 +523,12 @@ else:
         if drift in {"none", "rewrite"}:
             invoke_generic()
         else:
-            with pytest.raises(RuntimeError):
+            with pytest.raises(ValueError if drift == "replacement" else RuntimeError):
                 invoke_generic()
-            before = log.read_text()
+            before = log.read_text() if log.exists() else ""
             with pytest.raises(ValueError):
                 invoke_generic()
-            assert log.read_text() == before
+            assert (log.read_text() if log.exists() else "") == before
     else:
         registry = dict(load_capability_registry(default_capability_definition_dirs(root)))
         approval = {}
@@ -536,13 +550,15 @@ else:
             assert result["delivered"]
         else:
             assert not result["delivered"] and result["status"] == "unknown"
-            before = log.read_text()
+            before = log.read_text() if log.exists() else ""
             with pytest.raises(ValueError):
                 publish_compact_pr(issue, root, output, registry=registry, **approval)
-            assert log.read_text() == before
+            assert (log.read_text() if log.exists() else "") == before
     assert not git(other, "for-each-ref", "--format=%(objectname)", "refs/heads/feature")
     observed = git(Path(authorized), "for-each-ref", "--format=%(objectname)", "refs/heads/feature")
-    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+    if drift == "replacement":
+        assert not log.exists()
     if drift in {"none", "rewrite"}:
         assert observed.split()[0] == head
         assert any(call["args"][:2] == ["pr", "create"] for call in calls)
@@ -552,7 +568,7 @@ else:
 
 
 @pytest.mark.parametrize("rewrite", [False, True])
-@pytest.mark.parametrize("boundary", ["filter", "transport", "pre_push"])
+@pytest.mark.parametrize("boundary", ["filter", "lookup", "transport", "pre_push"])
 @pytest.mark.parametrize("drift", ["none", "head", "push", "both"])
 def test_native_direct_push_keeps_reviewed_source_and_authorized_target(
     compact_request, tmp_path, monkeypatch, rewrite, boundary, drift
@@ -582,16 +598,36 @@ def test_native_direct_push_keeps_reviewed_source_and_authorized_target(
     # guards, native parsing, public closeout and Git operations remain real.
     program.write_text('''import json, subprocess, sys
 from pathlib import Path
-root, control, fired, checkpoint = map(Path, sys.argv[2:])
-data = b"" if sys.argv[1] == "transport" else sys.stdin.buffer.read()
+root, control, fired, checkpoint = map(Path, sys.argv[2:6])
+data = b"" if sys.argv[1] in {"aba", "lookup", "replacement", "transport"} else sys.stdin.buffer.read()
 if control.exists():
     plan = json.loads(control.read_text())
-    ready = sys.argv[1] == plan["boundary"] and (
-        sys.argv[1] != "filter" or checkpoint.stat().st_mtime_ns != plan["checkpoint_mtime"])
+    if plan["boundary"] == "aba" and sys.argv[1] == "aba":
+        args = sys.argv[6:]
+        stage = plan.get("stage", "select")
+        if stage == "select" and "get-url" in args and checkpoint.stat().st_mtime_ns != plan["checkpoint_mtime"]:
+            plan["stage"] = "restore"
+            control.write_text(json.dumps(plan))
+            subprocess.run(["git", "-C", str(root), "update-ref", "HEAD", plan["unreviewed"]], check=True)
+            (root / "app.py").write_text('value = "unreviewed"\\n')
+            fired.write_text(plan["drift"])
+        elif stage == "restore" and plan["baseline"] + "^{commit}" in args:
+            plan["stage"] = "rearm"
+            control.write_text(json.dumps(plan))
+            subprocess.run(["git", "-C", str(root), "update-ref", "HEAD", plan["reviewed"]], check=True)
+            (root / "app.py").write_text('value = "reviewed"\\n')
+        elif stage == "rearm" and "get-url" in args:
+            control.unlink()
+            subprocess.run(["git", "-C", str(root), "update-ref", "HEAD", plan["unreviewed"]], check=True)
+            (root / "app.py").write_text('value = "unreviewed"\\n')
+    ready = plan["boundary"] != "aba" and sys.argv[1] == plan["boundary"] and (
+        sys.argv[1] not in {"filter", "lookup", "replacement"} or checkpoint.stat().st_mtime_ns != plan["checkpoint_mtime"])
     if ready:
         control.unlink()
         if plan["drift"] in {"head", "both"}:
             subprocess.run(["git", "-C", str(root), "update-ref", "HEAD", plan["unreviewed"]], check=True)
+            if sys.argv[1] == "lookup":
+                (root / "app.py").write_text('value = "unreviewed"\\n')
         if plan["drift"] in {"push", "both"}:
             subprocess.run(["git", "-C", str(root), "remote", "set-url", "--push", "origin", plan["other"]], check=True)
         fired.write_text(plan["drift"])
@@ -621,10 +657,13 @@ sys.stdout.buffer.write(data)
     object_git("update-index", "--cacheinfo", "100644," + blob + ",app.py")
     unreviewed = object_git("commit-tree", object_git("write-tree"), "-p", reviewed,
                             "-m", "unreviewed replacement")
+    if boundary == "replacement":
+        git(root, "replace", unreviewed, reviewed)
     control.write_text(json.dumps({"boundary": boundary, "drift": drift,
         "checkpoint_mtime": checkpoint_path.stat().st_mtime_ns,
-        "unreviewed": unreviewed, "other": str(other)}))
-    if boundary == "transport":
+        "unreviewed": unreviewed, "other": str(other), "reviewed": reviewed,
+        "baseline": context["baseline_commit"]}))
+    if boundary in {"aba", "lookup", "replacement", "transport"}:
         # The external CLI boundary changes inputs immediately before the real
         # Git process consumes argv. No Git command or result is simulated.
         real_git = shutil.which("git")
@@ -633,22 +672,25 @@ sys.stdout.buffer.write(data)
         wrapper = binary / "git"
         wrapper.write_text("#!" + sys.executable + "\n" +
             "import os, subprocess, sys\n" +
-            "if 'push' in sys.argv[1:]:\n" +
-            "    subprocess.run(" + repr([sys.executable, str(program), "transport",
-                str(root), str(control), str(fired), str(checkpoint_path)]) + ", check=True)\n" +
+            ("if True:\n" if boundary == "aba" else
+             "if " + repr("get-url" if boundary in {"lookup", "replacement"} else "push") + " in sys.argv[1:]:\n") +
+            "    subprocess.run(" + repr([sys.executable, str(program), boundary,
+                str(root), str(control), str(fired), str(checkpoint_path)]) + " + sys.argv[1:], check=True)\n" +
             "os.execv(" + repr(real_git) + ", [" + repr(real_git) + ", *sys.argv[1:]])\n")
         wrapper.chmod(0o755)
         monkeypatch.setenv("PATH", str(binary) + os.pathsep + os.environ["PATH"])
     push = closeout(root, issue, "--execute", "--stage", "deliver", "--index", "1")
     assert fired.read_text() == drift
-    assert (root / "app.py").read_text() == 'value = "reviewed"\n'
     assert not git(other, "for-each-ref", "--format=%(objectname)", "refs/heads/feature")
     observed = git(authorized, "for-each-ref", "--format=%(objectname)", "refs/heads/feature")
-    if drift == "none" or boundary != "filter":
+    if drift == "none" or boundary not in {"aba", "filter", "lookup", "replacement"}:
         assert observed == reviewed
         assert git(authorized, "show", observed + ":app.py") == 'value = "reviewed"'
     else:
         assert not observed
+    expected_bytes = ('value = "unreviewed"\n' if boundary == "lookup" and
+                      drift in {"head", "both"} else 'value = "reviewed"\n')
+    assert (root / "app.py").read_text() == expected_bytes
     evidence_path = issue / "delivery_result.json"
     if drift == "none":
         assert push.returncode == 0, push.stderr
@@ -663,3 +705,22 @@ sys.stdout.buffer.write(data)
     assert replay.returncode != 0
     assert git(authorized, "for-each-ref", "--format=%(objectname)", "refs/heads/feature") == observed
     assert not git(other, "for-each-ref", "--format=%(objectname)", "refs/heads/feature")
+
+
+@pytest.mark.parametrize("rewrite", [False, True])
+def test_native_direct_source_receipt_cannot_follow_a_restored_worktree(
+    compact_request, tmp_path, monkeypatch, rewrite
+):
+    # Select the bad commit, restore the reviewed HEAD/bytes during validation,
+    # then reselect bad HEAD before the final target check if validation allows it.
+    test_native_direct_push_keeps_reviewed_source_and_authorized_target(
+        compact_request, tmp_path, monkeypatch, rewrite, "aba", "head")
+
+
+@pytest.mark.parametrize("rewrite", [False, True])
+def test_native_direct_source_checks_original_objects_under_replacement_refs(
+    compact_request, tmp_path, monkeypatch, rewrite
+):
+    # A local replacement view must not substitute the tree actually pushed.
+    test_native_direct_push_keeps_reviewed_source_and_authorized_target(
+        compact_request, tmp_path, monkeypatch, rewrite, "replacement", "head")

@@ -80,9 +80,10 @@ def path_content(root: Path, path: str):
     return digest.hexdigest()
 
 
-def git_content_entries(root: Path, revision: str | None = None):
+def git_content_entries(root: Path, revision: str | None = None, *, original_objects=False):
     """Read bounded Git modes/blob identities, rejecting unresolved index stages."""
-    data = (_git(root, "ls-tree", "-r", "-z", revision) if revision else
+    flags = ("--no-replace-objects",) if original_objects else ()
+    data = (_git(root, *flags, "ls-tree", "-r", "-z", revision) if revision else
             _git(root, "ls-files", "--stage", "-z"))
     result = {}
     for item in data.split("\x00"):
@@ -138,13 +139,15 @@ def require_committed_content(root: Path, paths, *, revision="HEAD"):
     return oid
 
 
-def collect_changes(root: Path, baseline_commit: str) -> ChangeCollection:
+def collect_changes(root: Path, baseline_commit: str, *, source_revision=None) -> ChangeCollection:
     """Collect every baseline-descendant commit edge plus Git-visible dirt."""
     try:
-        resolved = _git(root, "rev-parse", "--verify", baseline_commit + "^{commit}").strip()
-        _git(root, "merge-base", "--is-ancestor", resolved, "HEAD")
+        flags = ("--no-replace-objects",) if source_revision is not None else ()
+        resolved = _git(root, *flags, "rev-parse", "--verify", baseline_commit + "^{commit}").strip()
+        revision = "HEAD" if source_revision is None else source_revision
+        _git(root, *flags, "merge-base", "--is-ancestor", resolved, revision)
         tokens = _git(
-            root, "log", "--format=", "--name-status", "-z", "-m", "-M", resolved + "..HEAD"
+            root, *flags, "log", "--format=", "--name-status", "-z", "-m", "-M", resolved + ".." + revision
         ).split("\x00")
         records = []
         index = 0
@@ -219,7 +222,7 @@ def compare_scope(changes: ChangeCollection, approved_paths, *, preexisting=()) 
         return ScopeResult(False, ({"reason": "malformed_evidence", "detail": str(exc)},))
 
 
-def content_snapshot(root: Path, changes: ChangeCollection, approved_paths) -> str:
+def content_snapshot(root: Path, changes: ChangeCollection, approved_paths, *, source_revision=None) -> str:
     """Current relevant content, including approved files absent from Git status."""
     if changes.error:
         raise ValueError(changes.error)
@@ -229,14 +232,22 @@ def content_snapshot(root: Path, changes: ChangeCollection, approved_paths) -> s
         if "old_path" in record:
             paths.add(record["old_path"])
     index = git_content_entries(root)
-    head = git_content_entries(root, "HEAD")
-    baseline = git_content_entries(root, changes.baseline_commit) if changes.baseline_commit else {}
+    # Replacement refs are a local view; Git transports the original objects.
+    original = source_revision is not None
+    head = git_content_entries(root, "HEAD" if source_revision is None else source_revision,
+                               original_objects=original)
+    baseline = (git_content_entries(root, changes.baseline_commit, original_objects=original)
+                if changes.baseline_commit else {})
     content = {}
     approved = set(approved_paths)
     for path in sorted(paths):
         value = {"working": path_content(root, path)}
         if path in approved:
             working = working_git_entry(root, path)
+            # Check the selected tree against the very same effective entries
+            # used in this receipt hash, rather than a later worktree observation.
+            if source_revision is not None and head.get(path) != working:
+                raise ValueError("selected commit differs from checkpoint content: " + path)
             # Bind clean filters/attributes through the effective blob they produce.
             value["effective"] = working
             # Normal staging/commit of reviewed bytes is stable. Divergent new

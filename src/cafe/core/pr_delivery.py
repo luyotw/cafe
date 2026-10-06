@@ -54,6 +54,16 @@ def publish_resolved_pr(issue_dir: Path, root: Path, output: Path, *, context, b
             before_dispatch()
             # Credential-bearing repository lookup follows the capability gate.
             require_publication_target(context, request["args"])
+            from cafe.core.execution_checkpoints import (
+                load_review_evidence, require_checkpoint, require_verified_review,
+            )
+            selected = request["args"]["head_oid"]
+            readiness = load_review_evidence(issue_dir / "execution_delivery.json")
+            require_checkpoint(context, readiness.get("checkpoint"), "before_delivery",
+                               source_revision=selected)
+            if context.get("review_policy") == "single_native":
+                require_verified_review(context, load_review_evidence(issue_dir / "execution_review.json"),
+                                        source_revision=selected)
             push_url = request["args"]["push_url"]
             repository = subprocess.run(["gh", "repo", "view", push_url, "--json",
                 "nameWithOwner", "--jq", ".nameWithOwner"], cwd=root, capture_output=True,

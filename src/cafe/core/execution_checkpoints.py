@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import hashlib
 import json
+import re
 import uuid
 
 from cafe.core.file_scope import (
@@ -31,17 +32,22 @@ def context_digest(context):
     return hashlib.sha256(json.dumps(context, sort_keys=True).encode()).hexdigest()
 
 
-def checkpoint(context, boundary, *, round_id, parent_id):
+def checkpoint(context, boundary, *, round_id, parent_id, source_revision=None):
     if boundary not in BOUNDARIES or not round_id or not parent_id:
         raise ValueError("checkpoint requires a declared boundary and invocation identity")
+    if source_revision is not None and (
+        not isinstance(source_revision, str) or
+        not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", source_revision)
+    ):
+        raise ValueError("selected checkpoint source requires an immutable commit identity")
     digest = context_digest(context)
     root = Path(context["root"])
-    changes = collect_changes(root, context["baseline_commit"])
+    changes = collect_changes(root, context["baseline_commit"], source_revision=source_revision)
     result = compare_scope(changes, context["paths"], preexisting=context.get("preexisting", []))
     snapshot = None
     if result.passed:
         try:
-            snapshot = content_snapshot(root, changes, context["paths"])
+            snapshot = content_snapshot(root, changes, context["paths"], source_revision=source_revision)
         except (OSError, ValueError) as exc:
             from cafe.core.file_scope import ScopeResult
 
@@ -63,7 +69,7 @@ def checkpoint(context, boundary, *, round_id, parent_id):
     }
 
 
-def require_checkpoint(context, receipt, boundary):
+def require_checkpoint(context, receipt, boundary, *, source_revision=None):
     if (
         not isinstance(receipt, dict)
         or receipt.get("passed") is not True
@@ -76,7 +82,8 @@ def require_checkpoint(context, receipt, boundary):
     ):
         raise ValueError("checkpoint lacks invocation-bound evidence")
     current = checkpoint(
-        context, boundary, round_id=receipt["round_id"], parent_id=receipt["parent_id"]
+        context, boundary, round_id=receipt["round_id"], parent_id=receipt["parent_id"],
+        source_revision=source_revision,
     )
     if not current["passed"] or current["snapshot"] != receipt["snapshot"]:
         raise ValueError("execution checkpoint does not cover current content")
@@ -90,11 +97,12 @@ def load_execution_context(path: Path):
     return context
 
 
-def require_current_review(context, evidence, *, native_observations=None):
+def require_current_review(context, evidence, *, native_observations=None, source_revision=None):
     """Accept exactly one independent terminal invocation of current content."""
     if not isinstance(evidence, dict) or evidence.get("version") != 1:
         raise ValueError("native review evidence is missing")
-    receipt = require_checkpoint(context, evidence.get("checkpoint"), "before_review")
+    receipt = require_checkpoint(context, evidence.get("checkpoint"), "before_review",
+                                 source_revision=source_revision)
     if evidence.get("round_id") != receipt["round_id"]:
         raise ValueError("review round does not match its checkpoint")
     invocations = evidence.get("invocations")
@@ -157,11 +165,12 @@ def load_review_evidence(path: Path):
     return load_execution_artifact(path)
 
 
-def require_verified_review(context, evidence):
+def require_verified_review(context, evidence, *, source_revision=None):
     """Consumers require host-observed invocation proof, not parent-only claims."""
     if not isinstance(evidence, dict) or not isinstance(evidence.get("native_observations"), dict):
         raise ValueError("host-observed native review evidence is missing")
-    return require_current_review(context, evidence, native_observations=evidence["native_observations"])
+    return require_current_review(context, evidence, native_observations=evidence["native_observations"],
+                                  source_revision=source_revision)
 
 
 def guard_execution_delivery(context, request, *, issue_dir, output_dir):
@@ -175,6 +184,9 @@ def guard_execution_delivery(context, request, *, issue_dir, output_dir):
     observed = subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
     if observed.returncode != 0:
         raise ValueError("publication scope checkpoint failed")
-    require_checkpoint(context, json.loads(observed.stdout), "before_delivery")
+    selected = request["args"]["head_oid"]
+    require_checkpoint(context, json.loads(observed.stdout), "before_delivery",
+                       source_revision=selected)
     if context.get("review_policy") == "single_native":
-        require_verified_review(context, load_review_evidence(issue_dir / "execution_review.json"))
+        require_verified_review(context, load_review_evidence(issue_dir / "execution_review.json"),
+                                source_revision=selected)

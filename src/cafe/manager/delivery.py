@@ -362,6 +362,17 @@ def run_compact_closeout_command(issue_dir: Path, root: Path, argv: list[str]):
             )
             target = delivery_target(context)
             require_committed_content(root, context["paths"], revision=target["head_oid"])
+            from cafe.core.execution_checkpoints import (
+                require_checkpoint, require_verified_review, load_review_evidence,
+            )
+            # A newly selected commit must match the existing reviewed receipt,
+            # including its immutable history, not just its new working bytes.
+            readiness = load_review_evidence(issue_dir / "execution_delivery.json")
+            require_checkpoint(context, readiness.get("checkpoint"), "before_delivery",
+                               source_revision=target["head_oid"])
+            if context.get("review_policy") == "single_native":
+                require_verified_review(context, load_review_evidence(issue_dir / "execution_review.json"),
+                                        source_revision=target["head_oid"])
             require_delivery_target(context, target)
             ref = f"refs/heads/{target['source_branch']}"
             # The approved argv defines intent; resolved immutable operands keep
