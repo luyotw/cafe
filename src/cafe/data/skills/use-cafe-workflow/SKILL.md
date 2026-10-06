@@ -23,7 +23,7 @@ read the union once; do not preload the rest.
 | --- | --- |
 | Check or apply runtime, catalog, or bundled-helper updates | `references/project_global_skill_sync.md` |
 | Select a playbook for a new kickoff | `references/playbook_selection.md` |
-| Prepare kickoff inputs, render, or reconfirm a kickoff | `references/kickoff_inputs.md`, `references/kickoff.md`, `references/model_selection.md`, `references/strategic_context.md` |
+| Prepare kickoff inputs, render, or reconfirm a kickoff | First `references/playbook_selection.md`; compact mode then loads `references/compact_kickoff.md`; full mode loads `references/kickoff_inputs.md`, `references/kickoff.md`, `references/model_selection.md`, `references/strategic_context.md` |
 | Write or change confirmed phase chains after confirmation | `references/model_selection.md`, then `references/phases_yaml.md` |
 | Prepare and activate after kickoff confirmation | `references/kickoff_execution.md` |
 | Start, resume, or supply declared input to ordinary execution | `references/project_global_skill_sync.md`, then `references/running_workflow.md` |
@@ -32,7 +32,7 @@ read the union once; do not preload the rest.
 | Receive an issue split proposal from any step, or start/resume linked work | `references/issue_decomposition.md`, `references/strategic_context.md`, and `references/handoffs_and_alignment.md` |
 | Diagnose or repair a playbook, phase, Manager, or runtime defect | `references/diagnosis_and_repair.md` plus the reference for the failing boundary |
 | Consider direct closeout, verify completion, handle a Git delivery conflict, or handle follow-up work | `references/completion_and_authority.md` |
-| Present the initial kickoff | `references/kickoff.md`, `references/workflow_progress.md` |
+| Present the initial kickoff | Compact: `references/compact_kickoff.md`; full: `references/kickoff.md`; both: `references/workflow_progress.md` |
 | Render any other user-visible question, progress, error, or completion reply | `references/workflow_progress.md` |
 | Measure fresh-versus-resumed correction efficiency | `references/correction_ab_experiment.md` |
 

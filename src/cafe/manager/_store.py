@@ -17,7 +17,9 @@ from ._schema import validate_contract
 
 CONTRACT_FILENAME = "contract.json"
 LOCK_FILENAME = "contract.lock"
-MAX_CONTRACT_BYTES = 256 * 1024
+from cafe.core.execution_artifacts import MAX_EXECUTION_ARTIFACT_BYTES
+
+MAX_CONTRACT_BYTES = MAX_EXECUTION_ARTIFACT_BYTES
 
 
 class ManagerContractMissingError(ValueError):

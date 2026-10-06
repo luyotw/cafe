@@ -33,7 +33,7 @@ DEVELOPMENT_PLAYBOOKS = {
     "tdd-qa",
     "hotfix",
 }
-BUNDLED_PLAYBOOKS = DEVELOPMENT_PLAYBOOKS | {"editorial", "incident", "research"}
+BUNDLED_PLAYBOOKS = DEVELOPMENT_PLAYBOOKS | {"editorial", "incident", "research", "streamlined"}
 
 
 def test_all_bundled_playbooks_have_distinct_bounded_applicability() -> None:

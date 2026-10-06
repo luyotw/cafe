@@ -1,5 +1,12 @@
 # Kickoff And Preparation
 
+## Compact route
+
+Select the effective contract mode with lightweight playbook discovery first.
+For compact mode, use `compact_kickoff.md` before loading full-only model,
+strategy, questionnaire or preflight references. The full instructions below
+apply to full contracts. Confirmed authority takes precedence on resume.
+
 Use `kickoff_inputs.md` for the preparation CLI and editable draft. Apply this
 reference and the model, strategy and playbook policies to the current request.
 Execution and activation instructions are in `kickoff_execution.md`.

@@ -13,6 +13,37 @@ from _kickoff_test_support import load_kickoff_module
 pytestmark = pytest.mark.release_extended
 
 
+def test_lightweight_selection_does_not_resolve_unselected_skill_catalog(tmp_path):
+    import yaml
+
+    module = load_kickoff_module("kickoff_catalog")
+    project = tmp_path / "project"
+    playbooks = project / ".cafe/playbooks"
+    playbooks.mkdir(parents=True)
+    for name, mode in [("chosen", "compact"), ("other", "full")]:
+        (playbooks / f"{name}.yaml").write_text(yaml.safe_dump({
+            "playbook": {"id": name, "applicability": {
+                "summary": name, "use_when": ["small change"], "avoid_when": ["research"]}},
+            "contract": {"mode": mode},
+            "roles": {"operator": {}},
+            "steps": {"run": {"role": "operator", "skill": "missing-skill",
+                               "on": {"await_agent": "_done"}}},
+        }))
+    kwargs = dict(project_root=project, global_root=tmp_path / "global",
+                  builtin_root=tmp_path / "builtin", cache_file=tmp_path / "catalog.json")
+    report = module.discover_index(**kwargs, lightweight=True)
+    assert not report["diagnostics"]
+    assert {item["id"]: item["contract_mode"] for item in report["candidates"]} == {
+        "chosen": "compact", "other": "full"}
+    assert all("profiles" not in item for item in report["candidates"])
+    selected = module.discover_index(**kwargs, lightweight=True, selected_id="chosen")
+    assert [item["id"] for item in selected["candidates"]] == ["chosen"]
+    (playbooks / "chosen.yaml").write_text("contract: {mode: broken}\n")
+    invalid = module.discover_index(**kwargs, lightweight=True, selected_id="chosen")
+    assert not invalid["candidates"]
+    assert invalid["diagnostics"][0]["id"] == "chosen"
+
+
 @pytest.mark.parametrize("scope,key", [("roles", "operator"), ("steps", "first")])
 def test_alias_overlay_cache_tracks_effective_skill_and_direct_override(tmp_path, scope, key):
     import yaml

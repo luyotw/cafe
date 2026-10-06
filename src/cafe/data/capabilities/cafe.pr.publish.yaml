@@ -9,6 +9,16 @@ arguments:
       type: string
     base:
       type: string
+    remote:
+      type: string
+    push_url:
+      type: string
+    remote_identity:
+      type: string
+    source_branch:
+      type: string
+    head_oid:
+      type: string
 outputs:
   required:
     - pr_url

@@ -20,6 +20,17 @@ from ._lifecycle import (
 from ._store import ManagerContractMissingError, ManagerContractUnsafeError
 
 
+def confirmed_contract_snapshot(issue_dir: Path) -> Mapping[str, Any] | None:
+    """Read confirmed authority without preparing or rewriting a contract."""
+    from ._store import load_contract
+
+    try:
+        contract, _ = load_contract(issue_dir, allow_legacy_upgrade=True)
+    except ManagerContractMissingError:
+        return None
+    return _freeze(contract)
+
+
 @dataclass(frozen=True)
 class ActivateConfirmedContract:
     issue_dir: Path

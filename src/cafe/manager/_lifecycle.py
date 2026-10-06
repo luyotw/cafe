@@ -143,6 +143,11 @@ def replace(
         )
         if current_sha != expected_predecessor_sha256:
             raise ValueError("Manager contract predecessor is stale")
+        if current.get("contract_mode") == "compact":
+            if proposal.get("contract_mode") != "compact" or proposal.get("file_scope", {}).get("baseline_commit") != current["file_scope"]["baseline_commit"]:
+                raise ValueError("compact replacement must retain the agreed baseline and mode")
+            if proposal["file_scope"].get("preexisting") != current["file_scope"]["preexisting"]:
+                raise ValueError("compact replacement must retain preexisting evidence")
         candidate = build_initial_contract(
             proposal=proposal,
             issue_name=issue_name,

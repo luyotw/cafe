@@ -1,5 +1,12 @@
 # Playbook Selection
 
+## Compact route
+
+Use lightweight applicability and contract-mode discovery before resolving
+profiles, skills or templates. Resolve only the selected compact graph and chain.
+`streamlined` opts into compact mode and single native review; compact mode alone
+does not alter another graph or its review policy.
+
 Read this reference before kickoff when starting new work, resuming work whose
 confirmed playbook is missing or stale, or answering why a playbook was chosen.
 Playbook selection precedes phase-profile and model selection because the graph

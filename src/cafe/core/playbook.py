@@ -593,6 +593,30 @@ def _behavior_value(
     return fallback if value is None else value
 
 
+class ExecutionRequirements(BaseModel):
+    """Semantic boundaries, independent of contract form and step names."""
+
+    model_config = ConfigDict(extra="forbid")
+    checkpoints: List[Literal["before_review", "resume", "before_delivery"]] = Field(default_factory=list)
+    review_policy: Optional[Literal["single_native"]] = None
+    review_evidence_artifact: Optional[str] = None
+    delivery_evidence_artifact: Optional[str] = None
+
+    @field_validator("review_evidence_artifact", "delivery_evidence_artifact")
+    @classmethod
+    def _literal_evidence_path(cls, value):
+        if value is not None and (not value or Path(value).is_absolute() or
+                any(part in {"", ".", ".."} for part in value.split("/")) or "\\" in value):
+            raise ValueError("execution evidence must use a literal relative path")
+        return value
+
+    @model_validator(mode="after")
+    def _review_requires_checkpoint(self):
+        if self.review_policy and ("before_review" not in self.checkpoints or not self.review_evidence_artifact):
+            raise ValueError("native review requires per-invocation checkpoints and evidence")
+        return self
+
+
 class StepConfig(BaseModel):
     """One playbook step."""
 
@@ -613,6 +637,7 @@ class StepConfig(BaseModel):
     workspace_artifact: Optional[str] = None
     workspace_input_artifact: Optional[str] = None
     initial_input: Optional[InitialInputDeclaration] = None
+    execution: ExecutionRequirements = Field(default_factory=ExecutionRequirements)
     template: Optional[str] = None
     allowed_tools: List[str] = Field(default_factory=list)
     capability_requests: List[str] = Field(default_factory=list)
@@ -1003,12 +1028,20 @@ def _has_mandatory_confirmation_gate(step: StepConfig) -> bool:
     )
 
 
+class ContractForm(BaseModel):
+    """Proposal form only; never changes the execution graph or its gates."""
+
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["full", "compact"] = "full"
+
+
 class PlaybookDefinition(BaseModel):
     """Top-level playbook definition."""
 
     model_config = ConfigDict(extra="forbid")
 
     playbook: PlaybookMeta
+    contract: ContractForm = Field(default_factory=ContractForm)
     roles: Dict[str, PlaybookRole] = Field(default_factory=dict)
     skills: Optional[PlaybookSkillEnvironments] = None
     behavior: StepBehaviorDeclaration = Field(default_factory=StepBehaviorDeclaration)
@@ -2054,3 +2087,11 @@ def _collect_tool_warnings(step_name: str, allowed_tools: List[str]) -> List[str
             )
 
     return warnings
+
+
+def execution_graph_digest(graph: Mapping[str, Any]) -> str:
+    """Bind execution declarations separately from the confirmed contract form."""
+    import hashlib
+    import json
+    execution = {key: value for key, value in graph.items() if key != "contract"}
+    return hashlib.sha256(json.dumps(execution, sort_keys=True).encode()).hexdigest()
