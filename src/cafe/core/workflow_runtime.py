@@ -57,7 +57,7 @@ from cafe.core.human_tasks import (
     agent_execution_interrupted_human_task,
     resolve_step_human_task,
 )
-from cafe.core.integration import integration_service
+from cafe.core.integration import IntegrationReviewRequired, integration_service
 from cafe.core.packet_io import atomic_write_bytes, sha256_bytes
 from cafe.core.playbook import (
     resolve_step_attempt_limit,
@@ -875,6 +875,9 @@ class BlackboardWorkflowRuntime:
                 return None
             if self._contract_postdates_event(contract, event):
                 return None
+        blocked = self._integration_completion_guard(current_step=source)
+        if blocked is not None:
+            return blocked
         status = str(event.data.get("status_code", ""))
         transition_id = event.data.get("transition_id")
         self.blackboard_store.update_handoff_contract(
@@ -914,6 +917,9 @@ class BlackboardWorkflowRuntime:
         )
         status_code = contract.status_code or f"BATON_{contract.intent.value.upper()}"
         if current_step == "done":
+            blocked = self._integration_completion_guard(current_step=contract.from_step, completed=True)
+            if blocked is not None:
+                return blocked
             cafe_dir = self.issue_dir.parent.parent
             clear_marker_if_matches(cafe_dir, self.issue_dir.name)
         return PlaybookRunResult(
@@ -3614,6 +3620,112 @@ class BlackboardWorkflowRuntime:
             )
         self._replaced_user_handoff = None
 
+    def _integration_wait(self, *, step: str, reason: str, status: str = "INTEGRATION_BLOCKED") -> PlaybookRunResult:
+        self.blackboard_store.update_handoff_contract(
+            self.blackboard, from_step=step, to_owner=HandoffOwner.USER, to_step="user",
+            intent=HandoffIntent.MANUAL_HANDOFF, status_code=status, source="workflow.integration",
+        )
+        self.blackboard_store.set_current_step(self.blackboard, "user")
+        self.blackboard_store.record_event(self.blackboard, "integration_blocked",
+                                           {"step": step, "reason": reason})
+        return PlaybookRunResult(final_step=step, final_status_code=status, completed=False, detail=reason)
+
+    def _integration_review_required(self, service: Any, reason: str) -> PlaybookRunResult:
+        step = service.declaration.correction_step
+        for task in service.tasks.tasks():
+            if task.handoff_key.startswith(f"integration:{self.blackboard.workflow_id}:") and task.status is HumanTaskStatus.PENDING:
+                service.tasks.cancel(workflow_id=self.blackboard.workflow_id, task_id=task.id,
+                                     reason="Source changed; renewed review required")
+        self.blackboard_store.update_handoff_contract(
+            self.blackboard, from_step=service.declaration.action_step, to_owner=HandoffOwner.AGENT,
+            to_step=step, intent=HandoffIntent.AWAIT_AGENT, status_code="INTEGRATION_REVIEW_REQUIRED",
+            source="workflow.integration_correction",
+        )
+        self.blackboard_store.set_current_step(self.blackboard, step)
+        self.blackboard_store.record_event(self.blackboard, "integration_review_required", {"step": step, "reason": reason})
+        return PlaybookRunResult(final_step=step, final_status_code="INTEGRATION_REVIEW_REQUIRED", completed=False, detail=reason)
+
+    def _integration_completion_guard(self, *, current_step: str, completed: bool = False) -> Optional[PlaybookRunResult]:
+        service = integration_service(self.issue_dir, self.playbook, self.blackboard)
+        if service is None:
+            return None
+        if completed and service.completion_allowed(completed=True):
+            return None
+        try:
+            service.reconcile()
+            selected, _ = service.selected()
+            if not selected["tasks"].get("action"):
+                raise ValueError("A distinct human integration task is required")
+            # Recheck the actual destination after any pre-completion interruption.
+            attempt = service.verify()
+            if not attempt["success"] or not service.completion_allowed():
+                raise ValueError(attempt["reason"])
+            service.records.mark_completion()
+            # A verified already-integrated result settles pending human work
+            # without manufacturing a human completion report.
+            for task in service.tasks.tasks():
+                if task.id == selected["tasks"].get("action") and task.status is HumanTaskStatus.PENDING:
+                    service.tasks.cancel(workflow_id=self.blackboard.workflow_id, task_id=task.id,
+                                         reason="Destination verified; no further human integration required")
+            return None
+        except IntegrationReviewRequired as exc:
+            return self._integration_review_required(service, str(exc))
+        except (OSError, ValueError) as exc:
+            step = service.declaration.correction_step if "source changed" in str(exc).lower() else service.declaration.action_step
+            return self._integration_wait(step=step, reason=str(exc))
+
+    def _run_integration_boundary(self, *, start_step: Optional[str]) -> Optional[PlaybookRunResult]:
+        service = integration_service(self.issue_dir, self.playbook, self.blackboard)
+        if service is None:
+            return None
+        d = service.declaration
+        current = start_step or self.blackboard.current_step
+        if current == "done":
+            if service.completion_allowed(completed=True):
+                return None
+            return self._integration_wait(step=d.action_step, reason="Current durable integration completion proof is missing or invalid")
+        if current == "user":
+            contract = self.blackboard.handoff_contract
+            current = contract.from_step if contract is not None else current
+        if current not in {d.selection_step, d.action_step}:
+            return None
+        try:
+            service.reconcile()
+            service.validate_current_review()
+            if current == d.selection_step:
+                selected = service.records.current(service.records.read())
+                if selected is None:
+                    return self._integration_wait(step=current, reason="Stage an explicit destination with cafe integration select", status="INTEGRATION_SELECTION_REQUIRED")
+                if selected["confirmation"] is not None:
+                    current = d.action_step
+                else:
+                    return self._materialize_owned_human_task(current_step=current, trigger="initial",
+                                                             status_code="HUMAN_TASK_PENDING", runtime="integration")
+            selected, _ = service.selected()
+            if not selected["tasks"].get("action"):
+                # Materialize and associate before exposing the action boundary.
+                return self._materialize_owned_human_task(current_step=current, trigger="initial",
+                                                         status_code="HUMAN_TASK_PENDING", runtime="integration")
+            reports = [r for r in service.records.read()["reports"] if r["revision"] == selected["revision"]]
+            if reports and reports[-1]["outcome"] == "blocked" and not service.completion_allowed():
+                return self._integration_wait(step=current, reason="Human integration is blocked; resolve the conflict, then run cafe integration verify or renew review for changed source")
+            attempt = service.verify()
+            if not attempt["success"]:
+                return self._integration_wait(step=current, reason=attempt["reason"])
+            target = d.verified_continuation
+            if target == "_done":
+                return self._emit_complete(current_step=current, status_code="INTEGRATION_VERIFIED",
+                                           next_step=target, runtime="integration", reason="durable_read_only_proof",
+                                           update_contract=True)
+            self._emit_transition(current_step=current, next_step=target, status_code="INTEGRATION_VERIFIED",
+                                  source="integration.verified", runtime="integration", update_contract=True)
+            return PlaybookRunResult(final_step=current, final_status_code="INTEGRATION_VERIFIED", completed=False)
+        except IntegrationReviewRequired as exc:
+            return self._integration_review_required(service, str(exc))
+        except (OSError, ValueError) as exc:
+            step = d.correction_step if "source changed" in str(exc).lower() else current
+            return self._integration_wait(step=step, reason=str(exc))
+
     def _emit_complete(
         self,
         *,
@@ -3625,6 +3737,9 @@ class BlackboardWorkflowRuntime:
         update_contract: bool = False,
         contract_source: str = "workflow.transition",
     ) -> PlaybookRunResult:
+        blocked = self._integration_completion_guard(current_step=current_step)
+        if blocked is not None:
+            return blocked
         self.blackboard.current_step = "done"
         baton_contract = None
         if update_contract:
@@ -5444,6 +5559,9 @@ class BlackboardWorkflowRuntime:
             ):
                 payload = record["data"]
                 self._dispatch_workflow_event(str(payload.get("event_type", "")), payload)
+        integration_result = self._run_integration_boundary(start_step=start_step)
+        if integration_result is not None:
+            return self._finalize_observed_result(integration_result)
         recovered_feedback_delivery = self._try_reconcile_pending_feedback_delivery()
         if (
             recovered_feedback_delivery is not None

@@ -1051,6 +1051,11 @@ def workflow(
             )
             if active_step in {"user", "done"} and not terminal_callback_resume:
                 if active_step == "done" and not interactive:
+                    from cafe.core.integration import integration_service
+                    integration = integration_service(issue_dir, playbook_data, resume_blackboard)
+                    if integration is not None and not integration.completion_allowed(completed=True):
+                        console.print("[red]Integration completion proof is missing or invalid; run cafe integration status and verify[/red]")
+                        raise typer.Exit(1)
                     console.print("[green]Workflow already completed[/green] step=done")
                     console.print("[yellow]Workflow is waiting for user input[/yellow] step=user")
                     return

@@ -25,11 +25,13 @@ class IntegrationRecordStore:
     HumanTask-before-integration order. Inspection happens outside this lock.
     """
 
-    def __init__(self, issue_dir: Path, workflow_id: str):
+    def __init__(
+        self, issue_dir: Path, workflow_id: str, task_store: HumanTaskRecordStore | None = None
+    ):
         self.issue_dir = Path(issue_dir)
         self.workflow_id = workflow_id
         self.file_path = self.issue_dir / "integration.json"
-        self.tasks = HumanTaskRecordStore(self.issue_dir)
+        self.tasks = task_store or HumanTaskRecordStore(self.issue_dir)
 
     def read(self) -> dict[str, Any]:
         if not self.file_path.exists():
@@ -186,6 +188,9 @@ class IntegrationRecordStore:
         if not attempts:
             return False
         last = attempts[-1]
+        reports = [r for r in record["reports"] if r["revision"] == selected["revision"]]
+        if reports and last.get("report_result_id") != reports[-1]["result_id"]:
+            return False
         return (
             last.get("success") is True
             and last.get("review") == selected["review"]

@@ -21,6 +21,10 @@ class IntegrationError(ValueError):
     """Delivery remains incomplete until its declared prerequisite is restored."""
 
 
+class IntegrationReviewRequired(IntegrationError):
+    """The current source identity must return through the declared review route."""
+
+
 def valid_branch(value: str) -> str:
     if (
         not value
@@ -129,15 +133,17 @@ def accepted_review(
 class IntegrationService:
     """Neutral domain service; topology and task policies come from the catalog."""
 
-    def __init__(self, issue_dir: Path, playbook: Mapping[str, Any], blackboard: Any):
+    def __init__(
+        self, issue_dir: Path, playbook: Mapping[str, Any], blackboard: Any, task_store: Any = None
+    ):
         from cafe.core.integration_records import IntegrationRecordStore
         from cafe.core.human_task_records import HumanTaskRecordStore
 
         self.issue_dir = Path(issue_dir)
         self.blackboard = blackboard
         self.declaration = IntegrationDeclaration.model_validate(playbook["integration"])
-        self.records = IntegrationRecordStore(self.issue_dir, blackboard.workflow_id)
-        self.tasks = HumanTaskRecordStore(self.issue_dir)
+        self.tasks = task_store or HumanTaskRecordStore(self.issue_dir)
+        self.records = IntegrationRecordStore(self.issue_dir, blackboard.workflow_id, self.tasks)
 
     def _artifact(self, name: str, producer: str) -> tuple[dict[str, Any], bytes]:
         entry = self.blackboard.artifacts.get(name)
@@ -234,7 +240,7 @@ class IntegrationService:
             entry["version"] != snapshot["source_entry"]["version"]
             or sha256_bytes(content) != review.source_identity
         ):
-            raise IntegrationError("Reviewed source changed; renewed review is required")
+            raise IntegrationReviewRequired("Reviewed source changed; renewed review is required")
         return review
 
     def propose(
@@ -254,7 +260,7 @@ class IntegrationService:
                 repository != str(Path(review.repository).resolve())
                 or feature_branch != snapshot["feature_branch"]
             ):
-                raise IntegrationError(
+                raise IntegrationReviewRequired(
                     "Repository or feature differs from the reviewed source; renew review"
                 )
         selection = IntegrationSelection(
@@ -275,9 +281,22 @@ class IntegrationService:
             expected_url = f"https://github.com/{repository}/pull/{pr}"
             if outputs.get("pr_url") != expected_url or str(outputs.get("pr_number")) != str(pr):
                 raise IntegrationError("Selected PR does not match the reviewed publication")
-        return self.records.propose(
+        revision = self.records.propose(
             selection.model_dump(mode="json"), review.model_dump(mode="json")
         )
+        prefix = f"integration:{self.blackboard.workflow_id}:"
+        for task in self.tasks.tasks():
+            if (
+                task.handoff_key.startswith(prefix)
+                and not task.handoff_key.startswith(f"{prefix}{revision}:")
+                and task.status.value == "pending"
+            ):
+                self.tasks.cancel(
+                    workflow_id=self.blackboard.workflow_id,
+                    task_id=task.id,
+                    reason="Superseded by a newly proposed integration destination",
+                )
+        return revision
 
     def task_context(self, step: str, policy_id: str, prompt: str) -> tuple[str, str | None]:
         import json
@@ -384,6 +403,20 @@ class IntegrationService:
 
         self.reconcile()
         selected, selection = self.selected()
+        from cafe.core.git import GitOperations
+
+        review, snapshot = self.review()
+        feature = snapshot["feature_branch"]
+        from cafe.core.git import GitError
+
+        try:
+            current_source = GitOperations(review.repository).run_git(
+                "show-ref", "--verify", "--hash", f"refs/heads/{feature}"
+            )
+        except GitError:
+            current_source = None  # A deleted historical feature ref is permitted.
+        if current_source is not None and current_source != review.source_commit:
+            raise IntegrationReviewRequired("Feature source changed; renewed review is required")
         try:
             if selection.target == "github_pr":
                 observed = GitHubOps().observe_integration(selection.repository, selection.pr)
@@ -481,8 +514,8 @@ def evaluate_local(
 
 
 def integration_service(
-    issue_dir: Path, playbook: Mapping[str, Any], blackboard: Any
+    issue_dir: Path, playbook: Mapping[str, Any], blackboard: Any, task_store: Any = None
 ) -> IntegrationService | None:
     if not playbook.get("integration"):
         return None
-    return IntegrationService(issue_dir, playbook, blackboard)
+    return IntegrationService(issue_dir, playbook, blackboard, task_store)

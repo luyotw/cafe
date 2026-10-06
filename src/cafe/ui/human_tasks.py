@@ -752,6 +752,9 @@ def durable_task_matches_current_handoff(task: HumanTask, blackboard: Any) -> bo
             contract.created_at,
         )
     )
+    if task.handoff_key.startswith(f"integration:{task.workflow_id}:"):
+        return (task.status is HumanTaskStatus.PENDING and task.trigger == "initial"
+                and contract.intent is HandoffIntent.MANUAL_HANDOFF)
     if task.handoff_key.startswith("user-handoff:"):
         # Human-owned and hybrid tasks intentionally use a generic
         # ``manual_handoff`` contract while retaining ``initial`` or the
@@ -892,6 +895,15 @@ def _apply_human_task_payload(
             raw_payload,
             questions=questions,
         )
+    integration = integration_service(issue_dir, playbook_data, blackboard, record_store)
+    if integration is not None and durable_task is not None:
+        try:
+            integration.associate(durable_task)
+        except (ValueError, OSError) as exc:
+            return _durable_task_routing_rejection(
+                issue_dir=issue_dir, blackboard=blackboard, task_id=durable_task.id, message=str(exc),
+            )
+
     result_was_recovered = durable_result is not None
 
     recovered_agent_input = ""
@@ -1174,7 +1186,7 @@ def _apply_human_task_payload(
                 )
                 return HumanTaskApplication(target=None, policy=policy, rejection=rejection)
 
-    integration = integration_service(issue_dir, playbook_data, blackboard)
+    integration = integration_service(issue_dir, playbook_data, blackboard, record_store)
     if integration is not None and durable_task is not None and durable_result is not None:
         try:
             integration.apply_result(durable_task, durable_result)
@@ -1301,6 +1313,16 @@ def _apply_human_task_payload(
             text="\n\n".join(input_parts),
         )
     is_done = continuation == "_done"
+    if is_done and integration is not None:
+        if not integration.completion_allowed():
+            return _durable_task_routing_rejection(
+                issue_dir=issue_dir, blackboard=blackboard,
+                task_id=durable_task.id if durable_task is not None else policy.id,
+                message="Durable current integration verification is required before completion",
+            )
+        # A task result itself cannot publish integration-required completion.
+        continuation = integration.declaration.action_step
+        is_done = False
     playbook_steps = playbook_data.get("steps", {})
     from_step_def = playbook_steps.get(from_step, {}) if isinstance(playbook_steps, Mapping) else {}
     if (

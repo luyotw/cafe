@@ -128,3 +128,197 @@ def test_missing_local_source_never_fetches(local_repository):
     repo, git, _, source = local_repository
     observed = GitOperations(str(repo)).observe_integration("main", "0" * 40)
     assert observed["unavailable"] and observed["exit_code"] != 0
+
+
+@pytest.fixture
+def journey(tmp_path, monkeypatch):
+    from tests.integration.integration_fixture import create_journey
+
+    return create_journey(tmp_path / "journey", monkeypatch)
+
+
+@pytest.mark.parametrize("target", ["local_branch", "github_pr"])
+def test_report_then_native_verification_completes_only_with_durable_proof(
+    journey, monkeypatch, target
+):
+    monkeypatch.setattr(
+        "cafe.utils.github.GitHubOps.observe_integration", lambda *a: dict(journey.observation)
+    )
+    assert journey.complete("ship").target == "destination"
+    journey.select(target)
+    journey.runtime().run()
+    assert journey.complete("confirm").target == "land"
+    journey.runtime().run()
+    action = journey.pending()
+    assert action.step == "land"
+    assert journey.complete("performed").target == "land"
+    assert journey.state().current_step != "done"
+    failed = journey.runtime().run()
+    assert not failed.completed
+    journey.human_integrate(target)
+    succeeded = journey.runtime().run()
+    assert succeeded.completed
+    assert journey.service().completion_allowed(completed=True)
+    assert journey.service().records.read()["attempts"][-1]["report_result_id"]
+    assert journey.runtime().run().completed
+
+
+@pytest.mark.parametrize("target", ["local_branch", "github_pr"])
+def test_already_integrated_restart_preserves_absent_report_and_task_identity(
+    journey, monkeypatch, target
+):
+    monkeypatch.setattr(
+        "cafe.utils.github.GitHubOps.observe_integration", lambda *a: dict(journey.observation)
+    )
+    journey.complete("ship")
+    journey.select(target)
+    journey.runtime().run()
+    journey.complete("confirm")
+    journey.runtime().run()
+    action = journey.pending()
+    journey.human_integrate(target)
+    assert journey.runtime().run().completed
+    record = journey.service().records.read()
+    assert record["reports"] == [] and record["attempts"][-1]["report_result_id"] is None
+    assert len([t for t in journey.service().tasks.tasks() if t.step == "land"]) == 1
+    assert journey.service().tasks.get_task(action.id).status.value == "cancelled"
+
+
+def test_forged_terminal_request_never_publishes_completion(journey):
+    result = journey.runtime()._emit_complete(
+        current_step="verdict",
+        status_code="WORKFLOW_COMPLETE",
+        next_step="_done",
+        runtime="fixture",
+        reason="forged",
+    )
+    assert not result.completed and journey.state().current_step != "done"
+
+
+def confirmed_action(journey, target):
+    journey.complete("ship")
+    journey.select(target)
+    journey.runtime().run()
+    journey.complete("confirm")
+    journey.runtime().run()
+    return journey.pending()
+
+
+@pytest.mark.parametrize("target", ["local_branch", "github_pr"])
+def test_conflict_and_changed_source_require_declared_review_correction(
+    journey, monkeypatch, target
+):
+    monkeypatch.setattr(
+        "cafe.utils.github.GitHubOps.observe_integration", lambda *a: dict(journey.observation)
+    )
+    action = confirmed_action(journey, target)
+    journey.complete("blocked", action)
+    assert not journey.runtime().run().completed
+    assert journey.service().records.read()["reports"][-1]["outcome"] == "blocked"
+    reviewed = journey.issue_dir / "reviewed.json"
+    source = json.loads(reviewed.read_text())
+    source["head_sha"] = journey.base
+    reviewed.write_text(json.dumps(source))
+    assert not journey.runtime().run().completed
+    assert journey.state().current_step == "forge"
+    assert journey.state().handoff_contract.to_owner.value == "agent"
+
+
+@pytest.mark.parametrize("target", ["local_branch", "github_pr"])
+def test_report_and_task_association_crash_windows_reconcile_without_duplicate(
+    journey, monkeypatch, target
+):
+    monkeypatch.setattr(
+        "cafe.utils.github.GitHubOps.observe_integration", lambda *a: dict(journey.observation)
+    )
+    action = confirmed_action(journey, target)
+    journey.complete("performed", action)
+    with journey.service().records.transaction() as record:
+        record["reports"] = []
+        record["selections"][-1]["tasks"].pop("action")
+    journey.human_integrate(target)
+    assert journey.runtime().run().completed
+    record = journey.service().records.read()
+    assert len(record["reports"]) == 1
+    assert record["selections"][-1]["tasks"]["action"] == action.id
+    assert len([t for t in journey.service().tasks.tasks() if t.step == "land"]) == 1
+
+
+@pytest.mark.parametrize("target", ["local_branch", "github_pr"])
+def test_failed_proof_persistence_keeps_report_and_retries_observation(
+    journey, monkeypatch, target
+):
+    monkeypatch.setattr(
+        "cafe.utils.github.GitHubOps.observe_integration", lambda *a: dict(journey.observation)
+    )
+    action = confirmed_action(journey, target)
+    journey.complete("performed", action)
+    journey.human_integrate(target)
+    original = __import__(
+        "cafe.core.integration_records", fromlist=["atomic_write_bytes"]
+    ).atomic_write_bytes
+
+    def fail(path, data):
+        if b'"attempts": [\n' in data:
+            raise OSError("proof persistence unavailable")
+        return original(path, data)
+
+    monkeypatch.setattr("cafe.core.integration_records.atomic_write_bytes", fail)
+    assert not journey.runtime().run().completed
+    assert journey.state().current_step != "done"
+    assert journey.service().records.read()["reports"][-1]["task_id"] == action.id
+    monkeypatch.setattr("cafe.core.integration_records.atomic_write_bytes", original)
+    assert journey.runtime().run().completed
+
+
+@pytest.mark.parametrize("target", ["local_branch", "github_pr"])
+def test_precompletion_proof_rechecks_rewritten_or_changed_destination(
+    journey, monkeypatch, target
+):
+    monkeypatch.setattr(
+        "cafe.utils.github.GitHubOps.observe_integration", lambda *a: dict(journey.observation)
+    )
+    confirmed_action(journey, target)
+    journey.human_integrate(target)
+    assert journey.service().verify()["success"]
+    if target == "local_branch":
+        journey.git("update-ref", "refs/heads/main", journey.base)
+    else:
+        journey.observation["target_branch"] = "elsewhere"
+    assert not journey.runtime().run().completed
+    assert not journey.service().completion_allowed()
+
+
+def test_retarged_during_inspection_discards_stale_success(journey, monkeypatch):
+    confirmed_action(journey, "local_branch")
+    journey.human_integrate()
+    from cafe.core.git import GitOperations
+
+    original = GitOperations.observe_integration
+
+    def observe(ops, *args):
+        facts = original(ops, *args)
+        journey.service().propose(
+            target="local_branch",
+            repository=str(journey.root),
+            feature_branch="feature",
+            target_branch="other",
+        )
+        return facts
+
+    monkeypatch.setattr(GitOperations, "observe_integration", observe)
+    with pytest.raises(ValueError):
+        journey.service().verify()
+    assert not journey.service().completion_allowed()
+
+
+def test_stale_action_cannot_complete_a_new_selection(journey):
+    action = confirmed_action(journey, "local_branch")
+    journey.service().propose(
+        target="local_branch",
+        repository=str(journey.root),
+        feature_branch="feature",
+        target_branch="other",
+    )
+    assert journey.complete("performed", action).rejection is not None
+    assert not journey.service().records.read()["reports"]

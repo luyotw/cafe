@@ -1242,3 +1242,17 @@ def test_an_unreadable_snapshot_falls_back_to_the_declared_contract(tmp_path: Pa
         _pending_task_presentation(record_store=store, task_id="missing", declared=declared)
         is declared
     )
+
+
+def test_integration_task_terminal_override_cannot_complete_without_proof(tmp_path, monkeypatch):
+    """I9: a public supervisor override cannot replace destination evidence."""
+    from tests.integration.integration_fixture import create_journey
+    journey = create_journey(tmp_path / "gated", monkeypatch)
+    task = journey.pending()
+    applied = apply_human_task_payload(
+        issue_dir=journey.issue_dir, playbook_data=journey.playbook, blackboard=journey.state(),
+        from_step=task.step, trigger=task.trigger, raw_payload={"human_task_id": task.id, "task": task.policy_id, "decision": "ship"},
+        source="fixture", supervisor_handoff_to="_done",
+    )
+    assert not applied.target or applied.target != "done"
+    assert journey.state().current_step != "done"

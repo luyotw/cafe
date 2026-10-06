@@ -7628,3 +7628,29 @@ def test_runtime_plan_need_permission_pauses_at_user(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("entry", ["emit", "owner", "terminal", "lifecycle"])
+def test_integration_completion_entry_requires_current_durable_proof(tmp_path, monkeypatch, entry):
+    """I9/U6: every terminal publisher shares the neutral integration gate."""
+    from tests.integration.integration_fixture import create_journey
+    journey = create_journey(tmp_path / "gated", monkeypatch)
+    runtime = journey.runtime()
+    if entry == "owner":
+        result = runtime._complete_owned_transition(current_step="land", status_code="AWAIT_AGENT",
+                                                    runtime="owner_dispatch", source="automatic")
+    elif entry in {"terminal", "lifecycle"}:
+        runtime.blackboard_store.update_handoff_contract(
+            runtime.blackboard, from_step="land", to_owner=HandoffOwner.DONE, to_step="done",
+            intent=HandoffIntent.WORKFLOW_COMPLETE, source="fixture.forged",
+        )
+        if entry == "lifecycle":
+            runtime.blackboard_store.record_event(runtime.blackboard, "workflow_completed",
+                                                   {"step": "land", "next_step": "done", "status_code": "WORKFLOW_COMPLETE"})
+        runtime.blackboard_store.set_current_step(runtime.blackboard, "done")
+        result = runtime.run()
+    else:
+        result = runtime._emit_complete(current_step="land", status_code="WORKFLOW_COMPLETE",
+                                        next_step="_done", runtime="baton", reason="forged")
+    assert not result.completed
+    assert journey.state().current_step != "done"
