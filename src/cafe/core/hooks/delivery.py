@@ -13,7 +13,7 @@ from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.human_tasks import resolve_step_human_task
 from cafe.core.packet_io import atomic_write_bytes, canonical_json
 from cafe.core.status_codes import PhaseStatusCode
-from cafe.delivery.contracts import ActionProposal, DeliveryBinding, FollowUp, digest
+from cafe.delivery.contracts import ActionProposal, DeliveryBinding, FollowUp, ReviewSource, digest
 from cafe.delivery.operations import Commands
 from cafe.delivery.selection import approved_snapshot, save_shown_proposal, validate_complete_report
 from cafe.skills.loader import SkillLoader
@@ -64,16 +64,27 @@ def _task(kwargs, prompt, *, trigger="confirm_output"):
     )
 
 
-def _proposals(state, binding):
+def _proposals(state, binding, issue_dir):
     entry = state.artifacts.get(binding.proposals_artifact) if binding.proposals_artifact else None
     if entry is None:
         if binding.proposals_artifact:
             raise ValueError("declared Review proposal artifact is missing")
-        return ()
-    text = Path(entry.path).read_text()
+        return (), None
+    path = Path(entry.path).resolve()
+    if not path.is_relative_to(issue_dir.resolve()) or path.stat().st_size > 1024 * 1024:
+        raise ValueError("Review source must be a bounded workflow artifact")
+    content = path.read_bytes()
+    source = ReviewSource(
+        artifact=binding.proposals_artifact,
+        path=str(path.relative_to(issue_dir.resolve())),
+        version=entry.version,
+        producer=entry.updated_by,
+        sha256=hashlib.sha256(content).hexdigest(),
+    )
+    text = content.decode()
     section = re.search(r"(?ms)^## Follow-up Proposals\s*\n(.*?)(?=^## |\Z)", text)
     if not section or not re.search(r"FUP-[0-9]{3}", section[1]):
-        return ()
+        return (), source
     block = re.search(r"```json\s*(.*?)\s*```", section[1], re.S)
     if not block:
         raise ValueError("open proposals require the Review's original structured draft bundle")
@@ -81,7 +92,7 @@ def _proposals(state, binding):
     selected = tuple(FollowUp.model_validate(row) for row in rows)
     if set(re.findall(r"FUP-[0-9]{3}", section[1])) != {p.id for p in selected}:
         raise ValueError("Review draft IDs do not match open proposal evidence")
-    return selected
+    return selected, source
 
 
 class DevelopmentActionContext(NoOpHook):
@@ -147,6 +158,7 @@ class DevelopmentActionContext(NoOpHook):
                     raise ValueError("published PR differs from reviewed source/target")
                 target = pr["base"]["sha"]
                 destination = ""
+            proposals, review_source = _proposals(state, binding, phase.issue_dir)
             proposal = ActionProposal(
                 workflow_id=state.workflow_id,
                 approval_step=binding.approval_step,
@@ -161,7 +173,8 @@ class DevelopmentActionContext(NoOpHook):
                 destination=destination,
                 pr_number=number,
                 issue_repository=request.get("issue_repository", ""),
-                proposals=_proposals(state, binding),
+                proposals=proposals,
+                review_source=review_source,
                 reviewed_artifact=str(output.resolve().relative_to(phase.issue_dir.resolve())),
                 reviewed_artifact_sha256=hashlib.sha256(output.read_bytes()).hexdigest(),
             )
@@ -180,6 +193,13 @@ class DevelopmentActionContext(NoOpHook):
                 destination=str(destination or number),
                 issues=proposal.issue_repository or "∅",
             )
+            if proposal.review_source:
+                shown += "\n\n" + render_text(
+                    "human_task.cafe_pr.delivery_review_source",
+                    locale=locale,
+                    catalog_root=owner / "locales",
+                    **proposal.review_source.model_dump(),
+                )
             for item in proposal.proposals:
                 shown += "\n\n" + render_text(
                     "human_task.cafe_pr.delivery_draft",
@@ -189,6 +209,9 @@ class DevelopmentActionContext(NoOpHook):
                     title=item.title,
                     body=item.body,
                     evidence=item.evidence,
+                    evidence_head=item.evidence_head,
+                    impact=item.impact,
+                    confidence=item.confidence,
                 )
             shown += f"\n\nAction proposal SHA256: {proposal.digest}"
             task = _task(kwargs, shown)

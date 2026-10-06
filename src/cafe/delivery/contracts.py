@@ -32,11 +32,30 @@ class DeliveryBinding(FrozenModel):
     proposals_artifact: str | None = None
 
 
+class ReviewSource(FrozenModel):
+    """Original producer identity and bytes retained with the shown draft bundle."""
+
+    artifact: str = Field(min_length=1)
+    path: str = Field(min_length=1, max_length=4096)
+    version: int = Field(ge=1)
+    producer: str = Field(min_length=1)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def relative_source(self):
+        if Path(self.path).is_absolute() or ".." in Path(self.path).parts:
+            raise ValueError("Review source must be relative to the workflow issue")
+        return self
+
+
 class FollowUp(FrozenModel):
     id: str = Field(pattern=r"^FUP-[0-9]{3}$")
     title: str = Field(min_length=1, max_length=256)
     body: str = Field(min_length=1, max_length=32768)
     evidence: str = Field(min_length=1, max_length=4096)
+    evidence_head: str = Field(pattern=r"^[0-9a-f]{40}$")
+    impact: Literal["Critical", "Important", "Minor"]
+    confidence: int = Field(ge=0, le=100)
 
 
 class ActionProposal(FrozenModel):
@@ -55,6 +74,7 @@ class ActionProposal(FrozenModel):
     destination: str = ""
     issue_repository: str = ""
     proposals: tuple[FollowUp, ...] = Field(default=(), max_length=100)
+    review_source: ReviewSource | None = None
     reviewed_artifact: str = ""
     reviewed_artifact_sha256: str = Field(default="", pattern=r"^(?:[0-9a-f]{64})?$")
 
@@ -91,6 +111,8 @@ class ActionProposal(FrozenModel):
             r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", self.issue_repository
         ):
             raise ValueError("invalid issue destination")
+        if self.proposals and self.review_source is None:
+            raise ValueError("Review drafts need their frozen producer evidence")
         if len({p.id for p in self.proposals}) != len(self.proposals):
             raise ValueError("duplicate proposal identity")
         return self
@@ -132,7 +154,7 @@ class ActionSnapshot(FrozenModel):
             {
                 "workflow": self.proposal.workflow_id,
                 "repository": self.proposal.issue_repository,
-                "draft": item.model_dump(mode="json"),
+                "draft": item.model_dump(include={"id", "title", "body", "evidence"}, mode="json"),
             }
         )
         return f"<!-- cafe-follow-up:{self.proposal.workflow_id}:{identity}:{proposal_id} -->"
@@ -162,12 +184,13 @@ def approve_selection(proposal: ActionProposal, authority: dict) -> ActionSnapsh
     else:
         raise ValueError("review acceptance is not action authority")
     available = {p.id: p for p in proposal.proposals}
-    if len(set(ids)) != len(ids) or set(ids) - available.keys():
+    selected_ids = set(ids)
+    if len(selected_ids) != len(ids) or selected_ids - available.keys():
         raise ValueError("unknown or duplicate selected proposal")
     return ActionSnapshot(
         proposal=proposal,
         proposal_digest=proposal.digest,
         task_id=authority["task_id"],
         result_id=authority["result_id"],
-        selected=tuple(available[item] for item in ids),
+        selected=tuple(item for item in proposal.proposals if item.id in selected_ids),
     )

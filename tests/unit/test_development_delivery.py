@@ -24,11 +24,17 @@ def proposal(**updates):
         "pr_number": 23,
         "destination": "",
         "issue_repository": "owner/repo",
+        "review_source": {
+            "artifact": "review_feedback", "path": "review/iteration_001/output.md",
+            "version": 1, "producer": "review", "sha256": "c" * 64,
+        },
         "proposals": [
             {"id": "FUP-001", "title": "First", "body": "Original draft", "evidence": "file:1"},
             {"id": "FUP-002", "title": "Second", "body": "Another draft", "evidence": "file:2"},
         ],
     }
+    for item in value["proposals"]:
+        item.update(evidence_head="a" * 40, impact="Important", confidence=98)
     value.update(updates)
     return ActionProposal.model_validate(value)
 
@@ -262,3 +268,27 @@ def test_malformed_predispatch_observation_does_not_create_unknown_effect(
     result = execute_action(tmp_path, tmp_path / "issue", snapshot, "integration")
     assert result["state"] == "blocked"
     assert ActionStore(tmp_path / "issue", snapshot).read("integration")["state"] == "blocked"
+
+
+def test_selected_actions_keep_original_snapshot_order():
+    p = proposal()
+    selected = approve_selection(p, authority(p, feedback="FUP-002 FUP-001"))
+    assert [item.id for item in selected.selected] == ["FUP-001", "FUP-002"]
+
+
+@pytest.mark.parametrize("field", ["evidence_head", "impact", "confidence"])
+def test_shown_review_drafts_require_original_lineage(field):
+    value = proposal().model_dump(mode="json")
+    del value["proposals"][0][field]
+    with pytest.raises(ValueError):
+        ActionProposal.model_validate(value)
+
+
+def test_review_source_is_part_of_exact_immutable_authority():
+    p = proposal()
+    changed = p.model_dump(mode="json")
+    changed["review_source"]["sha256"] = "d" * 64
+    assert ActionProposal.model_validate(changed).digest != p.digest
+    changed["review_source"] = None
+    with pytest.raises(ValueError):
+        ActionProposal.model_validate(changed)

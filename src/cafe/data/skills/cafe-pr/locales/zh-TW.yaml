@@ -29,4 +29,8 @@ human_task.cafe_pr.delivery_draft: '{id}：{title}
 
   {body}
 
-  依據：{evidence}'
+  依據：{evidence}
+
+  證據 HEAD：{evidence_head}；影響：{impact}；信心：{confidence}'
+
+human_task.cafe_pr.delivery_review_source: "Review 來源：{artifact} v{version}，{path}，產生者 {producer}，SHA256 {sha256}"

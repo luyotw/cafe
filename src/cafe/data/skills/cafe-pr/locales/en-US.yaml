@@ -37,4 +37,8 @@ human_task.cafe_pr.delivery_draft: '{id}: {title}
 
   {body}
 
-  Evidence: {evidence}'
+  Evidence: {evidence}
+
+  Evidence HEAD: {evidence_head}; impact: {impact}; confidence: {confidence}'
+
+human_task.cafe_pr.delivery_review_source: "Review source: {artifact} v{version}, {path}, producer {producer}, SHA256 {sha256}"

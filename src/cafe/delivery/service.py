@@ -60,7 +60,38 @@ def execute_snapshot(
     results = {}
     pending_task = None
     store = ActionStore(issue_dir, snapshot)
-    for action in actions:
+    previous_results = {}
+    history = list((issue_dir / "delivery").glob("*/actions.json"))
+    if len(history) > 100:
+        raise ValueError("delivery history requires bounded manual reconciliation")
+    from cafe.delivery.contracts import ActionSnapshot
+
+    for manifest in history:
+        if manifest.parent == store.directory:
+            continue
+        if manifest.stat().st_size > 1024 * 1024:
+            raise ValueError("oversized historical action manifest")
+        previous = ActionSnapshot.model_validate_json(manifest.read_bytes())
+        if previous.proposal.workflow_id != snapshot.proposal.workflow_id:
+            continue
+        previous_store = ActionStore(issue_dir, previous)
+        for action in ["integration", *[item.id for item in previous.selected]]:
+            receipt = previous_store.read(action)
+            if not receipt or receipt["state"] not in {"unknown", "succeeded"}:
+                continue
+            if receipt["state"] == "unknown" and deadline - time.monotonic() > 5:
+                # Existing unknown attempts permit observation only, even if a revision drops them.
+                receipt = execute_action(
+                    root, issue_dir, previous, action, timeout=deadline - time.monotonic() - 5
+                )
+            previous_results[f"{previous.digest}:{action}"] = receipt
+    unresolved_history = [
+        "previous:" + key
+        for key, value in previous_results.items()
+        if value["state"] != "succeeded"
+    ]
+    # Resolve retained uncertainty before any newly approved effect or host approval request.
+    for action in (actions if not unresolved_history else []):
         remaining = deadline - time.monotonic()
         if remaining <= 5:
             results[action] = {"state": "not_dispatched", "error": "batch_deadline"}
@@ -120,36 +151,6 @@ def execute_snapshot(
         results[action] = result
         if not execution.get("success") or result["state"] != "succeeded":
             break
-    previous_results = {}
-    history = list((issue_dir / "delivery").glob("*/actions.json"))
-    if len(history) > 100:
-        raise ValueError("delivery history requires bounded manual reconciliation")
-    from cafe.delivery.contracts import ActionSnapshot
-
-    for manifest in history:
-        if manifest.parent == store.directory:
-            continue
-        if manifest.stat().st_size > 1024 * 1024:
-            raise ValueError("oversized historical action manifest")
-        previous = ActionSnapshot.model_validate_json(manifest.read_bytes())
-        if previous.proposal.workflow_id != snapshot.proposal.workflow_id:
-            continue
-        previous_store = ActionStore(issue_dir, previous)
-        for action in ["integration", *[item.id for item in previous.selected]]:
-            receipt = previous_store.read(action)
-            if not receipt or receipt["state"] not in {"unknown", "succeeded"}:
-                continue
-            if receipt["state"] == "unknown" and deadline - time.monotonic() > 5:
-                # Existing unknown attempts permit observation only, even if a revision drops them.
-                receipt = execute_action(
-                    root, issue_dir, previous, action, timeout=deadline - time.monotonic() - 5
-                )
-            previous_results[f"{previous.digest}:{action}"] = receipt
-    unresolved_history = [
-        "previous:" + key
-        for key, value in previous_results.items()
-        if value["state"] != "succeeded"
-    ]
     complete = len(results) == len(actions) and all(
         r["state"] == "succeeded" for r in results.values()
     )

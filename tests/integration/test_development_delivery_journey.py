@@ -1,5 +1,6 @@
 """I1–I9: public hook/task/capability journeys with isolated Git and fake GitHub."""
 
+import hashlib
 import json
 import shutil
 from collections import UserDict
@@ -117,6 +118,11 @@ def setup_action(
         from cafe.core.blackboard import ArtifactEntry, ArtifactKind
 
         review = issue / "review.md"
+        proposals = [
+            {**item, "impact": "Important", "confidence": 98,
+             "evidence_head": local.proposal.source_oid}
+            for item in proposals
+        ]
         review.write_text(
             "## Follow-up Proposals\n\n```json\n"
             + json.dumps({"proposals": list(proposals)})
@@ -337,6 +343,22 @@ def test_selected_subset_creates_only_frozen_drafts_and_restart_does_not_replay(
     ]
     context = setup_action(local_action, tmp_path, github=github, proposals=proposals)
     approve_action(context, selected="FUP-002")
+    from cafe.delivery.contracts import DeliveryBinding
+    from cafe.delivery.selection import approved_snapshot
+
+    snapshot = approved_snapshot(
+        context[2], workflow_id=context[3].workflow_id,
+        binding=DeliveryBinding.model_validate(context[5]["steps"][context[-1]]["delivery"]),
+    )
+    review = context[2] / "review.md"
+    assert snapshot.proposal.review_source.path == "review.md"
+    assert snapshot.proposal.review_source.version == 1
+    assert snapshot.proposal.review_source.producer == "review"
+    assert snapshot.proposal.review_source.sha256 == hashlib.sha256(review.read_bytes()).hexdigest()
+    assert snapshot.selected[0].impact == "Important" and snapshot.selected[0].confidence == 98
+    assert snapshot.selected[0].evidence_head == local_action[3].proposal.source_oid
+    # Later source artifacts cannot expand or replace the already shown frozen drafts.
+    review.write_text(review.read_text().replace("Original selected body", "Later draft"))
     result = run_and_approve_host(context)
     if result.override_status_code == PhaseStatusCode.NEED_PERMISSION:
         result = run_and_approve_host(context)
@@ -464,8 +486,9 @@ def test_denied_host_approval_remains_nonterminal_without_dispatch(local_action,
     assert state.current_step != "done"
 
 
-def test_revised_empty_selection_cannot_hide_an_earlier_unknown_issue(
-    local_action, tmp_path, fake_github
+@pytest.mark.parametrize("revise_draft", [False, True])
+def test_revised_selection_reconciles_earlier_unknown_before_new_effects(
+    local_action, tmp_path, fake_github, revise_draft
 ):
     external = json.loads(fake_github.read_text())
     external["lose_issue_response"] = True
@@ -481,6 +504,9 @@ def test_revised_empty_selection_cannot_hide_an_earlier_unknown_issue(
     external = json.loads(fake_github.read_text())
     external["issues"] = []
     fake_github.write_text(json.dumps(external))
+    if revise_draft:
+        review = issue / "review.md"
+        review.write_text(review.read_text().replace("Original", "Revised"))
     phase.iteration = 2
     phase.phase_name = "pr"
     kwargs.update(
@@ -497,8 +523,9 @@ def test_revised_empty_selection_cannot_hide_an_earlier_unknown_issue(
     assert hook(engine, "publish_output", "DevelopmentActionContext", kwargs).continue_pipeline
     task = HumanTaskRecordStore(issue).tasks()[-1]
     revised = (*context[:8], task, delivery)
-    approve_action(revised)
-    hook(engine, "prepare_input", "DevelopmentDeliveryExecutor", kwargs)
+    approve_action(revised, selected="FUP-001" if revise_draft else "")
+    run_and_approve_host(revised)
+    run_and_approve_host(revised)
     from cafe.delivery.contracts import DeliveryBinding
     from cafe.delivery.selection import approved_snapshot
 
