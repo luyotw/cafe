@@ -322,3 +322,128 @@ def test_stale_action_cannot_complete_a_new_selection(journey):
     )
     assert journey.complete("performed", action).rejection is not None
     assert not journey.service().records.read()["reports"]
+
+
+def test_review_materialization_crash_cannot_rebind_an_old_task_to_new_source(
+    tmp_path, monkeypatch
+):
+    """U7/U2: persist the reviewed snapshot before exposing its HumanTask."""
+    from cafe.core.blackboard import BlackboardStore
+    from cafe.core.integration import IntegrationService
+    from cafe.core.human_task_records import HumanTaskRecordStore
+    from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
+    from cafe.playbooks.loader import PlaybookLoader
+    from tests.integration.integration_fixture import create_journey
+
+    root = tmp_path / "snapshot-crash"
+    original = IntegrationService.associate
+
+    def interrupted(service, task):
+        if task.step == service.declaration.review_step:
+            raise OSError("interrupted task/snapshot association")
+        return original(service, task)
+
+    monkeypatch.setattr(IntegrationService, "associate", interrupted)
+    with pytest.raises(OSError):
+        create_journey(root, monkeypatch)
+    issue_dir = root / ".cafe/issues/delivery"
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    source_path = issue_dir / "reviewed.json"
+    raw = json.loads(source_path.read_text())
+    original_source = raw["head_sha"]
+    raw["head_sha"] = raw["base_sha"]
+    source_path.write_text(json.dumps(raw))
+    monkeypatch.setattr(IntegrationService, "associate", original)
+    playbook = PlaybookLoader(project_root=root).load("custom-delivery")
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=playbook, executor=lambda *a: None
+    )
+    runtime.run(start_step="verdict")
+    assert HumanTaskRecordStore(issue_dir).tasks()[0].id == task.id
+    snapshot = IntegrationService(
+        issue_dir, playbook, BlackboardStore(issue_dir).load_read_only()
+    ).records.read()["reviews"][task.id]
+    assert snapshot["source"]["head_sha"] == original_source
+
+
+def test_local_feature_revision_drift_requires_review_and_deleted_feature_is_historical(journey):
+    confirmed_action(journey, "local_branch")
+    journey.git("commit", "--allow-empty", "-m", "unreviewed conflict resolution")
+    assert not journey.runtime().run().completed
+    assert journey.state().current_step == "forge"
+
+
+def test_completed_unchanged_delivery_has_no_new_tasks_attempts_or_network(journey, monkeypatch):
+    confirmed_action(journey, "local_branch")
+    journey.human_integrate()
+    assert journey.runtime().run().completed
+    before = journey.service().records.read()
+
+    def forbidden(*a, **kw):
+        raise AssertionError("Completed delivery must not be monitored")
+
+    monkeypatch.setattr("cafe.core.git.GitOperations.observe_integration", forbidden)
+    assert journey.runtime().run().completed
+    assert journey.service().records.read() == before
+
+
+def test_github_changed_approved_pr_source_routes_to_declared_correction(journey, monkeypatch):
+    monkeypatch.setattr(
+        "cafe.utils.github.GitHubOps.observe_integration", lambda *a: dict(journey.observation)
+    )
+    confirmed_action(journey, "github_pr")
+    journey.observation["source_commit"] = journey.base
+    assert not journey.runtime().run().completed
+    assert journey.state().current_step == "forge"
+    assert journey.service().records.read()["attempts"][-1]["success"] is False
+
+
+def test_deleted_feature_ref_still_allows_reviewed_historical_source(journey):
+    confirmed_action(journey, "local_branch")
+    journey.human_integrate()
+    journey.git("checkout", "main")
+    journey.git("branch", "-D", "feature")
+    assert journey.runtime().run().completed
+
+
+@pytest.mark.parametrize("target", ["local_branch", "github_pr"])
+def test_success_failure_and_recovery_issue_only_fixed_read_requests(journey, monkeypatch, target):
+    from tests.integration.integration_fixture import install_github_process_fixture
+
+    confirmed_action(journey, target)
+    if target == "github_pr":
+        fixture = install_github_process_fixture(journey.root, journey.source)
+        import os
+
+        monkeypatch.setenv("PATH", str(fixture) + os.pathsep + os.environ["PATH"])
+    requests = []
+    original = subprocess.run
+
+    def tracked(argv, **kwargs):
+        requests.append(list(argv))
+        return original(argv, **kwargs)
+
+    monkeypatch.setattr("cafe.core.git.subprocess.run", tracked)
+    assert not journey.runtime().run().completed
+    if target == "github_pr":
+        state = json.loads((fixture / "pr.json").read_text())
+        state.update(merged=True, state="closed", merge_commit_sha="c" * 40)
+        (fixture / "pr.json").write_text(json.dumps(state))
+    else:
+        monkeypatch.setattr("cafe.core.git.subprocess.run", original)
+        journey.human_integrate()
+        monkeypatch.setattr("cafe.core.git.subprocess.run", tracked)
+    assert journey.runtime().run().completed
+    for argv in requests:
+        if argv[0] == "git":
+            assert argv[1] in {"rev-parse", "show-ref", "cat-file", "merge-base"}
+        else:
+            assert argv == ["gh", "--version"] or argv == [
+                "gh",
+                "api",
+                "--method",
+                "GET",
+                "repos/owner/repo/pulls/17",
+            ]
+    if target == "local_branch":
+        assert all(argv[0] == "git" for argv in requests)

@@ -161,7 +161,9 @@ See `src/cafe/data/playbooks/standard-qa-integrate.yaml` for complete bindings a
 `src/cafe/data/skills/cafe-integrate/SKILL.md` for English/Traditional Chinese policies.
 Accepted review outcomes point to the selection step; `confirm` points to action;
 `performed`, `already_performed` and `blocked` return to action for native verification.
-The action step declares its verified continuation. Equivalent custom step, artifact,
+Selection and action steps are human-owned. The action step declares its verified
+continuation and includes the correction step in its existing `allowed_goto` or
+`on` routes. Equivalent custom step, artifact,
 policy and accepted-decision names work through the same catalog/task/runtime paths.
 The source artifact is the versioned WorkspaceArtifact from its named producer,
 and GitHub publication is matched to the named prepared artifact's receipt.

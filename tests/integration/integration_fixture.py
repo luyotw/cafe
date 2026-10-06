@@ -130,6 +130,7 @@ def create_journey(root: Path, monkeypatch):
                 on=dict(await_agent="land"),
             ),
             land=step(
+                allowed_goto=["forge"],
                 assignee_type="human",
                 human_tasks=[
                     dict(
@@ -186,6 +187,32 @@ def create_journey(root: Path, monkeypatch):
             outputs=dict(pr_url="https://github.com/owner/repo/pull/17", pr_number="17"),
             correlation_id="fixture-publication",
             finished_at="2026-10-06T00:00:00+00:00",
+        ),
+    )
+
+    unrelated_source = issue_dir / "unrelated-workspace.json"
+    raw = json.loads(source_file.read_text())
+    raw.update(name="workspace", head_sha=base, version=99)
+    unrelated_source.write_text(json.dumps(raw))
+    unrelated_delivery = issue_dir / "unrelated-pr-result.md"
+    unrelated_delivery.write_text("Unrelated built-in-named delivery artifact")
+    for name, producer, path, kind in [
+        ("workspace", "develop", unrelated_source, ArtifactKind.WORKSPACE),
+        ("pr_result", "pr", unrelated_delivery, ArtifactKind.DOCUMENT),
+    ]:
+        board_store.put_artifact(
+            board,
+            ArtifactEntry(name=name, updated_by=producer, path=str(path), kind=kind, version=99),
+        )
+    board_store.append_capability_receipt(
+        board,
+        dict(
+            capability="cafe.pr.publish",
+            success=True,
+            inputs=dict(output=str(unrelated_delivery)),
+            outputs=dict(pr_url="https://github.com/unrelated/repo/pull/999", pr_number="999"),
+            correlation_id="unrelated-publication",
+            finished_at="2026-10-06T00:01:00+00:00",
         ),
     )
 

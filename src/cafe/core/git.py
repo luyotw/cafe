@@ -77,6 +77,20 @@ class GitOperations:
         except (OSError, subprocess.TimeoutExpired):
             return dict(observed, unavailable=True, exit_code=None)
 
+    def observe_feature_source(self, feature_branch: str) -> dict:
+        """Read an optional historical feature ref; distinguish absence from failure."""
+        from cafe.core.integration import valid_branch
+        valid_branch(feature_branch)
+        try:
+            result = subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{feature_branch}^{{commit}}"],
+                                    cwd=self.repo_path, text=True, capture_output=True, check=False, timeout=30)
+            commit = result.stdout.strip() if result.returncode == 0 else None
+            if commit is not None and not re.fullmatch(r"[0-9a-f]{40}", commit):
+                return {"commit": None, "exit_code": 2}
+            return {"commit": commit, "exit_code": result.returncode}
+        except (OSError, subprocess.TimeoutExpired):
+            return {"commit": None, "exit_code": None}
+
     @classmethod
     def is_repository(cls, repo_path: str = ".") -> bool:
         """Return whether ``repo_path`` is inside a Git work tree."""

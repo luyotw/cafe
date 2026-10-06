@@ -2745,6 +2745,7 @@ def integration_playbook_data():
                 ],
             },
             "delivery": {
+                "allowed_goto": ["build"],
                 "role": "operator",
                 "skill": "custom",
                 "assignee_type": "human",
@@ -2787,5 +2788,19 @@ def test_integration_declaration_preserves_custom_relationships():
 def test_integration_declaration_rejects_unknown_or_executable_relationships(field, value):
     data = integration_playbook_data()
     data["integration"][field] = value
+    with pytest.raises(ValueError):
+        PlaybookDefinition.model_validate(data)
+
+
+def test_integration_correction_requires_a_declared_action_route():
+    data = integration_playbook_data()
+    data["steps"]["delivery"].pop("allowed_goto", None)
+    with pytest.raises(ValueError):
+        PlaybookDefinition.model_validate(data)
+
+
+def test_integration_confirmation_and_action_are_human_owned():
+    data = integration_playbook_data()
+    data["steps"]["delivery"]["assignee_type"] = "agent"
     with pytest.raises(ValueError):
         PlaybookDefinition.model_validate(data)

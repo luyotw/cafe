@@ -96,3 +96,23 @@ def test_corrupt_foreign_or_unconfirmed_proof_fails_closed(records, tmp_path):
     records.file_path.write_text('{"schema_version":99}')
     with pytest.raises(ValueError):
         records.read()
+
+
+@pytest.mark.parametrize(
+    "corrupt",
+    [
+        {"schema_version": True},
+        {"selections": [{}]},
+        {"attempts": [True]},
+        {"completion": "claimed"},
+        {"reports": [{}]},
+    ],
+)
+def test_malformed_record_cannot_claim_current_proof(records, corrupt):
+    import json
+
+    confirmed(records)
+    raw = records.read() | corrupt
+    records.file_path.write_text(json.dumps(raw))
+    with pytest.raises(ValueError):
+        records.read()

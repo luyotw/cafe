@@ -1,51 +1,36 @@
 playbook:
   id: standard-qa-integrate
-  name: Standard Development + QA + Verified Human Integration
+  name: "Standard Development + QA + Verified Human Integration"
   conversation_locale: en-US
   applicability:
-    summary: Planned delivery with independent QA and verified human integration into
-      an explicitly confirmed destination.
+    summary: "Planned delivery with independent QA and verified human integration into a confirmed GitHub PR base or local branch."
     use_when:
-    - Accepted changes must reach a confirmed GitHub PR base or local branch before
-      completion.
+      - "Accepted changes must reach a confirmed destination before completion."
+      - "Acceptance must be verified independently from implementation and code review."
     avoid_when:
-    - Review-only completion is sufficient.
-    - Automatic merging or local squash equivalence is required.
+      - "Repository policy requires test-driven implementation throughout development."
+      - "Implementation verification and code review fully cover the acceptance boundary."
+
 behavior:
   completion: status_code
   allow_issue_decomposition: true
+
 skills:
   workflow:
-    shared:
-    - cafe-workflow-common
-    - cafe-github_sync
+    shared: [cafe-workflow-common, cafe-github_sync]
   chat:
-    shared:
-    - cafe-common-chat-handoff
-    - cafe-chat-develop-change
-    - cafe-chat-spec-revision
-    - cafe-chat-plan-revision
-    - cafe-chat-alignment-decision
+    shared: [cafe-common-chat-handoff, cafe-chat-develop-change, cafe-chat-spec-revision, cafe-chat-plan-revision, cafe-chat-alignment-decision]
+
 roles:
-  pm:
-    description: Product Manager
-    default_agent: Roger
-    default_cli: gemini
-  developer:
-    description: Developer
-    default_agent: David
-    default_cli: claude
-  reviewer:
-    description: Code Reviewer
-    default_agent: Richard
-    default_cli: gemini
-  qa:
-    description: Product Acceptance QA
-    default_agent: Quinn
-    default_cli: gemini
+  pm: {description: "Product Manager", default_agent: Roger, default_cli: gemini}
+  developer: {description: Developer, default_agent: David, default_cli: claude}
+  reviewer: {description: "Code Reviewer", default_agent: Richard, default_cli: gemini}
+  qa: {description: "Product Acceptance QA", default_agent: Quinn, default_cli: gemini}
+
 commands:
   prepare:
     fields_ref: skill://cafe-spec/assets/prepare/default_prepare_fields.yaml
+
 steps:
   spec:
     type: skill
@@ -55,218 +40,95 @@ steps:
     input_artifacts: []
     output_artifact: spec
     initial_input:
-      providers:
-      - manual_text
-      - github_issue
-      bind:
-        artifact: spec
-        prompt_context: user_input
+      providers: [manual_text, github_issue]
+      bind: {artifact: spec, prompt_context: user_input}
     human_tasks:
-    - trigger: confirm_output
-      task_id: output-review
-      outcomes:
-        confirm: plan
-        revise: spec
-    - trigger: need_clarification
-      task_id: clarification-answers
-      outcomes:
-        submit: spec
-    allowed_tools:
-    - Read
-    - Grep
-    - Glob
-    - WebFetch
-    - WebSearch
+      - {trigger: confirm_output, task_id: output-review, outcomes: {confirm: plan, revise: spec}}
+      - {trigger: need_clarification, task_id: clarification-answers, outcomes: {submit: spec}}
+    allowed_tools: [Read, Grep, Glob, WebFetch, WebSearch]
     hooks:
-      prepare_input:
-      - InitialInputProviderResolver
-      - UserInputCollector
-      after_execute:
-      - InteractiveQAHandler
-    'on':
-      confirm_output: spec
-      need_clarification: spec
-      need_permission: spec
-      await_agent: plan
+      prepare_input: [InitialInputProviderResolver, UserInputCollector]
+      after_execute: [InteractiveQAHandler]
+    "on": {confirm_output: spec, need_clarification: spec, need_permission: spec, await_agent: plan}
+
   plan:
     type: skill
     skill: cafe-plan
     role: developer
     assignee_type: agent
-    input_artifacts:
-    - spec
-    - plan
+    input_artifacts: [spec, plan]
     output_artifact: plan
     todo_identity_input_artifact: plan
     human_tasks:
-    - trigger: initial
-      task_id: development-guide
-    - trigger: confirm_output
-      task_id: output-review
-      outcomes:
-        confirm: develop
-        revise: plan
-    - trigger: need_clarification
-      task_id: clarification-answers
-      outcomes:
-        submit: plan
-    allowed_tools:
-    - Read
-    - Grep
-    - Glob
-    - WebFetch
-    - WebSearch
-    hooks:
-      prepare_input:
-      - UserInputCollector
-    'on':
-      confirm_output: plan
-      need_clarification: plan
-      need_permission: plan
-      await_agent: develop
+      - {trigger: initial, task_id: development-guide}
+      - {trigger: confirm_output, task_id: output-review, outcomes: {confirm: develop, revise: plan}}
+      - {trigger: need_clarification, task_id: clarification-answers, outcomes: {submit: plan}}
+    allowed_tools: [Read, Grep, Glob, WebFetch, WebSearch]
+    hooks: {prepare_input: [UserInputCollector]}
+    "on": {confirm_output: plan, need_clarification: plan, need_permission: plan, await_agent: develop}
+
   develop:
     type: skill
     skill: cafe-develop
     handoff_label: Continue implementation
     role: developer
     assignee_type: agent
-    input_artifacts:
-    - spec
-    - plan
-    - review_feedback
-    - qa_feedback
-    - pr_result
-    - workflow_feedback
+    input_artifacts: [spec, plan, review_feedback, qa_feedback, pr_result, workflow_feedback]
     output_artifact: code
     workspace_artifact: workspace
     human_tasks:
-    - trigger: need_clarification
-      task_id: clarification-feedback
-      outcomes:
-        submit: develop
-    - trigger: need_permission
-      task_id: permission-answers
-      outcomes:
-        submit: develop
-    - trigger: no_changes_needed
-      task_id: no-change-decision
-      outcomes:
-        agree: review
-        disagree: develop
-    allowed_tools:
-    - Read
-    - Edit
-    - Write
-    - Grep
-    - Glob
-    - Bash
-    - WebFetch
-    - WebSearch
+      - {trigger: need_clarification, task_id: clarification-feedback, outcomes: {submit: develop}}
+      - {trigger: need_permission, task_id: permission-answers, outcomes: {submit: develop}}
+      - {trigger: no_changes_needed, task_id: no-change-decision, outcomes: {agree: review, disagree: develop}}
+    allowed_tools: [Read, Edit, Write, Grep, Glob, Bash, WebFetch, WebSearch]
     hooks:
-      prepare_input:
-      - UserInputCollector
-      after_execute:
-      - NoChangesNeededHandler
-      - PermissionRetryHandler
-    'on':
-      await_agent: review
-      need_clarification: develop
-      need_permission: develop
-      no_changes_needed: review
+      prepare_input: [UserInputCollector]
+      after_execute: [NoChangesNeededHandler, PermissionRetryHandler]
+    "on": {await_agent: review, need_clarification: develop, need_permission: develop, no_changes_needed: review}
+
   review:
     type: skill
     skill: cafe-review
     role: reviewer
     assignee_type: agent
-    input_artifacts:
-    - spec
-    - plan
-    - code
-    - workspace
-    - qa_feedback
-    - workflow_feedback
+    input_artifacts: [spec, plan, code, workspace, qa_feedback, workflow_feedback]
     workspace_input_artifact: workspace
     output_artifact: review_feedback
-    behavior:
-      runtime_tool_grants:
-      - git_inspection
+    behavior: {runtime_tool_grants: [git_inspection]}
     human_tasks:
-    - trigger: need_clarification
-      task_id: clarification-feedback
-      outcomes:
-        submit: review
-    - trigger: manual_handoff
-      task_id: iteration-limit
-      outcomes:
-        resume: review
-    allowed_tools:
-    - Read
-    - Grep
-    - Glob
-    - Bash(git:*)
+      - {trigger: need_clarification, task_id: clarification-feedback, outcomes: {submit: review}}
+      - {trigger: manual_handoff, task_id: iteration-limit, outcomes: {resume: review}}
+    allowed_tools: [Read, Grep, Glob, "Bash(git:*)"]
     max_attempts_per_cycle: 5
-    allowed_goto:
-    - develop
+    allowed_goto: [develop]
     hooks:
-      prepare_input:
-      - UserInputCollector
-      before_execute:
-      - NewChangesGate
-    'on':
-      await_agent: qa
-      manual_handoff: develop
-      need_clarification: review
+      prepare_input: [UserInputCollector]
+      before_execute: [NewChangesGate]
+    "on": {await_agent: qa, manual_handoff: develop, need_clarification: review}
+
   qa:
     type: skill
     skill: cafe-qa
     role: qa
     assignee_type: agent
-    input_artifacts:
-    - spec
-    - plan
-    - code
-    - workspace
-    - review_feedback
+    input_artifacts: [spec, plan, code, workspace, review_feedback]
     workspace_input_artifact: workspace
     output_artifact: qa_feedback
     human_tasks:
-    - trigger: need_clarification
-      task_id: clarification-feedback
-      outcomes:
-        submit: qa
-    - trigger: manual_handoff
-      task_id: iteration-limit
-      outcomes:
-        resume: qa
-    allowed_tools:
-    - Read
-    - Grep
-    - Glob
-    - Bash
+      - {trigger: need_clarification, task_id: clarification-feedback, outcomes: {submit: qa}}
+      - {trigger: manual_handoff, task_id: iteration-limit, outcomes: {resume: qa}}
+    allowed_tools: [Read, Grep, Glob, Bash]
     max_attempts_per_cycle: 5
-    allowed_goto:
-    - develop
-    hooks:
-      prepare_input:
-      - UserInputCollector
-    'on':
-      await_agent: pr
-      manual_handoff: develop
-      need_clarification: qa
-      need_permission: qa
+    allowed_goto: [develop]
+    hooks: {prepare_input: [UserInputCollector]}
+    "on": {await_agent: pr, manual_handoff: develop, need_clarification: qa, need_permission: qa}
+
   pr:
     type: skill
     skill: cafe-pr
     role: developer
     assignee_type: agent
-    input_artifacts:
-    - spec
-    - plan
-    - code
-    - workspace
-    - review_feedback
-    - qa_feedback
-    - workflow_feedback
+    input_artifacts: [spec, plan, code, workspace, review_feedback, qa_feedback, workflow_feedback]
     workspace_input_artifact: workspace
     output_artifact: pr_result
     behavior:
@@ -277,85 +139,43 @@ steps:
       feedback_source_kind: github_pr
       feedback_todo_source: pr_comment
       feedback_todo_id_prefix: PRC
-      context_providers:
-      - git_history
-      - local_review
-    capability_requests:
-    - cafe.pr.publish
-    allowed_tools:
-    - Read
-    - Edit
-    - Write
-    - Grep
-    - Glob
-    allowed_goto:
-    - develop
+      context_providers: [git_history, local_review]
+    capability_requests: [cafe.pr.publish]
+    allowed_tools: [Read, Edit, Write, Grep, Glob]
+    allowed_goto: [develop]
     hooks:
-      prepare_input:
-      - GitHubPRCreator
-      - GitHubPRFeedbackSource
-      - UserInputCollector
-      publish_output:
-      - GitHubPRCreator
-      - LocalReviewContextProvider
-      - PRLinkOpener
+      prepare_input: [GitHubPRCreator, GitHubPRFeedbackSource, UserInputCollector]
+      publish_output: [GitHubPRCreator, LocalReviewContextProvider, PRLinkOpener]
     human_tasks:
-    - trigger: confirm_output
-      task_id: local-review
-      outcomes:
-        fix_now: pr
-        create_follow_up: destination
-        continue_without_issue: destination
-      feedback_delivery:
-        artifact: workflow_feedback
-        source_kind: local_review
-        todo_source: workflow_feedback
-        todo_id_prefix: WF
-    'on':
-      confirm_output: pr
-      need_permission: pr
-      manual_handoff: develop
+      - trigger: confirm_output
+        task_id: local-review
+        outcomes: {fix_now: pr, create_follow_up: destination, continue_without_issue: destination}
+        feedback_delivery: {artifact: workflow_feedback, source_kind: local_review, todo_source: workflow_feedback, todo_id_prefix: WF}
+    "on": {confirm_output: pr, need_permission: pr, manual_handoff: develop}
+
   destination:
-    type: skill
     skill: cafe-integrate
     role: developer
     assignee_type: human
-    input_artifacts:
-    - workspace
-    - pr_result
-    - workflow_feedback
+    input_artifacts: [workspace, pr_result, workflow_feedback]
     human_tasks:
-    - trigger: initial
-      task_id: integration-destination
-      outcomes:
-        confirm: integrate
-        revise: destination
-    'on':
-      await_agent: integrate
+      - {trigger: initial, task_id: integration-destination, outcomes: {confirm: integrate, revise: destination}}
+    "on": {await_agent: integrate}
+
   integrate:
-    type: skill
     skill: cafe-integrate
     role: developer
     assignee_type: human
-    input_artifacts:
-    - workspace
-    - pr_result
+    input_artifacts: [workspace, pr_result]
+    allowed_goto: [develop]
     human_tasks:
-    - trigger: initial
-      task_id: human-integration
-      outcomes:
-        performed: integrate
-        already_performed: integrate
-        blocked: integrate
-    'on':
-      workflow_complete: _done
-entry_point: spec
+      - {trigger: initial, task_id: human-integration, outcomes: {performed: integrate, already_performed: integrate, blocked: integrate}}
+    "on": {workflow_complete: _done}
+
 integration:
   review_step: pr
   review_task: local-review
-  accepted_decisions:
-  - create_follow_up
-  - continue_without_issue
+  accepted_decisions: [create_follow_up, continue_without_issue]
   source_artifact: workspace
   source_step: develop
   delivery_artifact: pr_result
@@ -366,3 +186,5 @@ integration:
   action_task: human-integration
   correction_step: develop
   verified_continuation: _done
+
+entry_point: spec

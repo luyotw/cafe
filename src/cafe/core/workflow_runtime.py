@@ -2027,7 +2027,7 @@ class BlackboardWorkflowRuntime:
         integration = integration_service(self.issue_dir, self.playbook, self.blackboard)
         integration_prompt = policy.prompt
         if integration is not None:
-            integration_prompt, integration_key = integration.task_context(current_step, policy.id, integration_prompt)
+            integration_prompt, integration_key = integration.task_context(current_step, policy.id, integration_prompt, handoff_key)
             if integration_key is not None:
                 handoff_key = integration_key
 
@@ -3407,7 +3407,7 @@ class BlackboardWorkflowRuntime:
         integration = integration_service(self.issue_dir, self.playbook, self.blackboard)
         integration_prompt = prompt
         if integration is not None:
-            integration_prompt, integration_key = integration.task_context(current_step, policy.id, integration_prompt)
+            integration_prompt, integration_key = integration.task_context(current_step, policy.id, integration_prompt, handoff_key)
             if integration_key is not None:
                 handoff_key = integration_key
 

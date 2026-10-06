@@ -135,3 +135,23 @@ def test_github_wrong_missing_or_unavailable_proof_is_incomplete(changes):
     selected = selection(target="github_pr", repository="owner/repo", pr=17)
     success, reason = evaluate_github(selected, github_observation(**changes))
     assert not success and reason
+
+
+def test_boolean_pr_is_not_an_explicit_pr_identity():
+    with pytest.raises(ValueError):
+        selection(target="github_pr", repository="owner/repo", pr=True)
+
+
+def test_local_exit_status_is_integer_evidence_not_truthy_claim():
+    from cafe.core.integration import evaluate_local
+
+    selected = selection()
+    observed = dict(
+        repository="/tmp/reviewed",
+        target_branch="main",
+        source_commit="a" * 40,
+        target_head="a" * 40,
+        stable=True,
+        ancestor_exit_code=False,
+    )
+    assert not evaluate_local(selected, observed)[0]

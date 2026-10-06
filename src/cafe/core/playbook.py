@@ -1041,6 +1041,10 @@ class IntegrationDeclaration(BaseModel):
             raise ValueError("integration source artifact must belong to its declared producer")
         if steps[self.delivery_step].output_artifact != self.delivery_artifact:
             raise ValueError("integration delivery artifact must belong to its declared producer")
+        if any(steps[name].assignee_type != "human" for name in (self.selection_step, self.action_step)):
+            raise ValueError("integration confirmation and action steps must be human owned")
+        if self.correction_step not in (*steps[self.action_step].on.values(), *steps[self.action_step].allowed_goto):
+            raise ValueError("integration correction requires a declared action route")
         if self.verified_continuation not in {*steps, DONE_TARGET}:
             raise ValueError("integration verified continuation is unknown")
         for step_name, task_id in (
@@ -1493,6 +1497,13 @@ def validate_playbook(
         _validate_targets(step_name, step.allowed_goto, steps, "allowed_goto")
         _validate_transition_targets(step_name, step.on, steps)
         warnings.extend(_collect_tool_warnings(step_name, step.allowed_tools))
+    if model.integration is not None:
+        declaration = model.integration
+        for composition in compositions[declaration.review_step]:
+            policy = next((p for p in composition.human_tasks if p.id == declaration.review_task), None)
+            decisions = {d.id for d in policy.decisions} if policy is not None else set()
+            if not set(declaration.accepted_decisions).issubset(decisions):
+                raise ValueError("integration accepted decisions must exist in every effective review policy")
     _validate_feedback_target_prompt_inputs(model, compositions=compositions)
     _validate_prepare_metadata(
         model,

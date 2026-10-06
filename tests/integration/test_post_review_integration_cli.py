@@ -181,3 +181,64 @@ def test_documented_journey_survives_real_cli_process_restarts(journey, target):
         "completed"
     ]
     assert journey.state().current_step == "done"
+
+
+def test_status_service_projects_integration_without_processes(journey, monkeypatch):
+    from cafe.services.status_service import StatusService
+
+    task_complete(journey, "ship")
+    journey.select()
+
+    def forbidden(*a, **kw):
+        raise AssertionError("Status projection cannot invoke subprocesses")
+
+    monkeypatch.setattr("cafe.core.git.subprocess.run", forbidden)
+    projection = StatusService(issues_root=journey.issue_dir.parent).load_integration_status(
+        "delivery"
+    )
+    assert projection["state"] == "pending_confirmation"
+
+
+def test_custom_review_policy_must_declare_its_accepted_decision(journey):
+    import yaml
+    from cafe.playbooks.loader import PlaybookLoader
+
+    skill_path = journey.root / ".cafe/skills/custom-delivery/SKILL.md"
+    text = skill_path.read_text()
+    metadata = yaml.safe_load(text.split("---")[1])
+    metadata["workflow"]["human_tasks"][0]["decisions"] = [
+        dict(id="fix", label="Request correction")
+    ]
+    skill_path.write_text("---\n" + yaml.safe_dump(metadata) + "---\n")
+    with pytest.raises(ValueError):
+        PlaybookLoader(project_root=journey.root).load("custom-delivery", strict=True)
+
+
+def test_duplicate_completed_action_preserves_delivery_and_original_result(journey):
+    """I10/U3: a rejected duplicate cannot reopen or duplicate completed delivery."""
+    task_complete(journey, "ship")
+    journey.select()
+    journey.runtime().run()
+    task_complete(journey, "confirm")
+    journey.runtime().run()
+    action = journey.pending()
+    task_complete(journey, "performed")
+    journey.human_integrate()
+    assert journey.runtime().run().completed
+    before = journey.service().records.read()
+    original = journey.service().tasks.get_result(action.id)
+    duplicate = runner.invoke(
+        app,
+        [
+            "task",
+            "complete",
+            action.id,
+            "--result",
+            json.dumps(dict(task=action.policy_id, human_task_id=action.id, decision="performed")),
+            "--no-resume",
+        ],
+    )
+    assert duplicate.exit_code != 0
+    assert journey.state().current_step == "done"
+    assert journey.service().records.read() == before
+    assert journey.service().tasks.get_result(action.id) == original

@@ -56,6 +56,67 @@ class IntegrationRecordStore:
                 or not isinstance(record["reviews"], dict)
             ):
                 raise ValueError("foreign or unsupported integration record")
+            if type(record["schema_version"]) is not int:
+                raise ValueError("invalid integration schema version")
+            if not all(isinstance(v, dict) for v in record["reviews"].values()):
+                raise ValueError("invalid review snapshot")
+            revisions = set()
+            for selected in record["selections"]:
+                if (
+                    not isinstance(selected, dict)
+                    or not isinstance(selected.get("revision"), str)
+                    or not selected["revision"]
+                    or selected["revision"] in revisions
+                    or not isinstance(selected.get("selection"), dict)
+                    or not isinstance(selected.get("review"), dict)
+                    or not isinstance(selected.get("tasks"), dict)
+                    or not set(selected["tasks"]).issubset({"confirmation", "action"})
+                    or any(not isinstance(t, str) or not t for t in selected["tasks"].values())
+                ):
+                    raise ValueError("invalid integration selection history")
+                revisions.add(selected["revision"])
+                confirmation = selected.get("confirmation")
+                if confirmation is not None and (
+                    not isinstance(confirmation, dict)
+                    or any(
+                        not isinstance(confirmation.get(k), str) or not confirmation[k]
+                        for k in ("task_id", "result_id")
+                    )
+                ):
+                    raise ValueError("invalid confirmation reference")
+            for report in record["reports"]:
+                if (
+                    not isinstance(report, dict)
+                    or report.get("outcome") not in {"performed", "already_performed", "blocked"}
+                    or any(
+                        not isinstance(report.get(k), str) or not report[k]
+                        for k in ("revision", "task_id", "result_id")
+                    )
+                ):
+                    raise ValueError("invalid human report reference")
+            for attempt in record["attempts"]:
+                if (
+                    not isinstance(attempt, dict)
+                    or type(attempt.get("success")) is not bool
+                    or not isinstance(attempt.get("observed"), dict)
+                    or not isinstance(attempt.get("review"), dict)
+                    or any(
+                        not isinstance(attempt.get(k), str) or not attempt[k]
+                        for k in ("revision", "id", "reason", "verified_at")
+                    )
+                ):
+                    raise ValueError("invalid verification attempt")
+                if datetime.fromisoformat(attempt["verified_at"]).tzinfo is None:
+                    raise ValueError("verification time needs an explicit timezone")
+            completion = record["completion"]
+            if completion is not None and (
+                not isinstance(completion, dict)
+                or any(
+                    not isinstance(completion.get(k), str) or not completion[k]
+                    for k in ("revision", "attempt_id", "completed_at")
+                )
+            ):
+                raise ValueError("invalid integration completion association")
             revision = record["current_revision"]
             if (
                 revision is not None

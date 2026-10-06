@@ -52,6 +52,13 @@ class IntegrationSelection(BaseModel):
     feature_branch: str | None = None
     pr: int | None = None
 
+    @field_validator("pr", mode="before")
+    @classmethod
+    def _pr_identity(cls, value: Any) -> Any:
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
+            raise IntegrationError("A PR identity must be a positive integer")
+        return value
+
     @field_validator("source_commit")
     @classmethod
     def _source(cls, value: str) -> str:
@@ -162,7 +169,7 @@ class IntegrationService:
             raise IntegrationError(f"Declared artifact {name!r} is unavailable") from exc
         return entry.to_dict(), content
 
-    def capture_review(self, task_id: str) -> None:
+    def _review_snapshot(self) -> dict[str, Any]:
         import json
         from cafe.core.packet_io import sha256_bytes
         from cafe.core.git import GitOperations
@@ -193,18 +200,21 @@ class IntegrationService:
 
         receipts = [r for r in self.blackboard.capability_receipts if receipt_matches(r)]
         publication = receipts[-1] if receipts else None
-        self.records.stage_review(
-            task_id,
-            {
-                "source": source,
-                "source_identity": sha256_bytes(content),
-                "source_entry": entry,
-                "feature_branch": branch,
-                "delivery_entry": delivery,
-                "delivery_identity": sha256_bytes(prepared),
-                "publication": publication,
-            },
-        )
+        return {
+            "source": source,
+            "source_identity": sha256_bytes(content),
+            "source_entry": entry,
+            "feature_branch": branch,
+            "delivery_entry": delivery,
+            "delivery_identity": sha256_bytes(prepared),
+            "publication": publication,
+        }
+
+    def capture_review(self, task: Any) -> None:
+        snapshot = self.records.read()["reviews"].get(f"handoff:{task.handoff_key}")
+        if snapshot is None:
+            raise IntegrationError("Review snapshot was not staged before its task; renew review")
+        self.records.stage_review(task.id, snapshot)
 
     def review(self) -> tuple[AcceptedReview, dict[str, Any]]:
         d = self.declaration
@@ -307,12 +317,29 @@ class IntegrationService:
                 )
         return revision
 
-    def task_context(self, step: str, policy_id: str, prompt: str) -> tuple[str, str | None]:
+    def task_context(
+        self, step: str, policy_id: str, prompt: str, handoff_key: str | None = None
+    ) -> tuple[str, str | None]:
         import json
 
         d = self.declaration
         if (step, policy_id) == (d.review_step, d.review_task):
-            return prompt, None
+            if not handoff_key:
+                raise IntegrationError("Review needs a durable handoff identity")
+            key = f"handoff:{handoff_key}"
+            snapshot = self.records.read()["reviews"].get(key)
+            if snapshot is None:
+                snapshot = self._review_snapshot()
+                self.records.stage_review(key, snapshot)
+            context = json.dumps(
+                {
+                    "reviewed_source": snapshot["source"],
+                    "prepared_delivery": snapshot["delivery_entry"],
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            return f"{prompt}\n\n{context}", None
         kind = (
             "confirmation"
             if (step, policy_id) == (d.selection_step, d.selection_task)
@@ -345,7 +372,7 @@ class IntegrationService:
         d = self.declaration
         if (task.step, task.policy_id) == (d.review_step, d.review_task):
             if task.id not in self.records.read()["reviews"]:
-                self.capture_review(task.id)
+                self.capture_review(task)
             return
         for kind, step, policy in (
             ("confirmation", d.selection_step, d.selection_task),
@@ -377,6 +404,13 @@ class IntegrationService:
 
     def reconcile(self) -> None:
         """Repair exact task/result associations after cross-file interruptions."""
+        for task in self.tasks.tasks():
+            if (task.step, task.policy_id) == (
+                self.declaration.review_step,
+                self.declaration.review_task,
+            ):
+                if task.id not in self.records.read()["reviews"]:
+                    self.associate(task)
         selected = self.records.current(self.records.read())
         if selected is None:
             return
@@ -408,6 +442,30 @@ class IntegrationService:
             != f"integration:{self.blackboard.workflow_id}:{selected['revision']}:confirmation"
         ):
             raise IntegrationError("Current destination lacks its durable human confirmation")
+        action_id = selected["tasks"].get("action")
+        if action_id:
+            action = self.tasks.get_task(action_id)
+            if (
+                (action.step, action.policy_id)
+                != (self.declaration.action_step, self.declaration.action_task)
+                or action.workflow_id != self.blackboard.workflow_id
+                or action.handoff_key
+                != f"integration:{self.blackboard.workflow_id}:{selected['revision']}:action"
+            ):
+                raise IntegrationError("Action task does not belong to the confirmed selection")
+        for report in record["reports"]:
+            if report["revision"] != selected["revision"]:
+                continue
+            result = self.tasks.get_result(report["task_id"])
+            if (
+                report["task_id"] != action_id
+                or result is None
+                or result.id != report["result_id"]
+                or result.payload.get("decision") != report["outcome"]
+            ):
+                raise IntegrationError(
+                    "Human integration report lacks its matching durable task result"
+                )
         return selected, IntegrationSelection.model_validate(selected["selection"])
 
     def verify(self) -> dict[str, Any]:
@@ -418,28 +476,31 @@ class IntegrationService:
         from cafe.core.git import GitOperations
 
         review, snapshot = self.review()
-        feature = snapshot["feature_branch"]
-        from cafe.core.git import GitError
-
-        try:
-            current_source = GitOperations(review.repository).run_git(
-                "show-ref", "--verify", "--hash", f"refs/heads/{feature}"
-            )
-        except GitError:
-            current_source = None  # A deleted historical feature ref is permitted.
-        if current_source is not None and current_source != review.source_commit:
-            raise IntegrationReviewRequired("Feature source changed; renewed review is required")
+        source_changed = False
         try:
             if selection.target == "github_pr":
                 observed = GitHubOps().observe_integration(selection.repository, selection.pr)
                 success, reason = evaluate_github(selection, observed)
             else:
-                from cafe.core.git import GitOperations
-
-                observed = GitOperations(selection.repository).observe_integration(
-                    selection.target_branch, selection.source_commit
-                )
-                success, reason = evaluate_local(selection, observed)
+                operations = GitOperations(selection.repository)
+                feature = operations.observe_feature_source(snapshot["feature_branch"])
+                if feature["exit_code"] not in (0, 1):
+                    observed = {"unavailable": True, "source_ref_exit_code": feature["exit_code"]}
+                    success, reason = (
+                        False,
+                        "Local source inspection unavailable; restore access and retry",
+                    )
+                elif (
+                    feature.get("commit") is not None and feature["commit"] != review.source_commit
+                ):
+                    observed = {"source_changed": True, "feature_commit": feature["commit"]}
+                    source_changed = True
+                    success, reason = False, "Feature source changed; renewed review is required"
+                else:
+                    observed = operations.observe_integration(
+                        selection.target_branch, selection.source_commit
+                    )
+                    success, reason = evaluate_local(selection, observed)
         except (GitHubError, OSError, ValueError) as exc:
             observed = {"unavailable": True}
             success, reason = False, str(exc)[:1000]
@@ -447,7 +508,7 @@ class IntegrationService:
         review = self.validate_current_review()
         if review.model_dump(mode="json") != selected["review"]:
             raise IntegrationError("Review changed during inspection; discard stale observation")
-        return self.records.record_attempt(
+        attempt = self.records.record_attempt(
             selected["revision"],
             {
                 "success": success,
@@ -455,6 +516,20 @@ class IntegrationService:
                 "observed": observed,
             },
         )
+        if source_changed:
+            raise IntegrationReviewRequired(reason)
+        if (
+            selection.target == "github_pr"
+            and observed.get("repository") == selection.repository
+            and observed.get("pr") == selection.pr
+            and isinstance(observed.get("source_commit"), str)
+            and _SHA.fullmatch(observed["source_commit"])
+            and observed["source_commit"] != selection.source_commit
+        ):
+            raise IntegrationReviewRequired(
+                "Published PR source changed; renewed review is required"
+            )
+        return attempt
 
     def status(self) -> dict[str, Any]:
         """Pure projection: read durable facts without Git, network or reconciliation."""
@@ -519,7 +594,12 @@ class IntegrationService:
                 )
                 if self.completion_allowed():
                     state, action = "verified", "cafe workflow --execute"
-            if review != selected["review"]:
+            try:
+                self.validate_current_review()
+                source_current = True
+            except ValueError:
+                source_current = False
+            if review != selected["review"] or not source_current:
                 state, reason, action = (
                     "review_required",
                     "Current source review no longer matches selection",
@@ -609,7 +689,11 @@ def evaluate_local(
     head = observed.get("target_head")
     if not isinstance(head, str) or not _SHA.fullmatch(head):
         return False, "Named local target branch has no valid commit"
-    if observed.get("ancestor_exit_code") != 0 or observed.get("stable") is not True:
+    if (
+        type(observed.get("ancestor_exit_code")) is not int
+        or observed.get("ancestor_exit_code") != 0
+        or observed.get("stable") is not True
+    ):
         return False, "Approved source is not an ancestor of the stable named local target"
     return True, "Approved source is the named local target HEAD or its ancestor"
 
