@@ -344,6 +344,141 @@ class IntegrationService:
                 selected["revision"], task.id, result.id, result.payload["decision"]
             )
 
+    def reconcile(self) -> None:
+        """Repair exact task/result associations after cross-file interruptions."""
+        selected = self.records.current(self.records.read())
+        if selected is None:
+            return
+        prefix = f"integration:{self.blackboard.workflow_id}:{selected['revision']}:"
+        results = {r.task_id: r for r in self.tasks.results()}
+        for task in self.tasks.tasks():
+            if task.handoff_key.startswith(prefix):
+                self.associate(task)
+                if task.id in results:
+                    self.apply_result(task, results[task.id])
+
+    def selected(self) -> tuple[dict[str, Any], IntegrationSelection]:
+        review = self.validate_current_review()
+        record = self.records.read()
+        selected = self.records.current(record)
+        if selected is None or selected["review"] != review.model_dump(mode="json"):
+            raise IntegrationError("Current selection needs the accepted source review")
+        confirmation = selected.get("confirmation")
+        if not isinstance(confirmation, dict):
+            raise IntegrationError("Confirm the exact integration destination first")
+        task = self.tasks.get_task(confirmation["task_id"])
+        result = self.tasks.get_result(task.id)
+        if (
+            result is None
+            or result.id != confirmation["result_id"]
+            or result.payload.get("decision") != "confirm"
+            or task.workflow_id != self.blackboard.workflow_id
+            or task.handoff_key
+            != f"integration:{self.blackboard.workflow_id}:{selected['revision']}:confirmation"
+        ):
+            raise IntegrationError("Current destination lacks its durable human confirmation")
+        return selected, IntegrationSelection.model_validate(selected["selection"])
+
+    def verify(self) -> dict[str, Any]:
+        from cafe.utils.github import GitHubOps, GitHubError
+
+        self.reconcile()
+        selected, selection = self.selected()
+        try:
+            if selection.target == "github_pr":
+                observed = GitHubOps().observe_integration(selection.repository, selection.pr)
+                success, reason = evaluate_github(selection, observed)
+            else:
+                from cafe.core.git import GitOperations
+
+                observed = GitOperations(selection.repository).observe_integration(
+                    selection.target_branch, selection.source_commit
+                )
+                success, reason = evaluate_local(selection, observed)
+        except (GitHubError, OSError, ValueError) as exc:
+            observed = {"unavailable": True}
+            success, reason = False, str(exc)[:1000]
+        # The caller's snapshot is fenced again after all process/network I/O.
+        review = self.validate_current_review()
+        if review.model_dump(mode="json") != selected["review"]:
+            raise IntegrationError("Review changed during inspection; discard stale observation")
+        return self.records.record_attempt(
+            selected["revision"],
+            {
+                "success": success,
+                "reason": reason,
+                "observed": observed,
+            },
+        )
+
+    def completion_allowed(self, *, completed: bool = False) -> bool:
+        try:
+            selected, selection = self.selected()
+            record = self.records.read()
+            if not self.records.qualifies(record):
+                return False
+            last = [a for a in record["attempts"] if a["revision"] == selected["revision"]][-1]
+            evaluator = evaluate_github if selection.target == "github_pr" else evaluate_local
+            if not evaluator(selection, last["observed"])[0]:
+                return False
+            if completed:
+                association = record.get("completion")
+                return (
+                    isinstance(association, dict)
+                    and association.get("revision") == selected["revision"]
+                    and association.get("attempt_id") == last["id"]
+                )
+            return True
+        except (ValueError, KeyError, TypeError, OSError):
+            return False
+
+
+def evaluate_github(
+    selection: IntegrationSelection, observed: Mapping[str, Any]
+) -> tuple[bool, str]:
+    if observed.get("unavailable"):
+        return (
+            False,
+            "GitHub inspection unavailable; restore access and retry cafe integration verify",
+        )
+    for field, expected in (
+        ("repository", selection.repository),
+        ("pr", selection.pr),
+        ("source_commit", selection.source_commit),
+        ("target_branch", selection.target_branch),
+    ):
+        if observed.get(field) != expected:
+            return False, f"Observed PR {field} differs from the confirmed reviewed destination"
+    if observed.get("merged") is not True or observed.get("state") != "closed":
+        return False, "The confirmed PR is not merged; human integration is still required"
+    commit = observed.get("merge_commit")
+    if not isinstance(commit, str) or not _SHA.fullmatch(commit):
+        return False, "The merged PR has no valid merge commit identity"
+    return True, "Exact reviewed PR is merged into the confirmed destination"
+
+
+def evaluate_local(
+    selection: IntegrationSelection, observed: Mapping[str, Any]
+) -> tuple[bool, str]:
+    if observed.get("unavailable"):
+        return (
+            False,
+            "Local inspection unavailable; restore local branch/source objects and retry verification",
+        )
+    for field, expected in (
+        ("repository", str(Path(selection.repository).resolve())),
+        ("target_branch", selection.target_branch),
+        ("source_commit", selection.source_commit),
+    ):
+        if observed.get(field) != expected:
+            return False, f"Observed local {field} differs from the confirmed reviewed destination"
+    head = observed.get("target_head")
+    if not isinstance(head, str) or not _SHA.fullmatch(head):
+        return False, "Named local target branch has no valid commit"
+    if observed.get("ancestor_exit_code") != 0 or observed.get("stable") is not True:
+        return False, "Approved source is not an ancestor of the stable named local target"
+    return True, "Approved source is the named local target HEAD or its ancestor"
+
 
 def integration_service(
     issue_dir: Path, playbook: Mapping[str, Any], blackboard: Any

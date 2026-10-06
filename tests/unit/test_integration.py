@@ -88,3 +88,50 @@ def test_review_binding_uses_declared_task_decision_and_source(declaration):
         )
         with pytest.raises(ValueError):
             accepted_review(declaration, **args)
+
+
+# U4: supported GitHub merge methods qualify through exact PR evidence.
+def github_observation(**changes):
+    return (
+        dict(
+            repository="owner/repo",
+            pr=17,
+            source_commit="a" * 40,
+            target_branch="main",
+            merged=True,
+            merge_commit="c" * 40,
+            state="closed",
+        )
+        | changes
+    )
+
+
+@pytest.mark.parametrize("method", ["merge", "squash", "rebase"])
+def test_exact_approved_github_pr_qualifies_without_local_ancestry(method):
+    from cafe.core.integration import evaluate_github
+
+    selected = selection(target="github_pr", repository="owner/repo", pr=17)
+    assert evaluate_github(selected, github_observation(merge_method=method))[0]
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"repository": "other/repo"},
+        {"pr": 18},
+        {"source_commit": "b" * 40},
+        {"target_branch": "other"},
+        {"merged": False, "state": "open"},
+        {"merged": False},
+        {"merge_commit": None},
+        {"merge_commit": "claimed"},
+        {"merged": "true"},
+        {"unavailable": True},
+    ],
+)
+def test_github_wrong_missing_or_unavailable_proof_is_incomplete(changes):
+    from cafe.core.integration import evaluate_github
+
+    selected = selection(target="github_pr", repository="owner/repo", pr=17)
+    success, reason = evaluate_github(selected, github_observation(**changes))
+    assert not success and reason

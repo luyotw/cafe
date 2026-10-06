@@ -67,6 +67,27 @@ class GitHubOps:
         # gh auth status returns 0 if authenticated, 1 if not
         return result.returncode == 0
 
+    def observe_integration(self, repository: str, pr: int) -> Dict[str, Any]:
+        """Read the exact PR through GitHub's fixed REST endpoint, never mutate it."""
+        if (not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository)
+                or isinstance(pr, bool) or not isinstance(pr, int) or pr < 1):
+            raise GitHubError("Explicit repository and positive PR number required")
+        try:
+            result = subprocess.run(
+                ["gh", "api", "--method", "GET", f"repos/{repository}/pulls/{pr}"],
+                capture_output=True, text=True, check=False, timeout=30,
+            )
+            if result.returncode != 0:
+                raise GitHubError(f"GitHub inspection unavailable (exit {result.returncode}); check gh authentication and repository access")
+            raw = json.loads(result.stdout)
+            base = raw["base"]
+            return {"repository": base["repo"]["full_name"], "pr": raw["number"],
+                    "source_commit": raw["head"]["sha"], "target_branch": base["ref"],
+                    "merged": raw["merged"], "merge_commit": raw.get("merge_commit_sha"),
+                    "state": raw["state"], "exit_code": result.returncode}
+        except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError) as exc:
+            raise GitHubError("GitHub inspection unavailable or returned malformed PR evidence") from exc
+
     def get_issue(self, issue_id: str, include_comments: bool = False) -> Dict[str, Any]:
         """Get GitHub issue information.
 
