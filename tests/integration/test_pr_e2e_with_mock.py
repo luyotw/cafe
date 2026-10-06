@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.types import AgentCLI, TokenUsage
 from cafe.core.workflow_models import StepExecutionResult
@@ -23,6 +23,8 @@ from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 from cafe.utils.phase_config import PhaseStepModelResolution
 from cafe.verification import run_verification
+from tests.integration.test_development_delivery_journey import fake_github, local_action
+from tests.integration.test_development_delivery_operations import git
 
 pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
@@ -188,48 +190,109 @@ def test_pr_review_handoff_tracks_published_or_local_only_journey(
     tmp_path: Path,
     auto_create: bool,
     with_driver_contract: bool,
+    local_action,
+    fake_github,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Integration 4: #467 publication has identical Driver-free outcomes."""
-    issue_dir = tmp_path / ".cafe" / "issues" / f"review-{auto_create}-{with_driver_contract}"
+    """I1/I2: declared publication hooks retain the verified review evidence."""
+    root, destination, _, snapshot = local_action
+    issue_dir = root / ".cafe" / "issues" / "pr-review"
     _seed_pr_artifacts(issue_dir, auto_create=auto_create)
+    playbook = _load_default_playbook()
+    review = issue_dir / "review.md"
+    review.write_text('## Follow-up Proposals\n\n```json\n{"proposals":[]}\n```\n')
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("pr")
+    store.put_artifact(state, ArtifactEntry(
+        name="review_feedback", kind=ArtifactKind.DOCUMENT, version=1,
+        updated_by="review", path=str(review),
+    ))
     if with_driver_contract:
         driver_dir = issue_dir / "driver"
         driver_dir.mkdir()
         (driver_dir / "contract.json").write_text('{"not": "generic authority"}', encoding="utf-8")
     verified_url = "https://github.com/acme/widgets/pull/467"
+    git(root, "remote", "set-url", "origin", "https://github.com/acme/widgets.git")
+    external = json.loads(fake_github.read_text())
+    external["pr"]["number"] = 467
+    external["pr"]["base"]["repo"]["full_name"] = "acme/widgets"
+    fake_github.write_text(json.dumps(external))
+    publication_calls = []
+    native_run = subprocess.run
 
-    def executor(step_name: str, *_args: object, **_kwargs: object) -> StepExecutionResult:
+    def publication_boundary(argv, *args, **kwargs):
+        if argv[:1] == ["/bin/bash"] and Path(argv[1]).name == "sync_pr.sh":
+            publication_calls.append(argv)
+            return subprocess.CompletedProcess(argv, 0, json.dumps({
+                "action": "created", "pr_number": "467", "pr_url": verified_url,
+            }), "")
+        return native_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", publication_boundary)
+    native_popen = subprocess.Popen
+
+    def local_boundary(argv, *args, **kwargs):
+        if not auto_create:
+            assert argv[0] != "gh"
+        return native_popen(argv, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", local_boundary)
+    output = issue_dir / "pr" / "iteration_001" / "output.md"
+    output.parent.mkdir(parents=True)
+    output.write_text("# Reviewed PR package\n")
+    (output.parent / "delivery_request.json").write_text(json.dumps({
+        "mode": "github" if auto_create else "local",
+        "strategy": "merge" if auto_create else "ff-only",
+        "target_branch": "develop", "destination": "" if auto_create else str(destination),
+        "issue_repository": "",
+    }))
+    request_file = output.parent / "publish_request.json"
+    request_file.write_text(json.dumps({
+        "capability": "cafe.pr.publish",
+        "args": {"output": str(output.relative_to(root)), "base": "develop"},
+    }))
+    phase = SimpleNamespace(
+        issue_dir=issue_dir, iteration=1, phase_name="pr", playbook=playbook,
+        git_ops=SimpleNamespace(repo_path=root, get_repo_root=lambda: root),
+    )
+    engine = GenericPhase(SkillLoader(project_root=root))
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
         _write_baton(
-            issue_dir,
-            from_step=step_name,
-            to_owner=HandoffOwner.USER,
-            to_step="user",
-            intent=HandoffIntent.CONFIRM_OUTPUT,
+            issue_dir, from_step=step_name, to_owner=HandoffOwner.USER,
+            to_step="user", intent=HandoffIntent.CONFIRM_OUTPUT,
             status_code="BATON_CONFIRM_OUTPUT",
         )
-        events = (
-            [{"type": "pr_synced", "url": verified_url, "source": "capability"}]
-            if auto_create
-            else []
+        result = engine._run_hook_stage(
+            "publish_output", skill_name=step_def["skill"], step_def=step_def,
+            phase=phase, step_name=step_name, blackboard_state=state,
+            output_file=output, status_code="BATON_CONFIRM_OUTPUT",
+            validated_pr_auto_create=auto_create, context={},
+            capability_request_file=request_file,
         )
+        assert result.continue_pipeline, result.context_updates
         return StepExecutionResult(
-            response="done",
-            artifacts={"pr": str(issue_dir / "pr" / "iteration_001" / "output.md")},
-            events=events,
+            response="done", artifacts={step_def["output_artifact"]: str(output)},
+            events=result.events,
         )
 
     result = BlackboardWorkflowRuntime(
-        issue_dir=issue_dir,
-        playbook=_load_default_playbook(),
-        executor=executor,
+        issue_dir=issue_dir, playbook=playbook, executor=executor,
     ).run(start_step="pr", max_transitions=5)
 
     assert result.final_status_code == "BATON_CONFIRM_OUTPUT"
     task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    assert task.policy_id == "delivery-review"
+    assert "Action proposal SHA256:" in task.prompt
     if auto_create:
         assert f"Verified PR URL: {verified_url}" in task.prompt
+        assert len(publication_calls) == 1
     else:
         assert "Publication mode:" not in task.prompt
+        assert "https://github.com/acme/widgets/pull/" not in task.prompt
+        assert not publication_calls
+    assert git(destination, "rev-parse", "HEAD") == snapshot.proposal.target_oid
+    assert json.loads(fake_github.read_text())["effects"] == []
 
 
 @pytest.mark.e2e
@@ -333,7 +396,12 @@ def test_declared_pr_feedback_source_records_and_delivers_each_item_once(
         def __init__(self) -> None:
             self.prompts: list[str] = []
             self.agent = SimpleNamespace(
-                config=SimpleNamespace(cli=AgentCLI.CODEX, session_id=None, model=None)
+                config=SimpleNamespace(
+                    cli=AgentCLI.CODEX,
+                    session_id=None,
+                    model=None,
+                    native_review_configuration=None,
+                )
             )
 
         def get_agent(self, _name: str):
