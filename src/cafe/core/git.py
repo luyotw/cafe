@@ -1,5 +1,6 @@
 """Git operations for CAFE."""
 
+import re
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -32,6 +33,49 @@ class GitOperations:
             repo_path: Path to git repository
         """
         self.repo_path = Path(repo_path)
+
+    def observe_integration(self, target_branch: str, source_commit: str) -> dict:
+        """Observe an exact local heads ref and approved object without writes.
+
+        Preserve ancestor exit 1 as negative evidence. Other failures are
+        unavailable inspection. Observe the destination twice and retry once if
+        a concurrent branch update prevents a stable snapshot.
+        """
+        from cafe.core.integration import valid_branch
+        valid_branch(target_branch)
+        if not re.fullmatch(r"[0-9a-f]{40}", source_commit):
+            raise ValueError("Integration source requires a full approved commit")
+        observed = {"repository": str(self.repo_path.resolve()), "target_branch": target_branch,
+                    "source_commit": source_commit, "unavailable": False}
+
+        def run(*args: str) -> subprocess.CompletedProcess:
+            return subprocess.run(["git", *args], cwd=self.repo_path, capture_output=True,
+                                  text=True, check=False, timeout=30)
+
+        try:
+            root = run("rev-parse", "--show-toplevel")
+            if root.returncode != 0 or Path(root.stdout.strip()).resolve() != self.repo_path.resolve():
+                return dict(observed, unavailable=True, exit_code=root.returncode or 2)
+            obj = run("cat-file", "-t", source_commit)
+            if obj.returncode != 0 or obj.stdout.strip() != "commit":
+                return dict(observed, unavailable=True, exit_code=obj.returncode or 2)
+            ref = f"refs/heads/{target_branch}"
+            for _ in range(2):
+                first = run("show-ref", "--verify", "--hash", ref)
+                if first.returncode != 0:
+                    return dict(observed, unavailable=True, exit_code=first.returncode)
+                head = first.stdout.strip()
+                if not re.fullmatch(r"[0-9a-f]{40}", head):
+                    return dict(observed, unavailable=True, exit_code=2)
+                ancestry = run("merge-base", "--is-ancestor", source_commit, head)
+                last = run("show-ref", "--verify", "--hash", ref)
+                if last.returncode == 0 and head == last.stdout.strip():
+                    return dict(observed, target_head=head, stable=True,
+                                ancestor_exit_code=ancestry.returncode, exit_code=ancestry.returncode,
+                                unavailable=ancestry.returncode not in (0, 1))
+            return dict(observed, unavailable=True, stable=False, exit_code=2)
+        except (OSError, subprocess.TimeoutExpired):
+            return dict(observed, unavailable=True, exit_code=None)
 
     @classmethod
     def is_repository(cls, repo_path: str = ".") -> bool:
