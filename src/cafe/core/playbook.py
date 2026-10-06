@@ -91,9 +91,7 @@ class PlaybookApplicability(BaseModel):
     def _validate_conditions(cls, value: List[str], info) -> List[str]:
         field_name = info.field_name
         if not (
-            APPLICABILITY_CONDITION_MIN_COUNT
-            <= len(value)
-            <= APPLICABILITY_CONDITION_MAX_COUNT
+            APPLICABILITY_CONDITION_MIN_COUNT <= len(value) <= APPLICABILITY_CONDITION_MAX_COUNT
         ):
             raise ValueError(
                 f"playbook.applicability.{field_name} must contain "
@@ -390,9 +388,7 @@ class StepBehaviorDeclaration(BaseModel):
         "feedback_todo_id_prefix",
     )
     @classmethod
-    def _validate_feedback_identifiers(
-        cls, value: Optional[str], info: Any
-    ) -> Optional[str]:
+    def _validate_feedback_identifiers(cls, value: Optional[str], info: Any) -> Optional[str]:
         if value is None:
             return None
         token = value.strip()
@@ -666,9 +662,7 @@ class StepConfig(BaseModel):
                 self.input_artifacts is None
                 or self.todo_identity_input_artifact not in self.input_artifacts
             ):
-                raise ValueError(
-                    "todo_identity_input_artifact must be listed in input_artifacts"
-                )
+                raise ValueError("todo_identity_input_artifact must be listed in input_artifacts")
         if self.automatic is not None and self.assignee_type != "auto":
             raise ValueError("automatic requires matching assignee_type=auto")
         if self.hybrid is not None and self.assignee_type != "hybrid":
@@ -694,14 +688,13 @@ class StepConfig(BaseModel):
             if self.workspace_artifact == self.output_artifact:
                 raise ValueError("workspace_artifact must differ from output_artifact")
         if self.workspace_input_artifact is not None:
-            if not re.fullmatch(
-                r"[A-Za-z][A-Za-z0-9_-]*", self.workspace_input_artifact.strip()
-            ):
+            if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", self.workspace_input_artifact.strip()):
                 raise ValueError("workspace_input_artifact must be a safe identifier")
-            if self.input_artifacts is None or self.workspace_input_artifact not in self.input_artifacts:
-                raise ValueError(
-                    "workspace_input_artifact must be listed in input_artifacts"
-                )
+            if (
+                self.input_artifacts is None
+                or self.workspace_input_artifact not in self.input_artifacts
+            ):
+                raise ValueError("workspace_input_artifact must be listed in input_artifacts")
             if self.output_artifact == self.workspace_input_artifact:
                 raise ValueError("workspace_input_artifact must differ from output_artifact")
         return self
@@ -962,9 +955,7 @@ def playbook_requests_capability(
         in (
             step.capability_requests
             if isinstance(step, StepConfig)
-            else step.get("capability_requests", [])
-            if isinstance(step, Mapping)
-            else []
+            else step.get("capability_requests", []) if isinstance(step, Mapping) else []
         )
         for step in steps.values()
     )
@@ -982,8 +973,7 @@ def confirmation_gate_steps(model: PlaybookDefinition) -> tuple[str, ...]:
     return tuple(
         step_name
         for step_name, step in model.steps.items()
-        if "confirm_output" in step.on
-        and not _has_mandatory_confirmation_gate(step)
+        if "confirm_output" in step.on and not _has_mandatory_confirmation_gate(step)
     )
 
 
@@ -1003,6 +993,85 @@ def _has_mandatory_confirmation_gate(step: StepConfig) -> bool:
     )
 
 
+class IntegrationDeclaration(BaseModel):
+    """Data-only relationships for a human-owned, verified delivery journey."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    review_step: str
+    review_task: str
+    accepted_decisions: List[str] = Field(min_length=1)
+    source_artifact: str
+    source_step: str
+    delivery_artifact: str
+    delivery_step: str
+    selection_step: str
+    selection_task: str
+    action_step: str
+    action_task: str
+    correction_step: str
+    verified_continuation: str
+
+    @field_validator("*")
+    @classmethod
+    def _identifiers(cls, value: Any) -> Any:
+        values = value if isinstance(value, list) else [value]
+        for item in values:
+            if not isinstance(item, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", item):
+                raise ValueError("integration references must be declared identifiers")
+        if isinstance(value, list) and len(value) != len(set(value)):
+            raise ValueError("integration decisions must be unique")
+        return value
+
+    def validate_relationships(self, steps: Dict[str, StepConfig]) -> None:
+        for name in (
+            self.review_step,
+            self.source_step,
+            self.delivery_step,
+            self.selection_step,
+            self.action_step,
+            self.correction_step,
+        ):
+            if name not in steps:
+                raise ValueError(f"integration references unknown step {name!r}")
+        if len({self.review_step, self.selection_step, self.action_step}) != 3:
+            raise ValueError("integration review, selection and action steps must be distinct")
+        source = steps[self.source_step]
+        if self.source_artifact not in (source.workspace_artifact, source.output_artifact):
+            raise ValueError("integration source artifact must belong to its declared producer")
+        if steps[self.delivery_step].output_artifact != self.delivery_artifact:
+            raise ValueError("integration delivery artifact must belong to its declared producer")
+        if self.verified_continuation not in {*steps, DONE_TARGET}:
+            raise ValueError("integration verified continuation is unknown")
+        for step_name, task_id in (
+            (self.review_step, self.review_task),
+            (self.selection_step, self.selection_task),
+            (self.action_step, self.action_task),
+        ):
+            bindings = [b for b in steps[step_name].human_tasks if b.task_id == task_id]
+            if len(bindings) != 1:
+                raise ValueError("integration requires exactly one matching task binding")
+            binding = bindings[0]
+            if step_name == self.review_step:
+                if any(
+                    binding.outcomes.get(d) != self.selection_step for d in self.accepted_decisions
+                ):
+                    raise ValueError("integration accepted decisions must continue to selection")
+            elif step_name == self.selection_step:
+                if binding.outcomes.get("confirm") != self.action_step:
+                    raise ValueError("integration confirmation must continue to human action")
+            else:
+                if any(
+                    binding.outcomes.get(d) != self.action_step
+                    for d in ("performed", "already_performed", "blocked")
+                ):
+                    raise ValueError("integration reports must return to native verification")
+                if self.verified_continuation not in steps[step_name].on.values():
+                    raise ValueError(
+                        "integration verified continuation must be a declared transition"
+                    )
+
+
 class PlaybookDefinition(BaseModel):
     """Top-level playbook definition."""
 
@@ -1014,12 +1083,16 @@ class PlaybookDefinition(BaseModel):
     behavior: StepBehaviorDeclaration = Field(default_factory=StepBehaviorDeclaration)
     steps: Dict[str, StepConfig]
     commands: Optional[CommandsConfig] = None
+    integration: Optional[IntegrationDeclaration] = None
     entry_point: Optional[str] = None
 
     @model_validator(mode="after")
     def _default_entry_point(self) -> "PlaybookDefinition":
         if self.entry_point is None:
             self.entry_point = next(iter(self.steps.keys()))
+
+        if self.integration is not None:
+            self.integration.validate_relationships(self.steps)
 
         def declares_feedback_artifact(step: StepConfig, artifact: str) -> bool:
             return "input_artifacts" in step.model_fields_set and artifact in (
@@ -1043,8 +1116,7 @@ class PlaybookDefinition(BaseModel):
             ]
 
         route_declarations_present = any(
-            resolve_step_behavior(self, step_name).feedback_routes
-            for step_name in self.steps
+            resolve_step_behavior(self, step_name).feedback_routes for step_name in self.steps
         )
         step_order = {name: index for index, name in enumerate(self.steps)}
 
@@ -1108,9 +1180,7 @@ class PlaybookDefinition(BaseModel):
             if (
                 target is not None
                 and behavior.feedback_artifact is not None
-                and not declares_feedback_artifact(
-                    self.steps[target], behavior.feedback_artifact
-                )
+                and not declares_feedback_artifact(self.steps[target], behavior.feedback_artifact)
             ):
                 raise ValueError(
                     f"steps.{step_name}.behavior.feedback_target {target!r} must declare "
@@ -1185,12 +1255,8 @@ def resolve_step_behavior(
         publish_confirmation=_behavior_value(defaults, override, "publish_confirmation", False),
         feedback_target=_behavior_value(defaults, override, "feedback_target", None),
         feedback_artifact=_behavior_value(defaults, override, "feedback_artifact", None),
-        feedback_source_kind=_behavior_value(
-            defaults, override, "feedback_source_kind", None
-        ),
-        feedback_todo_source=_behavior_value(
-            defaults, override, "feedback_todo_source", None
-        ),
+        feedback_source_kind=_behavior_value(defaults, override, "feedback_source_kind", None),
+        feedback_todo_source=_behavior_value(defaults, override, "feedback_todo_source", None),
         feedback_todo_id_prefix=_behavior_value(
             defaults, override, "feedback_todo_id_prefix", None
         ),
@@ -1353,9 +1419,7 @@ def load_playbook_file(
             raise
         raw_playbook = data.get("playbook") if isinstance(data, dict) else None
         playbook_id = (
-            raw_playbook.get("id", path.stem)
-            if isinstance(raw_playbook, dict)
-            else path.stem
+            raw_playbook.get("id", path.stem) if isinstance(raw_playbook, dict) else path.stem
         )
         details = "; ".join(
             f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
@@ -1503,8 +1567,7 @@ def _validate_initial_input_declarations(model: PlaybookDefinition, *, source: s
             raise ValueError(f"{field_path} is only allowed on entry_point {model.entry_point!r}")
         if declaration.legacy_presentation and (
             source != "builtin"
-            or model.playbook.id
-            not in {"standard", "standard-qa", "simple", "tdd", "tdd-qa"}
+            or model.playbook.id not in {"standard", "standard-qa", "simple", "tdd", "tdd-qa"}
         ):
             raise ValueError(
                 f"{field_path}.legacy_presentation is reserved for bundled development playbooks"
@@ -1755,16 +1818,10 @@ def _validate_feedback_target_prompt_inputs(
     """Ensure routed feedback is exposed to every possible target skill."""
 
     def receives_feedback_artifact(composition: StepWorkflowComposition, artifact: str) -> bool:
-        return any(
-            mapping.artifacts == (artifact,)
-            for mapping in composition.prompt_inputs
-        )
+        return any(mapping.artifacts == (artifact,) for mapping in composition.prompt_inputs)
 
     def receives_causal_artifact(composition: StepWorkflowComposition, artifact: str) -> bool:
-        return any(
-            artifact in mapping.artifacts
-            for mapping in composition.prompt_inputs
-        )
+        return any(artifact in mapping.artifacts for mapping in composition.prompt_inputs)
 
     for step_name, step in model.steps.items():
         behavior = resolve_step_behavior(model, step_name)

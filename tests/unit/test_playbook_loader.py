@@ -24,12 +24,8 @@ pytestmark = pytest.mark.usefixtures("cached_builtin_skill_frontmatter")
 
 
 @pytest.fixture(autouse=True)
-def _isolate_global_catalog(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(
-        "cafe.utils.config.get_global_cafe_dir", lambda: tmp_path / "global"
-    )
+def _isolate_global_catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: tmp_path / "global")
 
 
 def _write_skill(root: Path, name: str) -> None:
@@ -55,9 +51,7 @@ def test_strict_validation_applies_contributor_tools_without_granting_permission
 ) -> None:
     builtin_root = tmp_path / "builtin"
     _write_skill(builtin_root / "skills", "primary")
-    _write_workflow_skill(
-        builtin_root / "skills", "support", "  required_tools: [Write]\n"
-    )
+    _write_workflow_skill(builtin_root / "skills", "support", "  required_tools: [Write]\n")
     _write_playbook(
         builtin_root / "playbooks",
         "composed-tools",
@@ -473,16 +467,12 @@ def test_workspace_companion_cannot_collide_with_summary() -> None:
 )
 def test_step_attempt_limit_rejects_non_positive_integers(field: str, value: object) -> None:
     with pytest.raises(ValueError, match="positive integer"):
-        StepConfig.model_validate(
-            {"skill": "phase", "role": "reviewer", field: value, "on": {}}
-        )
+        StepConfig.model_validate({"skill": "phase", "role": "reviewer", field: value, "on": {}})
 
 
 @pytest.mark.parametrize("field", ["max_attempts_per_cycle", "max_iterations"])
 def test_step_attempt_limit_normalizes_positive_digit_strings(field: str) -> None:
-    step = StepConfig.model_validate(
-        {"skill": "phase", "role": "reviewer", field: "5", "on": {}}
-    )
+    step = StepConfig.model_validate({"skill": "phase", "role": "reviewer", field: "5", "on": {}})
     assert step.max_attempts_per_cycle == 5
 
 
@@ -1122,9 +1112,10 @@ def test_bundled_playbooks_preserve_declared_skill_environment_parity(
     if playbook_id == "direct-qa":
         expected_chat_skills.remove("cafe-chat-spec-revision")
         expected_chat_skills.remove("cafe-chat-plan-revision")
-    assert resolve_playbook_skills(
-        model, channel="chat", role=None, step_name=None
-    ) == expected_chat_skills
+    assert (
+        resolve_playbook_skills(model, channel="chat", role=None, step_name=None)
+        == expected_chat_skills
+    )
 
 
 def test_playbook_rejects_human_task_outcome_outside_declared_steps(tmp_path: Path) -> None:
@@ -2692,3 +2683,109 @@ def test_legacy_applicability_migration_preserves_graph_and_restores_eligibility
 
     assert migrated.automatic_selection_eligible is True
     assert migrated.model.steps["run"].model_dump() == legacy_graph
+
+
+# U9: opt-in declarations preserve custom topology and forbid executable policy.
+def integration_playbook_data():
+    return {
+        "playbook": {"id": "custom-delivery"},
+        "roles": {"operator": {}},
+        "integration": {
+            "review_step": "judgement",
+            "review_task": "accept-delivery",
+            "accepted_decisions": ["ship"],
+            "source_artifact": "reviewed-tree",
+            "source_step": "build",
+            "delivery_artifact": "proposal",
+            "delivery_step": "package",
+            "selection_step": "destination",
+            "selection_task": "choose",
+            "action_step": "delivery",
+            "action_task": "human-delivery",
+            "correction_step": "build",
+            "verified_continuation": "_done",
+        },
+        "steps": {
+            "build": {
+                "role": "operator",
+                "skill": "custom",
+                "workspace_artifact": "reviewed-tree",
+                "output_artifact": "built-code",
+                "on": {"await_agent": "package"},
+            },
+            "package": {
+                "role": "operator",
+                "skill": "custom",
+                "output_artifact": "proposal",
+                "on": {"await_agent": "judgement"},
+            },
+            "judgement": {
+                "role": "operator",
+                "skill": "custom",
+                "on": {"confirm_output": "judgement"},
+                "human_tasks": [
+                    {
+                        "trigger": "confirm_output",
+                        "task_id": "accept-delivery",
+                        "outcomes": {"ship": "destination", "fix": "build"},
+                    }
+                ],
+            },
+            "destination": {
+                "role": "operator",
+                "skill": "custom",
+                "assignee_type": "human",
+                "on": {"await_agent": "delivery"},
+                "human_tasks": [
+                    {
+                        "trigger": "initial",
+                        "task_id": "choose",
+                        "outcomes": {"confirm": "delivery", "revise": "destination"},
+                    }
+                ],
+            },
+            "delivery": {
+                "role": "operator",
+                "skill": "custom",
+                "assignee_type": "human",
+                "on": {"await_agent": "_done"},
+                "human_tasks": [
+                    {
+                        "trigger": "initial",
+                        "task_id": "human-delivery",
+                        "outcomes": {
+                            "performed": "delivery",
+                            "already_performed": "delivery",
+                            "blocked": "delivery",
+                        },
+                    }
+                ],
+            },
+        },
+    }
+
+
+def test_integration_declaration_preserves_custom_relationships():
+    model = PlaybookDefinition.model_validate(integration_playbook_data())
+    assert model.integration.review_step == "judgement"
+    assert model.integration.source_artifact == "reviewed-tree"
+    data = integration_playbook_data()
+    del data["integration"]
+    assert PlaybookDefinition.model_validate(data).integration is None
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("review_step", "unknown"),
+        ("source_artifact", "workspace"),
+        ("accepted_decisions", ["missing"]),
+        ("verified_continuation", "unknown"),
+        ("command", "git merge main"),
+    ],
+)
+def test_integration_declaration_rejects_unknown_or_executable_relationships(field, value):
+    data = integration_playbook_data()
+    data["integration"][field] = value
+    with pytest.raises(ValueError):
+        PlaybookDefinition.model_validate(data)
