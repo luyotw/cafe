@@ -62,7 +62,7 @@ workflow:
 
 Read your agent file: {agent_file}
 
-The declared host hook owns operations. Read `{delivery_actions_file}` and `{delivery_receipts_file}`; their current receipts are the evidence authority. Perform no direct Git/GitHub mutation. Render actual integration commit, selected proposal IDs and issue URLs, remaining actions and unknown/pending outcomes in {output_file}.
+The declared host hook owns operations. Read the action and receipt paths supplied in the current delivery evidence continuation; these receipts are the evidence authority. Perform no direct Git/GitHub mutation. Render actual integration commit, selected proposal IDs and issue URLs, remaining actions and unknown/pending outcomes in {output_file}.
 
 Only when `delivery_complete` is true may you request the declared user `confirm_output` handoff. Host approval is distinct from action selection and outcome acceptance. For incomplete effects use the declared recovery/permission task. For conflicts or changed implementation, normalize the correction into the existing Todo List contract and select the injected discretionary implementation route; do not resolve conflicts or redesign here. Revised actions need fresh PR action review, never edits to the approved snapshot. Cleanup/archive/branch deletion/issue closure/release/deployment remain separately authorized.
 

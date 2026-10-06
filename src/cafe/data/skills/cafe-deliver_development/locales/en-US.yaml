@@ -4,3 +4,11 @@ human_task.delivery.delivery_recovery: Provide recovery details or request a rev
   action review. Unknown effects must be reconciled before retry.
 human_task.delivery.delivery_permission: Resolve the pending exact host capability
   approval using its durable task; this feedback grants no host authority.
+human_task.delivery.runtime_evidence: 'Read these current delivery sources before
+  presenting the outcome.
+
+  - delivery_actions_file: {actions}
+
+  - delivery_receipts_file: {receipts}
+
+  - delivery_complete: {complete}'

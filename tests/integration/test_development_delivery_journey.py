@@ -1,6 +1,7 @@
 """I1–I9: public hook/task/capability journeys with isolated Git and fake GitHub."""
 
 import json
+import shutil
 from collections import UserDict
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,9 +24,12 @@ def local_action(tmp_path):
     return local_operations.local_action.__wrapped__(tmp_path)
 
 
-def graph(tmp_path, *, renamed=False):
-    data = PlaybookLoader(project_root=tmp_path, global_root=tmp_path).load("direct")
+def graph(tmp_path, *, renamed=False, playbook="direct"):
+    data = PlaybookLoader(project_root=tmp_path, global_root=tmp_path).load(playbook)
     if renamed:
+        data = PlaybookLoader(project_root=tmp_path, global_root=tmp_path).load_model(
+            playbook
+        ).model.model_dump(mode="json", exclude_unset=True)
         names = {"pr": "package", "deliver": "ship", "develop": "build"}
         # JSON substitution is limited to declared machine identities in this fixture.
         raw = json.dumps(data)
@@ -35,6 +39,26 @@ def graph(tmp_path, *, renamed=False):
             '"delivery_result"', '"outcome_document"'
         )
         data = json.loads(raw)
+        data["playbook"]["id"] = "renamed-delivery"
+        for field in data["commands"]["prepare"].get("fields", []):
+            if isinstance(field.get("write"), str):
+                section, dot, key = field["write"].partition(".")
+                field["write"] = names.get(section, section) + dot + key
+        # An equivalent catalog must also declare the renamed correction artifact in its target skill.
+        from cafe.skills.loader import SkillLoader
+
+        target_skill = tmp_path / ".cafe" / "skills" / "cafe-develop"
+        shutil.copytree(
+            SkillLoader(project_root=tmp_path).get_skill_dir("cafe-develop"), target_skill
+        )
+        skill_file = target_skill / "SKILL.md"
+        skill_file.write_text(skill_file.read_text().replace("delivery_result", "outcome_document"))
+        catalog = tmp_path / ".cafe" / "playbooks"
+        catalog.mkdir(parents=True, exist_ok=True)
+        (catalog / "renamed-delivery.yaml").write_text(json.dumps(data))
+        data = PlaybookLoader(project_root=tmp_path, global_root=tmp_path / "global").load(
+            "renamed-delivery", strict=True
+        )
     return data
 
 
@@ -63,9 +87,11 @@ def pause(issue, state, step, intent=HandoffIntent.CONFIRM_OUTPUT):
     )
 
 
-def setup_action(local_action, tmp_path, *, renamed=False, github=False, proposals=()):
+def setup_action(
+    local_action, tmp_path, *, renamed=False, github=False, proposals=(), playbook="direct"
+):
     root, dest, _, local = local_action
-    data = graph(tmp_path, renamed=renamed)
+    data = graph(root, renamed=renamed, playbook=playbook)
     approval, delivery = ("package", "ship") if renamed else ("pr", "deliver")
     issue = root / ".cafe" / "issues" / "journey"
     issue.mkdir(parents=True)
@@ -525,3 +551,91 @@ def test_delivery_recovery_accepts_declared_mapping_feedback_route(local_action,
     assert result.target == delivery, result.rejection
     assert HumanTaskRecordStore(issue).get_result(recovery.id) is not None
     assert git(dest, "rev-parse", "HEAD") == local_action[3].proposal.target_oid
+
+
+@pytest.mark.parametrize("renamed", [False, True])
+def test_public_phase_execute_forwards_declared_delivery_and_current_receipts(
+    local_action, tmp_path, renamed
+):
+    context = setup_action(local_action, tmp_path, renamed=renamed)
+    approve_action(context)
+    root, dest, issue, state, phase, data, engine, kwargs, task, delivery = context
+    calls = []
+    hook_context = {
+        key: value
+        for key, value in kwargs.items()
+        if key not in {"step_def", "context", "status_code"}
+    }
+
+    def agent(prompt):
+        calls.append(prompt)
+        assert "delivery_receipts_file" in prompt and "delivery_complete: true" in prompt
+        reports = list((issue / "delivery").glob("*/result.json"))
+        report = json.loads(reports[-1].read_text())
+        assert report["complete"] and report["actions"]["integration"]["commit"] == git(
+            dest, "rev-parse", "HEAD"
+        )
+        (issue / "next_step.txt").write_text(
+            json.dumps(
+                {"version": 1, "to_owner": "user", "to_step": "user", "intent": "confirm_output"}
+            )
+        )
+        return "Current delivery results presented"
+
+    def execute():
+        return engine.execute(
+            skill_name=kwargs["step_def"]["skill"],
+            step_def=kwargs["step_def"],
+            agent_executor=agent,
+            skill_invocation="/cafe-deliver_development",
+            context={"next_step_path": str(issue / "next_step.txt")},
+            output_file=kwargs["output_file"],
+            hook_context=hook_context,
+        )
+
+    pending = execute()
+    assert pending.status_code == PhaseStatusCode.NEED_PERMISSION
+    assert not calls and not pending.published
+    approval_task = next(
+        task
+        for task in HumanTaskRecordStore(issue).tasks()
+        if task.policy_id == "capability-approval"
+    )
+    service = CapabilityApprovalService(
+        issue_dir=issue, workflow_id=state.workflow_id, step=delivery, iteration=phase.iteration
+    )
+    approval = service.inspect(approval_task.id)
+    service.record_decision(
+        approval_task.id,
+        {
+            "decision": "approve",
+            "workflow_id": state.workflow_id,
+            "task_id": approval_task.id,
+            "request_fingerprint": approval["fingerprint"],
+            "correlation_id": approval["correlation_id"],
+        },
+    )
+    completed = execute()
+    assert completed.published and len(calls) == 1
+    assert any(task.policy_id == "delivery-outcome" for task in HumanTaskRecordStore(issue).tasks())
+    assert state.current_step != "done"
+
+
+def test_qa_only_graph_empty_selection_needs_no_review_or_github(
+    local_action, tmp_path, monkeypatch
+):
+    import subprocess
+
+    native = subprocess.Popen
+
+    def no_github(argv, *args, **kwargs):
+        assert argv[0] != "gh"
+        return native(argv, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", no_github)
+    context = setup_action(local_action, tmp_path, playbook="simple")
+    assert "review_feedback" not in context[3].artifacts
+    approve_action(context)
+    result = run_and_approve_host(context)
+    assert result.context_updates["delivery_complete"] == "true"
+    assert git(local_action[1], "rev-parse", "HEAD") == local_action[3].proposal.source_oid

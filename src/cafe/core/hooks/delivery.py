@@ -249,6 +249,23 @@ class DevelopmentDeliveryExecutor(NoOpHook):
                 "delivery_complete": str(report["complete"]).lower(),
                 "delivery_actions_file": str(actions_path),
             }
+            from cafe.core.runtime_locales import render_text
+
+            owner = SkillLoader(project_root=root).get_skill_dir(kwargs["step_def"]["skill"])
+            evidence_prompt = render_text(
+                "human_task.delivery.runtime_evidence",
+                locale=getattr(state, "conversation_locale", "en-US"),
+                catalog_root=owner / "locales",
+                actions=str(actions_path),
+                receipts=str(path),
+                complete=updates["delivery_complete"],
+            )
+            updates["continuation_prompt"] = "\n\n".join(
+                filter(
+                    None,
+                    [(kwargs.get("context") or {}).get("continuation_prompt", ""), evidence_prompt],
+                )
+            )
             if report["pending_task"]:
                 kwargs["output_file"].write_text(
                     "# Delivery awaits host approval\n\n" + json.dumps(report, indent=2)
