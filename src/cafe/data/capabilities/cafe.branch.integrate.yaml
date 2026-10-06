@@ -1,0 +1,43 @@
+id: cafe.branch.integrate
+version: 1
+implementation: integrate_local_branch
+arguments:
+  required:
+  - snapshot
+  - issue_dir
+  - action
+  properties:
+    snapshot:
+      type: string
+    issue_dir:
+      type: string
+    action:
+      type: string
+outputs:
+  required:
+  - state
+  properties:
+    state:
+      type: string
+    commit:
+      type: string
+    url:
+      type: string
+    proposal_id:
+      type: string
+    target_branch:
+      type: string
+effects:
+  writes:
+  - delivery_effect
+  network_destinations: []
+  browser_open: []
+credentials: []
+permissions:
+  writes:
+  - delivery_effect
+  network: []
+idempotency: unsafe
+risk: high
+approval: required
+policy: allow

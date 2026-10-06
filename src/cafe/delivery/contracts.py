@@ -43,7 +43,7 @@ class ActionProposal(FrozenModel):
     workflow_id: str = Field(min_length=1)
     approval_step: str = Field(min_length=1)
     approval_iteration: int = Field(ge=1)
-    repository: str = Field(pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+    repository: str = Field(min_length=1)
     source_oid: str = Field(pattern=r"^[0-9a-f]{40}$")
     source_branch: str = Field(min_length=1)
     target_branch: str = Field(min_length=1)
@@ -57,6 +57,12 @@ class ActionProposal(FrozenModel):
 
     @model_validator(mode="after")
     def exact_binding(self):
+        if self.mode == "github" and not re.fullmatch(
+            r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", self.repository
+        ):
+            raise ValueError("invalid GitHub repository")
+        if self.mode == "local" and not Path(self.repository).is_absolute():
+            raise ValueError("local repository must bind its absolute Git common directory")
         for branch in (self.source_branch, self.target_branch):
             if (
                 branch.startswith(("-", "/"))

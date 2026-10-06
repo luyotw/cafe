@@ -125,3 +125,82 @@ def test_marker_is_stable_and_scoped_to_selected_identity():
     ).marker("FUP-002")
     with pytest.raises(ValueError):
         s.marker("FUP-001")
+
+
+def test_registered_capability_requires_host_approval(tmp_path):
+    from cafe.core.capabilities import (
+        default_capability_definition_dirs,
+        load_capability_registry,
+        run_capability_request,
+    )
+    from cafe.delivery.service import action_request
+
+    p = proposal()
+    snapshot = approve_selection(p, authority(p))
+    registry = load_capability_registry(default_capability_definition_dirs(tmp_path))
+    request = action_request(registry, snapshot, tmp_path, "integration")
+    run = run_capability_request(
+        repo_root=tmp_path,
+        registry=registry,
+        capability_request=request,
+        output_file=tmp_path / "result.md",
+    )
+    assert not run.receipt["success"]
+    assert run.receipt["outcome"] == "approval_required"
+
+
+def test_pending_or_lost_response_is_not_success(tmp_path, monkeypatch):
+    from cafe.delivery.operations import Commands, execute_action
+
+    p = proposal()
+    snapshot = approve_selection(p, authority(p, "integrate_only", ""))
+
+    def git(self, root, *args):
+        if args[:2] == ("remote", "get-url"):
+            return "https://github.com/owner/repo.git"
+        return p.source_oid if args[0] == "rev-parse" else p.source_branch
+
+    monkeypatch.setattr(Commands, "git", git)
+    monkeypatch.setattr(
+        Commands,
+        "api",
+        lambda *args, **kwargs: {
+            "number": 23,
+            "state": "open",
+            "merged": False,
+            "head": {"sha": p.source_oid, "ref": p.source_branch},
+            "base": {
+                "sha": p.target_oid,
+                "ref": p.target_branch,
+                "repo": {"full_name": p.repository},
+            },
+        },
+    )
+    calls = []
+    monkeypatch.setattr(
+        Commands, "run", lambda self, argv, **kwargs: (calls.append(argv) or ("", 0))
+    )
+    first = execute_action(tmp_path, tmp_path / "issue", snapshot, "integration")
+    second = execute_action(tmp_path, tmp_path / "issue", snapshot, "integration")
+    assert first["state"] == second["state"] == "unknown"
+    assert len(calls) == 1
+
+
+def test_issue_effect_before_receipt_is_reconciled_and_ambiguity_blocks(tmp_path, monkeypatch):
+    from cafe.delivery.operations import Commands, execute_action
+
+    p = proposal()
+    snapshot = approve_selection(p, authority(p))
+    store = ActionStore(tmp_path, snapshot)
+    with store.locked():
+        store.start("FUP-002")
+    row = {
+        "title": snapshot.selected[0].title,
+        "body": snapshot.selected[0].body + "\n\n" + snapshot.marker("FUP-002"),
+        "html_url": "https://github.com/owner/repo/issues/42",
+    }
+    monkeypatch.setattr(Commands, "api", lambda *args, **kwargs: [row])
+    result = execute_action(tmp_path, tmp_path, snapshot, "FUP-002")
+    assert result["state"] == "succeeded" and result["url"].endswith("/42")
+    monkeypatch.setattr(Commands, "api", lambda *args, **kwargs: [row, row])
+    assert execute_action(tmp_path, tmp_path, snapshot, "FUP-002")["state"] == "unknown"

@@ -1,0 +1,48 @@
+id: cafe.github.pr.merge
+version: 1
+implementation: merge_github_pr
+arguments:
+  required:
+  - snapshot
+  - issue_dir
+  - action
+  properties:
+    snapshot:
+      type: string
+    issue_dir:
+      type: string
+    action:
+      type: string
+outputs:
+  required:
+  - state
+  properties:
+    state:
+      type: string
+    commit:
+      type: string
+    url:
+      type: string
+    proposal_id:
+      type: string
+    target_branch:
+      type: string
+effects:
+  writes:
+  - delivery_effect
+  network_destinations:
+  - github.com
+  - api.github.com
+  browser_open: []
+credentials:
+- gh
+permissions:
+  writes:
+  - delivery_effect
+  network:
+  - github.com
+  - api.github.com
+idempotency: unsafe
+risk: high
+approval: required
+policy: allow
