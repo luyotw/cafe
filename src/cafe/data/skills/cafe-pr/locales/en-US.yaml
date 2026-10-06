@@ -42,3 +42,5 @@ human_task.cafe_pr.delivery_draft: '{id}: {title}
   Evidence HEAD: {evidence_head}; impact: {impact}; confidence: {confidence}'
 
 human_task.cafe_pr.delivery_review_source: "Review source: {artifact} v{version}, {path}, producer {producer}, SHA256 {sha256}"
+
+human_task.cafe_pr.delivery_publication: "Verified PR URL: {url}"

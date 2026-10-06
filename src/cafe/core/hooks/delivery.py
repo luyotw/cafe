@@ -125,6 +125,7 @@ class DevelopmentActionContext(NoOpHook):
             source = commands.git(root, "rev-parse", "HEAD")
             branch = commands.git(root, "symbolic-ref", "--short", "HEAD")
             mode = request["mode"]
+            publication_url = ""
             if mode == "local":
                 destination = str(Path(request["destination"]).resolve(strict=True))
                 repository = commands.git(
@@ -156,6 +157,14 @@ class DevelopmentActionContext(NoOpHook):
                     or pr["base"]["ref"] != request["target_branch"]
                 ):
                     raise ValueError("published PR differs from reviewed source/target")
+                expected_url = f"https://github.com/{repository}/pull/{number}"
+                publication_url = str(
+                    (kwargs.get("context") or {}).get("pr_url")
+                    or pr.get("html_url")
+                    or expected_url
+                ).strip()
+                if publication_url != expected_url:
+                    raise ValueError("published PR link differs from the reviewed PR identity")
                 target = pr["base"]["sha"]
                 destination = ""
             proposals, review_source = _proposals(state, binding, phase.issue_dir)
@@ -193,6 +202,13 @@ class DevelopmentActionContext(NoOpHook):
                 destination=str(destination or number),
                 issues=proposal.issue_repository or "∅",
             )
+            if publication_url:
+                shown += "\n\n" + render_text(
+                    "human_task.cafe_pr.delivery_publication",
+                    locale=locale,
+                    catalog_root=owner / "locales",
+                    url=publication_url,
+                )
             if proposal.review_source:
                 shown += "\n\n" + render_text(
                     "human_task.cafe_pr.delivery_review_source",
