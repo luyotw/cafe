@@ -148,6 +148,7 @@ class IntegrationService:
 
         self.issue_dir = Path(issue_dir)
         self.blackboard = blackboard
+        self.playbook = playbook
         self.declaration = IntegrationDeclaration.model_validate(playbook["integration"])
         self.tasks = task_store or HumanTaskRecordStore(self.issue_dir)
         self.records = IntegrationRecordStore(self.issue_dir, blackboard.workflow_id, self.tasks)
@@ -624,6 +625,30 @@ class IntegrationService:
             "next_action": action,
             "completed": completed,
         }
+
+    def completion_fence(self) -> dict[str, Any]:
+        """Retain the exact decision/proof identities consumed by publication.
+
+        The caller holds the shared HumanTask transaction through terminal
+        publication; inspection itself remains outside that transaction.
+        """
+        import copy
+
+        selected, _ = self.selected()
+        record = self.records.read()
+        if not self.completion_allowed():
+            raise IntegrationError("Current durable integration proof required")
+        attempt = [a for a in record["attempts"] if a["revision"] == selected["revision"]][-1]
+        return copy.deepcopy({"selection": selected, "attempt": attempt})
+
+    def validate_completion_fence(self, expected: dict[str, Any], state: Any) -> None:
+        """Validate against the state actually being committed, before its journal."""
+        current = IntegrationService(self.issue_dir, self.playbook, state, task_store=self.tasks)
+        current.validate_current_review()
+        if current.completion_fence() != expected or not current.completion_allowed(completed=True):
+            raise IntegrationError(
+                "Integration decisions or proof changed before completion publication"
+            )
 
     def completion_allowed(self, *, completed: bool = False) -> bool:
         try:

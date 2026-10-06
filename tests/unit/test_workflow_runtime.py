@@ -7637,7 +7637,7 @@ def test_integration_completion_entry_requires_current_durable_proof(tmp_path, m
     journey = create_journey(tmp_path / "gated", monkeypatch)
     runtime = journey.runtime()
     if entry == "owner":
-        result = runtime._complete_owned_transition(current_step="land", status_code="AWAIT_AGENT",
+        result = runtime._complete_owned_transition(current_step="land", status_code="await_agent",
                                                     runtime="owner_dispatch", source="automatic")
     elif entry in {"terminal", "lifecycle"}:
         runtime.blackboard_store.update_handoff_contract(

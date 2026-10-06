@@ -447,3 +447,141 @@ def test_success_failure_and_recovery_issue_only_fixed_read_requests(journey, mo
             ]
     if target == "local_branch":
         assert all(argv[0] == "git" for argv in requests)
+
+
+@pytest.mark.parametrize("target", ["local_branch", "github_pr"])
+@pytest.mark.parametrize("entry", ["workflow", "emit", "owner", "lifecycle"])
+@pytest.mark.parametrize("boundary", ["completion_record", "terminal_event"])
+def test_changed_source_at_final_publication_never_completes(
+    tmp_path, monkeypatch, target, entry, boundary
+):
+    """U6/U8/I9/I10: source changes at persistence cannot publish invalid done."""
+    from tests.integration.integration_fixture import create_journey
+    from cafe.core.integration_records import IntegrationRecordStore
+    from cafe.core.blackboard import BlackboardStore
+    from cafe.ui.cli import app
+    from typer.testing import CliRunner
+
+    journey = create_journey(tmp_path / "publication", monkeypatch)
+    monkeypatch.setattr(
+        "cafe.utils.github.GitHubOps.observe_integration", lambda *a: dict(journey.observation)
+    )
+    journey.complete("ship")
+    journey.select(target)
+    journey.runtime().run(start_step="destination")
+    journey.complete("confirm")
+    journey.runtime().run()
+    journey.human_integrate(target)
+    runtime = journey.runtime()
+    if entry == "lifecycle":
+        runtime.blackboard_store.set_current_step(runtime.blackboard, "land")
+        runtime.blackboard_store.record_event(
+            runtime.blackboard,
+            "workflow_completed",
+            {"step": "land", "next_step": "done", "status_code": "WORKFLOW_COMPLETE"},
+        )
+
+    def change_source():
+        path = journey.issue_dir / "reviewed.json"
+        raw = json.loads(path.read_text())
+        raw["head_sha"] = journey.base
+        path.write_text(json.dumps(raw))
+
+    if boundary == "completion_record":
+        original = IntegrationRecordStore.mark_completion
+
+        def persist(store):
+            change_source()
+            return original(store)
+
+        monkeypatch.setattr(IntegrationRecordStore, "mark_completion", persist)
+    else:
+        original = BlackboardStore.record_event
+
+        def publish(store, state, kind, payload, **kwargs):
+            if kind in {"workflow_completed", "completion_recovered"}:
+                change_source()
+            return original(store, state, kind, payload, **kwargs)
+
+        monkeypatch.setattr(BlackboardStore, "record_event", publish)
+
+    if entry == "workflow":
+        result = CliRunner().invoke(app, ["workflow", "--issue", "delivery", "--execute"])
+        assert result.exit_code == 0, (result.stdout, result.exception)
+    elif entry == "lifecycle":
+        result = runtime._recover_unpublished_lifecycle_position()
+        assert result is not None and not result.completed
+    elif entry == "owner":
+        result = runtime._complete_owned_transition(
+            current_step="land",
+            status_code="await_agent",
+            runtime="owner_dispatch",
+            source="automatic",
+        )
+        assert not result.completed
+    else:
+        result = runtime._emit_complete(
+            current_step="land",
+            status_code="WORKFLOW_COMPLETE",
+            next_step="_done",
+            runtime="baton",
+            reason="requested",
+            update_contract=True,
+        )
+        assert not result.completed
+    state = journey.state()
+    assert state.current_step == "forge"
+    assert not journey.service().completion_allowed(completed=True)
+    assert state.handoff_contract.to_step == "forge"
+    assert state.events[-1].event_type == "integration_review_required"
+
+
+@pytest.mark.parametrize("target", ["local_branch", "github_pr"])
+@pytest.mark.parametrize("change", ["artifact_version", "selection", "proof"])
+def test_final_event_uses_current_decision_and_proof_identity(
+    tmp_path, monkeypatch, target, change
+):
+    """U6/I9/I10: publication validates reconciled metadata and locked records."""
+    from tests.integration.integration_fixture import create_journey
+    from cafe.core.blackboard import BlackboardStore
+    from cafe.ui.cli import app
+    from typer.testing import CliRunner
+
+    journey = create_journey(tmp_path / "final-identity", monkeypatch)
+    monkeypatch.setattr(
+        "cafe.utils.github.GitHubOps.observe_integration", lambda *a: dict(journey.observation)
+    )
+    journey.complete("ship")
+    journey.select(target)
+    journey.runtime().run(start_step="destination")
+    journey.complete("confirm")
+    journey.runtime().run()
+    journey.human_integrate(target)
+    original = BlackboardStore.record_event
+
+    def publish(store, state, kind, payload, **kwargs):
+        if kind == "workflow_completed":
+            if change == "artifact_version":
+                fresh = store.load_read_only()
+                entry = fresh.artifacts["approved_delta"]
+                entry.version += 1
+                store.put_artifact(fresh, entry)
+            else:
+                # Persistence-boundary injection represents another decision/proof
+                # becoming durable after the caller's predicate was evaluated.
+                path = journey.issue_dir / "integration.json"
+                raw = json.loads(path.read_text())
+                if change == "proof":
+                    raw["attempts"][-1]["success"] = False
+                else:
+                    raw["selections"][-1]["selection"]["target_branch"] = "other"
+                path.write_text(json.dumps(raw))
+        return original(store, state, kind, payload, **kwargs)
+
+    monkeypatch.setattr(BlackboardStore, "record_event", publish)
+    result = CliRunner().invoke(app, ["workflow", "--issue", "delivery", "--execute"])
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    state = journey.state()
+    assert state.current_step != "done"
+    assert not journey.service().completion_allowed(completed=True)
+    assert not any(e.event_type == "workflow_completed" for e in state.events)

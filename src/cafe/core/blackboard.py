@@ -1443,13 +1443,16 @@ class BlackboardStore:
         data: Optional[Dict[str, Any]] = None,
         *,
         baton_contract: HandoffContract | None = None,
+        publication_guard: Callable[[BlackboardState], None] | None = None,
     ) -> None:
         entry = EventEntry(_now_iso(), step, event_type, message, data or {})
-        self._commit_event(state, entry, baton_contract=baton_contract)
+        self._commit_event(state, entry, baton_contract=baton_contract,
+                           publication_guard=publication_guard)
 
     def _commit_event(self, state: BlackboardState, entry: EventEntry,
                       *, event_id: str | None = None,
-                      baton_contract: HandoffContract | None = None) -> EventEntry:
+                      baton_contract: HandoffContract | None = None,
+                      publication_guard: Callable[[BlackboardState], None] | None = None) -> EventEntry:
         with self._thread_lock_for(self.file_path):
             with self.state_lock_path.open("a+", encoding="utf-8") as lock_file:
                 with _optional_process_file_lock(lock_file):
@@ -1463,6 +1466,10 @@ class BlackboardStore:
                         baseline=state._persisted_snapshot,
                         capability_receipts_authoritative=False,
                     ) if state._persisted_snapshot is not None else state)
+                    # Validate the effective state under the publication lock before
+                    # committing any event, baton or state patch.
+                    if publication_guard is not None:
+                        publication_guard(merged)
                     before = self._compact_dict(persisted)
                     after = self._compact_dict(merged)
                     patch = {
@@ -1504,11 +1511,12 @@ class BlackboardStore:
     def record_event(
         self, state: BlackboardState, event_type: str, payload: Dict[str, Any],
         *, baton_contract: HandoffContract | None = None,
+        publication_guard: Callable[[BlackboardState], None] | None = None,
     ) -> None:
         step = str(payload.get("step", state.current_step))
         self.log_event(
             state, step, event_type, json.dumps(payload, ensure_ascii=False), payload,
-            baton_contract=baton_contract,
+            baton_contract=baton_contract, publication_guard=publication_guard,
         )
 
     def prepare_workflow_callback_event(

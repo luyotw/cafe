@@ -875,32 +875,28 @@ class BlackboardWorkflowRuntime:
                 return None
             if self._contract_postdates_event(contract, event):
                 return None
-        blocked = self._integration_completion_guard(current_step=source)
-        if blocked is not None:
-            return blocked
         status = str(event.data.get("status_code", ""))
         transition_id = event.data.get("transition_id")
-        self.blackboard_store.update_handoff_contract(
-            self.blackboard,
-            from_step=source,
-            to_owner=HandoffOwner.DONE,
-            to_step="done",
-            intent=HandoffIntent.WORKFLOW_COMPLETE,
-            status_code=status,
-            source="workflow.lifecycle_recovery",
-        )
-        if current == source:
-            self.blackboard_store.set_current_step(self.blackboard, "done")
-        self.blackboard_store.record_event(
-            self.blackboard,
-            "completion_recovered",
-            {
-                "transition_id": transition_id,
-                "from": source,
-                "to": "done",
-                "status_code": status,
-            },
-        )
+
+        def publish(publication_guard):
+            # Recovery publishes its contract and done patch in the same guarded
+            # journal entry, instead of separate unchecked state writes.
+            contract = self.blackboard_store.build_handoff_contract(
+                from_step=source, to_owner=HandoffOwner.DONE, to_step="done",
+                intent=HandoffIntent.WORKFLOW_COMPLETE, status_code=status,
+                source="workflow.lifecycle_recovery",
+            )
+            self.blackboard.handoff_contract = contract
+            self.blackboard.current_step = "done"
+            self.blackboard_store.record_event(
+                self.blackboard, "completion_recovered",
+                {"transition_id": transition_id, "from": source, "to": "done", "status_code": status},
+                baton_contract=contract, publication_guard=publication_guard,
+            )
+
+        blocked = self._integration_completion_guard(current_step=source, publish=publish)
+        if blocked is not None:
+            return blocked
         return PlaybookRunResult(
             final_step=source,
             final_status_code=status or "WORKFLOW_COMPLETE",
@@ -3645,32 +3641,50 @@ class BlackboardWorkflowRuntime:
         self.blackboard_store.record_event(self.blackboard, "integration_review_required", {"step": step, "reason": reason})
         return PlaybookRunResult(final_step=step, final_status_code="INTEGRATION_REVIEW_REQUIRED", completed=False, detail=reason)
 
-    def _integration_completion_guard(self, *, current_step: str, completed: bool = False) -> Optional[PlaybookRunResult]:
+    def _integration_completion_guard(
+        self, *, current_step: str, completed: bool = False,
+        publish: Optional[Callable[..., None]] = None,
+    ) -> Optional[PlaybookRunResult]:
         service = integration_service(self.issue_dir, self.playbook, self.blackboard)
         if service is None:
+            if publish is not None:
+                publish(None)
             return None
         if completed and service.completion_allowed(completed=True):
             return None
+        original_position = self.blackboard.current_step
         try:
             service.reconcile()
             selected, _ = service.selected()
             if not selected["tasks"].get("action"):
                 raise ValueError("A distinct human integration task is required")
-            # Recheck the actual destination after any pre-completion interruption.
+            # Process/network work happens before acquiring the publication fence.
             attempt = service.verify()
             if not attempt["success"] or not service.completion_allowed():
                 raise ValueError(attempt["reason"])
-            service.records.mark_completion()
-            # A verified already-integrated result settles pending human work
-            # without manufacturing a human completion report.
-            for task in service.tasks.tasks():
-                if task.id == selected["tasks"].get("action") and task.status is HumanTaskStatus.PENDING:
-                    service.tasks.cancel(workflow_id=self.blackboard.workflow_id, task_id=task.id,
-                                         reason="Destination verified; no further human integration required")
+            with service.tasks.transaction():
+                fence = service.completion_fence()
+                service.records.mark_completion()
+
+                def validate(state):
+                    service.validate_completion_fence(fence, state)
+
+                validate(self.blackboard)
+                # Settle pending human work without manufacturing a report.
+                for task in service.tasks.tasks():
+                    if task.id == selected["tasks"].get("action") and task.status is HumanTaskStatus.PENDING:
+                        service.tasks.cancel(workflow_id=self.blackboard.workflow_id, task_id=task.id,
+                                             reason="Destination verified; no further human integration required")
+                if publish is not None:
+                    # The store invokes validate after reconciling the effective
+                    # state and before publishing the event, baton or done patch.
+                    publish(validate)
             return None
         except IntegrationReviewRequired as exc:
+            self.blackboard.current_step = original_position
             return self._integration_review_required(service, str(exc))
         except (OSError, ValueError) as exc:
+            self.blackboard.current_step = original_position
             step = service.declaration.correction_step if "source changed" in str(exc).lower() else service.declaration.action_step
             return self._integration_wait(step=step, reason=str(exc))
 
@@ -3737,31 +3751,32 @@ class BlackboardWorkflowRuntime:
         update_contract: bool = False,
         contract_source: str = "workflow.transition",
     ) -> PlaybookRunResult:
-        blocked = self._integration_completion_guard(current_step=current_step)
+        def publish(publication_guard):
+            self.blackboard.current_step = "done"
+            baton_contract = None
+            if update_contract:
+                baton_contract = self.blackboard_store.build_handoff_contract(
+                    from_step=current_step, to_owner=HandoffOwner.DONE,
+                    to_step="done", intent=HandoffIntent.WORKFLOW_COMPLETE,
+                    status_code=status_code, source=contract_source,
+                )
+                self.blackboard.handoff_contract = baton_contract
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "workflow_completed",
+                {
+                    "transition_id": str(uuid4()),
+                    "step": current_step,
+                    "status_code": status_code,
+                    "next_step": next_step,
+                    "reason": reason,
+                    "runtime": runtime,
+                },
+                baton_contract=baton_contract, publication_guard=publication_guard,
+            )
+        blocked = self._integration_completion_guard(current_step=current_step, publish=publish)
         if blocked is not None:
             return blocked
-        self.blackboard.current_step = "done"
-        baton_contract = None
-        if update_contract:
-            baton_contract = self.blackboard_store.build_handoff_contract(
-                from_step=current_step, to_owner=HandoffOwner.DONE,
-                to_step="done", intent=HandoffIntent.WORKFLOW_COMPLETE,
-                status_code=status_code, source=contract_source,
-            )
-            self.blackboard.handoff_contract = baton_contract
-        self.blackboard_store.record_event(
-            self.blackboard,
-            "workflow_completed",
-            {
-                "transition_id": str(uuid4()),
-                "step": current_step,
-                "status_code": status_code,
-                "next_step": next_step,
-                "reason": reason,
-                "runtime": runtime,
-            },
-            baton_contract=baton_contract,
-        )
         cafe_dir = self.issue_dir.parent.parent
         clear_marker_if_matches(cafe_dir, self.issue_dir.name)
         if not self._flush_phase_terminal(event_type="workflow_completed"):
