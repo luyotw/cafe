@@ -21,8 +21,13 @@ class ActionStore:
     def locked(self):
         self.directory.mkdir(parents=True, exist_ok=True)
         with (self.directory.parent / "actions.lock").open("a+b") as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             try:
+                manifest = self.directory / "actions.json"
+                content = canonical_json(self.snapshot.model_dump(mode="json"))
+                if manifest.exists() and manifest.read_bytes() != content:
+                    raise ValueError("action manifest changed")
+                atomic_write_bytes(manifest, content)
                 yield self
             finally:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
@@ -45,9 +50,48 @@ class ActionStore:
             raise ValueError("invalid action state")
         return record
 
+    def correlated_attempt(self, action: str):
+        """Revised human approval does not erase an earlier uncertain identical effect."""
+        directories = list(self.directory.parent.glob("*/actions.json"))
+        if len(directories) > 100:
+            raise ValueError("delivery history requires bounded manual reconciliation")
+        for manifest in directories:
+            if manifest.parent == self.directory:
+                continue
+            if manifest.stat().st_size > 1024 * 1024:
+                raise ValueError("oversized historical action manifest")
+            other = ActionSnapshot.model_validate_json(manifest.read_bytes())
+            if other.proposal.workflow_id != self.snapshot.proposal.workflow_id:
+                continue
+            if action != "integration":
+                if action not in {p.id for p in other.selected} or other.marker(
+                    action
+                ) != self.snapshot.marker(action):
+                    continue
+            else:
+                keys = (
+                    "mode",
+                    "repository",
+                    "source_oid",
+                    "source_branch",
+                    "target_branch",
+                    "strategy",
+                    "pr_number",
+                    "destination",
+                )
+                if any(
+                    getattr(other.proposal, key) != getattr(self.snapshot.proposal, key)
+                    for key in keys
+                ):
+                    continue
+            record = ActionStore(self.directory.parent.parent, other).read(action)
+            if record and record["state"] in {"unknown", "succeeded"}:
+                return record
+        return None
+
     def start(self, action: str):
         prior = self.read(action)
-        if prior is not None and prior["state"] != "not_dispatched":
+        if prior is not None and prior["state"] not in {"not_dispatched", "blocked"}:
             raise ValueError("action needs reconciliation before retry")
         self.finish(action, {"state": "unknown"})
 

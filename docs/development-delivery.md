@@ -1,0 +1,13 @@
+# Development delivery
+
+The eleven adopting development playbooks separate PR preparation from delivery. Their `delivery` declarations bind the action-review step/task, action and outcome artifacts, original Review proposal artifact and implementation correction route. Names are not runtime discriminators. Compact delivery remains a separate contract.
+
+PR publication presents exact repository, PR or local destination, source and target commit identities, strategy and original FUP drafts. The host freezes the proposal and reviewed artifact digest. A correlated user result authorizes integration plus an explicit subset or empty issue selection. Selection is not host capability approval. Registered `cafe.github.pr.merge`, `cafe.branch.integrate` and `cafe.github.issue.create` require independent approval through the existing registry.
+
+Each effect records an unknown attempt atomically before dispatch. Operations have an aggregate deadline and bounded process-group cleanup, retain child exit status and require positive Git/GitHub observation. A zero exit, queued merge or empty search cannot establish completion. Local integration requires an explicitly approved clean destination under the existing workspace lock. No reset, stash, generic argv or conflict resolution is supplied.
+
+Durable receipts retain actual integration commit and selected issue URLs. Stable workflow/repository/draft markers reconcile issues after interrupted responses or revised approvals. An earlier unknown identical action never gains replay permission. Partial, unknown, denied and pending results remain recoverable and nonterminal. Final acceptance requires the current completed receipt digest. Changed artifacts, source identity or selection require fresh review. Implementation corrections use the declared Develop Todo handoff.
+
+New Manager contracts use nested delivery schema version 5 with cleanup only. Kickoff schemas, templates, saved preference offers, formatter and progress do not expose Manager deliver actions. Descriptive discovery remains useful. Old delivery conventions/templates are inspectable diagnostics and cannot restore executable fields. Recorded legacy contracts retain original bytes, digests, command outcomes and narrow exact bindings; they are never silently rewritten. Cleanup, archive, branch/worktree deletion, issue closure, deployment and releases remain separate authority.
+
+Validation uses real temporary Git repositories and an isolated fake GitHub executable at the process boundary, plus public HumanTask and capability approval callers. No test merges the development repository or creates remote issues.

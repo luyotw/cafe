@@ -42,7 +42,6 @@ produce a default `gh issue close <id> --repo <repository>` proposal.
     "playbook_id": "standard",
     "issue_name": "issue600",
     "delivery_contract": {"schema_version": 3},
-    "deliver": [],
     "cleanup": [],
     "update_preflight": {"status": "current"},
     "catalog_preflight": {"status": "identical"},
@@ -54,7 +53,7 @@ produce a default `gh issue close <id> --repo <repository>` proposal.
 
 An absent value is filled only by the documented preference, configuration,
 template or default rules; otherwise it remains missing. An explicitly empty
-`deliver` or `cleanup` list and an explicit `false` capability choice remain
+`cleanup` list and an explicit `false` capability choice remain
 distinct values. The helper accepts only the declared formatter fields, encodes
 each value as a JSON or argv element, and rejects activation metadata, shell
 commands, and unknown fields.
@@ -153,11 +152,10 @@ paired with the presented output; do not overwrite it before answering that
 confirmation. Staged preparation is preferred because it pins these paths.
 
 Optional request-level `preference_templates` accepts only `worktree.convention`,
-`delivery.convention` and `cleanup.convention`, using the reusable shapes below.
+`cleanup.convention`, using the reusable shapes below.
 The formatter checks their expansion against the current complete proposal;
 literal current issue targets, mismatches or malformed templates are excluded
-from saving with a visible diagnostic. A valid cached delivery template may
-be supplied automatically when it still matches the proposal. Arbitrary commands
+from saving with a visible diagnostic. Obsolete delivery templates produce diagnostics and are never supplied automatically. Arbitrary commands
 and custom paths are not reverse-engineered into templates. These values only
 propose future defaults; they never execute actions or replace their authority.
 
@@ -212,34 +210,9 @@ Catalog refresh derives current effective declarations. Delivery and model refre
 
 These records are preparation facts only. They do not authorize publication, issue changes, workflow activation, paid services, or exact delivery/cleanup actions. The complete formatter output and existing confirmation/activation boundaries remain required.
 
-### Reusable delivery template
+### Legacy delivery template diagnostics
 
-Delivery evidence may include this optional structured template alongside its
-existing `target`, `stable_conventions` and fingerprinted `sources`:
-
-```json
-{
-  "delivery_template": {
-    "deliver": [["gh", "pr", "merge", "--merge"]],
-    "deliver_description": ["Merge the reviewed PR for {issue_name}."]
-  }
-}
-```
-
-The example is applicable only to a repository whose sourced delivery route
-is a PR merge. First establish that route, then save its reusable template with
-the existing `evidence refresh --category delivery` command. Do not save a prior
-issue's concrete PR number or one-time target as a repository-wide convention.
-
-Allowed substitutions are `{issue_name}`, `{issue_id}`, `{project_root}` and
-`{worktree}`. Expansion operates on individual argv strings, with no shell or
-attribute evaluation. Escape literal braces as `{{` and `}}`. Unknown or missing
-substitutions, invalid argv shapes and mismatched descriptions remain gaps.
-The command and description arrays must have equal lengths. Only a fully valid
-cache hit supplies the template; stale, contradictory or corrupt records do not.
-Explicit current commands (including `[]`) override the template. Old narrative
-records remain readable but cannot be silently converted into executable routes.
-
+Old `delivery_template`, `delivery.convention` and generated delivery provenance are retained for inspection and diagnosed as obsolete. They cannot populate new formatter fields, preference offers, saves or prefill. Refresh accepts descriptive conventions and their source fingerprints only. Worktree and cleanup templates retain literal per-argument substitution of `{issue_name}`, `{issue_id}`, `{project_root}` and `{worktree}`; these preferences confer no action authority.
 
 ### Raw check report files
 
@@ -288,7 +261,6 @@ precede user values; clearing a repository key exposes the user value.
 | `phase.chains` | `{"steps":{"develop":["codex:MODEL"]},"roles":{"developer":["codex:MODEL","claude:FALLBACK"]}}`. Selectors must match the selected graph; a step entry precedes its role entry. Current phase entries precede both. Ordered fallback candidates remain subject to current suitability and availability decisions. |
 | `confirmation.assignments` | `{"user_required":["STEP"],"manager_confirmable":["STEP"]}` using the existing assignable-gate partition. Mandatory task gates cannot be overridden here. |
 | `review.decisions` | Step-to-decision mapping using existing formatter choices (`required`, `not_required`), subject to the selected graph's review eligibility. |
-| `delivery.convention` | `{"deliver":[["git","-C","{worktree}","commit","-m","{issue_name}"]],"deliver_description":["Commit {issue_name}."]}`. |
 | `cleanup.convention` | Same action-template shape with `cleanup` and `cleanup_description`; explicit empty arrays propose no cleanup. |
 
 Action templates use the existing literal-argv renderer and its allowed
@@ -297,15 +269,7 @@ and confer no authority. These preferences supply proposal inputs; Manager still
 judges strategy, suitability, exact targets, source freshness and action permission.
 A saved value never confirms or activates a contract.
 
-Generated delivery values carry `generated_inputs` provenance in the editable
-request. Preserve that metadata when editing gaps. Unchanged generated values
-must still have valid matching evidence and target context at render time. If
-these change, reassess the action and edit the affected `formatter_inputs` field.
-If reassessment deliberately retains the same value, use the advanced
-`current_explicit_inputs` adapter and remove that field from `formatter_inputs`;
-an unchanged value alone does not record reassessment. Never remove provenance
-to bypass invalidation. Legacy requests without generated metadata retain
-their explicit-input semantics. This metadata is freshness evidence, not authority.
+Old generated delivery provenance remains inspectable and produces an obsolete-field diagnostic. Preserve other preference and evidence metadata. Resolve reported obsolete fields explicitly; never silently convert them into executable cleanup or new delivery authority.
 
 Report capture publishes the raw report and request atomically per file. When
 replacing a report already referenced by the draft, it uses a content-addressed

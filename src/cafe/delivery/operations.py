@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
+import re
 import signal
 import subprocess
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
-from cafe.core.workspace_lock import workspace_execution_lock
 from cafe.delivery.contracts import ActionSnapshot
 from cafe.delivery.records import ActionStore
 
@@ -78,18 +80,41 @@ class Commands:
             raise OperationError("malformed_observation", state="unknown") from exc
 
 
-def _local_identity(commands, root, proposal):
+@contextmanager
+def _destination_lock(destination):
+    """Use the existing workspace lease file without unbounded lock waiting."""
+    directory = Path(destination) / ".cafe"
+    directory.mkdir(exist_ok=True)
+    with (directory / "workspace-use.lock").open("a+b") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise OperationError("destination_in_use") from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _local_identity(commands, root, proposal, *, reconcile_only=False):
     dest = Path(proposal.destination).resolve(strict=True)
     common = commands.git(root, "rev-parse", "--path-format=absolute", "--git-common-dir")
     if (
         str(Path(common).resolve()) != proposal.repository
         or commands.git(dest, "rev-parse", "--path-format=absolute", "--git-common-dir") != common
-        or commands.git(root, "symbolic-ref", "--short", "HEAD") != proposal.source_branch
-        or commands.git(root, "rev-parse", "HEAD") != proposal.source_oid
+        or (
+            not reconcile_only
+            and (
+                commands.git(root, "symbolic-ref", "--short", "HEAD") != proposal.source_branch
+                or commands.git(root, "rev-parse", "HEAD") != proposal.source_oid
+            )
+        )
         or commands.git(dest, "symbolic-ref", "--short", "HEAD") != proposal.target_branch
     ):
         raise OperationError("changed_repository_or_source")
-    if commands.git(dest, "status", "--porcelain", "--untracked-files=all"):
+    if not reconcile_only and commands.git(root, "status", "--porcelain", "--untracked-files=all"):
+        raise OperationError("dirty_source")
+    if not reconcile_only and commands.git(dest, "status", "--porcelain", "--untracked-files=all"):
         raise OperationError("dirty_destination")
     return dest
 
@@ -107,21 +132,26 @@ def _local_result(commands, dest, proposal):
     return None
 
 
-def _github_pr(commands, root, proposal):
+def _github_pr(commands, root, proposal, *, reconcile_only=False):
     remote = commands.git(root, "remote", "get-url", "origin").removesuffix(".git")
     if remote not in {
         f"https://github.com/{proposal.repository}",
         f"git@github.com:{proposal.repository}",
     }:
         raise OperationError("changed_repository")
-    if (
+    if not reconcile_only and (
         commands.git(root, "rev-parse", "HEAD") != proposal.source_oid
         or commands.git(root, "symbolic-ref", "--short", "HEAD") != proposal.source_branch
     ):
         raise OperationError("changed_source")
+    if not reconcile_only and commands.git(root, "status", "--porcelain", "--untracked-files=all"):
+        raise OperationError("dirty_source")
     data = commands.api(f"repos/{proposal.repository}/pulls/{proposal.pr_number}")
     if (
         not isinstance(data, dict)
+        or not isinstance(data.get("head"), dict)
+        or not isinstance(data.get("base"), dict)
+        or not isinstance(data.get("base", {}).get("repo"), dict)
         or data.get("number") != proposal.pr_number
         or data.get("head", {}).get("sha") != proposal.source_oid
         or data.get("head", {}).get("ref") != proposal.source_branch
@@ -134,7 +164,11 @@ def _github_pr(commands, root, proposal):
 
 def _merged(data):
     commit = data.get("merge_commit_sha")
-    if data.get("merged") is True and isinstance(commit, str) and len(commit) == 40:
+    if (
+        data.get("merged") is True
+        and isinstance(commit, str)
+        and re.fullmatch(r"[0-9a-f]{40}", commit)
+    ):
         return {"state": "succeeded", "commit": commit}
     return None
 
@@ -149,12 +183,15 @@ def _issue_matches(commands, snapshot, item):
         if not isinstance(rows, list):
             raise OperationError("issue_observation_unavailable", state="unknown")
         for row in rows:
+            if not isinstance(row, dict) or not isinstance(row.get("body") or "", str):
+                raise OperationError("issue_observation_unavailable", state="unknown")
             if marker in (row.get("body") or "") and "pull_request" not in row:
                 if (
                     row.get("title") != item.title
                     or row.get("body") != item.body + "\n\n" + marker
-                    or not str(row.get("html_url", "")).startswith(
-                        f"https://github.com/{repo}/issues/"
+                    or not re.fullmatch(
+                        f"https://github.com/{re.escape(repo)}/issues/[1-9][0-9]*",
+                        str(row.get("html_url", "")),
                     )
                 ):
                     raise OperationError("issue_marker_identity_changed", state="unknown")
@@ -174,14 +211,15 @@ def execute_action(
     store = ActionStore(issue_dir, snapshot)
     p = snapshot.proposal
     with store.locked():
-        prior = store.read(action)
+        prior = store.read(action) or store.correlated_attempt(action)
+        reconcile_only = bool(prior and prior["state"] in {"unknown", "succeeded"})
         try:
             if action == "integration" and p.mode == "local":
-                with workspace_execution_lock(Path(p.destination)):
-                    dest = _local_identity(commands, root, p)
+                with _destination_lock(p.destination):
+                    dest = _local_identity(commands, root, p, reconcile_only=reconcile_only)
                     result = _local_result(commands, dest, p)
                     if result is None:
-                        if prior and prior["state"] != "not_dispatched":
+                        if prior and prior["state"] not in {"not_dispatched", "blocked"}:
                             raise OperationError("unreconciled_local_attempt", state="unknown")
                         if commands.git(dest, "rev-parse", "HEAD") != p.target_oid:
                             raise OperationError("changed_destination")
@@ -197,10 +235,10 @@ def execute_action(
                         if result is None:
                             raise OperationError("integration_unobserved", state="unknown")
             elif action == "integration":
-                data = _github_pr(commands, root, p)
+                data = _github_pr(commands, root, p, reconcile_only=reconcile_only)
                 result = _merged(data)
                 if result is None:
-                    if prior and prior["state"] != "not_dispatched":
+                    if prior and prior["state"] not in {"not_dispatched", "blocked"}:
                         raise OperationError("unreconciled_merge_attempt", state="unknown")
                     if (
                         data.get("base", {}).get("sha") != p.target_oid
@@ -230,7 +268,7 @@ def execute_action(
                     raise OperationError("unselected_issue")
                 row = _issue_matches(commands, snapshot, item)
                 if row is None:
-                    if prior and prior["state"] != "not_dispatched":
+                    if prior and prior["state"] not in {"not_dispatched", "blocked"}:
                         raise OperationError("unreconciled_issue_attempt", state="unknown")
                     store.start(action)
                     commands.api(
@@ -250,8 +288,12 @@ def execute_action(
             # Once dispatched, uncertainty must never be converted into retry permission.
             attempted = store.read(action)
             state = getattr(exc, "state", "blocked")
-            if attempted and attempted["state"] in {"unknown", "succeeded"}:
+            if (attempted and attempted["state"] in {"unknown", "succeeded"}) or (
+                prior and prior["state"] in {"unknown", "succeeded"}
+            ):
                 state = "unknown"
+            elif state == "unknown":
+                state = "not_dispatched"
             result = {
                 "state": state,
                 "error": str(exc)[:1024],

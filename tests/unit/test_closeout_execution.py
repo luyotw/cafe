@@ -264,3 +264,16 @@ def test_confirmed_plan_fits_durable_evidence_at_exact_boundary(tmp_path: Path) 
     with pytest.raises(ValueError):
         activate_confirmed_contract(_activation(rejected, oversized))
     assert not (rejected / "driver" / "contract.json").exists()
+
+
+def test_legacy_unbound_merge_keeps_original_authority_and_undispatched_receipt(tmp_path):
+    root, issue, evidence = _journey(tmp_path, [["gh", "pr", "merge", "--merge"]])
+    from cafe.manager._store import select_authority_directory
+    contract = select_authority_directory(issue) / "contract.json"
+    original = contract.read_bytes()
+    assert _run(root, issue, "--initialize").returncode == 0
+    result = _run(root, issue, "--execute", "--stage", "deliver", "--index", "0")
+    assert result.returncode == 2
+    assert contract.read_bytes() == original
+    receipt = json.loads(evidence.read_text())
+    assert receipt["commands"]["deliver"][0]["status"] == "not_started"

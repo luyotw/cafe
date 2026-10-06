@@ -227,6 +227,7 @@ def test_script_launcher_inventory_covers_workflow_process_calls() -> None:
         classifications[identity] = classification.strip()
 
     required_classifications = {
+        "src/cafe/delivery/operations.py::run": "Registered fixed Git/GitHub delivery capability adapter",
         "src/cafe/core/capabilities.py::run_pr_publish_capability": (
             "Registered host capability adapter"
         ),

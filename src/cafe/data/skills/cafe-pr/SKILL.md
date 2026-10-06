@@ -1,6 +1,6 @@
 ---
 name: cafe-pr
-description: "Prepare the local pull request title and description for publication"
+description: Prepare the local pull request title and description for publication
 version: 1.8.0
 workflow:
   notification:
@@ -12,70 +12,133 @@ workflow:
   execution_profile:
     workload: publication
     reasoning: routine
-    risk_domains: [external-side-effects]
+    risk_domains:
+    - external-side-effects
     fallback_strength: equivalent
   human_tasks:
-    - id: local-review
-      pattern: confirm_output
-      prompt: {message_key: human_task.cafe_pr.local_review.prompt}
-      prompt_locales:
-        zh-TW: {message_key: human_task.cafe_pr.local_review.prompt}
-      input_schema: decision
-      decisions:
-        - id: fix_now
-          label: {message_key: human_task.cafe_pr.local_review.decisions.fix_now.label}
-          label_locales:
-            zh-TW: {message_key: human_task.cafe_pr.local_review.decisions.fix_now.label}
-          requires_feedback: true
-          correction: true
-        - id: create_follow_up
-          label: {message_key: human_task.cafe_pr.local_review.decisions.create_follow_up.label}
-          label_locales:
-            zh-TW: {message_key: human_task.cafe_pr.local_review.decisions.create_follow_up.label}
-        - id: continue_without_issue
-          label: {message_key: human_task.cafe_pr.local_review.decisions.continue_without_issue.label}
-          label_locales:
-            zh-TW: {message_key: human_task.cafe_pr.local_review.decisions.continue_without_issue.label}
+  - id: local-review
+    pattern: confirm_output
+    prompt:
+      message_key: human_task.cafe_pr.local_review.prompt
+    prompt_locales:
+      zh-TW:
+        message_key: human_task.cafe_pr.local_review.prompt
+    input_schema: decision
+    decisions:
+    - id: fix_now
+      label:
+        message_key: human_task.cafe_pr.local_review.decisions.fix_now.label
+      label_locales:
+        zh-TW:
+          message_key: human_task.cafe_pr.local_review.decisions.fix_now.label
+      requires_feedback: true
+      correction: true
+    - id: create_follow_up
+      label:
+        message_key: human_task.cafe_pr.local_review.decisions.create_follow_up.label
+      label_locales:
+        zh-TW:
+          message_key: human_task.cafe_pr.local_review.decisions.create_follow_up.label
+    - id: continue_without_issue
+      label:
+        message_key: human_task.cafe_pr.local_review.decisions.continue_without_issue.label
+      label_locales:
+        zh-TW:
+          message_key: human_task.cafe_pr.local_review.decisions.continue_without_issue.label
+  - id: delivery-review
+    pattern: confirm_output
+    prompt:
+      message_key: human_task.cafe_pr.delivery_review.prompt
+    prompt_locales:
+      zh-TW:
+        message_key: human_task.cafe_pr.delivery_review.prompt
+    input_schema: decision
+    decisions:
+    - id: fix_now
+      label:
+        message_key: human_task.cafe_pr.delivery_review.fix_now
+      label_locales:
+        zh-TW:
+          message_key: human_task.cafe_pr.delivery_review.fix_now
+      requires_feedback: true
+      correction: true
+    - id: integrate_selected
+      label:
+        message_key: human_task.cafe_pr.delivery_review.integrate_selected
+      label_locales:
+        zh-TW:
+          message_key: human_task.cafe_pr.delivery_review.integrate_selected
+      requires_feedback: true
+    - id: integrate_only
+      label:
+        message_key: human_task.cafe_pr.delivery_review.integrate_only
+      label_locales:
+        zh-TW:
+          message_key: human_task.cafe_pr.delivery_review.integrate_only
+    - id: review_only
+      label:
+        message_key: human_task.cafe_pr.delivery_review.review_only
+      label_locales:
+        zh-TW:
+          message_key: human_task.cafe_pr.delivery_review.review_only
+  - id: delivery-details
+    pattern: revision_feedback
+    prompt:
+      message_key: human_task.cafe_pr.delivery_details.prompt
+    prompt_locales:
+      zh-TW:
+        message_key: human_task.cafe_pr.delivery_details.prompt
+    input_schema: feedback
   prompt_inputs:
-    - artifacts: [spec]
-      placeholder: spec_file
-      required: false
-      load_policy:
-        - mode: packet
-          contract_kind: spec
-    - artifacts: [spec]
-      placeholder: spec_file_path
-      required: false
-      load_policy:
-        - mode: packet
-          contract_kind: spec
-    - artifacts: [plan]
-      placeholder: plan_file
-      required: false
-      load_policy:
-        - mode: packet
-          contract_kind: plan
-    - artifacts: [plan]
-      placeholder: plan_file_path
-      required: false
-      load_policy:
-        - mode: packet
-          contract_kind: plan
-    - artifacts: [code]
-      placeholder: develop_file
-      required: false
-    - artifacts: [workspace]
-      placeholder: workspace_file
-      required: false
-    - artifacts: [qa_feedback, review_feedback]
-      placeholder: feedback_file
-      required: false
-    - artifacts: [review_feedback]
-      placeholder: review_feedback_file
-      required: false
-    - artifacts: [workflow_feedback]
-      placeholder: workflow_feedback_file
-      required: false
+  - artifacts:
+    - spec
+    placeholder: spec_file
+    required: false
+    load_policy:
+    - mode: packet
+      contract_kind: spec
+  - artifacts:
+    - spec
+    placeholder: spec_file_path
+    required: false
+    load_policy:
+    - mode: packet
+      contract_kind: spec
+  - artifacts:
+    - plan
+    placeholder: plan_file
+    required: false
+    load_policy:
+    - mode: packet
+      contract_kind: plan
+  - artifacts:
+    - plan
+    placeholder: plan_file_path
+    required: false
+    load_policy:
+    - mode: packet
+      contract_kind: plan
+  - artifacts:
+    - code
+    placeholder: develop_file
+    required: false
+  - artifacts:
+    - workspace
+    placeholder: workspace_file
+    required: false
+  - artifacts:
+    - qa_feedback
+    - review_feedback
+    placeholder: feedback_file
+    required: false
+  - artifacts:
+    - review_feedback
+    placeholder: review_feedback_file
+    required: false
+  - artifacts:
+    - workflow_feedback
+    placeholder: workflow_feedback_file
+    required: false
   prompt_references:
     spec_context: pr_spec_context.md
     plan_context: pr_plan_context.md
@@ -85,14 +148,16 @@ workflow:
       plan_read_instruction: plan_read_instruction.md
       review_feedback_instruction: review_feedback_instruction.md
     variants:
-      - when: {iteration: 1}
-        sections:
-          - reference: execution_steps_iteration_1.md
-          - optional_checklist: basic_principles.md
-      - when: {min_iteration: 2}
-        sections:
-          - reference: execution_steps_iteration_n.md
-          - optional_checklist: basic_principles.md
+    - when:
+        iteration: 1
+      sections:
+      - reference: execution_steps_iteration_1.md
+      - optional_checklist: basic_principles.md
+    - when:
+        min_iteration: 2
+      sections:
+      - reference: execution_steps_iteration_n.md
+      - optional_checklist: basic_principles.md
     include_role_guidance: true
 ---
 
@@ -151,7 +216,7 @@ When there is no corrective feedback for this cycle, or this batch has no applic
    - Put a concise title, no longer than 80 characters, on the first `#` line.
    - Keep the `Summary`, `Changes`, `Test Plan`, and `Follow-up Proposals` structure.
    - Copy each `status: open` `FUP-NNN` ID, impact, confidence, evidence summary, and draft issue title/body from the declared `review_feedback_file`; do not rewrite IDs or invent proposals.
-   - Write `None` when there are no open proposals. Otherwise state that one PR HumanTask choice applies to all open `FUP-NNN` items; `create_follow_up` records the request and does not create a GitHub issue automatically.
+   - Write `None` when there are no open proposals. For legacy `local-review`, one PR HumanTask choice applies to all open proposals; it does not create a GitHub issue automatically. When the declared task is `delivery-review`, display every original draft and request explicit proposal IDs for `integrate_selected`; `integrate_only` selects none. `review_only` authorizes no delivery effect.
 3. Do not call a GitHub connector or API, `gh pr create`, or `scripts/sync_pr.sh` directly.
 4. Do not query or wait for a remote branch or PR; the host-side hook publishes after the agent returns.
 5. After the local PR artifact and checklist are complete, choose the next baton from the injected route catalog. Route `confirm_output` to `user`; complete directly only when the catalog declares a `workflow_complete` default to `done`. Do not handle a follow-up proposal on the user's behalf.
@@ -177,3 +242,7 @@ Write PR content to: {output_file}
 
 ## Handoff
 - Write the next-step baton for this result; the runtime updates the blackboard.
+
+### Declared development delivery review
+
+When this step declares a `delivery` binding, prepare `delivery_request.json` beside the PR output with only `mode` (`local` or `github`), `strategy`, `target_branch`, `destination` (absolute clean target checkout for local), and `issue_repository` (explicit GitHub destination for selected issues). Source/repository/PR identities and Review drafts are supplied and checked by the host. Ask for missing material details through the declared clarification task. Do not guess a strategy or convert publication into action approval. The host displays and freezes the exact bundle before `delivery-review`; users supply only the selected `FUP-NNN` IDs. The host executes nothing during this PR step.

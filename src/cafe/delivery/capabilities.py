@@ -10,10 +10,20 @@ def boundaries(request):
     snapshot = snapshot_from_args(request.args)
     p = snapshot.proposal
     if request.capability == "cafe.branch.integrate":
-        return {"delivery_effect": p.destination}
+        return {
+            "delivery_effect": p.destination,
+            "delivery_git": p.repository,
+            "delivery_records": str(Path(request.args["issue_dir"]) / "delivery"),
+        }
     if request.capability == "cafe.github.pr.merge":
-        return {"delivery_effect": f"github_pr:{p.repository}#{p.pr_number}"}
-    return {"delivery_effect": f"github_issues:{p.issue_repository}"}
+        return {
+            "delivery_effect": f"github_pr:{p.repository}#{p.pr_number}",
+            "delivery_records": str(Path(request.args["issue_dir"]) / "delivery"),
+        }
+    return {
+        "delivery_effect": f"github_issues:{p.issue_repository}",
+        "delivery_records": str(Path(request.args["issue_dir"]) / "delivery"),
+    }
 
 
 def adapter(*, repo_root, request, manifest, output_file, timeout_sec):

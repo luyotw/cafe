@@ -48,7 +48,7 @@ def test_configured_values_are_written_to_the_actual_draft_without_granting_acti
     assert draft["need_permission"] == "user_required"
     assert draft["need_clarification"] == "manager_confirmable"
     assert draft["alignment_checkpoint"] == "manager_resolvable_when_clear"
-    assert draft["deliver"] is None and draft["cleanup"] == [["cafe", "close"]]
+    assert "deliver" not in draft and draft["cleanup"] == [["cafe", "close"]]
     assert draft["delivery_contract"]["permissions"] == []
     assert draft["capability_choice"] == [] and draft["manager_mode"] == "event-driven"
     assert draft["current_checkout"] is True
@@ -84,7 +84,7 @@ def test_explicit_values_and_invalid_inputs_are_never_replaced_by_defaults(tmp_p
     request["current_explicit_inputs"] = explicit
     report = module.assemble_kickoff(request)
     assert all(report["formatter_draft"][k] == v for k, v in explicit.items())
-    assert report["formatter_draft"]["deliver_description"] == []
+    assert "deliver_description" not in report["formatter_draft"]
     assert report["formatter_draft"]["cleanup_description"] == []
     request["formatter_inputs"] = {"effective_locale": "de-DE"}
     conflict = module.assemble_kickoff(request)
@@ -115,7 +115,6 @@ def test_only_applicable_explicit_preferences_prefill_mode_dependencies(tmp_path
     ("worktree.convention", "{unknown}", ["worktree", "current_checkout"], {"current_checkout": True}),
     ("confirmation.assignments", {"mandatory_task": False}, ["user_required", "manager_confirmable"], {"user_required": [], "manager_confirmable": []}),
     ("review.decisions", {"absent": "required"}, ["proactive_review_decision"], {"proactive_review_decision": ["outline=not_required"]}),
-    ("delivery.convention", {"wrong": []}, ["deliver", "deliver_description"], {"deliver": [], "deliver_description": []}),
     ("cleanup.convention", {"wrong": []}, ["cleanup", "cleanup_description"], {"cleanup": [], "cleanup_description": []}),
 ])
 def test_invalid_saved_preference_requires_explicit_resolution_without_catalog_discovery(
@@ -205,31 +204,25 @@ def test_issue_id_derives_checkout_cleanup_and_current_cli_without_creating_them
     assert module.assemble_kickoff(request)["formatter_draft"]["cleanup"] == [["cafe", "close"]]
 
 
-def test_cached_delivery_fills_only_missing_fields_on_a_valid_hit(tmp_path):
+def test_cached_delivery_cannot_restore_manager_commands(tmp_path):
     module = load_kickoff_module("kickoff_inputs")
     request = _project(tmp_path)
     request.update(issue_id="123", manager_cli="claude")
-    template = {"deliver": [["deploy-tool", "--issue", "{issue_id}", "--workspace", "{worktree}"]],
+    template = {"deliver": [["deploy-tool", "--issue", "{issue_id}"]],
                 "deliver_description": ["Deliver {issue_name}."]}
     discovery = {"delivery": {"status": "hit", "delivery_template": template}}
-    report = module.assemble_kickoff(request, discovery=discovery)
-    draft = report["formatter_draft"]
-    assert draft["deliver"] == [["deploy-tool", "--issue", "123", "--workspace", str(tmp_path)]]
-    assert draft["deliver_description"] == ["Deliver new."]
-    assert draft["event_manager"] == ["claude"]
-    # An earlier incomplete draft has a null action slot, not an exclusion.
-    request["formatter_inputs"] = {"deliver": None}
-    assert module.assemble_kickoff(request, discovery=discovery)["formatter_draft"]["deliver"] == draft["deliver"]
-    request.pop("formatter_inputs")
-    request["current_explicit_inputs"] = {"deliver": [], "cleanup": [], "current_checkout": True,
-                                          "manager_mode": "unattended"}
-    overridden = module.assemble_kickoff(request, discovery=discovery)["formatter_draft"]
-    assert overridden["deliver"] == overridden["cleanup"] == []
-    assert overridden["deliver_description"] == overridden["cleanup_description"] == []
-    assert "worktree" not in overridden and "event_manager" not in overridden
-    request.pop("current_explicit_inputs")
-    discovery["delivery"]["status"] = "miss"
-    assert "deliver" not in module.assemble_kickoff(request, discovery=discovery)["formatter_draft"]
+    prefs = load_kickoff_module("kickoff_preferences").PreferenceStore(tmp_path / "prefs", repository_root=tmp_path)
+    # An actual old record is inspected without rewriting it or treating it as authority.
+    prefs._store("repository").update(lambda rows: {**rows, "delivery.convention": {
+        "value": template, "scope": "repository", "origin": "explicit"}})
+    before = prefs.inspect(scope="repository")
+    draft = module.assemble_kickoff(request, discovery=discovery, preference_store=prefs)["formatter_draft"]
+    assert "deliver" not in draft and "deliver_description" not in draft
+    assert prefs.inspect(scope="repository") == before
+    request["formatter_inputs"] = {"deliver": []}
+    rejected = module.assemble_kickoff(request, discovery=discovery, preference_store=prefs)
+    assert rejected["status"] != "ready"
+    assert any("deliver" in reason for reason in rejected["diagnostics"])
 
 
 def test_default_mode_uses_saved_dependency_and_does_not_invent_caller_identity(tmp_path, monkeypatch):

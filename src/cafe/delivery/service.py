@@ -65,7 +65,7 @@ def execute_snapshot(
         if remaining <= 5:
             results[action] = {"state": "not_dispatched", "error": "batch_deadline"}
             break
-        prior = store.read(action)
+        prior = store.read(action) or store.correlated_attempt(action)
         if prior and prior["state"] in {"unknown", "succeeded"}:
             # Observation is read-only. It never replays an unknown/successful effect.
             result = execute_action(root, issue_dir, snapshot, action, timeout=remaining)
@@ -120,9 +120,40 @@ def execute_snapshot(
         results[action] = result
         if not execution.get("success") or result["state"] != "succeeded":
             break
+    previous_results = {}
+    history = list((issue_dir / "delivery").glob("*/actions.json"))
+    if len(history) > 100:
+        raise ValueError("delivery history requires bounded manual reconciliation")
+    from cafe.delivery.contracts import ActionSnapshot
+
+    for manifest in history:
+        if manifest.parent == store.directory:
+            continue
+        if manifest.stat().st_size > 1024 * 1024:
+            raise ValueError("oversized historical action manifest")
+        previous = ActionSnapshot.model_validate_json(manifest.read_bytes())
+        if previous.proposal.workflow_id != snapshot.proposal.workflow_id:
+            continue
+        previous_store = ActionStore(issue_dir, previous)
+        for action in ["integration", *[item.id for item in previous.selected]]:
+            receipt = previous_store.read(action)
+            if not receipt or receipt["state"] not in {"unknown", "succeeded"}:
+                continue
+            if receipt["state"] == "unknown" and deadline - time.monotonic() > 5:
+                # Existing unknown attempts permit observation only, even if a revision drops them.
+                receipt = execute_action(
+                    root, issue_dir, previous, action, timeout=deadline - time.monotonic() - 5
+                )
+            previous_results[f"{previous.digest}:{action}"] = receipt
+    unresolved_history = [
+        "previous:" + key
+        for key, value in previous_results.items()
+        if value["state"] != "succeeded"
+    ]
     complete = len(results) == len(actions) and all(
         r["state"] == "succeeded" for r in results.values()
     )
+    complete = complete and not unresolved_history
     report = {
         "version": 1,
         "snapshot": snapshot.digest,
@@ -130,7 +161,9 @@ def execute_snapshot(
         "result_id": snapshot.result_id,
         "complete": complete,
         "actions": results,
-        "remaining": [a for a in actions if results.get(a, {}).get("state") != "succeeded"],
+        "previous_results": previous_results,
+        "remaining": [a for a in actions if results.get(a, {}).get("state") != "succeeded"]
+        + unresolved_history,
         "pending_task": pending_task,
     }
     path = store.directory / "result.json"

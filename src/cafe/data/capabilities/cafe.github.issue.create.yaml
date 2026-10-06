@@ -30,6 +30,7 @@ outputs:
 effects:
   writes:
   - delivery_effect
+  - delivery_records
   network_destinations:
   - github.com
   - api.github.com
@@ -39,6 +40,7 @@ credentials:
 permissions:
   writes:
   - delivery_effect
+  - delivery_records
   network:
   - github.com
   - api.github.com

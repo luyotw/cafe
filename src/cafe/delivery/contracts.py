@@ -27,6 +27,7 @@ class DeliveryBinding(FrozenModel):
     result_artifact: str
     approval_step: str
     approval_task: str = "delivery-review"
+    result_task: str = "delivery-outcome"
     correction_step: str
     proposals_artifact: str | None = None
 
@@ -54,6 +55,8 @@ class ActionProposal(FrozenModel):
     destination: str = ""
     issue_repository: str = ""
     proposals: tuple[FollowUp, ...] = Field(default=(), max_length=100)
+    reviewed_artifact: str = ""
+    reviewed_artifact_sha256: str = Field(default="", pattern=r"^(?:[0-9a-f]{64})?$")
 
     @model_validator(mode="after")
     def exact_binding(self):
@@ -124,7 +127,15 @@ class ActionSnapshot(FrozenModel):
     def marker(self, proposal_id: str) -> str:
         if proposal_id not in {p.id for p in self.selected}:
             raise ValueError("proposal was not selected")
-        return f"<!-- cafe-follow-up:{self.proposal.workflow_id}:{self.digest}:{proposal_id} -->"
+        item = next(p for p in self.selected if p.id == proposal_id)
+        identity = digest(
+            {
+                "workflow": self.proposal.workflow_id,
+                "repository": self.proposal.issue_repository,
+                "draft": item.model_dump(mode="json"),
+            }
+        )
+        return f"<!-- cafe-follow-up:{self.proposal.workflow_id}:{identity}:{proposal_id} -->"
 
 
 def approve_selection(proposal: ActionProposal, authority: dict) -> ActionSnapshot:

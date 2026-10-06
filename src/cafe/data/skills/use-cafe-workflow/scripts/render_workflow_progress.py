@@ -190,15 +190,17 @@ def _manager_progress(
     manager_state: Mapping[str, Any] | None,
     *,
     required_reviews: set[str],
+    phase_owned: bool = False,
 ) -> tuple[dict[str, str], dict[str, str]]:
+    items = ("cleanup",) if phase_owned else _CLOSEOUT_ITEMS
     if manager_state is None:
-        raise ValueError("manager state must provide required closeout items: deliver, cleanup")
+        raise ValueError("manager state must provide required closeout items: " + ", ".join(items))
     state = _mapping(manager_state, "manager state")
-    unexpected = set(state) - {"proactive_review", *_CLOSEOUT_ITEMS}
+    unexpected = set(state) - {"proactive_review", *items}
     if unexpected:
         field = sorted(unexpected)[0]
         raise ValueError(f"manager state cannot override runtime phase '{field}'")
-    missing = [item for item in _CLOSEOUT_ITEMS if item not in state]
+    missing = [item for item in items if item not in state]
     if missing:
         raise ValueError(f"manager state missing required closeout item: {missing[0]}")
     review_raw = state.get("proactive_review", {})
@@ -209,7 +211,7 @@ def _manager_progress(
     normalized_reviews = {
         phase: _status(value, f"proactive_review.{phase}") for phase, value in reviews.items()
     }
-    closeout = {name: _status(state[name], name) for name in _CLOSEOUT_ITEMS}
+    closeout = {name: _status(state[name], name) for name in items}
     return normalized_reviews, closeout
 
 
@@ -597,7 +599,9 @@ def render_progress(
     steps = list(model["steps"])
     policy = _mapping(contract or {}, "contract")
     required_reviews = _required_reviews(policy, set(steps))
-    reviews, closeout = _manager_progress(manager_state, required_reviews=required_reviews)
+    from cafe.manager.delivery import phase_owned_contract, phase_owned_graph
+    phase_owned = phase_owned_contract(policy) if policy.get("delivery_contract") else phase_owned_graph(model)
+    reviews, closeout = _manager_progress(manager_state, required_reviews=required_reviews, phase_owned=phase_owned)
     phase_statuses, iterations = _runtime_progress(issue_dir, model)
     user_required, manager_confirmable, mandatory = _confirmation_contract(policy)
     gate_steps = (user_required | manager_confirmable | mandatory) & set(steps)
@@ -665,7 +669,7 @@ def render_progress(
             body += separator
         body += "\n│\n".join(block)
         previous_step = step
-    for item in _CLOSEOUT_ITEMS:
+    for item in closeout:
         closeout_line = _line(
             closeout.get(item, "unknown"),
             render_text(
@@ -744,7 +748,7 @@ def main() -> int:
             print(render_progress(locale=args.locale))
             return 0
         if args.manager_state is None:
-            raise ValueError("manager state must provide required closeout items: deliver, cleanup")
+            raise ValueError("manager state must provide required closeout items: " + ("cleanup" if any(step.get("delivery") for step in playbook["steps"].values()) else "deliver, cleanup"))
         print(
             render_progress(
                 playbook=playbook,

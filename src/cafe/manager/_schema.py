@@ -407,8 +407,8 @@ def _validate_policy(proposal: Mapping[str, Any]) -> dict[str, Any]:
         "checkout": _validate_checkout(raw["checkout"]),
     }
     delivery = normalize_delivery_contract(raw["delivery_contract"])
-    if delivery["schema_version"] != 3:
-        raise ValueError("Manager v8 requires Delivery Contract version 3")
+    if delivery["schema_version"] not in {3, 5}:
+        raise ValueError("Manager v8 requires legacy or phase-owned Delivery Contract facts")
     validate_closeout_plan_policy(delivery["closeout_plan"], allow_squash=None)
     result["delivery_contract"] = delivery
     for field in result["reactive_user_handoffs"]:

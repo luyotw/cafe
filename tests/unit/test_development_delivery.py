@@ -156,6 +156,8 @@ def test_pending_or_lost_response_is_not_success(tmp_path, monkeypatch):
     snapshot = approve_selection(p, authority(p, "integrate_only", ""))
 
     def git(self, root, *args):
+        if args[0] == "status":
+            return ""
         if args[:2] == ("remote", "get-url"):
             return "https://github.com/owner/repo.git"
         return p.source_oid if args[0] == "rev-parse" else p.source_branch
@@ -204,3 +206,59 @@ def test_issue_effect_before_receipt_is_reconciled_and_ambiguity_blocks(tmp_path
     assert result["state"] == "succeeded" and result["url"].endswith("/42")
     monkeypatch.setattr(Commands, "api", lambda *args, **kwargs: [row, row])
     assert execute_action(tmp_path, tmp_path, snapshot, "FUP-002")["state"] == "unknown"
+
+
+def test_child_timeout_has_bounded_cleanup_and_actual_exit_status():
+    import sys
+    import time
+    from cafe.delivery.operations import Commands, OperationError
+
+    started = time.monotonic()
+    with pytest.raises(OperationError) as caught:
+        Commands(0.2).run([sys.executable, "-c", "import os,time; os.close(1); time.sleep(60)"])
+    assert caught.value.state == "unknown"
+    assert caught.value.returncode is not None and caught.value.returncode != 0
+    assert time.monotonic() - started < 5
+
+
+def test_reapproval_keeps_issue_identity_and_unknown_attempt(tmp_path):
+    p = proposal()
+    first = approve_selection(p, authority(p))
+    store = ActionStore(tmp_path, first)
+    with store.locked():
+        store.start("FUP-002")
+    later = p.model_copy(update={"approval_iteration": 2})
+    a = authority(later)
+    a.update(task_id="new-task", result_id="new-result")
+    revised = approve_selection(later, a)
+    assert revised.digest != first.digest
+    assert revised.marker("FUP-002") == first.marker("FUP-002")
+    assert ActionStore(tmp_path, revised).correlated_attempt("FUP-002")["state"] == "unknown"
+
+
+@pytest.mark.parametrize(
+    "data", [{"number": 23, "head": None, "base": {}}, {"number": 23, "head": [], "base": []}]
+)
+def test_malformed_predispatch_observation_does_not_create_unknown_effect(
+    tmp_path, monkeypatch, data
+):
+    from cafe.delivery.operations import Commands, execute_action
+
+    p = proposal()
+    snapshot = approve_selection(p, authority(p, "integrate_only", ""))
+
+    def git(self, root, *args):
+        if args[0] == "status":
+            return ""
+        if args[:2] == ("remote", "get-url"):
+            return "https://github.com/owner/repo.git"
+        return p.source_oid if args[0] == "rev-parse" else p.source_branch
+
+    monkeypatch.setattr(Commands, "git", git)
+    monkeypatch.setattr(Commands, "api", lambda *args, **kwargs: data)
+    monkeypatch.setattr(
+        Commands, "run", lambda *args, **kwargs: pytest.fail("no dispatch is permitted")
+    )
+    result = execute_action(tmp_path, tmp_path / "issue", snapshot, "integration")
+    assert result["state"] == "blocked"
+    assert ActionStore(tmp_path / "issue", snapshot).read("integration")["state"] == "blocked"

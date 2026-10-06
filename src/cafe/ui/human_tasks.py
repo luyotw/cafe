@@ -458,7 +458,10 @@ def _explicit_user_handoff_payload(
             raw_payload = json.loads(raw_payload)
         except json.JSONDecodeError:
             return None
-    if not isinstance(raw_payload, Mapping) or raw_payload.get("type") != _USER_HANDOFF_PAYLOAD_TYPE:
+    if (
+        not isinstance(raw_payload, Mapping)
+        or raw_payload.get("type") != _USER_HANDOFF_PAYLOAD_TYPE
+    ):
         return None
     expected = {"type", "workflow_id", "human_task_id", "target", "input", "request_id"}
     if set(raw_payload) != expected:
@@ -863,12 +866,33 @@ def _apply_human_task_payload(
             },
         )
         return HumanTaskApplication(target=None, policy=policy, rejection=durable_rejection)
+    delivery_declaration = playbook_data.get("steps", {}).get(from_step, {}).get("delivery")
+    if delivery_declaration and durable_task is None:
+        from cafe.delivery.contracts import DeliveryBinding
+        action_binding = DeliveryBinding.model_validate(delivery_declaration)
+        if policy.id in {action_binding.approval_task, action_binding.result_task}:
+            return _durable_task_routing_rejection(
+                issue_dir=issue_dir, blackboard=blackboard, task_id=policy.id,
+                message="The exact host-produced action/result task is required before this response.",
+            )
     if durable_task is not None:
         try:
+            delivery = playbook_data.get("steps", {}).get(from_step, {}).get("delivery")
+            if delivery:
+                from cafe.core.human_tasks import _parse_payload
+                from cafe.delivery.contracts import DeliveryBinding
+                from cafe.delivery.selection import validate_response
+
+                validate_response(
+                    issue_dir,
+                    DeliveryBinding.model_validate(delivery),
+                    durable_task,
+                    _parse_payload(policy, raw_payload),
+                )
             snapshot = HumanTaskPolicy.model_validate(durable_task.expected_result)
             if _task_machine_contract(snapshot) != _task_machine_contract(policy):
                 raise ValueError("Saved task policy does not match the current declaration")
-        except (TypeError, ValueError) as exc:
+        except (OSError, TypeError, ValueError) as exc:
             return _durable_task_routing_rejection(
                 issue_dir=issue_dir,
                 blackboard=blackboard,
@@ -1046,7 +1070,7 @@ def _apply_human_task_payload(
         and feedback.strip()
         and (
             policy.input_schema == "feedback"
-            or (delivery_decision is not None and delivery_decision.requires_feedback)
+            or (delivery_decision is not None and delivery_decision.correction)
         )
     ):
         ledger = WorkflowFeedbackLedger(issue_dir)

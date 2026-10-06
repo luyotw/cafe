@@ -305,7 +305,10 @@ def _resolve_boundary_tokens(
     }:
         from cafe.delivery.capabilities import boundaries
 
-        replacements.update(boundaries(request))
+        try:
+            replacements.update(boundaries(request))
+        except (ValueError, KeyError, TypeError):
+            return CapabilityEffects(writes=(), network_destinations=(), browser_open=()), {}
     if manifest.id == CAPABILITY_PR_PUBLISH_ID:
         output = str(request.args.get("output") or "")
         output_path = Path(output)

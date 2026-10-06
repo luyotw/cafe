@@ -1,0 +1,6 @@
+human_task.delivery.delivery_outcome: Confirm whether the displayed completed integration
+  and selected issue results satisfy the goal.
+human_task.delivery.delivery_recovery: Provide recovery details or request a revised
+  action review. Unknown effects must be reconciled before retry.
+human_task.delivery.delivery_permission: Resolve the pending exact host capability
+  approval using its durable task; this feedback grants no host authority.

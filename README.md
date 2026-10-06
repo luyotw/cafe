@@ -541,3 +541,5 @@ setup, testing, and release verification.
 ## License
 
 CAFE is available under the [MIT License](LICENSE).
+
+See [development delivery](docs/development-delivery.md) for exact action approval, receipts, recovery and cleanup ownership.

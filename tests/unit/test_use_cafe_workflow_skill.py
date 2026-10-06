@@ -34,6 +34,7 @@ DEFAULT_PHASE_CHAINS = {
     "develop": "copilot:implementation-main,cursor-agent:implementation-fallback",
     "review": "gemini:review-main,copilot:review-fallback",
     "pr": "cursor-agent:publication-main,gemini:publication-fallback",
+    "deliver": "cursor-agent:delivery-main,gemini:delivery-fallback",
 }
 
 PRIMARY_ONLY_PHASE_CHAINS = {
@@ -42,6 +43,7 @@ PRIMARY_ONLY_PHASE_CHAINS = {
     "develop": "claude:implementation-main",
     "review": "claude:review-main",
     "pr": "claude:publication-main",
+    "deliver": "claude:delivery-main",
 }
 
 
@@ -72,10 +74,6 @@ def _preflight_args() -> list[str]:
     return [
         "--delivery-contract",
         json.dumps(product),
-        "--deliver",
-        json.dumps([["git", "push", "origin", "feature/issue346"]]),
-        "--deliver-description",
-        "Publish the confirmed feature branch to origin.",
         "--cleanup",
         json.dumps([["git", "worktree", "remove", "/tmp/issue346"]]),
         "--cleanup-description",
@@ -227,7 +225,7 @@ def run_kickoff_formatter(monkeypatch: pytest.MonkeyPatch, capsys: pytest.Captur
 
 
 def _rendered_closeout_commands(markdown: str) -> dict[str, list[list[str]]]:
-    stages: dict[str, list[list[str]]] = {"deliver": [], "cleanup": []}
+    stages: dict[str, list[list[str]]] = {"cleanup": []}
     active_stage = None
     tokens = MarkdownIt().parse(markdown)
     for index, token in enumerate(tokens):
@@ -308,7 +306,7 @@ def test_manager_requires_script_rendered_progress_on_every_visible_reply() -> N
     assert "never starts or resumes a workflow" in normalized
     assert "action: yield" in normalized
     assert '"proactive_review"' in progress
-    assert '"deliver"' in progress
+    assert "Phase-owned graphs reject a duplicate Manager `deliver` node" in progress
     assert '"cleanup"' in progress
     assert "required for every established-workflow render" in progress
     assert "--show-deliver" not in progress
@@ -871,8 +869,16 @@ def test_use_cafe_workflow_uses_structured_human_task_resume_payloads() -> None:
 
 def test_use_cafe_workflow_skill_requires_playbook_derived_kickoff_contract() -> None:
     skill = _read_skill_resource("SKILL.md")
-    reference = (_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md"))
-    kickoff_inputs = (_read_skill_resource("references/kickoff_inputs.md") + "\n" + _read_skill_resource("references/kickoff_input_reference.md"))
+    reference = (
+        _read_skill_resource("references/kickoff.md")
+        + "\n"
+        + _read_skill_resource("references/kickoff_execution.md")
+    )
+    kickoff_inputs = (
+        _read_skill_resource("references/kickoff_inputs.md")
+        + "\n"
+        + _read_skill_resource("references/kickoff_input_reference.md")
+    )
     selection = _read_skill_resource("references/playbook_selection.md")
     model_selection = _read_skill_resource("references/model_selection.md")
     normalized = " ".join(reference.split())
@@ -913,7 +919,10 @@ def test_use_cafe_workflow_skill_requires_playbook_derived_kickoff_contract() ->
     assert "use `render` to produce the complete contract" in normalized
     assert "draft --issue-id 123 --playbook-id standard-qa --output draft.json" in normalized_inputs
     assert "no handwritten request JSON is needed" in normalized_inputs
-    assert "assemble --request-file draft.json --summary --draft-output updated-draft.json" in normalized_inputs
+    assert (
+        "assemble --request-file draft.json --summary --draft-output updated-draft.json"
+        in normalized_inputs
+    )
     assert "The program writes known values into `draft.json`" in normalized_inputs
     assert "Model suitability still requires assessment" in normalized_inputs
     assert "an operational probe does not establish model capability" in normalized_inputs
@@ -937,7 +946,11 @@ def test_use_cafe_workflow_keeps_playbook_selection_issue_owned() -> None:
     skill = _read_skill_resource("SKILL.md")
     selection = _read_skill_resource("references/playbook_selection.md")
     strategic = _read_skill_resource("references/strategic_context.md")
-    kickoff = (_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md"))
+    kickoff = (
+        _read_skill_resource("references/kickoff.md")
+        + "\n"
+        + _read_skill_resource("references/kickoff_execution.md")
+    )
     normalized_skill = " ".join(skill.split())
     normalized_selection = " ".join(selection.split())
     normalized_strategic = " ".join(strategic.split())
@@ -1004,7 +1017,10 @@ def test_native_subagent_preference_checks_chains_without_overriding_scope() -> 
     assert "`native_subagent_steps`" in selection
     assert "user's explicit capability confirmation" in selection
     assert "both launches before either completes" in selection
-    assert "`Agent` alone requires native delegation; it does not imply parallel reviewers" in selection
+    assert (
+        "`Agent` alone requires native delegation; it does not imply parallel reviewers"
+        in selection
+    )
     assert "verify one native launch, a successful result, and parent collection" in selection
     assert "single-partner planning does not require parallel review capability" in models
     assert "cannot override an explicit or persisted choice" in selection
@@ -1021,9 +1037,14 @@ def test_narrowed_scope_reassesses_draft_selection_and_independent_owners() -> N
     assert "When scope narrows, reassess the responsibilities" in selection
     assert "excluded work must not justify extra phases" in selection
     assert "Keep applicable repository requirements" in selection
-    assert "Separate spec ownership needs evidence of an independent owner or artifact boundary" in selection
+    assert (
+        "Separate spec ownership needs evidence of an independent owner or artifact boundary"
+        in selection
+    )
     assert "joint phase with a planning partner covers them" in selection
-    assert "Cross-module changes and platform-specific conditions alone do not require QA" in selection
+    assert (
+        "Cross-module changes and platform-specific conditions alone do not require QA" in selection
+    )
     assert "identify the concrete acceptance check that needs another owner" in selection
 
 
@@ -1032,12 +1053,20 @@ def test_user_confirmed_native_capability_preserves_other_preflight_checks() -> 
     models = " ".join(_read_skill_resource("references/model_selection.md").split())
 
     assert "Check these accepted sources before declaring capability unknown" in selection
-    assert "Do not demand a redundant probe solely because the evidence is user-confirmed" in selection
-    assert "Confirmation for one setup does not establish capability for uncovered fallback entries" in selection
+    assert (
+        "Do not demand a redundant probe solely because the evidence is user-confirmed" in selection
+    )
+    assert (
+        "Confirmation for one setup does not establish capability for uncovered fallback entries"
+        in selection
+    )
     assert "contradicts it" in selection
     assert "satisfies the native-subagent check without a fresh native probe" in models
     assert "Apply that coverage to each primary and fallback" in models
-    assert "does not replace the exact-model availability, authentication, or fallback smoke checks" in models
+    assert (
+        "does not replace the exact-model availability, authentication, or fallback smoke checks"
+        in models
+    )
 
 
 def test_kickoff_contract_formatter_lists_all_phases_and_confirmation_owners(
@@ -1069,10 +1098,11 @@ mandate:
     assert "## Kickoff Contract — issue346" in result.stdout
     assert "### Deliver and cleanup plan to confirm" in result.stdout
     assert _rendered_closeout_commands(result.stdout) == {
-        "deliver": [["git", "push", "origin", "feature/issue346"]],
         "cleanup": [["git", "worktree", "remove", "/tmp/issue346"]],
     }
-    assert "Publish the confirmed feature branch to origin." in MarkdownIt().render(result.stdout)
+    assert "Publish the confirmed feature branch to origin." not in MarkdownIt().render(
+        result.stdout
+    )
     assert "Remove the issue worktree after delivery succeeds." in MarkdownIt().render(
         result.stdout
     )
@@ -1102,7 +1132,7 @@ mandate:
     assert "○ review · 待執行" in result.stdout
     assert "○ pr：流程管理員主動審查 · 待執行" in result.stdout
     assert "○ pr：使用者確認（流程管理員不可代理） · 待執行" in result.stdout
-    assert "○ deliver（收尾） · 待執行" in result.stdout
+    assert "○ deliver · 待執行" in result.stdout
     assert "○ cleanup（收尾） · 待執行" in result.stdout
     assert "狀態未知" not in progress_block
     assert "\ufe0f" not in result.stdout
@@ -1127,7 +1157,7 @@ mandate:
     assert result.stdout.count("| playbook_id |") == 1
 
 
-@pytest.mark.parametrize("flag", ["--deliver", "--cleanup"])
+@pytest.mark.parametrize("flag", ["--cleanup"])
 def test_kickoff_formatter_requires_confirmed_closeout_commands(tmp_path: Path, flag: str) -> None:
     strategic_context = tmp_path / "strategic_context.yaml"
     strategic_context.write_text("version: 1\n", encoding="utf-8")
@@ -1162,7 +1192,7 @@ mandate:
         encoding="utf-8",
     )
     command = _kickoff_formatter_command(strategic_context)
-    for flag in ("--deliver", "--cleanup"):
+    for flag in ("--cleanup",):
         command[command.index(flag) + 1] = "[]"
         description_index = command.index(f"{flag}-description")
         del command[description_index : description_index + 2]
@@ -1170,14 +1200,14 @@ mandate:
     result = run_kickoff_formatter(command)
 
     assert result.returncode == 0, result.stderr
-    assert "#### deliver" in result.stdout
+    assert "#### deliver" not in result.stdout
     assert "#### cleanup" in result.stdout
-    assert result.stdout.count("[]") == 2
-    assert _rendered_closeout_commands(result.stdout) == {"deliver": [], "cleanup": []}
+    assert result.stdout.count("[]") == 1
+    assert _rendered_closeout_commands(result.stdout) == {"cleanup": []}
     assert not any(token.info == "bash" for token in MarkdownIt().parse(result.stdout))
 
 
-@pytest.mark.parametrize("stage", ["deliver", "cleanup"])
+@pytest.mark.parametrize("stage", ["cleanup"])
 @pytest.mark.parametrize("damage", ["missing", "extra", "blank", "empty_stage"])
 def test_kickoff_formatter_requires_one_nonblank_description_per_command(
     tmp_path: Path,
@@ -1210,7 +1240,7 @@ def test_kickoff_closeout_prose_and_shell_blocks_preserve_order_without_executio
 ) -> None:
     command = _kickoff_formatter_command(tmp_path / "unused", "--project-root", str(tmp_path))
     commands = {
-        "deliver": [
+        "cleanup": [
             ["touch", str(tmp_path / "must-not-be-created")],
             [
                 "printf",
@@ -1225,19 +1255,14 @@ def test_kickoff_closeout_prose_and_shell_blocks_preserve_order_without_executio
                 "```\n### injected heading\n```",
                 "line one\nline two",
             ],
-        ],
-        "cleanup": [
-            ["git", "worktree", "remove", "/tmp/issue with spaces"],
-            ["printf", "%s", "last cleanup command"],
-        ],
+        ]
     }
     descriptions = {
-        "deliver": [
+        "cleanup": [
             "First delivery action.\n\n### Execution settings\n> extra approval\n"
             "9. extra action\n```bash\nfake code\n```\n<div>hidden condition</div>",
             "Second delivery action preserves every literal argument.",
-        ],
-        "cleanup": ["First cleanup action.", "Second cleanup action."],
+        ]
     }
     for stage in commands:
         command[command.index(f"--{stage}") + 1] = json.dumps(commands[stage])
@@ -1256,17 +1281,14 @@ def test_kickoff_closeout_prose_and_shell_blocks_preserve_order_without_executio
     ]
     assert headings.count("Execution settings") == 1
     assert "injected heading" not in headings
-    assert sum(token.type == "ordered_list_open" for token in tokens) == 2
+    assert sum(token.type == "ordered_list_open" for token in tokens) == 1
     assert not any(token.type in {"blockquote_open", "html_block"} for token in tokens)
     fences = [token for token in tokens if token.type == "fence"]
-    assert [token.info for token in fences] == ["bash"] * 4 + ["text"]
+    assert [token.info for token in fences] == ["bash"] * 2 + ["text"]
     assert len(fences[1].markup) > 3
     assert "hidden condition" in MarkdownIt().render(result.stdout)
     assert result.stdout.index("First delivery action") < result.stdout.index(
         "Second delivery action"
-    )
-    assert result.stdout.index("First cleanup action") < result.stdout.index(
-        "Second cleanup action"
     )
     assert list(tmp_path.iterdir()) == []
 
@@ -1274,7 +1296,7 @@ def test_kickoff_closeout_prose_and_shell_blocks_preserve_order_without_executio
 def test_kickoff_closeout_descriptions_do_not_change_the_confirmed_proposal(tmp_path: Path) -> None:
     command = _kickoff_formatter_command(tmp_path / "unused")
     original = _kickoff_proposal(command)
-    for stage in ("deliver", "cleanup"):
+    for stage in ("cleanup",):
         command[command.index(f"--{stage}-description") + 1] = f"Reworded {stage} explanation."
     assert _kickoff_proposal(command) == original
     for actions in original["delivery_contract"]["closeout_plan"].values():
@@ -1586,12 +1608,10 @@ def test_confirmed_kickoff_activates_one_issue_scoped_manager_contract(tmp_path:
     assert contract["identity"] == {"issue_name": "issue346", "workflow_id": "prepared-346"}
     assert "pr" not in contract
     assert "playbook" not in contract
-    assert contract["locales"] == {
-        "conversation": {"value": "zh-TW", "source": "explicit"}
-    }
-    assert contract["delivery_contract"]["schema_version"] == 3
+    assert contract["locales"] == {"conversation": {"value": "zh-TW", "source": "explicit"}}
+    assert contract["delivery_contract"]["schema_version"] == 5
     closeout_plan = contract["delivery_contract"]["closeout_plan"]
-    assert closeout_plan["deliver"] == [{"argv": ["git", "push", "origin", "feature/issue346"]}]
+    assert "deliver" not in closeout_plan
     assert closeout_plan["cleanup"] == [{"argv": ["git", "worktree", "remove", "/tmp/issue346"]}]
     assert "proactive_review.yaml" not in {path.name for path in (issue_dir / "manager").iterdir()}
     develop_review = next(
@@ -1764,8 +1784,8 @@ def test_kickoff_formatter_shows_only_task_decisions_without_mutating_the_projec
     )
     assert proposal["delivery_contract"] == {
         **product,
+        "schema_version": 5,
         "closeout_plan": {
-            "deliver": [{"argv": ["git", "push", "origin", "feature/issue346"]}],
             "cleanup": [{"argv": ["git", "worktree", "remove", "/tmp/issue346"]}],
         },
     }
@@ -1800,8 +1820,8 @@ def test_kickoff_fact_text_cannot_create_extra_contract_sections(
         for token in MarkdownIt().parse(delivery_section)
     )
     assert not any(token.type in {"blockquote_open", "html_block"} for token in tokens)
-    assert sum(token.type == "ordered_list_open" for token in tokens) == 2
-    assert [token.info for token in tokens if token.type == "fence"] == ["bash", "bash", "text"]
+    assert sum(token.type == "ordered_list_open" for token in tokens) == 1
+    assert [token.info for token in tokens if token.type == "fence"] == ["bash", "text"]
     assert "hidden constraint" in MarkdownIt().render(result.stdout)
     assert _kickoff_proposal(command)["delivery_contract"]["implementation_direction"] == (
         product["implementation_direction"]
@@ -1860,9 +1880,7 @@ def test_kickoff_formatter_keeps_the_rendered_policy_stable_until_activation(
         ),
         encoding="utf-8",
     )
-    normal_command = _kickoff_formatter_command(
-        strategic_context, "--issue-dir", str(issue_dir)
-    )
+    normal_command = _kickoff_formatter_command(strategic_context, "--issue-dir", str(issue_dir))
     normal = subprocess.run(
         normal_command,
         cwd=PROJECT_ROOT,
@@ -1900,7 +1918,7 @@ def test_kickoff_formatter_keeps_the_rendered_policy_stable_until_activation(
     assert set(contract) == set(proposal) | {"schema_version", "identity", "revision", "provenance"}
     for actions in contract["delivery_contract"]["closeout_plan"].values():
         assert all(set(action) == {"argv"} for action in actions)
-    for stage in ("deliver", "cleanup"):
+    for stage in ("cleanup",):
         description = normal_command[normal_command.index(f"--{stage}-description") + 1]
         assert description not in json.dumps(contract)
 
@@ -1935,10 +1953,10 @@ def test_kickoff_formatter_requires_and_binds_explicit_publication_choice(
 @pytest.mark.parametrize(
     ("choice", "close_argv", "expected_success"),
     [
-        (False, ["cafe", "close", "--squash"], True),
+        (False, ["cafe", "close", "--squash"], False),
         (True, ["cafe", "close", "--squash"], False),
-        (True, ["cafe", "close"], True),
-        (True, ["gh", "pr", "merge", "issue346", "--squash"], True),
+        (True, ["cafe", "close", "--archive-only"], True),
+        (True, ["gh", "pr", "merge", "issue346", "--squash"], False),
     ],
 )
 def test_kickoff_formatter_validates_squash_against_publication_mode(
@@ -1958,7 +1976,7 @@ def test_kickoff_formatter_validates_squash_against_publication_mode(
 
     assert (result.returncode == 0) is expected_success
     if not expected_success:
-        assert "unavailable in create-PR mode" in result.stderr
+        assert "phase-owned" in result.stderr
 
 
 @pytest.mark.parametrize("choice", [None, "yes"])
@@ -2075,7 +2093,11 @@ def test_minimal_non_software_kickoff_renders_only_its_two_declared_steps(
 
 
 def test_kickoff_contract_keeps_issue_preflight_separate_from_manager_policy() -> None:
-    kickoff = (_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md"))
+    kickoff = (
+        _read_skill_resource("references/kickoff.md")
+        + "\n"
+        + _read_skill_resource("references/kickoff_execution.md")
+    )
     normalized = " ".join(kickoff.split())
 
     assert "preflight:" in kickoff
@@ -2266,7 +2288,11 @@ def test_kickoff_contract_formatter_rejects_invalid_operating_mode(
 
 def test_kickoff_formatter_documents_structural_validation_boundary() -> None:
     script = (SKILL_ROOT / "scripts" / "format_kickoff_contract.py").read_text(encoding="utf-8")
-    kickoff = (_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md"))
+    kickoff = (
+        _read_skill_resource("references/kickoff.md")
+        + "\n"
+        + _read_skill_resource("references/kickoff_execution.md")
+    )
 
     assert "structurally validated" in script
     assert "validates chain structure only; it does not validate model suitability" in kickoff
@@ -2275,11 +2301,16 @@ def test_kickoff_formatter_documents_structural_validation_boundary() -> None:
 
 
 def test_kickoff_reference_distinguishes_new_and_legacy_manager_contract_versions() -> None:
-    kickoff = " ".join((_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md")).split())
+    kickoff = " ".join(
+        (
+            _read_skill_resource("references/kickoff.md")
+            + "\n"
+            + _read_skill_resource("references/kickoff_execution.md")
+        ).split()
+    )
 
     assert (
-        "Existing v7 Driver contracts remain valid through the legacy Driver authority"
-        in kickoff
+        "Existing v7 Driver contracts remain valid through the legacy Driver authority" in kickoff
     )
     assert "New v8 Manager contracts record both the overall choice and task overrides" in kickoff
     assert "single schema-version-8 durable Manager contract" in kickoff
@@ -2962,15 +2993,15 @@ def test_builtin_confirmation_gate_candidates_come_from_playbook_declarations() 
         for playbook_id in actual
     }
     assert mandatory == {
-        "direct": ("pr",),
-        "direct-qa": ("pr",),
-        "simple": ("pr",),
-        "standard": ("pr",),
-        "standard-qa": ("pr",),
-        "tdd": ("pr",),
-        "tdd-qa": ("pr",),
+        "direct": ("pr", "deliver"),
+        "direct-qa": ("pr", "deliver"),
+        "simple": ("pr", "deliver"),
+        "standard": ("pr", "deliver"),
+        "standard-qa": ("pr", "deliver"),
+        "tdd": ("pr", "deliver"),
+        "tdd-qa": ("pr", "deliver"),
         "editorial": (),
-        "hotfix": ("pr",),
+        "hotfix": ("pr", "deliver"),
         "incident": (),
         "research": (),
     }
@@ -3095,7 +3126,8 @@ def test_inside_non_intervention_envelope_requires_passive_supervision() -> None
     assert "Supervise active work" in skill
     assert "`references/supervision_and_recovery.md`" in skill
     assert (
-        "Manager remains passive while every applicable condition is demonstrably true" in normalized
+        "Manager remains passive while every applicable condition is demonstrably true"
+        in normalized
     )
     for forbidden in (
         "invoke `cafe chat` to watch progress",
@@ -3182,7 +3214,10 @@ def test_use_cafe_workflow_prefers_user_conversation_locale() -> None:
     assert "current explicit instruction for this workflow" in normalized_policy
     assert "applicable explicit repository-scoped saved preference" in normalized_policy
     assert "explicit user-scoped saved preference" in normalized_policy
-    assert "A saved preference is reused only after an explicit request to save it" in normalized_policy
+    assert (
+        "A saved preference is reused only after an explicit request to save it"
+        in normalized_policy
+    )
     assert "commands, paths, playbook and step names, intents, artifact keys" in normalized
     assert "Translate all presentation text into the effective conversation language" in normalized
     assert "capability prompts and outcomes" in normalized
@@ -3241,6 +3276,8 @@ def test_kickoff_cli_forwards_custom_task_overrides_and_overall_authority(tmp_pa
     assert proposal["task_contract"] == {
         "user_required": [
             {"phase": "pr", "task_id": "local-review"},
+            {"phase": "pr", "task_id": "delivery-review"},
+            {"phase": "deliver", "task_id": "delivery-outcome"},
             {"phase": "review", "task_id": "choose-release"},
         ],
         "manager_confirmable": [
@@ -3251,7 +3288,9 @@ def test_kickoff_cli_forwards_custom_task_overrides_and_overall_authority(tmp_pa
     }
     assert proposal["reactive_user_handoffs"]["need_clarification"] == "manager_confirmable"
     overall_flag = subprocess.run(
-        _kickoff_formatter_command(strategic_context, "--need-clarification", "manager_confirmable"),
+        _kickoff_formatter_command(
+            strategic_context, "--need-clarification", "manager_confirmable"
+        ),
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -3329,6 +3368,7 @@ def test_kickoff_derives_proactive_defaults_only_at_scheduled_pauses(
         "develop": "not_required",
         "review": "not_required",
         "pr": "required",
+        "deliver": "required",
     }
     section = result.stdout.split("### Proactive review at scheduled pauses", 1)[1]
     section = section.split("### Reactive user handoffs", 1)[0]
@@ -3338,7 +3378,7 @@ def test_kickoff_derives_proactive_defaults_only_at_scheduled_pauses(
     assert "| develop |" not in section
     assert "| review |" not in section
     assert section.count("Manager may confirm and advance after clean review") == 2
-    assert section.count("user confirmation remains required") == 1
+    assert section.count("user confirmation remains required") == 2
 
 
 def test_kickoff_defaults_apply_to_custom_assignable_and_mandatory_gates(
@@ -3866,7 +3906,11 @@ def test_use_cafe_workflow_requires_confirmed_repository_content_locale() -> Non
 
 def test_use_cafe_workflow_defines_event_driven_mode_and_model_authority() -> None:
     skill = _read_skill_resource("SKILL.md")
-    kickoff = (_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md"))
+    kickoff = (
+        _read_skill_resource("references/kickoff.md")
+        + "\n"
+        + _read_skill_resource("references/kickoff_execution.md")
+    )
     running = _read_skill_resource("references/running_workflow.md")
     models = _read_skill_resource("references/model_selection.md")
     normalized_kickoff = " ".join(kickoff.split())
@@ -3902,7 +3946,11 @@ def test_use_cafe_workflow_defines_event_driven_mode_and_model_authority() -> No
 
 def test_event_manager_documentation_defines_the_contract_managed_lifecycle() -> None:
     skill = _read_skill_resource("SKILL.md")
-    kickoff = (_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md"))
+    kickoff = (
+        _read_skill_resource("references/kickoff.md")
+        + "\n"
+        + _read_skill_resource("references/kickoff_execution.md")
+    )
     running = _read_skill_resource("references/running_workflow.md")
     contract = " ".join((skill + kickoff + running).split())
 
@@ -3990,12 +4038,12 @@ def test_manager_keeps_completion_separate_from_external_authority() -> None:
     for path in [SKILL_ROOT / "SKILL.md", *(SKILL_ROOT / "references").glob("*.md")]:
         text = path.read_text(encoding="utf-8")
         assert "convergent review" not in " ".join(text.split())
-        assert "cafe.pr.publish" not in text
+        assert "cafe.branch.integrate" not in text
         assert "pr.auto_create" not in text
-    assert "gh pr merge --merge" in kickoff
+    assert "integration and selected follow-up issue creation belong to the development delivery phase" in kickoff
     assert "only user confirmation authorizes execution" in " ".join(kickoff.split())
-    assert '[gh, issue, close, "123"]' in kickoff
-    assert "[cafe, close]" in kickoff
+    assert '[gh, issue, close, "123", --repo, owner/repo]' in kickoff
+    assert "[cafe, close, --archive-only]" in kickoff
 
 
 def test_manager_can_propose_a_user_approved_bounded_direct_closeout() -> None:
@@ -4075,7 +4123,13 @@ def test_manager_handles_git_delivery_conflicts_before_offering_repair() -> None
 class TestPollingContract:
     def test_first_poll_waits_for_the_full_confirmed_interval(self) -> None:
         skill = " ".join(_read_skill_resource("SKILL.md").split())
-        kickoff = " ".join((_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md")).split())
+        kickoff = " ".join(
+            (
+                _read_skill_resource("references/kickoff.md")
+                + "\n"
+                + _read_skill_resource("references/kickoff_execution.md")
+            ).split()
+        )
         running = " ".join(_read_skill_resource("references/running_workflow.md").split())
 
         assert "references/running_workflow.md" in skill
@@ -4086,7 +4140,13 @@ class TestPollingContract:
         assert "wait on the same deferred operation" in running
 
     def test_transport_yields_do_not_trigger_workflow_inspection(self) -> None:
-        kickoff = " ".join((_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md")).split())
+        kickoff = " ".join(
+            (
+                _read_skill_resource("references/kickoff.md")
+                + "\n"
+                + _read_skill_resource("references/kickoff_execution.md")
+            ).split()
+        )
         running = " ".join(_read_skill_resource("references/running_workflow.md").split())
 
         assert "is transport state rather than an event-driven signal" in kickoff

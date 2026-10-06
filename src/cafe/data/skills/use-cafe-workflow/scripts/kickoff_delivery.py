@@ -247,7 +247,8 @@ def assess_delivery(
         "diagnostics": diagnostics,
         "discovery_gap": discovery_gap,
         "stable_conventions": list(record.get("stable_conventions", [])) if not blocked else [],
-        "delivery_template": template if status == "hit" else None,
+        "delivery_template": None,
+        "legacy_template_diagnostic": "obsolete_manager_delivery_template" if template is not None else None,
         "current_observations": observations,
         "sources": list(record.get("sources", [])) if not blocked else [],
         "manifest": manifest,
@@ -257,8 +258,8 @@ def assess_delivery(
 def refresh_delivery(record: dict[str, Any], *, evidence: Any, project_root: Path, now: datetime) -> dict[str, Any]:
     if not isinstance(evidence, dict):
         return {"record": record, "refreshed": False, "diagnostic": "refresh_evidence_missing"}
-    if "delivery_template" in evidence and not _valid_template(evidence["delivery_template"]):
-        return {"record": record, "refreshed": False, "diagnostic": "delivery_template_invalid"}
+    if "delivery_template" in evidence:
+        return {"record": record, "refreshed": False, "diagnostic": "obsolete_manager_delivery_template"}
     references = [source["path"] for source in evidence.get("sources", [])
                   if isinstance(source, dict) and isinstance(source.get("path"), str)] if isinstance(evidence.get("sources"), list) else []
     manifest = discover_delivery_manifest(project_root, referenced_paths=references)

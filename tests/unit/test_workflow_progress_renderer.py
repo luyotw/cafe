@@ -475,6 +475,7 @@ def test_direct_playbook_and_archived_issue_cli_are_supported(tmp_path: Path) ->
         json.dumps(
             {
                 "policy": {
+                    "delivery_contract": {"schema_version": 3},
                     "confirmation_contract": {
                         "user_required": [],
                         "driver_confirmable": [],
@@ -513,7 +514,7 @@ def test_direct_playbook_and_archived_issue_cli_are_supported(tmp_path: Path) ->
     assert "\ufe0f" not in result.stdout
 
 
-def test_cli_requires_both_fixed_closeout_states() -> None:
+def test_cli_requires_cleanup_without_duplicate_delivery() -> None:
     base = [
         sys.executable,
         str(SCRIPT),
@@ -537,9 +538,9 @@ def test_cli_requires_both_fixed_closeout_states() -> None:
     )
 
     assert missing_state.returncode == 2
-    assert "must provide required closeout items: deliver, cleanup" in missing_state.stderr
+    assert "must provide required closeout items: cleanup" in missing_state.stderr
     assert missing_cleanup.returncode == 2
-    assert "missing required closeout item: cleanup" in missing_cleanup.stderr
+    assert "runtime phase" in missing_cleanup.stderr
 
 
 def test_previous_revision_does_not_approve_the_new_iteration(tmp_path: Path) -> None:

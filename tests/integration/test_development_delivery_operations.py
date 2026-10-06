@@ -74,3 +74,32 @@ def test_dirty_destination_is_blocked_without_changing_it(local_action):
     assert result["state"] == "blocked"
     assert git(dest, "rev-parse", "HEAD") == snapshot.proposal.target_oid
     assert (dest / "unrelated.txt").read_text() == "Keep"
+
+
+def test_local_conflict_retains_unknown_attempt_and_does_not_repair_or_replay(local_action):
+    root, dest, issue, initial = local_action
+    (dest / "result.txt").write_text("Competing target")
+    git(dest, "add", "result.txt")
+    git(dest, "commit", "-m", "Competing target")
+    target = git(dest, "rev-parse", "HEAD")
+    p = initial.proposal.model_copy(update={"strategy": "merge-commit", "target_oid": target})
+    snapshot = approve_selection(p, authority(p, "integrate_only", ""))
+    first = execute_action(root, issue, snapshot, "integration", timeout=20)
+    assert first["state"] == "unknown" and first["returncode"] != 0
+    assert git(dest, "rev-parse", "HEAD") == target
+    assert git(dest, "rev-parse", "MERGE_HEAD") == p.source_oid
+    second = execute_action(root, issue, snapshot, "integration", timeout=20)
+    assert second["state"] == "unknown"
+    assert git(dest, "rev-parse", "HEAD") == target
+    assert git(dest, "rev-parse", "MERGE_HEAD") == p.source_oid
+
+
+def test_completed_integration_can_be_observed_after_source_advances(local_action):
+    root, dest, issue, snapshot = local_action
+    completed = execute_action(root, issue, snapshot, "integration", timeout=20)
+    (root / "later.txt").write_text("Later source change")
+    git(root, "add", "later.txt")
+    git(root, "commit", "-m", "Later source")
+    observed = execute_action(root, issue, snapshot, "integration", timeout=20)
+    assert observed["state"] == "succeeded"
+    assert observed["commit"] == completed["commit"] == git(dest, "rev-parse", "HEAD")

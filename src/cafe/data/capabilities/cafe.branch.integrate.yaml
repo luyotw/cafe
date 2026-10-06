@@ -30,12 +30,16 @@ outputs:
 effects:
   writes:
   - delivery_effect
+  - delivery_records
+  - delivery_git
   network_destinations: []
   browser_open: []
 credentials: []
 permissions:
   writes:
   - delivery_effect
+  - delivery_records
+  - delivery_git
   network: []
 idempotency: unsafe
 risk: high

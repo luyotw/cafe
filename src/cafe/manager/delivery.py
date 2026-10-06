@@ -15,6 +15,17 @@ MAX_CLOSEOUT_EVIDENCE_BYTES = 256 * 1024
 _MAX_ENCODED_WORKTREE_PATH = 4096 * 6 + 1
 
 
+def phase_owned_graph(graph) -> bool:
+    """Resolve ownership from declarations, including equivalent custom graphs."""
+    if hasattr(graph, "model_dump"):
+        graph = graph.model_dump(mode="json")
+    return any(step.get("delivery") for step in graph.get("steps", {}).values())
+
+
+def phase_owned_contract(contract) -> bool:
+    return contract.get("delivery_contract", {}).get("schema_version") == 5
+
+
 def closeout_evidence_record(
     plan: dict[str, Any],
     *,
@@ -25,7 +36,7 @@ def closeout_evidence_record(
 ) -> dict[str, Any]:
     """Use the same ordered, exact-argv projection for validation and persistence."""
     return {
-        "version": 1,
+        "version": 1 if "deliver" in plan else 2,
         "issue_name": issue_name,
         "workflow_id": workflow_id,
         "contract_sha256": contract_sha256,
@@ -35,7 +46,7 @@ def closeout_evidence_record(
                 {"argv": item["argv"], "status": "not_started", "returncode": None}
                 for item in plan[stage]
             ]
-            for stage in ("deliver", "cleanup")
+            for stage in (("deliver", "cleanup") if "deliver" in plan else ("cleanup",))
         },
     }
 
@@ -201,11 +212,53 @@ class DeliveryContractV3(BaseModel):
         return values
 
 
+class CleanupCloseoutPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    cleanup: list[CloseoutCommand]
+
+    @model_validator(mode="after")
+    def bounded_commands(self):
+        commands = [tuple(c.argv) for c in self.cleanup]
+        if len(commands) != len(set(commands)):
+            raise ValueError("duplicate cleanup command")
+        for argv in commands:
+            if argv[:2] == ("cafe", "close") and argv != ("cafe", "close", "--archive-only"):
+                raise ValueError("phase-owned cleanup must archive without another integration")
+            program = Path(argv[0]).name
+            if (program == "git" and any(op in argv[1:] for op in ("merge", "rebase"))) or (
+                program == "gh" and any(argv[i:i + 2] in (("pr", "merge"), ("issue", "create")) for i in range(1, len(argv) - 1))
+            ):
+                raise ValueError(
+                    "phase-owned integration/issues cannot be Manager cleanup commands"
+                )
+        if (
+            maximum_closeout_evidence_size(self.model_dump(mode="json"))
+            > MAX_CLOSEOUT_EVIDENCE_BYTES
+        ):
+            raise ValueError("cleanup evidence exceeds capacity")
+        return self
+
+
+class DeliveryContractV5(DeliveryContractV3):
+    """Fresh phase-owned workflow; Manager holds only separately confirmed cleanup."""
+
+    closeout_plan: CleanupCloseoutPlan
+
+    @field_validator("schema_version")
+    @classmethod
+    def _version(cls, value: int) -> int:
+        if value != 5:
+            raise ValueError("unsupported phase-owned delivery facts")
+        return value
+
+
 def normalize_delivery_contract(value: Any) -> dict[str, Any]:
     """Validate contract structure; activation supplies confirmation authority."""
     if not isinstance(value, dict):
         raise ValueError("Delivery Contract must be a mapping")
     version = value.get("schema_version")
+    if version == 5:
+        return DeliveryContractV5.model_validate(value).model_dump(mode="json")
     if version == 4:
         return validate_compact_delivery(value)
     if version == 1:
@@ -259,9 +312,11 @@ def validate_closeout_plan_policy(
     closeout_plan: dict[str, Any], *, allow_squash: bool | None
 ) -> None:
     """Validate lifecycle-command placement and mode before closeout execution."""
-    plan = DeliveryCloseoutPlan.model_validate(closeout_plan)
-    for stage in ("deliver", "cleanup"):
-        commands = plan.deliver if stage == "deliver" else plan.cleanup
+    plan = (
+        DeliveryCloseoutPlan if "deliver" in closeout_plan else CleanupCloseoutPlan
+    ).model_validate(closeout_plan)
+    for stage in (("deliver", "cleanup") if "deliver" in closeout_plan else ("cleanup",)):
+        commands = getattr(plan, stage)
         for index, command in enumerate(commands):
             argv = command.argv
             if len(argv) < 2 or argv[1] != "close" or Path(argv[0]).name.lower() != "cafe":
@@ -276,6 +331,13 @@ def validate_closeout_plan_policy(
             argument_index = 2
             while argument_index < len(argv):
                 argument = argv[argument_index]
+                if (
+                    argument == "--archive-only"
+                    and "deliver" not in closeout_plan
+                    and len(argv) == 3
+                ):
+                    argument_index += 1
+                    continue
                 if argument == "--squash" and not squash:
                     squash = True
                     argument_index += 1
@@ -437,3 +499,32 @@ def publish_compact_pr(issue_dir: Path, root: Path, output: Path, *, registry=No
             registry=registry, approval_task_id=approval_task_id,
             correlation_id=correlation_id)
     return WorkflowHost(issue_dir).run(action, hosting="foreground").result
+
+
+def validate_legacy_delivery_binding(argv):
+    """Recorded legacy authority cannot supply a missing integration identity."""
+    import re
+
+    if argv[:3] == ["gh", "pr", "merge"]:
+
+        def option(name):
+            return (
+                argv[argv.index(name) + 1]
+                if name in argv and argv.index(name) + 1 < len(argv)
+                else ""
+            )
+
+        if (
+            len(argv) < 4
+            or not argv[3].isdigit()
+            or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", option("--repo"))
+            or not re.fullmatch(r"[0-9a-f]{40}", option("--match-head-commit"))
+            or sum(flag in argv for flag in ("--merge", "--squash", "--rebase")) != 1
+        ):
+            raise ValueError(
+                "legacy merge lacks exact PR/repository/source/strategy; obtain fresh action review without rewriting original authority"
+            )
+    if argv and Path(argv[0]).name == "git" and any(op in argv for op in ("merge", "rebase")):
+        raise ValueError(
+            "legacy local integration lacks an approved destination and exact source/target snapshot; obtain fresh action review"
+        )
