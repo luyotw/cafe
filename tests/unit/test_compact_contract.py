@@ -125,3 +125,31 @@ def test_compact_authority_cannot_hide_changed_delivery_or_execution_in_scope_ex
                 "scope_expansion",
             )
         )
+
+
+def test_absent_reviewer_requires_explicit_non_native_policy(compact_proposal):
+    from cafe.manager._schema import validate_compact_proposal
+    absent = deepcopy(compact_proposal)
+    absent["execution"]["review_policy"] = None
+    absent["review_configuration"] = None
+    assert validate_compact_proposal(absent)["review_configuration"] is None
+    for policy in ["single_native", "unsupported"]:
+        invalid = deepcopy(absent)
+        invalid["execution"]["review_policy"] = policy
+        with pytest.raises(ValueError):
+            validate_compact_proposal(invalid)
+    legacy = deepcopy(absent)
+    legacy["execution"].pop("review_policy")
+    with pytest.raises(ValueError):
+        validate_compact_proposal(legacy)
+
+
+def test_confirmed_review_policy_must_match_resolved_graph(compact_request, compact_proposal):
+    from cafe.manager.file_scope import execution_scope_projection
+    root = Path(compact_request["project_root"])
+    mismatched = deepcopy(compact_proposal)
+    mismatched["execution"]["review_policy"] = "single_native"
+    issue = root / ".cafe/issues/sample"
+    activate(issue, mismatched)
+    with pytest.raises(ValueError):
+        execution_scope_projection(issue, root)

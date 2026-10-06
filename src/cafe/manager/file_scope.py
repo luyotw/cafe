@@ -48,6 +48,9 @@ def execution_scope_projection(issue_dir: Path, root: Path):
         raise ValueError("execution graph differs from confirmed authority")
     review_policy = next((step["execution"]["review_policy"] for step in graph["steps"].values()
                           if step["execution"]["review_policy"]), None)
+    declared = contract["execution"]
+    if "review_policy" in declared and declared["review_policy"] != review_policy:
+        raise ValueError("confirmed review policy differs from the declared graph")
     if review_policy == "single_native":
         import subprocess
         from cafe.agents.executor import validate_native_review_projection

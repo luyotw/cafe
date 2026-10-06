@@ -115,23 +115,33 @@ def validate_compact_proposal(proposal):
         validate_scope_paths([record["path"]])
         if record["content"] != "missing" and not re.fullmatch(r"[a-f0-9]{64}", record["content"]):
             raise ValueError("preexisting evidence requires content fingerprints")
-    execution = _mapping(raw["execution"], "execution", keys={"playbook_id", "graph_digest"})
+    execution = _mapping(raw["execution"], "execution")
+    legacy_fields = {"playbook_id", "graph_digest"}
+    if set(execution) not in (legacy_fields, legacy_fields | {"review_policy"}):
+        raise ValueError("execution has unsupported or missing fields")
     _string(execution["playbook_id"], "playbook_id")
     if not re.fullmatch(r"[a-f0-9]{64}", execution["graph_digest"]):
         raise ValueError("invalid graph digest")
-    review = _mapping(raw["review_configuration"], "review_configuration", keys={
-        "cli", "model", "provider_version", "read_only", "model_behavior", "checkpoint_interface"})
-    if review["read_only"] is not True or review["checkpoint_interface"] != "parent_command":
-        raise ValueError("native review requires read-only checkpoint support")
-    if review["model_behavior"] not in {"inherits_parent", "independent_override"}:
-        raise ValueError("invalid effective reviewer model behavior")
-    for field in ("cli", "model", "provider_version"):
-        _string(review[field], "review_configuration." + field)
+    if execution.get("review_policy") not in (None, "single_native"):
+        raise ValueError("unsupported declared review policy")
     phases = _validate_phases(raw["phases"])
-    if not any(e["cli"] == review["cli"] and (review["model_behavior"] == "independent_override"
-                    or e["model"] == review["model"])
-               for p in phases for e in p["chain"]):
-        raise ValueError("review configuration must belong to the selected chain")
+    # Legacy contracts retain their strict reviewer validation. Only an
+    # explicitly declared graph without native review permits absent config.
+    no_review = "review_policy" in execution and execution["review_policy"] is None
+    review = None
+    if raw["review_configuration"] is not None or not no_review:
+        review = _mapping(raw["review_configuration"], "review_configuration", keys={
+            "cli", "model", "provider_version", "read_only", "model_behavior", "checkpoint_interface"})
+        if review["read_only"] is not True or review["checkpoint_interface"] != "parent_command":
+            raise ValueError("native review requires read-only checkpoint support")
+        if review["model_behavior"] not in {"inherits_parent", "independent_override"}:
+            raise ValueError("invalid effective reviewer model behavior")
+        for field in ("cli", "model", "provider_version"):
+            _string(review[field], "review_configuration." + field)
+        if not any(e["cli"] == review["cli"] and (review["model_behavior"] == "independent_override"
+                        or e["model"] == review["model"])
+                   for p in phases for e in p["chain"]):
+            raise ValueError("review configuration must belong to the selected chain")
     delivery = normalize_delivery_contract(raw["delivery_contract"])
     if delivery["schema_version"] != 4:
         raise ValueError("compact contract requires compact delivery")

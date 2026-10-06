@@ -94,7 +94,8 @@ def discover(
         inputs = {
             "files": list(confirmed["file_scope"]["paths"]),
             "phases": [dict(p) for p in confirmed["phases"]],
-            "review_configuration": dict(confirmed["review_configuration"]),
+            "review_configuration": (dict(confirmed["review_configuration"])
+                                     if confirmed["review_configuration"] is not None else None),
             "delivery_contract": dict(confirmed["delivery_contract"]),
         }
     cached_models = VersionedJsonStore(
@@ -179,11 +180,14 @@ def assemble(request, *, discovery):
                 "formatter_inputs": None, "diagnostics": discovery["diagnostics"]}
     inputs = dict(discovery.get("inputs", {}))
     candidate = discovery.get("selected_candidate", {})
-    missing = [
-        {"owner": "user", "requirement": key}
-        for key in ("files", "phases", "review_configuration", "delivery_contract")
-        if not inputs.get(key)
-    ]
+    review_policy = next((step["execution"]["review_policy"]
+                          for step in candidate.get("steps", {}).values()
+                          if step["execution"]["review_policy"]), None)
+    required = ["files", "phases", "delivery_contract"]
+    if review_policy is not None:
+        required.append("review_configuration")
+    missing = [{"owner": "user", "requirement": key}
+               for key in required if not inputs.get(key)]
     missing.extend(discovery.get("evidence_gaps", []))
     for phase in inputs.get("phases", []):
         if not phase.get("chain"):
@@ -222,12 +226,13 @@ def assemble(request, *, discovery):
                     if confirmed
                     else prepare_file_scope(root, inputs["files"])
                 ),
-                "execution": {
+                "execution": (dict(confirmed["execution"]) if confirmed else {
                     "playbook_id": candidate["id"],
                     "graph_digest": discovery["graph_digest"],
-                },
+                    "review_policy": review_policy,
+                }),
                 "phases": inputs["phases"],
-                "review_configuration": inputs["review_configuration"],
+                "review_configuration": inputs.get("review_configuration"),
                 "delivery_contract": (inputs["delivery_contract"] if confirmed else
                     prepare_compact_delivery(root, inputs["delivery_contract"],
                                              issue_name=request["issue_name"])),
