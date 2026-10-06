@@ -393,3 +393,104 @@ def test_continuation_final_publication_fence_rejects_intervening_changes(
     monkeypatch.setattr(BlackboardStore, "record_event", publish)
     assert not journey.runtime().run(max_transitions=2).completed
     assert changed and journey.state().current_step != "done"
+
+
+@pytest.mark.parametrize("target", ["github_pr", "local_branch"])
+@pytest.mark.parametrize("resumed", [False, True])
+def test_late_effective_graph_edit_blocks_terminal_publication_and_recovers(
+    tmp_path, monkeypatch, target, resumed
+):
+    """R2/FUP-001: both publishers fence the proof's exact graph (U6/U9/I9/I11)."""
+    from typer.testing import CliRunner
+    from cafe.ui.cli import app
+
+    journey = prepared(tmp_path, monkeypatch, target)
+    if resumed:
+        # Restart discards invocation freshness. Completed work then checkpoints
+        # its real terminal edge and awaits the next ordinary verifier dispatch.
+        journey.runtime().run(single_step=True)
+        assert not journey.runtime().run(single_step=True).completed
+        assert len(downstream_events(journey)) == 1
+    original = BlackboardStore.record_event
+    edited = []
+    path = journey.root / ".cafe/playbooks/custom-delivery.yaml"
+
+    def publish(store, state, kind, data, **kwargs):
+        if kind == "workflow_completed" and not edited:
+            graph = yaml.safe_load(path.read_text())
+            graph["steps"]["inspect"]["on"]["workflow_complete"] = "new_required_owner"
+            graph["steps"]["new_required_owner"] = dict(
+                skill="custom-delivery",
+                role="operator",
+                assignee_type="auto",
+                automatic=dict(
+                    executor="declared_transition", inputs=dict(intent="workflow_complete")
+                ),
+                on=dict(workflow_complete="after_delivery"),
+            )
+            path.write_text(yaml.safe_dump(graph, sort_keys=False))
+            PlaybookLoader(project_root=journey.root).load("custom-delivery", strict=True)
+            edited.append(True)
+        return original(store, state, kind, data, **kwargs)
+
+    monkeypatch.setattr(BlackboardStore, "record_event", publish)
+    result = journey.runtime().run(max_transitions=2, single_step=resumed)
+    assert edited and not result.completed
+    assert journey.state().current_step != "done"
+    assert not any(e.event_type == "workflow_completed" for e in journey.state().events)
+    assert not any(e.data.get("step") == "new_required_owner" for e in journey.state().events)
+    assert len(downstream_events(journey)) == 1
+    # A fresh public caller reloads the edited strict-valid graph. It must execute
+    # the added owner through normal dispatch before publishing completion.
+    recovery = CliRunner().invoke(app, ["workflow", "--issue", "delivery", "--execute"])
+    assert recovery.exit_code == 0, (recovery.stdout, recovery.exception)
+    assert journey.state().current_step == "done"
+    owners = [
+        e
+        for e in journey.state().events
+        if e.event_type == "automatic_step_completed" and e.data.get("step") == "new_required_owner"
+    ]
+    assert len(owners) == 1
+
+
+@pytest.mark.parametrize("target", ["github_pr", "local_branch"])
+@pytest.mark.parametrize("resumed", [False, True])
+def test_terminal_graph_guard_does_not_launch_processes(tmp_path, monkeypatch, target, resumed):
+    """The final graph fence uses process-free reads (U8/U9/I9/I11)."""
+    import subprocess
+
+    journey = prepared(tmp_path, monkeypatch, target)
+    if resumed:
+        journey.runtime().run(single_step=True)
+        journey.runtime().run(single_step=True)
+    original_record = BlackboardStore.record_event
+    original_popen = subprocess.Popen
+    guarded = []
+    inside_guard = False
+
+    def popen(*args, **kwargs):
+        assert not inside_guard
+        return original_popen(*args, **kwargs)
+
+    def record(store, state, kind, data, **kwargs):
+        if kind == "workflow_completed":
+            original_guard = kwargs["publication_guard"]
+
+            def guard(current):
+                nonlocal inside_guard
+                inside_guard = True
+                try:
+                    original_guard(current)
+                    guarded.append(True)
+                finally:
+                    inside_guard = False
+
+            kwargs["publication_guard"] = guard
+        return original_record(store, state, kind, data, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    monkeypatch.setattr(BlackboardStore, "record_event", record)
+    assert journey.runtime().run().completed
+    assert len(guarded) == 1
+    assert len(downstream_events(journey)) == 1
+    assert len(journey.service().records.read()["attempts"]) == (2 if resumed else 1)

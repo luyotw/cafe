@@ -149,6 +149,7 @@ def publish_terminal(context, prerequisite, proof, publish, *, completed=False):
         if position != context.step or witness is None:
             raise ValueError("Terminal edge has no matching verified owner completion")
     expected_sequence = board.applied_event_sequence
+    expected_graph = proof["graph"]
     proof = proof["fence"]
     with service.tasks.transaction():
         if service.completion_fence() != proof:
@@ -166,6 +167,9 @@ def publish_terminal(context, prerequisite, proof, publish, *, completed=False):
         def validate(state):
             if state.applied_event_sequence != expected_sequence:
                 raise ValueError("Workflow changed before terminal publication")
+            _, current_playbook = context.load()
+            if _graph_identity(current_playbook) != expected_graph:
+                raise ValueError("Workflow graph changed before terminal publication")
             service.validate_completion_fence(proof, state)
 
         if publish is not None:
