@@ -331,11 +331,14 @@ def validate_compact_action(issue_dir: Path, root: Path) -> dict:
     if (readiness.get("authority_digest") != context["authority_digest"]
             or readiness.get("endpoint") != endpoint):
         raise ValueError("delivery readiness no longer matches confirmed authority")
+    from cafe.core.execution_checkpoints import observe_checkpoint
+    current = observe_checkpoint(context)
     if context.get("review_policy") == "single_native":
-        require_verified_review(context, load_review_evidence(issue_dir / "execution_review.json"))
-    require_checkpoint(context, readiness.get("checkpoint"), "before_delivery")
-    fresh = checkpoint(context, "before_delivery", round_id="delivery-action", parent_id="manager")
-    require_checkpoint(context, fresh, "before_delivery")
+        require_verified_review(context, load_review_evidence(issue_dir / "execution_review.json"),
+                                observation=current)
+    require_checkpoint(context, readiness.get("checkpoint"), "before_delivery", observation=current)
+    fresh = checkpoint(context, "before_delivery", round_id="delivery-action", parent_id="manager",
+                       observation=current)
     from cafe.core.packet_io import atomic_write_bytes
     atomic_write_bytes(issue_dir / "delivery_action_checkpoint.json", canonical_json(fresh))
     return context
@@ -363,16 +366,17 @@ def run_compact_closeout_command(issue_dir: Path, root: Path, argv: list[str]):
             target = delivery_target(context)
             require_committed_content(root, context["paths"], revision=target["head_oid"])
             from cafe.core.execution_checkpoints import (
-                require_checkpoint, require_verified_review, load_review_evidence,
+                require_checkpoint, require_verified_review, load_review_evidence, observe_checkpoint,
             )
             # A newly selected commit must match the existing reviewed receipt,
             # including its immutable history, not just its new working bytes.
             readiness = load_review_evidence(issue_dir / "execution_delivery.json")
+            current = observe_checkpoint(context, source_revision=target["head_oid"])
             require_checkpoint(context, readiness.get("checkpoint"), "before_delivery",
-                               source_revision=target["head_oid"])
+                               source_revision=target["head_oid"], observation=current)
             if context.get("review_policy") == "single_native":
                 require_verified_review(context, load_review_evidence(issue_dir / "execution_review.json"),
-                                        source_revision=target["head_oid"])
+                                        source_revision=target["head_oid"], observation=current)
             require_delivery_target(context, target)
             ref = f"refs/heads/{target['source_branch']}"
             # The approved argv defines intent; resolved immutable operands keep

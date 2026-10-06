@@ -724,3 +724,50 @@ def test_native_direct_source_checks_original_objects_under_replacement_refs(
     # A local replacement view must not substitute the tree actually pushed.
     test_native_direct_push_keeps_reviewed_source_and_authorized_target(
         compact_request, tmp_path, monkeypatch, rewrite, "replacement", "head")
+
+
+@pytest.mark.parametrize("mutation", ["working", "restored_history"])
+def test_native_action_observes_once_per_boundary_and_refreshes_after_mutation(
+    compact_request, tmp_path, monkeypatch, mutation
+):
+    import os
+    import shutil
+    from tests.integration.test_compact_workflow import native_context
+    from cafe.manager.delivery import validate_compact_action
+
+    root, issue, _, context = native_context(compact_request, tmp_path, monkeypatch)
+    git(root, "config", "user.name", "Test")
+    git(root, "config", "user.email", "test@example.org")
+    (root / "app.py").write_text('value = "reviewed"\n')
+    native_delivery_ready(root, issue, context)
+    real_git = shutil.which("git")
+    binary = tmp_path / "observed-git"
+    binary.mkdir()
+    calls = tmp_path / "git-observations.jsonl"
+    wrapper = binary / "git"
+    wrapper.write_text("#!" + sys.executable + "\n" +
+        "import json, os, sys\n" +
+        "with open(" + repr(str(calls)) + ", 'a') as stream:\n" +
+        "    stream.write(json.dumps(sys.argv[1:]) + '\\n')\n" +
+        "os.execv(" + repr(real_git) + ", [" + repr(real_git) + ", *sys.argv[1:]])\n")
+    wrapper.chmod(0o755)
+    monkeypatch.setenv("PATH", str(binary) + os.pathsep + os.environ["PATH"])
+    validate_compact_action(issue, root)
+    observed = [json.loads(line) for line in calls.read_text().splitlines()]
+    assert sum("log" in args for args in observed) == 1
+    # Each new public validation boundary starts a new observation, even when
+    # the preceding one passed. This is no persistent or cross-effect cache.
+    calls.unlink()
+    if mutation == "working":
+        (root / "app.py").write_text('value = "changed"\n')
+    else:
+        (root / "outside.py").write_text("outside")
+        git(root, "add", "outside.py")
+        git(root, "commit", "-qm", "outside addition")
+        git(root, "rm", "-q", "outside.py")
+        git(root, "commit", "-qm", "outside restoration")
+    with pytest.raises(ValueError):
+        validate_compact_action(issue, root)
+    observed = [json.loads(line) for line in calls.read_text().splitlines()]
+    assert sum("log" in args for args in observed) == 1
+    assert not git(root, "ls-remote", "origin", "refs/heads/feature")

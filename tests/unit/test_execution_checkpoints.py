@@ -118,3 +118,23 @@ def test_checkpoint_binds_selected_commit_and_its_history(execution_context, can
     else:
         with pytest.raises(ValueError):
             require_checkpoint(execution_context, receipt, "before_review", source_revision=selected)
+
+
+@pytest.mark.parametrize("field", ["authority_digest", "revision", "identity", "boundary",
+                                  "receipt_id", "round_id", "parent_id"])
+def test_shared_observation_preserves_each_receipts_authority_and_identity(execution_context, field):
+    from copy import deepcopy
+    from cafe.core.execution_checkpoints import checkpoint, observe_checkpoint, require_checkpoint
+
+    receipt = checkpoint(execution_context, "before_review", round_id="review", parent_id="parent")
+    observation = observe_checkpoint(execution_context)
+    require_checkpoint(execution_context, receipt, "before_review", observation=observation)
+    changed = deepcopy(receipt)
+    changed[field] = "" if field.endswith("_id") else "other"
+    with pytest.raises(ValueError):
+        require_checkpoint(execution_context, changed, "before_review", observation=observation)
+    with pytest.raises(ValueError):
+        require_checkpoint({**execution_context, "revision": 2}, receipt, "before_review", observation=observation)
+    with pytest.raises(ValueError):
+        require_checkpoint(execution_context, receipt, "before_review", observation=observation,
+                           source_revision=execution_context["baseline_commit"])
