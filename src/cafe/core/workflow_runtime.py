@@ -63,6 +63,9 @@ from cafe.core.workflow_contracts import (
     validate_task_context,
     publish_terminal,
     terminal_recovery_target,
+    automatic_proof,
+    pending_terminal_reinspection,
+    terminal_reinspection,
 )
 from cafe.core.packet_io import atomic_write_bytes, sha256_bytes
 from cafe.core.playbook import (
@@ -2269,11 +2272,24 @@ class BlackboardWorkflowRuntime:
             ):
                 raise ValueError("Workflow changed during automatic inspection")
 
+        context = WorkflowHostContext(self.issue_dir, self.blackboard.workflow_id, current_step)
+        saved_proof = None
+        if result.proof is not None:
+            saved_proof = automatic_proof(
+                context,
+                result.proof,
+                resume=pending_terminal_reinspection(context, result.proof),
+            )
         try:
             self.blackboard_store.record_event(
                 self.blackboard,
                 "automatic_step_completed",
-                {"step": current_step, "executor": executor_id, "intent": result.intent},
+                {
+                    "step": current_step,
+                    "executor": executor_id,
+                    "intent": result.intent,
+                    **({"terminal_proof": saved_proof} if saved_proof is not None else {}),
+                },
                 publication_guard=validate_inspection,
             )
         except ValueError as exc:
@@ -2283,15 +2299,21 @@ class BlackboardWorkflowRuntime:
                 completed=False,
                 detail=str(exc),
             )
-        self._completion_proof = (
-            {
-                "fence": result.proof,
-                "workflow_sequence": self.blackboard.applied_event_sequence,
-                "step": current_step,
-            }
-            if result.proof is not None
-            else None
-        )
+        if saved_proof is not None:
+            self._completion_proof = dict(
+                saved_proof,
+                event_index=len(self.blackboard.events) - 1,
+                workflow_sequence=self.blackboard.applied_event_sequence,
+            )
+            if saved_proof["resume"] is not None:
+                return self._emit_complete(
+                    current_step=current_step,
+                    status_code=result.intent,
+                    next_step="_done",
+                    runtime=runtime,
+                    reason="workflow.prerequisite_resume",
+                    update_contract=True,
+                )
         return self._complete_owned_transition(
             current_step=current_step,
             status_code=result.intent,
@@ -3721,16 +3743,25 @@ class BlackboardWorkflowRuntime:
                 completed=completed,
             )
             return None
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, KeyError, IndexError, TypeError) as exc:
             # Recovery re-enters the declared prerequisite owner. Inspection is
             # never performed in a terminal publication callback.
             target = terminal_recovery_target(
                 self.playbook.get("terminal_prerequisite"), self.steps
             )
             if target is not None:
+                try:
+                    checkpoint = terminal_reinspection(
+                        WorkflowHostContext(
+                            self.issue_dir, self.blackboard.workflow_id, current_step
+                        )
+                    )
+                except (ValueError, KeyError, IndexError, TypeError, OSError):
+                    checkpoint = None
                 self._emit_transition(
                     current_step=current_step,
                     next_step=target,
+                    terminal_resume=checkpoint,
                     status_code="TERMINAL_PREREQUISITE_REQUIRED",
                     source="workflow.prerequisite_recovery",
                     runtime="owner_dispatch",
@@ -3803,6 +3834,7 @@ class BlackboardWorkflowRuntime:
         update_contract: bool = True,
         contract_source: str = "workflow.transition",
         transition_intent: HandoffIntent | str | None = None,
+        terminal_resume: dict | None = None,
     ) -> None:
         self.blackboard.decisions.append(DecisionEntry.from_dict(
             {"from": current_step, "to": next_step, "status_code": status_code}
@@ -3828,6 +3860,8 @@ class BlackboardWorkflowRuntime:
             "runtime": runtime,
             "transition_intent": raw_transition_intent,
         }
+        if terminal_resume is not None:
+            transition_data["terminal_resume"] = terminal_resume
         if source_artifact is not None:
             transition_data["source_artifact"] = source_artifact
         completed_attempts = self._reset_step_attempts_after_successful_advance(

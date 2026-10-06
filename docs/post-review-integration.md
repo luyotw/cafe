@@ -167,10 +167,22 @@ selection and action bindings use the closed `context_contract` IDs
 Selection and action remain human-owned. No declaration registers executable code.
 The fixed verifier receives only issue path, workflow ID and step from its host,
 reloads the effective catalog, performs read-only inspection and persists immutable
-proof. Ordinary owner lifecycle publication consumes that proof once, with its
-workflow sequence, under the shared terminal prerequisite and publication fence.
-The terminal gate itself performs no inspection. An intervening transition, restart,
-retarget or source/proof drift discards freshness and re-enters the declared verifier.
+proof. Its ordinary completion event binds the proof to the effective graph,
+reviewed source, selected destination and revision. A finite declared continuation
+may contain automatic, human or agent owners before `_done`; the same invocation
+carries proof only across those exact lifecycle edges. Cycles, re-entry into delivery
+owners, hybrid continuations and discretionary continuation routes are rejected
+when loading the graph.
+
+The shared terminal gate performs no inspection. Restart discards invocation
+freshness. A durable completed continuation edge then checkpoints its actual owner
+completion or human task/result and re-enters the declared verifier. Fresh proof
+resumes that terminal edge without executing downstream work or requesting the
+human answer again. Negative destination observations retain the checkpoint for a
+normal retry; retargeting, changed declarations, source drift or an unrelated
+transition cannot reuse it. Source drift follows renewed review. Direct verifier
+routing to `_done` still inspects once. Publication retains the shared effective-state
+fence and HumanTask → Blackboard lock order.
 
 Equivalent custom step, artifact,
 policy and accepted-decision names work through the same catalog/task/runtime paths.

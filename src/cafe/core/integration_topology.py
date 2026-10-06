@@ -77,6 +77,11 @@ def delivery_topology(identity: Mapping[str, Any], steps: Mapping[str, Any]) -> 
         raise ValueError("Pending human delivery must declare its automatic resume route")
     if len({declaration.review_step, declaration.selection_step, action_step, verifier}) != 4:
         raise ValueError("Delivery owners must be distinct")
+    validate_verified_continuation(
+        routes["workflow_complete"],
+        steps,
+        forbidden={declaration.review_step, declaration.selection_step, action_step, verifier},
+    )
     values.update(
         source_step=producer(declaration.source_artifact),
         delivery_step=producer(declaration.delivery_artifact),
@@ -87,3 +92,47 @@ def delivery_topology(identity: Mapping[str, Any], steps: Mapping[str, Any]) -> 
         verified_continuation=routes["workflow_complete"],
     )
     return SimpleNamespace(**values)
+
+
+def validate_verified_continuation(start, steps, *, forbidden):
+    """Accept finite ordinary owner paths; reject unsupported graphs at loading."""
+    visiting, visited = set(), set()
+
+    def visit(name):
+        if name in {"done", "_done"}:
+            return
+        if name in forbidden or name in visiting:
+            raise ValueError("Verified continuation must not cycle or re-enter delivery owners")
+        if name in visited:
+            return
+        definition = steps.get(name)
+        if definition is None or definition.get("assignee_type", "agent") not in {
+            "auto",
+            "human",
+            "agent",
+        }:
+            raise ValueError(
+                "Verified continuation requires an ordinary auto, human or agent owner"
+            )
+        visiting.add(name)
+        targets = set()
+        for intent, target in definition.get("on", {}).items():
+            if target == "_user" or (
+                target == name
+                and intent
+                in {"confirm_output", "need_permission", "need_clarification", "no_changes_needed"}
+            ):
+                continue
+            targets.add(target)
+        for binding in definition.get("human_tasks", []):
+            targets.update(binding["outcomes"].values())
+        if not targets or definition.get("allowed_goto"):
+            raise ValueError(
+                "Verified continuation needs terminating declared edges without discretionary goto"
+            )
+        for target in targets:
+            visit(target)
+        visiting.remove(name)
+        visited.add(name)
+
+    visit(start)

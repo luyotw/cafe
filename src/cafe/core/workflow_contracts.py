@@ -132,11 +132,23 @@ def publish_terminal(context, prerequisite, proof, publish, *, completed=False):
         return
     if proof is None:
         raise ValueError("A fresh automatic proof is required before completion")
-    if context.step != proof["step"]:
-        raise ValueError("Proof belongs to another automatic owner")
-    if service.blackboard.applied_event_sequence != proof["workflow_sequence"]:
-        raise ValueError("Workflow changed after automatic inspection")
-    expected_sequence = proof["workflow_sequence"]
+    board, playbook = context.load()
+    if board.current_step != context.step and not (
+        board.current_step == "user" and board.handoff_contract.from_step == context.step
+    ):
+        raise ValueError("Terminal owner is not the current workflow position")
+    if proof.get("resume") is not None:
+        if (
+            context.step != proof["step"]
+            or board.applied_event_sequence != proof["workflow_sequence"]
+            or pending_terminal_reinspection(context, proof["fence"]) != proof["resume"]
+        ):
+            raise ValueError("Terminal recovery no longer matches its exact completed edge")
+    else:
+        position, witness = _proof_position(context, proof, board, playbook)
+        if position != context.step or witness is None:
+            raise ValueError("Terminal edge has no matching verified owner completion")
+    expected_sequence = board.applied_event_sequence
     proof = proof["fence"]
     with service.tasks.transaction():
         if service.completion_fence() != proof:
@@ -169,3 +181,240 @@ def terminal_recovery_target(prerequisite, steps):
         and definition.get("automatic", {}).get("executor") == executor
     ]
     return targets[0] if executor is not None and len(targets) == 1 else None
+
+
+def _graph_identity(playbook):
+    import hashlib
+    import json
+
+    return hashlib.sha256(
+        json.dumps(
+            {key: playbook.get(key) for key in ("steps", "integration", "terminal_prerequisite")},
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+
+
+def automatic_proof(context, fence, *, resume=None):
+    """Journal a proof with its exact effective graph, not a reusable capability."""
+    _, playbook = context.load()
+    return {
+        "fence": fence,
+        "step": context.step,
+        "graph": _graph_identity(playbook),
+        "resume": resume,
+    }
+
+
+def _route(definition, intent):
+    from cafe.core.status_codes import PhaseStatusCode, transition_map_key
+
+    try:
+        intent = transition_map_key(PhaseStatusCode(intent))
+    except ValueError:
+        if intent.startswith("BATON_"):
+            intent = intent[6:].lower()
+    routes = definition.get("on", {})
+    return routes.get(intent, routes.get("default"))
+
+
+def _human_edge(context, playbook, step, task_id, result_id, task_store=None):
+    from cafe.core.human_task_records import HumanTaskRecordStore
+
+    records = task_store or HumanTaskRecordStore(context.issue_dir)
+    task = records.get_task(task_id)
+    result = records.get_result(task.id)
+    if (
+        task.workflow_id != context.workflow_id
+        or task.step != step
+        or task.status.value != "completed"
+        or result is None
+        or result.id != result_id
+    ):
+        raise ValueError("Terminal answer belongs to another owner or result")
+    bindings = [
+        b
+        for b in playbook["steps"][step].get("human_tasks", [])
+        if b["task_id"] == task.policy_id and b["trigger"] == task.trigger
+    ]
+    if len(bindings) != 1:
+        raise ValueError("Human result has no matching declared binding")
+    return bindings[0]["outcomes"].get(result.payload.get("decision"))
+
+
+def _human_terminal(context, playbook, step, task_id, result_id, task_store=None):
+    if _human_edge(context, playbook, step, task_id, result_id, task_store) != "_done":
+        raise ValueError("Human result has no declared terminal edge")
+
+
+def _proof_position(context, proof, board, playbook, *, stop=None, task_store=None):
+    """Follow only declared lifecycle edges since this immutable observation."""
+    if proof.get("graph") != _graph_identity(playbook):
+        raise ValueError("Verified continuation declaration changed")
+    index = proof["event_index"]
+    if not isinstance(index, int) or isinstance(index, bool) or index < 0:
+        raise ValueError("Proof has no valid lifecycle position")
+    if proof["step"] != terminal_recovery_target("verified_delivery", playbook["steps"]):
+        raise ValueError("Proof belongs to another automatic owner")
+    events = board.events
+    saved = events[index].data.get("terminal_proof")
+    expected = {k: v for k, v in proof.items() if k not in {"event_index", "workflow_sequence"}}
+    if saved != expected:
+        raise ValueError("Proof has no matching durable automatic completion")
+    position = proof["step"]
+    witness = None
+    seen = {position}
+    # The proof's own automatic completion is also a terminal-edge witness.
+    for event in events[index:stop]:
+        data = event.data
+        if event.event_type in {
+            "automatic_step_completed",
+            "step_completed",
+            "single_step_completed",
+        }:
+            if data.get("step") != position:
+                raise ValueError("Completion belongs to another continuation owner")
+            intent = data.get("intent", data.get("status_code", ""))
+            if _route(playbook["steps"][position], intent) in {"done", "_done"}:
+                witness = {"step": position, "intent": intent}
+        elif event.event_type in {"transition", "transition_recovered"}:
+            source, target = data.get("from"), data.get("to")
+            if (
+                source != position
+                or target in seen
+                or _route(
+                    playbook["steps"][position],
+                    data.get("transition_intent") or data.get("status_code", ""),
+                )
+                != target
+            ):
+                raise ValueError("Intervening transition invalidated the verified continuation")
+            position = target
+            seen.add(position)
+            witness = None
+        elif event.event_type == "human_task_completed":
+            if data.get("step") != position or data.get("supervisor_handoff"):
+                raise ValueError("Human continuation no longer belongs to the verified path")
+            target = data.get("to_step")
+            bindings = [
+                b
+                for b in playbook["steps"][position].get("human_tasks", [])
+                if b["task_id"] == data.get("task_id") and b["trigger"] == data.get("trigger")
+            ]
+            if (
+                len(bindings) != 1
+                or target in seen
+                or _human_edge(
+                    context,
+                    playbook,
+                    position,
+                    data.get("human_task_id"),
+                    data.get("result_id"),
+                    task_store,
+                )
+                != target
+            ):
+                raise ValueError("Human continuation has no matching declared edge")
+            position = target
+            seen.add(position)
+            witness = None
+    return position, witness
+
+
+def terminal_reinspection(context, *, task_id=None, result_id=None, task_store=None):
+    """Checkpoint a completed declared edge before normal prerequisite re-entry."""
+    board, playbook = context.load()
+    for index in range(len(board.events) - 1, -1, -1):
+        saved = board.events[index].data.get("terminal_proof")
+        if saved is None:
+            continue
+        proof = dict(saved, event_index=index)
+        if proof.get("resume") is not None:
+            resumed = pending_terminal_reinspection(context, proof["fence"], task_store=task_store)
+            if resumed != proof["resume"]:
+                raise ValueError("Terminal recovery checkpoint changed")
+            return board.events[resumed["checkpoint_event"]].data["terminal_resume"]
+        position, witness = _proof_position(context, proof, board, playbook, task_store=task_store)
+        if position != context.step:
+            raise ValueError("Terminal owner is outside the verified continuation")
+        if task_id is not None:
+            _human_terminal(context, playbook, context.step, task_id, result_id, task_store)
+            witness = {"step": context.step, "human_task_id": task_id, "result_id": result_id}
+        if witness is None:
+            raise ValueError("Continuation work has no durable terminal completion")
+        # Do not consume old destination facts. The normal verifier will inspect
+        # again; only the exact selected/reviewed identity can resume this edge.
+        return {"proof": proof, "completion": witness}
+    raise ValueError("No durable verified continuation is available")
+
+
+def pending_terminal_reinspection(context, fence, *, task_store=None):
+    """Recover a checkpoint only for its original selection and terminal edge."""
+    board, playbook = context.load()
+    for index in range(len(board.events) - 1, -1, -1):
+        checkpoint = board.events[index].data.get("terminal_resume")
+        if checkpoint is None:
+            continue
+        try:
+            proof = checkpoint["proof"]
+            if proof["fence"]["selection"] != fence["selection"]:
+                return None
+            anchor = next(
+                i
+                for i in range(proof["event_index"] + 1, index + 1)
+                if board.events[i].data.get("terminal_resume") == checkpoint
+            )
+            position, witness = _proof_position(
+                context, proof, board, playbook, stop=anchor, task_store=task_store
+            )
+            completion = checkpoint["completion"]
+            if position != completion["step"]:
+                return None
+            if "human_task_id" in completion:
+                _human_terminal(
+                    context,
+                    playbook,
+                    position,
+                    completion["human_task_id"],
+                    completion["result_id"],
+                    task_store,
+                )
+            elif witness != completion:
+                return None
+        except (ValueError, KeyError, IndexError, TypeError, StopIteration):
+            return None
+        position = context.step
+        action = playbook["steps"][context.step]["on"]["need_permission"]
+        for event in board.events[anchor + 1 :]:
+            data = event.data
+            if event.event_type in {"transition", "transition_recovered"}:
+                target = data.get("to")
+                if (
+                    data.get("source") == "workflow.prerequisite_recovery"
+                    and data.get("terminal_resume") == checkpoint
+                    and data.get("from") == position == target == context.step
+                ):
+                    continue
+                if (
+                    data.get("from") != position
+                    or target not in {action, context.step}
+                    or _route(
+                        playbook["steps"][position],
+                        data.get("transition_intent") or data.get("status_code", ""),
+                    )
+                    != target
+                ):
+                    return None
+                position = target
+            elif event.event_type == "human_task_completed":
+                if data.get("step") != action or data.get("to_step") != context.step:
+                    return None
+                position = context.step
+            elif (
+                event.event_type == "automatic_step_completed" and data.get("step") != context.step
+            ):
+                return None
+        if position != context.step:
+            return None
+        return {"checkpoint_event": index, "completion": completion}
+    return None

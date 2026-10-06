@@ -23,6 +23,8 @@ from cafe.core.workflow_contracts import (
     validate_task_context,
     task_context_matches_handoff,
     publish_terminal,
+    terminal_reinspection,
+    terminal_recovery_target,
 )
 from cafe.core.human_task_records import (
     HumanTask,
@@ -908,7 +910,7 @@ def _apply_human_task_payload(
                 durable_task,
                 task_store=record_store,
             )
-        except (ValueError, OSError) as exc:
+        except (ValueError, OSError, KeyError, IndexError, TypeError) as exc:
             return _durable_task_routing_rejection(
                 issue_dir=issue_dir, blackboard=blackboard, task_id=durable_task.id, message=str(exc),
             )
@@ -1326,15 +1328,31 @@ def _apply_human_task_payload(
             text="\n\n".join(input_parts),
         )
     is_done = continuation == "_done"
+    terminal_resume = None
     if is_done:
         try:
-            publish_terminal(
-                WorkflowHostContext(issue_dir, blackboard.workflow_id, from_step),
-                playbook_data.get("terminal_prerequisite"),
-                None,
-                None,
-            )
-        except (ValueError, OSError) as exc:
+            prerequisite = playbook_data.get("terminal_prerequisite")
+            if prerequisite is not None:
+                if durable_task is None or durable_result is None:
+                    raise ValueError("Terminal continuation requires a durable human result")
+                terminal_resume = terminal_reinspection(
+                    WorkflowHostContext(issue_dir, blackboard.workflow_id, from_step),
+                    task_id=durable_task.id,
+                    result_id=durable_result.id,
+                    task_store=record_store,
+                )
+                continuation = terminal_recovery_target(prerequisite, playbook_data["steps"])
+                if continuation is None:
+                    raise ValueError("Terminal prerequisite has no declared owner")
+                is_done = False
+            else:
+                publish_terminal(
+                    WorkflowHostContext(issue_dir, blackboard.workflow_id, from_step),
+                    prerequisite,
+                    None,
+                    None,
+                )
+        except (ValueError, OSError, KeyError, IndexError, TypeError) as exc:
             return _durable_task_routing_rejection(
                 issue_dir=issue_dir,
                 blackboard=blackboard,
@@ -1357,17 +1375,31 @@ def _apply_human_task_payload(
             transition_intent=HandoffIntent.AWAIT_AGENT.value,
             transition_source=f"human_task.{source}",
         )
-    store.set_current_step(blackboard, "done" if is_done else continuation)
-    store.set_handoff_summary(blackboard, f"Completed human task {policy.id} for {from_step}")
-    store.update_handoff_contract(
-        blackboard,
-        from_step=from_step,
-        to_owner=HandoffOwner.DONE if is_done else HandoffOwner.AGENT,
-        to_step="done" if is_done else continuation,
-        intent=HandoffIntent.WORKFLOW_COMPLETE if is_done else HandoffIntent.AWAIT_AGENT,
-        status_code="",
-        source=f"human_task.{source}",
-    )
+    baton_contract = None
+    if terminal_resume is not None:
+        blackboard.current_step = continuation
+        blackboard.handoff_summary = f"Completed human task {policy.id} for {from_step}"
+        baton_contract = store.build_handoff_contract(
+            from_step=from_step,
+            to_owner=HandoffOwner.AGENT,
+            to_step=continuation,
+            intent=HandoffIntent.AWAIT_AGENT,
+            status_code="",
+            source=f"human_task.{source}",
+        )
+        blackboard.handoff_contract = baton_contract
+    else:
+        store.set_current_step(blackboard, "done" if is_done else continuation)
+        store.set_handoff_summary(blackboard, f"Completed human task {policy.id} for {from_step}")
+        store.update_handoff_contract(
+            blackboard,
+            from_step=from_step,
+            to_owner=HandoffOwner.DONE if is_done else HandoffOwner.AGENT,
+            to_step="done" if is_done else continuation,
+            intent=HandoffIntent.WORKFLOW_COMPLETE if is_done else HandoffIntent.AWAIT_AGENT,
+            status_code="",
+            source=f"human_task.{source}",
+        )
     store.record_event(
         blackboard,
         "human_task_completed",
@@ -1395,8 +1427,15 @@ def _apply_human_task_payload(
                 else {}
             ),
             "source": source,
+            **({"terminal_resume": terminal_resume} if terminal_resume is not None else {}),
+            **(
+                {"human_task_id": durable_task.id, "result_id": durable_result.id}
+                if durable_task is not None and durable_result is not None
+                else {}
+            ),
             **_work_report_event_data(task=durable_task, result=durable_result),
         },
+        baton_contract=baton_contract,
     )
     return HumanTaskApplication(target="done" if is_done else continuation, policy=policy)
 
