@@ -124,12 +124,18 @@ def working_git_entry(root: Path, path: str):
             _git(root, "hash-object", "--path=" + path, "--", path).strip())
 
 
-def require_committed_content(root: Path, paths):
+def require_committed_content(root: Path, paths, *, revision="HEAD"):
     """The delivered tree must contain the implementation actually reviewed."""
-    head = git_content_entries(root, "HEAD")
+    oid = _git(root, "rev-parse", "--verify", revision + "^{commit}").strip()
+    head = git_content_entries(root, oid)
     for path in validate_scope_paths(paths):
         if head.get(path) != working_git_entry(root, path):
             raise ValueError("committed content differs from reviewed working content: " + path)
+    # Clean filters are executable; a matching output cannot authorize a HEAD
+    # replacement performed while validating the captured immutable tree.
+    if _git(root, "rev-parse", "HEAD").strip() != oid:
+        raise ValueError("committed source changed during content validation")
+    return oid
 
 
 def collect_changes(root: Path, baseline_commit: str) -> ChangeCollection:

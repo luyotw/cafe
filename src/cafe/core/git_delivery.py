@@ -36,20 +36,42 @@ def remote_identity(root: Path, remote: str, route: str) -> str:
 PUBLICATION_TARGET_FIELDS = ("push_url", "remote_identity", "source_branch", "head_oid")
 
 
-def publication_target(context, args):
+def delivery_target(context):
     """Resolve one checked target; its identity and URL use the same observation."""
+    endpoint = context["delivery_endpoint"]
+    route = endpoint["route"]
+    if route not in {"pr", "direct"}:
+        raise ValueError("unsupported delivery route")
+    root = Path(context["root"])
+    configuration = remote_configuration(root, endpoint["remote"], route)
+    if configuration_identity(configuration, route) != endpoint["remote_identity"]:
+        raise ValueError("delivery remote endpoint changed")
+    branch = endpoint["source_branch"] if route == "pr" else endpoint["branch"]
+    if git_text(root, "symbolic-ref", "--short", "HEAD") != branch:
+        raise ValueError("delivery source branch changed")
+    return {"push_url": configuration["push"], "remote_identity": endpoint["remote_identity"],
+            "source_branch": branch, "head_oid": git_text(root, "rev-parse", "HEAD")}
+
+
+def require_delivery_target(context, target):
+    current = delivery_target(context)
+    if any(target.get(key) != value for key, value in current.items()):
+        raise ValueError("delivery target changed since authorization")
+
+
+def pinned_remote_command(operation, push_url, *args):
+    """Consume an already resolved URL exactly once, despite Git URL rewrites."""
+    import uuid
+    alias = "cafe-pinned-" + uuid.uuid4().hex + ":"
+    return ["git", "-c", f"url.{push_url}.insteadOf={alias}", operation, alias, *args]
+
+
+def publication_target(context, args):
     endpoint = context["delivery_endpoint"]
     if (endpoint["route"] != "pr" or args.get("remote") != endpoint["remote"]
             or args.get("base") != endpoint["target_branch"]):
         raise ValueError("publication request differs from resolved delivery endpoint")
-    root = Path(context["root"])
-    configuration = remote_configuration(root, endpoint["remote"], "pr")
-    if configuration_identity(configuration, "pr") != endpoint["remote_identity"]:
-        raise ValueError("publication remote endpoint changed")
-    if git_text(root, "symbolic-ref", "--short", "HEAD") != endpoint["source_branch"]:
-        raise ValueError("publication source branch changed")
-    target = {"push_url": configuration["push"], "remote_identity": endpoint["remote_identity"],
-              "source_branch": endpoint["source_branch"], "head_oid": git_text(root, "rev-parse", "HEAD")}
+    target = delivery_target(context)
     if any(key in args and args[key] != value for key, value in target.items()):
         raise ValueError("publication target changed since authorization")
     return target

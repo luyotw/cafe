@@ -549,3 +549,117 @@ else:
     else:
         assert not observed
         assert not any(call["args"][:2] == ["pr", "create"] for call in calls)
+
+
+@pytest.mark.parametrize("rewrite", [False, True])
+@pytest.mark.parametrize("boundary", ["filter", "transport", "pre_push"])
+@pytest.mark.parametrize("drift", ["none", "head", "push", "both"])
+def test_native_direct_push_keeps_reviewed_source_and_authorized_target(
+    compact_request, tmp_path, monkeypatch, rewrite, boundary, drift
+):
+    import os
+    import shlex
+    import shutil
+    from tests.integration.test_compact_workflow import native_context
+    root = Path(compact_request["project_root"])
+    authorized = Path(git(root, "remote", "get-url", "--push", "origin"))
+    other = tmp_path / "unapproved.git"
+    git(tmp_path, "init", "--bare", "-q", str(other))
+    if rewrite:
+        git(root, "remote", "set-url", "origin", "cafe-original:")
+        git(root, "config", "url." + str(authorized) + ".insteadOf", "cafe-original:")
+        git(root, "config", "url." + str(other) + ".insteadOf", str(authorized))
+    compact_request["compact_inputs"]["delivery_contract"] = {"schema_version": 4,
+        "route": "direct", "remote": "origin", "branch": "feature", "effects": ["commit", "push"]}
+    root, issue, _, context = native_context(compact_request, tmp_path, monkeypatch)
+    git(root, "config", "user.name", "Test")
+    git(root, "config", "user.email", "test@example.org")
+    program = tmp_path / "late_git_input.py"
+    control = root / ".git/late-delivery-input.json"
+    fired = root / ".git/late-delivery-input-fired"
+    checkpoint_path = issue / "delivery_action_checkpoint.json"
+    # Only the external filter/hook program performs the mutation. All owning
+    # guards, native parsing, public closeout and Git operations remain real.
+    program.write_text('''import json, subprocess, sys
+from pathlib import Path
+root, control, fired, checkpoint = map(Path, sys.argv[2:])
+data = b"" if sys.argv[1] == "transport" else sys.stdin.buffer.read()
+if control.exists():
+    plan = json.loads(control.read_text())
+    ready = sys.argv[1] == plan["boundary"] and (
+        sys.argv[1] != "filter" or checkpoint.stat().st_mtime_ns != plan["checkpoint_mtime"])
+    if ready:
+        control.unlink()
+        if plan["drift"] in {"head", "both"}:
+            subprocess.run(["git", "-C", str(root), "update-ref", "HEAD", plan["unreviewed"]], check=True)
+        if plan["drift"] in {"push", "both"}:
+            subprocess.run(["git", "-C", str(root), "remote", "set-url", "--push", "origin", plan["other"]], check=True)
+        fired.write_text(plan["drift"])
+sys.stdout.buffer.write(data)
+''')
+    def command(mode):
+        return shlex.join([sys.executable, str(program), mode, str(root),
+                           str(control), str(fired), str(checkpoint_path)])
+    (root / ".git/info/attributes").write_text("app.py filter=reviewtest\n")
+    git(root, "config", "filter.reviewtest.clean", command("filter"))
+    hook = root / ".git/hooks/pre-push"
+    hook.write_text("#!/bin/sh\nexec " + command("pre_push") + "\n")
+    hook.chmod(0o755)
+    (root / "app.py").write_text('value = "reviewed"\n')
+    native_delivery_ready(root, issue, context)
+    assert closeout(root, issue, "--initialize").returncode == 0
+    commit = closeout(root, issue, "--execute", "--stage", "deliver", "--index", "0")
+    assert commit.returncode == 0, commit.stderr
+    reviewed = git(root, "rev-parse", "HEAD")
+    # Prepare an unreferenced commit without changing worktree, index or HEAD.
+    env = {**os.environ, "GIT_INDEX_FILE": str(root / ".git/late-test-index")}
+    def object_git(*args, input=None):
+        return subprocess.run(["git", "-C", str(root), *args], env=env, input=input,
+            text=True, capture_output=True, check=True, timeout=20).stdout.strip()
+    object_git("read-tree", reviewed)
+    blob = object_git("hash-object", "-w", "--stdin", input='value = "unreviewed"\n')
+    object_git("update-index", "--cacheinfo", "100644," + blob + ",app.py")
+    unreviewed = object_git("commit-tree", object_git("write-tree"), "-p", reviewed,
+                            "-m", "unreviewed replacement")
+    control.write_text(json.dumps({"boundary": boundary, "drift": drift,
+        "checkpoint_mtime": checkpoint_path.stat().st_mtime_ns,
+        "unreviewed": unreviewed, "other": str(other)}))
+    if boundary == "transport":
+        # The external CLI boundary changes inputs immediately before the real
+        # Git process consumes argv. No Git command or result is simulated.
+        real_git = shutil.which("git")
+        binary = tmp_path / "git-bin"
+        binary.mkdir()
+        wrapper = binary / "git"
+        wrapper.write_text("#!" + sys.executable + "\n" +
+            "import os, subprocess, sys\n" +
+            "if 'push' in sys.argv[1:]:\n" +
+            "    subprocess.run(" + repr([sys.executable, str(program), "transport",
+                str(root), str(control), str(fired), str(checkpoint_path)]) + ", check=True)\n" +
+            "os.execv(" + repr(real_git) + ", [" + repr(real_git) + ", *sys.argv[1:]])\n")
+        wrapper.chmod(0o755)
+        monkeypatch.setenv("PATH", str(binary) + os.pathsep + os.environ["PATH"])
+    push = closeout(root, issue, "--execute", "--stage", "deliver", "--index", "1")
+    assert fired.read_text() == drift
+    assert (root / "app.py").read_text() == 'value = "reviewed"\n'
+    assert not git(other, "for-each-ref", "--format=%(objectname)", "refs/heads/feature")
+    observed = git(authorized, "for-each-ref", "--format=%(objectname)", "refs/heads/feature")
+    if drift == "none" or boundary != "filter":
+        assert observed == reviewed
+        assert git(authorized, "show", observed + ":app.py") == 'value = "reviewed"'
+    else:
+        assert not observed
+    evidence_path = issue / "delivery_result.json"
+    if drift == "none":
+        assert push.returncode == 0, push.stderr
+        evidence = json.loads(evidence_path.read_text())
+        assert evidence["delivered"] and evidence["commit"] == reviewed
+    else:
+        assert push.returncode != 0
+        assert not evidence_path.exists()
+        journal = json.loads((root / ".git/cafe/closeout/sample/workflow.json").read_text())
+        assert [entry["status"] for entry in journal["commands"]["deliver"]] == ["succeeded", "unknown"]
+    replay = closeout(root, issue, "--execute", "--stage", "deliver", "--index", "1")
+    assert replay.returncode != 0
+    assert git(authorized, "for-each-ref", "--format=%(objectname)", "refs/heads/feature") == observed
+    assert not git(other, "for-each-ref", "--format=%(objectname)", "refs/heads/feature")

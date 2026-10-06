@@ -357,19 +357,30 @@ def run_compact_closeout_command(issue_dir: Path, root: Path, argv: list[str]):
             raise ValueError("closeout command differs from the approved direct effect")
         if argv[1] != "commit":
             from cafe.core.file_scope import require_committed_content
-            require_committed_content(root, context["paths"])
-            result = subprocess.run(argv, cwd=root, check=False, timeout=240)
+            from cafe.core.git_delivery import (
+                delivery_target, require_delivery_target, pinned_remote_command,
+            )
+            target = delivery_target(context)
+            require_committed_content(root, context["paths"], revision=target["head_oid"])
+            require_delivery_target(context, target)
+            ref = f"refs/heads/{target['source_branch']}"
+            # The approved argv defines intent; resolved immutable operands keep
+            # executable filters and normal hooks from redirecting that effect.
+            result = subprocess.run(pinned_remote_command(
+                "push", target["push_url"], f"{target['head_oid']}:{ref}"),
+                cwd=root, check=False, timeout=240)
             if result.returncode == 0:
-                head = _git(root, "rev-parse", "HEAD")
-                push_url = _git(root, "remote", "get-url", "--push", endpoint["remote"])
-                observed = _git(root, "ls-remote", push_url, f"refs/heads/{endpoint['branch']}")
-                if observed.split()[0:1] != [head]:
+                observed = subprocess.run(pinned_remote_command(
+                    "ls-remote", target["push_url"], ref), cwd=root, check=True,
+                    capture_output=True, text=True, timeout=20).stdout.strip()
+                if observed.split()[0:1] != [target["head_oid"]]:
                     raise ValueError("push outcome is unverified; inspect read-only before recovery")
                 if validate_compact_action(issue_dir, root)["authority_digest"] != context["authority_digest"]:
                     raise ValueError("delivery authority changed during push")
+                require_delivery_target(context, target)
                 from cafe.core.packet_io import atomic_write_bytes
                 atomic_write_bytes(issue_dir / "delivery_result.json", canonical_json({
-                    "delivered": True, "route": "direct", "commit": head,
+                    "delivered": True, "route": "direct", "commit": target["head_oid"],
                     "branch": endpoint["branch"], "remote_identity": endpoint["remote_identity"],
                     "authority_digest": context["authority_digest"]}))
             return result
