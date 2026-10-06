@@ -784,10 +784,19 @@ def workflow(
             if position == "user" and integration_board.handoff_contract is not None:
                 position = integration_board.handoff_contract.from_step
             if position in {integration.declaration.selection_step, integration.declaration.action_step, "done"}:
-                native_runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook_data,
-                                                            executor=_no_agent_executor)
-                native_result = native_runtime.run(start_step=start_step if isinstance(start_step, str) else None,
-                                                   single_step=single_step)
+                def run_native_integration():
+                    native_runtime = BlackboardWorkflowRuntime(
+                        issue_dir=issue_dir, playbook=playbook_data,
+                        executor=_no_agent_executor,
+                    )
+                    return native_runtime.run(
+                        start_step=start_step if isinstance(start_step, str) else None,
+                        single_step=single_step,
+                    )
+
+                native_result = WorkflowHost(issue_dir).run(
+                    run_native_integration, hosting="foreground",
+                ).result
                 console.print(f"Integration {'completed' if native_result.completed else 'pending'}: {native_result.final_status_code}")
                 if native_result.detail:
                     console.print(native_result.detail)

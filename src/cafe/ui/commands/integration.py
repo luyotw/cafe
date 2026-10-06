@@ -14,6 +14,7 @@ from cafe.core.blackboard import BlackboardStore
 from cafe.core.integration import IntegrationService, integration_service
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
+from cafe.workflow_execution.workflow_hosting import WorkflowHost, WorkerAlreadyRunningError
 
 integration_app = typer.Typer(
     help="Confirm a human integration destination and inspect delivery evidence"
@@ -82,25 +83,32 @@ def select(
 ) -> None:
     """Stage an explicit candidate and expose its separate human confirmation task."""
     try:
-        service, playbook = load_integration(issue)
-        if service.blackboard.current_step == "done":
-            raise ValueError(
-                "Completed delivery is immutable; start a new workflow for another destination"
+
+        def advance():
+            # Reload authoritative state only after acquiring the sole owner.
+            service, playbook = load_integration(issue)
+            if service.blackboard.current_step == "done":
+                raise ValueError(
+                    "Completed delivery is immutable; start a new workflow for another destination"
+                )
+            revision = service.propose(
+                target=target,
+                repository=repository,
+                target_branch=target_branch,
+                feature_branch=feature_branch,
+                pr=pr,
             )
-        revision = service.propose(
-            target=target,
-            repository=repository,
-            target_branch=target_branch,
-            feature_branch=feature_branch,
-            pr=pr,
-        )
-        runtime = BlackboardWorkflowRuntime(
-            issue_dir=service.issue_dir, playbook=playbook, executor=_no_agent_executor
-        )
-        runtime.run(start_step=service.declaration.selection_step)
-        current, _ = load_integration(issue)
-        emit({"revision": revision, "status": current.status()}, json_output)
-    except (OSError, ValueError) as exc:
+            runtime = BlackboardWorkflowRuntime(
+                issue_dir=service.issue_dir, playbook=playbook, executor=_no_agent_executor
+            )
+            runtime.run(start_step=service.declaration.selection_step)
+            current, _ = load_integration(issue)
+            return {"revision": revision, "status": current.status()}
+
+        service, _ = load_integration(issue)
+        result = WorkflowHost(service.issue_dir).run(advance, hosting="foreground").result
+        emit(result, json_output)
+    except (OSError, ValueError, WorkerAlreadyRunningError) as exc:
         failure(exc, json_output)
 
 
@@ -116,15 +124,20 @@ def verify(
 ) -> None:
     """Observe and persist current destination proof; continue with cafe workflow."""
     try:
+
+        def inspect():
+            service, _ = load_integration(issue)
+            if service.blackboard.current_step == "done":
+                if not service.completion_allowed(completed=True):
+                    raise ValueError("Stored completed integration association is invalid")
+                return {"status": service.status(), "already_completed": True}
+            attempt = service.verify()
+            return {"attempt": attempt, "status": service.status()}
+
         service, _ = load_integration(issue)
-        if service.blackboard.current_step == "done":
-            if not service.completion_allowed(completed=True):
-                raise ValueError("Stored completed integration association is invalid")
-            emit({"status": service.status(), "already_completed": True}, json_output)
-            return
-        attempt = service.verify()
-        emit({"attempt": attempt, "status": service.status()}, json_output)
-        if not attempt["success"]:
+        result = WorkflowHost(service.issue_dir).run(inspect, hosting="foreground").result
+        emit(result, json_output)
+        if "attempt" in result and not result["attempt"]["success"]:
             raise typer.Exit(1)
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, WorkerAlreadyRunningError) as exc:
         failure(exc, json_output)

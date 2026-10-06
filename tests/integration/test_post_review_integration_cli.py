@@ -242,3 +242,60 @@ def test_duplicate_completed_action_preserves_delivery_and_original_result(journ
     assert journey.state().current_step == "done"
     assert journey.service().records.read() == before
     assert journey.service().tasks.get_result(action.id) == original
+
+
+@pytest.mark.parametrize("target", ["local_branch", "github_pr"])
+@pytest.mark.parametrize("entry", ["select", "verify", "workflow"])
+@pytest.mark.parametrize("hosting", ["foreground", "background"])
+def test_native_commands_respect_existing_workflow_owner(
+    journey, monkeypatch, target, entry, hosting
+):
+    """I9/I10/I11: an occupied owner excludes every mutating native entry."""
+    from cafe.workflow_execution.workflow_hosting import WorkflowHost
+
+    monkeypatch.setattr(
+        "cafe.utils.github.GitHubOps.observe_integration", lambda *a: dict(journey.observation)
+    )
+    journey.complete("ship")
+    journey.select(target)
+    journey.runtime().run(start_step="destination")
+    journey.complete("confirm")
+    journey.runtime().run()
+    journey.human_integrate(target)
+    if entry == "select":
+        args = [
+            "integration",
+            "select",
+            "--issue",
+            "delivery",
+            "--target",
+            target,
+            "--repository",
+            str(journey.root) if target == "local_branch" else "owner/repo",
+            "--target-branch",
+            "other",
+        ]
+        args += ["--feature-branch", "feature"] if target == "local_branch" else ["--pr", "17"]
+    elif entry == "verify":
+        args = ["integration", "verify", "--issue", "delivery", "--json"]
+    else:
+        args = ["workflow", "--issue", "delivery", "--execute"]
+
+    def occupied():
+        before = {p: p.read_bytes() for p in journey.issue_dir.rglob("*") if p.is_file()}
+        result = runner.invoke(app, args)
+        assert result.exit_code != 0
+        assert before == {p: p.read_bytes() for p in journey.issue_dir.rglob("*") if p.is_file()}
+        assert journey.state().current_step != "done"
+        # Pure projection remains available while advancement is occupied.
+        invoke("integration", "status", "--issue", "delivery", "--json")
+
+    WorkflowHost(journey.issue_dir).run_worker(occupied, hosting=hosting)
+    result = runner.invoke(app, args)
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    if entry == "workflow":
+        assert journey.state().current_step == "done"
+    elif entry == "verify":
+        assert json.loads(result.stdout)["attempt"]["success"]
+    else:
+        assert journey.service().status()["state"] == "pending_confirmation"
