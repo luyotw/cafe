@@ -306,6 +306,9 @@ class HumanTaskBinding(BaseModel):
     allowed_targets: tuple[str, ...] = ()
     prompt: Optional[str] = None
     correction_guidance: Optional[str] = None
+    context_contract: Optional[
+        Literal["reviewed_delivery", "delivery_destination", "delivery_action"]
+    ] = None
     feedback_delivery: Optional["HumanTaskFeedbackDelivery"] = None
 
     @field_validator("trigger", "task_id")

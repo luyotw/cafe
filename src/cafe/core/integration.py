@@ -149,7 +149,9 @@ class IntegrationService:
         self.issue_dir = Path(issue_dir)
         self.blackboard = blackboard
         self.playbook = playbook
-        self.declaration = IntegrationDeclaration.model_validate(playbook["integration"])
+        from cafe.core.integration_topology import delivery_topology
+
+        self.declaration = delivery_topology(playbook["integration"], playbook["steps"])
         self.tasks = task_store or HumanTaskRecordStore(self.issue_dir)
         self.records = IntegrationRecordStore(self.issue_dir, blackboard.workflow_id, self.tasks)
 

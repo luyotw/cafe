@@ -597,6 +597,7 @@ class StepConfig(BaseModel):
     type: Literal["skill", "subflow"] = "skill"
     skill: SkillSelector
     role: str
+    resume_intent: Optional[Literal["await_agent"]] = None
     assignee_type: Literal["agent", "human", "auto", "hybrid"] = "agent"
     automatic: Optional[AutomaticStepConfig] = None
     hybrid: Optional[HybridStepConfig] = None
@@ -1002,15 +1003,9 @@ class IntegrationDeclaration(BaseModel):
     review_task: str
     accepted_decisions: List[str] = Field(min_length=1)
     source_artifact: str
-    source_step: str
     delivery_artifact: str
-    delivery_step: str
     selection_step: str
     selection_task: str
-    action_step: str
-    action_task: str
-    correction_step: str
-    verified_continuation: str
 
     @field_validator("*")
     @classmethod
@@ -1024,56 +1019,11 @@ class IntegrationDeclaration(BaseModel):
         return value
 
     def validate_relationships(self, steps: Dict[str, StepConfig]) -> None:
-        for name in (
-            self.review_step,
-            self.source_step,
-            self.delivery_step,
-            self.selection_step,
-            self.action_step,
-            self.correction_step,
-        ):
-            if name not in steps:
-                raise ValueError(f"integration references unknown step {name!r}")
-        if len({self.review_step, self.selection_step, self.action_step}) != 3:
-            raise ValueError("integration review, selection and action steps must be distinct")
-        source = steps[self.source_step]
-        if self.source_artifact not in (source.workspace_artifact, source.output_artifact):
-            raise ValueError("integration source artifact must belong to its declared producer")
-        if steps[self.delivery_step].output_artifact != self.delivery_artifact:
-            raise ValueError("integration delivery artifact must belong to its declared producer")
-        if any(steps[name].assignee_type != "human" for name in (self.selection_step, self.action_step)):
-            raise ValueError("integration confirmation and action steps must be human owned")
-        if self.correction_step not in (*steps[self.action_step].on.values(), *steps[self.action_step].allowed_goto):
-            raise ValueError("integration correction requires a declared action route")
-        if self.verified_continuation not in {*steps, DONE_TARGET}:
-            raise ValueError("integration verified continuation is unknown")
-        for step_name, task_id in (
-            (self.review_step, self.review_task),
-            (self.selection_step, self.selection_task),
-            (self.action_step, self.action_task),
-        ):
-            bindings = [b for b in steps[step_name].human_tasks if b.task_id == task_id]
-            if len(bindings) != 1:
-                raise ValueError("integration requires exactly one matching task binding")
-            binding = bindings[0]
-            if step_name == self.review_step:
-                if any(
-                    binding.outcomes.get(d) != self.selection_step for d in self.accepted_decisions
-                ):
-                    raise ValueError("integration accepted decisions must continue to selection")
-            elif step_name == self.selection_step:
-                if binding.outcomes.get("confirm") != self.action_step:
-                    raise ValueError("integration confirmation must continue to human action")
-            else:
-                if any(
-                    binding.outcomes.get(d) != self.action_step
-                    for d in ("performed", "already_performed", "blocked")
-                ):
-                    raise ValueError("integration reports must return to native verification")
-                if self.verified_continuation not in steps[step_name].on.values():
-                    raise ValueError(
-                        "integration verified continuation must be a declared transition"
-                    )
+        from cafe.core.integration_topology import delivery_topology
+
+        delivery_topology(
+            self.model_dump(), {name: step.model_dump() for name, step in steps.items()}
+        )
 
 
 class PlaybookDefinition(BaseModel):
@@ -1087,6 +1037,7 @@ class PlaybookDefinition(BaseModel):
     behavior: StepBehaviorDeclaration = Field(default_factory=StepBehaviorDeclaration)
     steps: Dict[str, StepConfig]
     commands: Optional[CommandsConfig] = None
+    terminal_prerequisite: Optional[Literal["verified_delivery"]] = None
     integration: Optional[IntegrationDeclaration] = None
     entry_point: Optional[str] = None
 
@@ -1096,7 +1047,27 @@ class PlaybookDefinition(BaseModel):
             self.entry_point = next(iter(self.steps.keys()))
 
         if self.integration is not None:
+            if self.terminal_prerequisite != "verified_delivery":
+                raise ValueError("Integration requires its native terminal prerequisite")
             self.integration.validate_relationships(self.steps)
+            verifiers = [
+                s
+                for s in self.steps.values()
+                if s.automatic is not None and s.automatic.executor == "verify_delivery"
+            ]
+            if len(verifiers) != 1:
+                raise ValueError("Terminal prerequisite requires one declared verifier owner")
+        elif self.terminal_prerequisite is not None:
+            raise ValueError("Verified delivery prerequisite requires integration identity")
+        for name, definition in self.steps.items():
+            if definition.resume_intent is not None:
+                target = definition.on.get(definition.resume_intent)
+                if (
+                    definition.assignee_type != "human"
+                    or target not in self.steps
+                    or self.steps[target].assignee_type != "auto"
+                ):
+                    raise ValueError("Human resume intent must target a declared automatic owner")
 
         def declares_feedback_artifact(step: StepConfig, artifact: str) -> bool:
             return "input_artifacts" in step.model_fields_set and artifact in (

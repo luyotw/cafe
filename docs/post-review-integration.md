@@ -138,32 +138,41 @@ association without duplicate tasks or further destination inspection.
 
 ## Custom declaration
 
-The optional top-level declaration names relationships, not executables:
+The optional top-level declaration names review/source/delivery/selection identities.
+Producer and action identities are derived from the ordinary graph:
 
 ```yaml
+terminal_prerequisite: verified_delivery
 integration:
   review_step: pr
   review_task: local-review
   accepted_decisions: [create_follow_up, continue_without_issue]
   source_artifact: workspace
-  source_step: develop
   delivery_artifact: pr_result
-  delivery_step: pr
   selection_step: destination
   selection_task: integration-destination
-  action_step: integrate
-  action_task: human-integration
-  correction_step: develop
-  verified_continuation: _done
 ```
 
 See `src/cafe/data/playbooks/standard-qa-integrate.yaml` for complete bindings and
 `src/cafe/data/skills/cafe-integrate/SKILL.md` for English/Traditional Chinese policies.
 Accepted review outcomes point to the selection step; `confirm` points to action;
-`performed`, `already_performed` and `blocked` return to action for native verification.
-Selection and action steps are human-owned. The action step declares its verified
-continuation and includes the correction step in its existing `allowed_goto` or
-`on` routes. Equivalent custom step, artifact,
+`performed`, `already_performed` and `blocked` point to an auto-owned step with
+`automatic: {executor: verify_delivery, inputs: {}}`. Its ordinary `on` routes map
+`workflow_complete` to `_done`, `need_permission` to human action and
+`manual_handoff` to correction. The human action step declares
+`resume_intent: await_agent` and `on: {await_agent: <verifier-step>}` so restart
+can inspect completed external work without fabricating a report. Review,
+selection and action bindings use the closed `context_contract` IDs
+`reviewed_delivery`, `delivery_destination` and `delivery_action` respectively.
+Selection and action remain human-owned. No declaration registers executable code.
+The fixed verifier receives only issue path, workflow ID and step from its host,
+reloads the effective catalog, performs read-only inspection and persists immutable
+proof. Ordinary owner lifecycle publication consumes that proof once, with its
+workflow sequence, under the shared terminal prerequisite and publication fence.
+The terminal gate itself performs no inspection. An intervening transition, restart,
+retarget or source/proof drift discards freshness and re-enters the declared verifier.
+
+Equivalent custom step, artifact,
 policy and accepted-decision names work through the same catalog/task/runtime paths.
 The source artifact is the versioned WorkspaceArtifact from its named producer,
 and GitHub publication is matched to the named prepared artifact's receipt.

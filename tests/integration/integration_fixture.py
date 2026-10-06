@@ -18,7 +18,7 @@ from cafe.playbooks.loader import PlaybookLoader
 from cafe.ui.human_tasks import apply_human_task_payload
 
 
-def create_journey(root: Path, monkeypatch):
+def create_journey(root: Path, monkeypatch, *, agent_review=False):
     root.mkdir(exist_ok=True)
     monkeypatch.chdir(root)
     monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda **kw: root / "global")
@@ -77,15 +77,9 @@ def create_journey(root: Path, monkeypatch):
         review_task="judge",
         accepted_decisions=["ship"],
         source_artifact="approved_delta",
-        source_step="forge",
         delivery_artifact="delivery_note",
-        delivery_step="package",
         selection_step="destination",
         selection_task="choose",
-        action_step="land",
-        action_task="human-delivery",
-        correction_step="forge",
-        verified_continuation="_done",
     )
     data = dict(
         playbook=dict(
@@ -100,6 +94,7 @@ def create_journey(root: Path, monkeypatch):
         skills=dict(workflow=dict(shared=[]), chat=dict(shared=[])),
         commands=dict(prepare=dict(prompt_for_spec_plan_config=False)),
         integration=declaration,
+        terminal_prerequisite="verified_delivery",
         steps=dict(
             forge=step(
                 output_artifact="code_delta",
@@ -108,15 +103,16 @@ def create_journey(root: Path, monkeypatch):
             ),
             package=step(output_artifact="delivery_note", on=dict(await_agent="verdict")),
             verdict=step(
-                assignee_type="human",
+                assignee_type="agent" if agent_review else "human",
                 human_tasks=[
                     dict(
-                        trigger="initial",
+                        trigger="confirm_output" if agent_review else "initial",
                         task_id="judge",
+                        context_contract="reviewed_delivery",
                         outcomes=dict(ship="destination", fix="forge"),
                     )
                 ],
-                on=dict(await_agent="destination"),
+                on=dict(confirm_output="verdict", await_agent="destination"),
             ),
             destination=step(
                 assignee_type="human",
@@ -124,6 +120,7 @@ def create_journey(root: Path, monkeypatch):
                     dict(
                         trigger="initial",
                         task_id="choose",
+                        context_contract="delivery_destination",
                         outcomes=dict(confirm="land", revise="destination"),
                     )
                 ],
@@ -136,10 +133,19 @@ def create_journey(root: Path, monkeypatch):
                     dict(
                         trigger="initial",
                         task_id="human-delivery",
-                        outcomes=dict(performed="land", already_performed="land", blocked="land"),
+                        context_contract="delivery_action",
+                        outcomes=dict(
+                            performed="inspect", already_performed="inspect", blocked="inspect"
+                        ),
                     )
                 ],
-                on=dict(await_agent="_done"),
+                resume_intent="await_agent",
+                on=dict(await_agent="inspect"),
+            ),
+            inspect=step(
+                assignee_type="auto",
+                automatic=dict(executor="verify_delivery", inputs={}),
+                on=dict(workflow_complete="_done", need_permission="land", manual_handoff="forge"),
             ),
         ),
     )
@@ -243,12 +249,18 @@ def create_journey(root: Path, monkeypatch):
             return IntegrationService(issue_dir, playbook, self.state())
 
         def runtime(self):
+            from cafe.core.workflow_models import StepExecutionResult
+
+            class FixtureExecutor:
+                def __call__(self, step_name, step_def, blackboard_state, **kwargs):
+                    if agent_review and step_name == "verdict":
+                        return StepExecutionResult(
+                            response="", artifacts={}, status_code="confirm_output"
+                        )
+                    raise AssertionError("No agent or integration executor expected")
+
             return BlackboardWorkflowRuntime(
-                issue_dir=issue_dir,
-                playbook=playbook,
-                executor=lambda *a, **kw: (_ for _ in ()).throw(
-                    AssertionError("No agent or integration executor expected")
-                ),
+                issue_dir=issue_dir, playbook=playbook, executor=FixtureExecutor()
             )
 
         def pending(self):

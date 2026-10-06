@@ -57,7 +57,13 @@ from cafe.core.human_tasks import (
     agent_execution_interrupted_human_task,
     resolve_step_human_task,
 )
-from cafe.core.integration import IntegrationReviewRequired, integration_service
+from cafe.core.workflow_contracts import (
+    WorkflowHostContext,
+    prepare_task_context,
+    validate_task_context,
+    publish_terminal,
+    terminal_recovery_target,
+)
 from cafe.core.packet_io import atomic_write_bytes, sha256_bytes
 from cafe.core.playbook import (
     resolve_step_attempt_limit,
@@ -894,7 +900,7 @@ class BlackboardWorkflowRuntime:
                 baton_contract=contract, publication_guard=publication_guard,
             )
 
-        blocked = self._integration_completion_guard(current_step=source, publish=publish)
+        blocked = self._terminal_prerequisite(current_step=source, publish=publish)
         if blocked is not None:
             return blocked
         return PlaybookRunResult(
@@ -912,8 +918,23 @@ class BlackboardWorkflowRuntime:
             allowed_steps=list(self.steps.keys()),
         )
         status_code = contract.status_code or f"BATON_{contract.intent.value.upper()}"
+        if current_step == "user":
+            definition = self.steps.get(contract.from_step, {})
+            target = definition.get("on", {}).get(definition.get("resume_intent"))
+            if target in self.steps and self.steps[target].get("assignee_type") == "auto":
+                self._emit_transition(
+                    current_step=contract.from_step,
+                    next_step=target,
+                    status_code=definition["resume_intent"],
+                    source="workflow.owner_resume",
+                    runtime="owner_dispatch",
+                )
+                return self._run_from_current_step(
+                    current_step=target,
+                    max_transitions=getattr(self, "_owner_transition_budget", 2),
+                )
         if current_step == "done":
-            blocked = self._integration_completion_guard(current_step=contract.from_step, completed=True)
+            blocked = self._terminal_prerequisite(current_step=contract.from_step, completed=True)
             if blocked is not None:
                 return blocked
             cafe_dir = self.issue_dir.parent.parent
@@ -2020,36 +2041,71 @@ class BlackboardWorkflowRuntime:
             if existing_task is not None:
                 handoff_key = existing_task.handoff_key
 
-        integration = integration_service(self.issue_dir, self.playbook, self.blackboard)
-        integration_prompt = policy.prompt
-        if integration is not None:
-            integration_prompt, integration_key = integration.task_context(current_step, policy.id, integration_prompt, handoff_key)
-            if integration_key is not None:
-                handoff_key = integration_key
+        context_host = WorkflowHostContext(
+            self.issue_dir, self.blackboard.workflow_id, current_step
+        )
+        try:
+            context_prompt, handoff_key, task_context = prepare_task_context(
+                context_host,
+                binding,
+                policy.model_copy(update={"prompt": policy.prompt}),
+                handoff_key,
+            )
+        except (OSError, ValueError) as exc:
+            self.blackboard_store.set_current_step(self.blackboard, "user")
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "human_task_context_required",
+                {"step": current_step, "trigger": trigger, "reason": str(exc)},
+            )
+            return PlaybookRunResult(
+                final_step=current_step,
+                final_status_code="HUMAN_TASK_CONTEXT_REQUIRED",
+                completed=False,
+                detail=str(exc),
+            )
 
-        materialization = records.materialize_with_status(
-            workflow_id=self.blackboard.workflow_id,
-            step=current_step,
-            iteration=iteration,
-            trigger=trigger,
-            policy_id=policy.id,
-            prompt=integration_prompt,
-            expected_result=policy.model_dump(mode="json"),
-            continuations=binding.outcomes,
-            assignee_type="human",
-            handoff_key=handoff_key,
-            superseded_task_ids=self._superseded_human_task_ids(
-                records,
+        if task_context.get("task_id"):
+            from cafe.core.human_task_records import HumanTaskMaterialization
+
+            materialization = HumanTaskMaterialization(
+                task=records.get_task(task_context["task_id"]), created=False
+            )
+        else:
+            materialization = records.materialize_with_status(
+                workflow_id=self.blackboard.workflow_id,
                 step=current_step,
                 iteration=iteration,
                 trigger=trigger,
                 policy_id=policy.id,
-                replaced_handoff=replaced_handoff,
-            ),
-        )
+                prompt=context_prompt,
+                context=task_context,
+                expected_result=policy.model_dump(mode="json"),
+                continuations=binding.outcomes,
+                assignee_type="human",
+                handoff_key=handoff_key,
+                superseded_task_ids=self._superseded_human_task_ids(
+                    records,
+                    step=current_step,
+                    iteration=iteration,
+                    trigger=trigger,
+                    policy_id=policy.id,
+                    replaced_handoff=replaced_handoff,
+                ),
+            )
         task = materialization.task
-        if integration is not None:
-            integration.associate(task)
+        if task_context and not task.context and task.status is HumanTaskStatus.PENDING:
+            # Restore bounded metadata on a compatible pre-context task; retain
+            # its durable identity and leave every human decision unanswered.
+            task = records.refresh_pending_contract(
+                workflow_id=task.workflow_id,
+                task_id=task.id,
+                prompt=task.prompt,
+                expected_result=task.expected_result,
+                continuations=binding.outcomes,
+                context=task_context,
+            )
+        validate_task_context(context_host, task)
         self._notify_new_human_task(task)
         self._replaced_user_handoff = None
         if cursor is not None:
@@ -2147,7 +2203,13 @@ class BlackboardWorkflowRuntime:
                 f"Step '{current_step}' has an invalid automatic executor declaration"
             )
         try:
-            result: AutomaticExecutionResult = self.automatic_registry.execute(executor_id, inputs)
+            result: AutomaticExecutionResult = self.automatic_registry.execute(
+                executor_id,
+                inputs,
+                context=WorkflowHostContext(
+                    self.issue_dir, self.blackboard.workflow_id, current_step
+                ),
+            )
         except Exception as exc:
             self.blackboard_store.record_event(
                 self.blackboard,
@@ -2200,10 +2262,35 @@ class BlackboardWorkflowRuntime:
         declaration = step_def["automatic"]
         executor_id = declaration["executor"]
         self._store_artifacts(result.artifacts)
-        self.blackboard_store.record_event(
-            self.blackboard,
-            "automatic_step_completed",
-            {"step": current_step, "executor": executor_id, "intent": result.intent},
+        def validate_inspection(state):
+            if (
+                result.inspection_sequence is not None
+                and state.applied_event_sequence != result.inspection_sequence
+            ):
+                raise ValueError("Workflow changed during automatic inspection")
+
+        try:
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "automatic_step_completed",
+                {"step": current_step, "executor": executor_id, "intent": result.intent},
+                publication_guard=validate_inspection,
+            )
+        except ValueError as exc:
+            return PlaybookRunResult(
+                final_step=current_step,
+                final_status_code="AUTOMATIC_EXECUTOR_REJECTED",
+                completed=False,
+                detail=str(exc),
+            )
+        self._completion_proof = (
+            {
+                "fence": result.proof,
+                "workflow_sequence": self.blackboard.applied_event_sequence,
+                "step": current_step,
+            }
+            if result.proof is not None
+            else None
         )
         return self._complete_owned_transition(
             current_step=current_step,
@@ -3400,12 +3487,12 @@ class BlackboardWorkflowRuntime:
             )
         )
 
-        integration = integration_service(self.issue_dir, self.playbook, self.blackboard)
-        integration_prompt = prompt
-        if integration is not None:
-            integration_prompt, integration_key = integration.task_context(current_step, policy.id, integration_prompt, handoff_key)
-            if integration_key is not None:
-                handoff_key = integration_key
+        context_host = WorkflowHostContext(
+            self.issue_dir, self.blackboard.workflow_id, current_step
+        )
+        context_prompt, handoff_key, task_context = prepare_task_context(
+            context_host, binding, policy.model_copy(update={"prompt": prompt}), handoff_key
+        )
 
         materialization = records.materialize_with_status(
             workflow_id=self.blackboard.workflow_id,
@@ -3413,7 +3500,8 @@ class BlackboardWorkflowRuntime:
             iteration=iteration,
             trigger=trigger,
             policy_id=policy.id,
-            prompt=integration_prompt,
+            prompt=context_prompt,
+            context=task_context,
             expected_result=policy.model_dump(mode="json"),
             continuations=binding.outcomes,
             assignee_type="user",
@@ -3428,8 +3516,7 @@ class BlackboardWorkflowRuntime:
             ),
         )
         task = materialization.task
-        if integration is not None:
-            integration.associate(task)
+        validate_task_context(context_host, task)
         self._notify_new_human_task(task)
         if materialization.created:
             self.blackboard_store.record_event(
@@ -3616,129 +3703,44 @@ class BlackboardWorkflowRuntime:
             )
         self._replaced_user_handoff = None
 
-    def _integration_wait(self, *, step: str, reason: str, status: str = "INTEGRATION_BLOCKED") -> PlaybookRunResult:
-        self.blackboard_store.update_handoff_contract(
-            self.blackboard, from_step=step, to_owner=HandoffOwner.USER, to_step="user",
-            intent=HandoffIntent.MANUAL_HANDOFF, status_code=status, source="workflow.integration",
-        )
-        self.blackboard_store.set_current_step(self.blackboard, "user")
-        self.blackboard_store.record_event(self.blackboard, "integration_blocked",
-                                           {"step": step, "reason": reason})
-        return PlaybookRunResult(final_step=step, final_status_code=status, completed=False, detail=reason)
-
-    def _integration_review_required(self, service: Any, reason: str) -> PlaybookRunResult:
-        step = service.declaration.correction_step
-        for task in service.tasks.tasks():
-            if task.handoff_key.startswith(f"integration:{self.blackboard.workflow_id}:") and task.status is HumanTaskStatus.PENDING:
-                service.tasks.cancel(workflow_id=self.blackboard.workflow_id, task_id=task.id,
-                                     reason="Source changed; renewed review required")
-        self.blackboard_store.update_handoff_contract(
-            self.blackboard, from_step=service.declaration.action_step, to_owner=HandoffOwner.AGENT,
-            to_step=step, intent=HandoffIntent.AWAIT_AGENT, status_code="INTEGRATION_REVIEW_REQUIRED",
-            source="workflow.integration_correction",
-        )
-        self.blackboard_store.set_current_step(self.blackboard, step)
-        self.blackboard_store.record_event(self.blackboard, "integration_review_required", {"step": step, "reason": reason})
-        return PlaybookRunResult(final_step=step, final_status_code="INTEGRATION_REVIEW_REQUIRED", completed=False, detail=reason)
-
-    def _integration_completion_guard(
-        self, *, current_step: str, completed: bool = False,
+    def _terminal_prerequisite(
+        self,
+        *,
+        current_step: str,
+        completed: bool = False,
         publish: Optional[Callable[..., None]] = None,
     ) -> Optional[PlaybookRunResult]:
-        service = integration_service(self.issue_dir, self.playbook, self.blackboard)
-        if service is None:
-            if publish is not None:
-                publish(None)
-            return None
-        if completed and service.completion_allowed(completed=True):
-            return None
-        original_position = self.blackboard.current_step
+        proof = getattr(self, "_completion_proof", None)
+        self._completion_proof = None
         try:
-            service.reconcile()
-            selected, _ = service.selected()
-            if not selected["tasks"].get("action"):
-                raise ValueError("A distinct human integration task is required")
-            # Process/network work happens before acquiring the publication fence.
-            attempt = service.verify()
-            if not attempt["success"] or not service.completion_allowed():
-                raise ValueError(attempt["reason"])
-            with service.tasks.transaction():
-                fence = service.completion_fence()
-                service.records.mark_completion()
-
-                def validate(state):
-                    service.validate_completion_fence(fence, state)
-
-                validate(self.blackboard)
-                # Settle pending human work without manufacturing a report.
-                for task in service.tasks.tasks():
-                    if task.id == selected["tasks"].get("action") and task.status is HumanTaskStatus.PENDING:
-                        service.tasks.cancel(workflow_id=self.blackboard.workflow_id, task_id=task.id,
-                                             reason="Destination verified; no further human integration required")
-                if publish is not None:
-                    # The store invokes validate after reconciling the effective
-                    # state and before publishing the event, baton or done patch.
-                    publish(validate)
+            publish_terminal(
+                WorkflowHostContext(self.issue_dir, self.blackboard.workflow_id, current_step),
+                self.playbook.get("terminal_prerequisite"),
+                proof,
+                publish,
+                completed=completed,
+            )
             return None
-        except IntegrationReviewRequired as exc:
-            self.blackboard.current_step = original_position
-            return self._integration_review_required(service, str(exc))
         except (OSError, ValueError) as exc:
-            self.blackboard.current_step = original_position
-            step = service.declaration.correction_step if "source changed" in str(exc).lower() else service.declaration.action_step
-            return self._integration_wait(step=step, reason=str(exc))
-
-    def _run_integration_boundary(self, *, start_step: Optional[str]) -> Optional[PlaybookRunResult]:
-        service = integration_service(self.issue_dir, self.playbook, self.blackboard)
-        if service is None:
-            return None
-        d = service.declaration
-        current = start_step or self.blackboard.current_step
-        if current == "done":
-            if service.completion_allowed(completed=True):
-                return None
-            return self._integration_wait(step=d.action_step, reason="Current durable integration completion proof is missing or invalid")
-        if current == "user":
-            contract = self.blackboard.handoff_contract
-            current = contract.from_step if contract is not None else current
-        if current not in {d.selection_step, d.action_step}:
-            return None
-        try:
-            service.reconcile()
-            service.validate_current_review()
-            if current == d.selection_step:
-                selected = service.records.current(service.records.read())
-                if selected is None:
-                    return self._integration_wait(step=current, reason="Stage an explicit destination with cafe integration select", status="INTEGRATION_SELECTION_REQUIRED")
-                if selected["confirmation"] is not None:
-                    current = d.action_step
-                else:
-                    return self._materialize_owned_human_task(current_step=current, trigger="initial",
-                                                             status_code="HUMAN_TASK_PENDING", runtime="integration")
-            selected, _ = service.selected()
-            if not selected["tasks"].get("action"):
-                # Materialize and associate before exposing the action boundary.
-                return self._materialize_owned_human_task(current_step=current, trigger="initial",
-                                                         status_code="HUMAN_TASK_PENDING", runtime="integration")
-            reports = [r for r in service.records.read()["reports"] if r["revision"] == selected["revision"]]
-            if reports and reports[-1]["outcome"] == "blocked" and not service.completion_allowed():
-                return self._integration_wait(step=current, reason="Human integration is blocked; resolve the conflict, then run cafe integration verify or renew review for changed source")
-            attempt = service.verify()
-            if not attempt["success"]:
-                return self._integration_wait(step=current, reason=attempt["reason"])
-            target = d.verified_continuation
-            if target == "_done":
-                return self._emit_complete(current_step=current, status_code="INTEGRATION_VERIFIED",
-                                           next_step=target, runtime="integration", reason="durable_read_only_proof",
-                                           update_contract=True)
-            self._emit_transition(current_step=current, next_step=target, status_code="INTEGRATION_VERIFIED",
-                                  source="integration.verified", runtime="integration", update_contract=True)
-            return PlaybookRunResult(final_step=current, final_status_code="INTEGRATION_VERIFIED", completed=False)
-        except IntegrationReviewRequired as exc:
-            return self._integration_review_required(service, str(exc))
-        except (OSError, ValueError) as exc:
-            step = d.correction_step if "source changed" in str(exc).lower() else current
-            return self._integration_wait(step=step, reason=str(exc))
+            # Recovery re-enters the declared prerequisite owner. Inspection is
+            # never performed in a terminal publication callback.
+            target = terminal_recovery_target(
+                self.playbook.get("terminal_prerequisite"), self.steps
+            )
+            if target is not None:
+                self._emit_transition(
+                    current_step=current_step,
+                    next_step=target,
+                    status_code="TERMINAL_PREREQUISITE_REQUIRED",
+                    source="workflow.prerequisite_recovery",
+                    runtime="owner_dispatch",
+                )
+            return PlaybookRunResult(
+                final_step=current_step,
+                final_status_code="TERMINAL_PREREQUISITE_REQUIRED",
+                completed=False,
+                detail=str(exc),
+            )
 
     def _emit_complete(
         self,
@@ -3774,7 +3776,7 @@ class BlackboardWorkflowRuntime:
                 },
                 baton_contract=baton_contract, publication_guard=publication_guard,
             )
-        blocked = self._integration_completion_guard(current_step=current_step, publish=publish)
+        blocked = self._terminal_prerequisite(current_step=current_step, publish=publish)
         if blocked is not None:
             return blocked
         cafe_dir = self.issue_dir.parent.parent
@@ -5565,6 +5567,8 @@ class BlackboardWorkflowRuntime:
         start_step: Optional[str] = None,
         single_step: bool = False,
     ) -> PlaybookRunResult:
+        self._completion_proof = None
+        self._owner_transition_budget = 1 if single_step else max_transitions
         if self._workflow_event_callback is not None:
             # Capture eligibility once; a failed open callback cannot be
             # selected again by events emitted later in this invocation.
@@ -5574,9 +5578,6 @@ class BlackboardWorkflowRuntime:
             ):
                 payload = record["data"]
                 self._dispatch_workflow_event(str(payload.get("event_type", "")), payload)
-        integration_result = self._run_integration_boundary(start_step=start_step)
-        if integration_result is not None:
-            return self._finalize_observed_result(integration_result)
         recovered_feedback_delivery = self._try_reconcile_pending_feedback_delivery()
         if (
             recovered_feedback_delivery is not None
@@ -5701,6 +5702,18 @@ class BlackboardWorkflowRuntime:
             runtime="owner_dispatch",
         )
         if owned_result is not None:
+            target = self.blackboard.current_step
+            if (
+                not owned_result.completed
+                and target in self.steps
+                and target != current_step
+                and self.steps[current_step].get("assignee_type") == "auto"
+                and self.steps[target].get("assignee_type") in {"human", "auto"}
+                and max_transitions > 1
+            ):
+                return self._run_from_current_step(
+                    current_step=target, max_transitions=max_transitions - 1
+                )
             return owned_result
 
         if not self._is_baton_driven_step(current_step):

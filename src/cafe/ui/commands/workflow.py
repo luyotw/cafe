@@ -6,6 +6,7 @@ import inspect
 import os
 import subprocess
 import sys
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -705,6 +706,7 @@ def workflow(
     validated_worker_id: str | None = None
     worker_exit_status = "stopped"
     worker_exit_error: str | None = None
+    ownership_stack = ExitStack()
     launch_store: WorkerLaunchStore | None = None
     try:
 
@@ -773,34 +775,6 @@ def workflow(
             )
             console.print(format_text_report(analyze_playbook(model)))
             return
-        if (playbook_data.get("integration") and not background and not internal_worker_id
-                and not internal_worker_token and on_workflow_event is None
-                and supplied_locale is None and requested_locale_change is None):
-            from cafe.core.integration import integration_service
-            from cafe.ui.commands.integration import _no_agent_executor
-            integration_board = BlackboardStore(issue_dir).load_read_only()
-            integration = integration_service(issue_dir, playbook_data, integration_board)
-            position = start_step if isinstance(start_step, str) else integration_board.current_step
-            if position == "user" and integration_board.handoff_contract is not None:
-                position = integration_board.handoff_contract.from_step
-            if position in {integration.declaration.selection_step, integration.declaration.action_step, "done"}:
-                def run_native_integration():
-                    native_runtime = BlackboardWorkflowRuntime(
-                        issue_dir=issue_dir, playbook=playbook_data,
-                        executor=_no_agent_executor,
-                    )
-                    return native_runtime.run(
-                        start_step=start_step if isinstance(start_step, str) else None,
-                        single_step=single_step,
-                    )
-
-                native_result = WorkflowHost(issue_dir).run(
-                    run_native_integration, hosting="foreground",
-                ).result
-                console.print(f"Integration {'completed' if native_result.completed else 'pending'}: {native_result.final_status_code}")
-                if native_result.detail:
-                    console.print(native_result.detail)
-                return
         launch_store = WorkerLaunchStore(issue_dir)
         has_internal_worker_context = bool(internal_worker_id or internal_worker_token)
         if has_internal_worker_context:
@@ -853,6 +827,9 @@ def workflow(
             console.print(f"[green]Workflow background worker started[/green] pid={pid}")
 
         tty_interactive = sys.stdin.isatty() or os.getenv("CAFE_FORCE_INTERACTIVE") == "1"
+        if not background:
+            ownership_stack.enter_context(WorkflowHost(issue_dir).ownership())
+
         generic_phase = GenericPhase(SkillLoader())
 
         entry_point = str(
@@ -1071,22 +1048,21 @@ def workflow(
                         f"[yellow]Detected external workflow feedback[/yellow] step={external_step}"
                     )
                     continue
-            terminal_callback_resume = (
-                active_step == "done"
+            terminal_callback_resume = active_step == "done" and not interactive
+            contract = blackboard.handoff_contract
+            native_resume = (
+                active_step == "user"
                 and not interactive
-                and validated_worker_id is not None
-                and callback_binding is not None
+                and not user_input
+                and contract is not None
+                and playbook_data.get("steps", {}).get(contract.from_step, {}).get("resume_intent")
+                is not None
             )
-            if active_step in {"user", "done"} and not terminal_callback_resume:
-                if active_step == "done" and not interactive:
-                    from cafe.core.integration import integration_service
-                    integration = integration_service(issue_dir, playbook_data, resume_blackboard)
-                    if integration is not None and not integration.completion_allowed(completed=True):
-                        console.print("[red]Integration completion proof is missing or invalid; run cafe integration status and verify[/red]")
-                        raise typer.Exit(1)
-                    console.print("[green]Workflow already completed[/green] step=done")
-                    console.print("[yellow]Workflow is waiting for user input[/yellow] step=user")
-                    return
+            if (
+                active_step in {"user", "done"}
+                and not terminal_callback_resume
+                and not native_resume
+            ):
                 # A validated callback worker observes done through the runtime
                 # below so the durable terminal callback follows the same path
                 # as every other workflow completion. Terminal observations are
@@ -1283,18 +1259,7 @@ def workflow(
             def run_composed_workflow():
                 return runner.run(start_step=pending_start_step, single_step=single_step)
 
-            host = WorkflowHost(issue_dir)
-            if validated_worker_id is not None:
-                result = host.run_worker(
-                    run_composed_workflow,
-                    worker_id=validated_worker_id,
-                    hosting="background",
-                ).result
-            else:
-                result = host.run(
-                    run_composed_workflow,
-                    hosting="foreground",
-                ).result
+            result = run_composed_workflow()
             latest_blackboard = BlackboardStore(issue_dir).load_or_create(
                 str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
                 playbook_id=str(playbook_data["playbook"]["id"]),
@@ -1400,6 +1365,7 @@ def workflow(
                 worker_exit_status,
                 error_code=worker_exit_error,
             )
+        ownership_stack.close()
 
 
 def _dispatch_interruption_callback(runtime: Any, error: Exception) -> None:

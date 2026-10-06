@@ -2690,20 +2690,15 @@ def integration_playbook_data():
     return {
         "playbook": {"id": "custom-delivery"},
         "roles": {"operator": {}},
+        "terminal_prerequisite": "verified_delivery",
         "integration": {
             "review_step": "judgement",
             "review_task": "accept-delivery",
             "accepted_decisions": ["ship"],
             "source_artifact": "reviewed-tree",
-            "source_step": "build",
             "delivery_artifact": "proposal",
-            "delivery_step": "package",
             "selection_step": "destination",
             "selection_task": "choose",
-            "action_step": "delivery",
-            "action_task": "human-delivery",
-            "correction_step": "build",
-            "verified_continuation": "_done",
         },
         "steps": {
             "build": {
@@ -2727,6 +2722,7 @@ def integration_playbook_data():
                     {
                         "trigger": "confirm_output",
                         "task_id": "accept-delivery",
+                        "context_contract": "reviewed_delivery",
                         "outcomes": {"ship": "destination", "fix": "build"},
                     }
                 ],
@@ -2740,6 +2736,7 @@ def integration_playbook_data():
                     {
                         "trigger": "initial",
                         "task_id": "choose",
+                        "context_contract": "delivery_destination",
                         "outcomes": {"confirm": "delivery", "revise": "destination"},
                     }
                 ],
@@ -2749,18 +2746,31 @@ def integration_playbook_data():
                 "role": "operator",
                 "skill": "custom",
                 "assignee_type": "human",
-                "on": {"await_agent": "_done"},
+                "on": {"await_agent": "inspect"},
+                "resume_intent": "await_agent",
                 "human_tasks": [
                     {
                         "trigger": "initial",
                         "task_id": "human-delivery",
+                        "context_contract": "delivery_action",
                         "outcomes": {
-                            "performed": "delivery",
-                            "already_performed": "delivery",
-                            "blocked": "delivery",
+                            "performed": "inspect",
+                            "already_performed": "inspect",
+                            "blocked": "inspect",
                         },
                     }
                 ],
+            },
+            "inspect": {
+                "role": "operator",
+                "skill": "custom",
+                "assignee_type": "auto",
+                "automatic": {"executor": "verify_delivery", "inputs": {}},
+                "on": {
+                    "workflow_complete": "_done",
+                    "need_permission": "delivery",
+                    "manual_handoff": "build",
+                },
             },
         },
     }
@@ -2772,6 +2782,7 @@ def test_integration_declaration_preserves_custom_relationships():
     assert model.integration.source_artifact == "reviewed-tree"
     data = integration_playbook_data()
     del data["integration"]
+    del data["terminal_prerequisite"]
     assert PlaybookDefinition.model_validate(data).integration is None
 
 
@@ -2794,7 +2805,7 @@ def test_integration_declaration_rejects_unknown_or_executable_relationships(fie
 
 def test_integration_correction_requires_a_declared_action_route():
     data = integration_playbook_data()
-    data["steps"]["delivery"].pop("allowed_goto", None)
+    data["steps"]["inspect"]["on"].pop("manual_handoff")
     with pytest.raises(ValueError):
         PlaybookDefinition.model_validate(data)
 

@@ -149,6 +149,7 @@ steps:
     human_tasks:
       - trigger: confirm_output
         task_id: local-review
+        context_contract: reviewed_delivery
         outcomes: {fix_now: pr, create_follow_up: destination, continue_without_issue: destination}
         feedback_delivery: {artifact: workflow_feedback, source_kind: local_review, todo_source: workflow_feedback, todo_id_prefix: WF}
     "on": {confirm_output: pr, need_permission: pr, manual_handoff: develop}
@@ -159,7 +160,7 @@ steps:
     assignee_type: human
     input_artifacts: [workspace, pr_result, workflow_feedback]
     human_tasks:
-      - {trigger: initial, task_id: integration-destination, outcomes: {confirm: integrate, revise: destination}}
+      - {trigger: initial, task_id: integration-destination, context_contract: delivery_destination, outcomes: {confirm: integrate, revise: destination}}
     "on": {await_agent: integrate}
 
   integrate:
@@ -169,22 +170,26 @@ steps:
     input_artifacts: [workspace, pr_result]
     allowed_goto: [develop]
     human_tasks:
-      - {trigger: initial, task_id: human-integration, outcomes: {performed: integrate, already_performed: integrate, blocked: integrate}}
-    "on": {workflow_complete: _done}
+      - {trigger: initial, task_id: human-integration, context_contract: delivery_action, outcomes: {performed: verify_delivery, already_performed: verify_delivery, blocked: verify_delivery}}
+    resume_intent: await_agent
+    "on": {await_agent: verify_delivery}
+
+  verify_delivery:
+    skill: cafe-integrate
+    role: developer
+    assignee_type: auto
+    automatic: {executor: verify_delivery, inputs: {}}
+    "on": {workflow_complete: _done, need_permission: integrate, manual_handoff: develop}
+
+terminal_prerequisite: verified_delivery
 
 integration:
   review_step: pr
   review_task: local-review
   accepted_decisions: [create_follow_up, continue_without_issue]
   source_artifact: workspace
-  source_step: develop
   delivery_artifact: pr_result
-  delivery_step: pr
   selection_step: destination
   selection_task: integration-destination
-  action_step: integrate
-  action_task: human-integration
-  correction_step: develop
-  verified_continuation: _done
 
 entry_point: spec

@@ -13,15 +13,9 @@ def declaration():
         review_task="accept-delivery",
         accepted_decisions=["ship"],
         source_artifact="reviewed-tree",
-        source_step="build",
         delivery_artifact="proposal",
-        delivery_step="package",
         selection_step="destination",
         selection_task="choose",
-        action_step="delivery",
-        action_task="human-delivery",
-        correction_step="build",
-        verified_continuation="_done",
     )
 
 

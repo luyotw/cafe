@@ -18,7 +18,12 @@ from cafe.core.blackboard import (
     HandoffOwner,
 )
 from cafe.core.capability_approvals import CapabilityApprovalService
-from cafe.core.integration import integration_service
+from cafe.core.workflow_contracts import (
+    WorkflowHostContext,
+    validate_task_context,
+    task_context_matches_handoff,
+    publish_terminal,
+)
 from cafe.core.human_task_records import (
     HumanTask,
     HumanTaskCorrelationError,
@@ -752,9 +757,10 @@ def durable_task_matches_current_handoff(task: HumanTask, blackboard: Any) -> bo
             contract.created_at,
         )
     )
-    if task.handoff_key.startswith(f"integration:{task.workflow_id}:"):
-        return (task.status is HumanTaskStatus.PENDING and task.trigger == "initial"
-                and contract.intent is HandoffIntent.MANUAL_HANDOFF)
+    if task.context:
+        return task.status is HumanTaskStatus.PENDING and task_context_matches_handoff(
+            task, contract, current_key
+        )
     if task.handoff_key.startswith("user-handoff:"):
         # Human-owned and hybrid tasks intentionally use a generic
         # ``manual_handoff`` contract while retaining ``initial`` or the
@@ -895,10 +901,13 @@ def _apply_human_task_payload(
             raw_payload,
             questions=questions,
         )
-    integration = integration_service(issue_dir, playbook_data, blackboard, record_store)
-    if integration is not None and durable_task is not None:
+    if durable_task is not None:
         try:
-            integration.associate(durable_task)
+            validate_task_context(
+                WorkflowHostContext(issue_dir, blackboard.workflow_id, from_step),
+                durable_task,
+                task_store=record_store,
+            )
         except (ValueError, OSError) as exc:
             return _durable_task_routing_rejection(
                 issue_dir=issue_dir, blackboard=blackboard, task_id=durable_task.id, message=str(exc),
@@ -1186,10 +1195,14 @@ def _apply_human_task_payload(
                 )
                 return HumanTaskApplication(target=None, policy=policy, rejection=rejection)
 
-    integration = integration_service(issue_dir, playbook_data, blackboard, record_store)
-    if integration is not None and durable_task is not None and durable_result is not None:
+    if durable_task is not None and durable_result is not None:
         try:
-            integration.apply_result(durable_task, durable_result)
+            validate_task_context(
+                WorkflowHostContext(issue_dir, blackboard.workflow_id, from_step),
+                durable_task,
+                durable_result,
+                task_store=record_store,
+            )
         except (OSError, ValueError) as exc:
             return _durable_task_routing_rejection(
                 issue_dir=issue_dir, blackboard=blackboard, task_id=durable_task.id,
@@ -1313,16 +1326,21 @@ def _apply_human_task_payload(
             text="\n\n".join(input_parts),
         )
     is_done = continuation == "_done"
-    if is_done and integration is not None:
-        if not integration.completion_allowed():
-            return _durable_task_routing_rejection(
-                issue_dir=issue_dir, blackboard=blackboard,
-                task_id=durable_task.id if durable_task is not None else policy.id,
-                message="Durable current integration verification is required before completion",
+    if is_done:
+        try:
+            publish_terminal(
+                WorkflowHostContext(issue_dir, blackboard.workflow_id, from_step),
+                playbook_data.get("terminal_prerequisite"),
+                None,
+                None,
             )
-        # A task result itself cannot publish integration-required completion.
-        continuation = integration.declaration.action_step
-        is_done = False
+        except (ValueError, OSError) as exc:
+            return _durable_task_routing_rejection(
+                issue_dir=issue_dir,
+                blackboard=blackboard,
+                task_id=durable_task.id if durable_task is not None else policy.id,
+                message=str(exc),
+            )
     playbook_steps = playbook_data.get("steps", {})
     from_step_def = playbook_steps.get(from_step, {}) if isinstance(playbook_steps, Mapping) else {}
     if (

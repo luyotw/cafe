@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import errno
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Any, Callable
@@ -90,11 +91,17 @@ class WorkflowHost:
     ) -> HostRunResult:
         if hosting not in {"foreground", "background"}:
             raise ValueError("hosting must be 'foreground' or 'background'")
+        with self.ownership():
+            identity = worker_id or str(uuid.uuid4())
+            return HostRunResult(hosting=hosting, worker_id=identity, result=runtime())
+
+    @contextmanager
+    def ownership(self):
+        """Hold the single-writer boundary across caller setup and execution."""
         process_lock = _try_advancement_process_lock(self.advancement_lock_path)
         if process_lock is None:
             raise WorkerAlreadyRunningError("workflow advancement is owned by another worker")
         try:
-            identity = worker_id or str(uuid.uuid4())
-            return HostRunResult(hosting=hosting, worker_id=identity, result=runtime())
+            yield
         finally:
             _release_advancement_process_lock(process_lock)

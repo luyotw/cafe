@@ -151,7 +151,7 @@ def test_report_then_native_verification_completes_only_with_durable_proof(
     journey.runtime().run()
     action = journey.pending()
     assert action.step == "land"
-    assert journey.complete("performed").target == "land"
+    assert journey.complete("performed").target == "inspect"
     assert journey.state().current_step != "done"
     failed = journey.runtime().run()
     assert not failed.completed
@@ -530,10 +530,22 @@ def test_changed_source_at_final_publication_never_completes(
         )
         assert not result.completed
     state = journey.state()
-    assert state.current_step == "forge"
+    assert state.current_step != "done"
     assert not journey.service().completion_allowed(completed=True)
+    # Every direct/recovery entry re-enters the declared automatic owner.
+    # The verifier then produces the ordinary graph's renewed-review outcome.
+    result = journey.runtime().run()
+    assert not result.completed
+    state = journey.state()
+    if state.current_step != "forge":
+        assert not journey.runtime().run().completed
+        state = journey.state()
+    assert state.current_step == "forge"
     assert state.handoff_contract.to_step == "forge"
-    assert state.events[-1].event_type == "integration_review_required"
+    assert any(
+        e.event_type == "automatic_step_completed" and e.data.get("intent") == "manual_handoff"
+        for e in state.events
+    )
 
 
 @pytest.mark.parametrize("target", ["local_branch", "github_pr"])

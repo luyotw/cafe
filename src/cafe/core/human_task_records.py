@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import threading
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -64,6 +64,7 @@ class HumanTask:
     continuations: dict[str, str]
     status: HumanTaskStatus
     created_at: str
+    context: dict[str, str] = field(default_factory=dict)
     capability_approval: Optional[dict[str, Any]] = None
     completed_at: Optional[str] = None
     cancelled_at: Optional[str] = None
@@ -83,6 +84,7 @@ class HumanTask:
             "continuations": dict(self.continuations),
             "status": self.status.value,
             "created_at": self.created_at,
+            "context": dict(self.context),
             "capability_approval": (
                 dict(self.capability_approval) if self.capability_approval is not None else None
             ),
@@ -107,6 +109,7 @@ class HumanTask:
                 continuations=_string_mapping(data, "continuations"),
                 status=HumanTaskStatus(_required_text(data, "status")),
                 created_at=_required_text(data, "created_at"),
+                context=_bounded_task_context(data.get("context", {})),
                 capability_approval=(
                     _mapping(data, "capability_approval")
                     if data.get("capability_approval") is not None
@@ -413,6 +416,7 @@ class HumanTaskRecordStore:
         assignee_id: Optional[str] = None,
         capability_approval: Optional[Mapping[str, Any]] = None,
         handoff_key: Optional[str] = None,
+        context: Optional[Mapping[str, str]] = None,
         superseded_task_ids: Sequence[str] = (),
     ) -> HumanTask:
         return self.materialize_with_status(
@@ -428,6 +432,7 @@ class HumanTaskRecordStore:
             assignee_id=assignee_id,
             capability_approval=capability_approval,
             handoff_key=handoff_key,
+            context=context,
             superseded_task_ids=superseded_task_ids,
         ).task
 
@@ -446,6 +451,7 @@ class HumanTaskRecordStore:
         assignee_id: Optional[str] = None,
         capability_approval: Optional[Mapping[str, Any]] = None,
         handoff_key: Optional[str] = None,
+        context: Optional[Mapping[str, str]] = None,
         superseded_task_ids: Sequence[str] = (),
     ) -> HumanTaskMaterialization:
         with self.transaction():
@@ -485,6 +491,7 @@ class HumanTaskRecordStore:
                 status=HumanTaskStatus.PENDING,
                 created_at=now,
                 capability_approval=capability_metadata,
+                context=_bounded_task_context(context or {}),
             )
             envelope.tasks[task.id] = task
             envelope.assignments[task.id] = Assignment(
@@ -563,6 +570,7 @@ class HumanTaskRecordStore:
         prompt: str,
         expected_result: Mapping[str, Any],
         continuations: Mapping[str, str],
+        context: Optional[Mapping[str, str]] = None,
     ) -> HumanTask:
         """Atomically apply one compatible runtime-policy update to an active task."""
         with self.transaction():
@@ -583,6 +591,7 @@ class HumanTaskRecordStore:
                 prompt=_text(prompt, "prompt"),
                 expected_result=dict(expected_result),
                 continuations=_string_mapping_value(continuations, "continuations"),
+                context=task.context if context is None else _bounded_task_context(context),
             )
             if refreshed == task:
                 return task
@@ -913,3 +922,14 @@ def _positive(value: Any, field_name: str) -> int:
     if not isinstance(value, int) or value < 1:
         raise ValueError(f"{field_name} must be a positive integer")
     return value
+
+
+def _bounded_task_context(value: Mapping[str, Any]) -> dict[str, str]:
+    if not isinstance(value, Mapping) or len(value) > 8:
+        raise ValueError("Task context must be a bounded object")
+    if any(
+        not isinstance(key, str) or not isinstance(item, str) or len(key) > 64 or len(item) > 512
+        for key, item in value.items()
+    ):
+        raise ValueError("Task context must contain bounded string identities")
+    return _string_mapping_value(value, "context")

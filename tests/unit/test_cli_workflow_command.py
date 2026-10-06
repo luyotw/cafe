@@ -587,28 +587,19 @@ def test_single_step_uses_the_mode_neutral_core_in_the_foreground(
         encoding="utf-8",
     )
     captured: dict[str, object] = {}
+    from cafe.workflow_execution.workflow_hosting import WorkflowHost, WorkerAlreadyRunningError
 
     class FakeExecutor:
         def execute_step(self, step_name, step_def, blackboard_state, **kwargs):
+            with pytest.raises(WorkerAlreadyRunningError):
+                WorkflowHost(issue_dir).run(lambda: None, hosting="foreground")
+            captured["host_locked"] = True
             captured["has_validated_pr_auto_create"] = "validated_pr_auto_create" in kwargs
             return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
-
-    class CapturingWorkflowHost:
-        def __init__(self, issue_dir) -> None:
-            captured["host_issue_dir"] = issue_dir
-
-        def run(self, runtime, *, hosting):
-            captured["hosting"] = hosting
-            return SimpleNamespace(result=runtime())
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
         patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
-        patch(
-            "cafe.ui.commands.workflow.WorkflowHost",
-            CapturingWorkflowHost,
-            create=True,
-        ),
     ):
         git = MagicMock()
         git.get_current_branch.return_value = "issue-v2-public"
@@ -620,7 +611,7 @@ def test_single_step_uses_the_mode_neutral_core_in_the_foreground(
         )
 
     assert result.exit_code == 0, (result.stdout, result.exception)
-    assert captured["hosting"] == "foreground"
+    assert captured["host_locked"] is True
     assert captured["has_validated_pr_auto_create"] is False
 
 
