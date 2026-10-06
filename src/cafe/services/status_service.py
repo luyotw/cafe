@@ -12,6 +12,7 @@ import yaml
 from cafe.core.audit_events import AuditEventStore
 from cafe.core.blackboard import (
     BlackboardState,
+    BlackboardStore,
     EventEntry,
     HandoffContract,
     HandoffIntent,
@@ -139,6 +140,23 @@ class StatusService:
         })
         return status
 
+    def load_integration_status(self, issue_name: str) -> Dict[str, Any]:
+        """Expose the neutral delivery projection without inspection or repair."""
+        from cafe.catalogs.resolver import filesystem_project_roots
+        from cafe.core.integration import integration_service
+        from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
+        issue_dir = self.issues_root / issue_name
+        try:
+            board = BlackboardStore(issue_dir).load_read_only()
+            playbook = PlaybookLoader(project_root=self.issues_root.parent.parent,
+                                      read_only=True, resolve_presentation=False,
+                                      project_roots=filesystem_project_roots(self.issues_root.parent.parent)).load(board.playbook_id)
+            playbook = apply_issue_playbook_overrides(playbook, issue_dir / "issue.yaml")
+            service = integration_service(issue_dir, playbook, board)
+            return service.status() if service is not None else {"state": "not_required"}
+        except (OSError, ValueError) as exc:
+            return {"state": "unavailable", "reason": str(exc), "completed": False}
+
     def load_current_state(self, issue_name: str, phase_names: List[str]) -> Dict[str, str]:
         """Project the current handoff and task without creating or repairing records."""
         issue_dir = self.issues_root / issue_name
@@ -154,6 +172,9 @@ class StatusService:
             state = BlackboardState.from_dict(raw, initial_step=raw["current_step"])
             audit = AuditEventStore(issue_dir)
             status["Workflow"] = state.workflow_id
+            if (issue_dir / "integration.json").is_file():
+                projection = self.load_integration_status(issue_name)
+                status["Integration"] = projection["state"]
             source = issue_dir / "next_step.txt"
             baton = HandoffContract.from_dict_with_current_step(
                 json.loads(source.read_text(encoding="utf-8")), current_step=state.current_step

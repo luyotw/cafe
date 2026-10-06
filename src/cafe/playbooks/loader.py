@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
-from cafe.catalogs.resolver import CatalogKind, CatalogResolver, global_catalog_lock
+from cafe.catalogs.resolver import CatalogKind, CatalogResolver, ProjectRoots, global_catalog_lock
 from cafe.core.playbook import LoadedPlaybook, load_playbook_file
 from cafe.skills.loader import SkillLoader
 from cafe.utils.yaml_utils import safe_load
@@ -97,6 +97,7 @@ class PlaybookLoader:
         builtin_root: Optional[Path] = None,
         resolve_presentation: bool = True,
         read_only: bool = False,
+        project_roots: Optional[ProjectRoots] = None,
     ) -> None:
         self.resolve_presentation = resolve_presentation
         self.resolver = CatalogResolver(
@@ -104,8 +105,10 @@ class PlaybookLoader:
             global_root=global_root,
             builtin_root=builtin_root,
             read_only=read_only,
+            project_roots=project_roots,
         )
         self.read_only = read_only
+        self.project_roots = project_roots
         self.project_root = self.resolver.project_root
         self.global_root = self.resolver.global_root
         self.builtin_root = self.resolver.builtin_root
@@ -144,6 +147,7 @@ class PlaybookLoader:
                 builtin_root=self.builtin_root,
                 resolve_presentation=self.resolve_presentation,
                 read_only=self.read_only,
+                project_roots=self.project_roots,
             )
             skill_loader.discover(strict=strict)
             return load_playbook_file(

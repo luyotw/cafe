@@ -773,6 +773,25 @@ def workflow(
             )
             console.print(format_text_report(analyze_playbook(model)))
             return
+        if (playbook_data.get("integration") and not background and not internal_worker_id
+                and not internal_worker_token and on_workflow_event is None
+                and supplied_locale is None and requested_locale_change is None):
+            from cafe.core.integration import integration_service
+            from cafe.ui.commands.integration import _no_agent_executor
+            integration_board = BlackboardStore(issue_dir).load_read_only()
+            integration = integration_service(issue_dir, playbook_data, integration_board)
+            position = start_step if isinstance(start_step, str) else integration_board.current_step
+            if position == "user" and integration_board.handoff_contract is not None:
+                position = integration_board.handoff_contract.from_step
+            if position in {integration.declaration.selection_step, integration.declaration.action_step, "done"}:
+                native_runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook_data,
+                                                            executor=_no_agent_executor)
+                native_result = native_runtime.run(start_step=start_step if isinstance(start_step, str) else None,
+                                                   single_step=single_step)
+                console.print(f"Integration {'completed' if native_result.completed else 'pending'}: {native_result.final_status_code}")
+                if native_result.detail:
+                    console.print(native_result.detail)
+                return
         launch_store = WorkerLaunchStore(issue_dir)
         has_internal_worker_context = bool(internal_worker_id or internal_worker_token)
         if has_internal_worker_context:

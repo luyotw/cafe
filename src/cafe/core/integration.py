@@ -176,13 +176,22 @@ class IntegrationService:
         delivery, prepared = self._artifact(d.delivery_artifact, d.delivery_step)
         branch = GitOperations(source["repository"]).get_current_branch()
         valid_branch(branch)
-        receipts = [
-            r
-            for r in self.blackboard.capability_receipts
-            if r.get("capability") == "cafe.pr.publish"
-            and r.get("success") is True
-            and r.get("step") == d.delivery_step
-        ]
+
+        def receipt_matches(receipt: dict[str, Any]) -> bool:
+            if receipt.get("capability") != "cafe.pr.publish" or receipt.get("success") is not True:
+                return False
+            output = (receipt.get("inputs") or {}).get("output")
+            if not isinstance(output, str):
+                return False
+            published_path = Path(output)
+            if not published_path.is_absolute():
+                published_path = self.issue_dir.parent.parent.parent / published_path
+            delivery_path = Path(delivery["path"])
+            if not delivery_path.is_absolute():
+                delivery_path = self.issue_dir.parent.parent.parent / delivery_path
+            return published_path.resolve() == delivery_path.resolve()
+
+        receipts = [r for r in self.blackboard.capability_receipts if receipt_matches(r)]
         publication = receipts[-1] if receipts else None
         self.records.stage_review(
             task_id,
@@ -318,14 +327,17 @@ class IntegrationService:
             raise IntegrationError("Stage an explicit destination with cafe integration select")
         if kind == "action" and selected["confirmation"] is None:
             raise IntegrationError("Confirm the destination task before human integration")
-        context = json.dumps(selected["selection"], sort_keys=True, ensure_ascii=False)
-        action = (
-            "Confirm this exact destination."
-            if kind == "confirmation"
-            else "A human must integrate this approved source. Report performed, already_performed or blocked; CAFE only verifies."
+        context = json.dumps(
+            {
+                "selection_revision": selected["revision"],
+                "destination": selected["selection"],
+                "accepted_review": selected["review"],
+            },
+            sort_keys=True,
+            ensure_ascii=False,
         )
         return (
-            f"{prompt}\n\n{action}\n{context}\nSelection revision: {selected['revision']}",
+            f"{prompt}\n\n{context}",
             f"integration:{self.blackboard.workflow_id}:{selected['revision']}:{kind}",
         )
 
@@ -443,6 +455,95 @@ class IntegrationService:
                 "observed": observed,
             },
         )
+
+    def status(self) -> dict[str, Any]:
+        """Pure projection: read durable facts without Git, network or reconciliation."""
+        record = self.records.read()
+        selected = self.records.current(record)
+        review = None
+        try:
+            accepted, _ = self.review()
+            review = accepted.model_dump(mode="json")
+        except ValueError:
+            pass
+        reports = [
+            r for r in record["reports"] if selected and r["revision"] == selected["revision"]
+        ]
+        attempts = [
+            a for a in record["attempts"] if selected and a["revision"] == selected["revision"]
+        ]
+        report = reports[-1] if reports else None
+        proof = attempts[-1] if attempts else None
+        state, reason, action = (
+            "awaiting_review",
+            "Accepted source review is required",
+            "Complete the declared review task",
+        )
+        if review is not None:
+            state, reason, action = (
+                "review_accepted",
+                "Choose an explicit destination",
+                "cafe integration select",
+            )
+        if selected:
+            state, reason, action = (
+                "pending_confirmation",
+                "Destination proposal awaits human confirmation",
+                "cafe task inspect",
+            )
+            if selected["confirmation"]:
+                state, reason, action = (
+                    "pending_action",
+                    "Human integration is required",
+                    "cafe task inspect",
+                )
+            if report:
+                state = (
+                    "blocked" if report["outcome"] == "blocked" else "reported_pending_verification"
+                )
+                reason = (
+                    "Human reported a conflict or inability to integrate"
+                    if state == "blocked"
+                    else "Human report awaits read-only proof"
+                )
+                action = (
+                    "Resolve human work, then cafe integration verify"
+                    if state == "blocked"
+                    else "cafe integration verify"
+                )
+            if proof and (report is None or proof.get("report_result_id") == report["result_id"]):
+                state, reason, action = (
+                    "verification_failed",
+                    proof["reason"],
+                    "cafe integration verify",
+                )
+                if self.completion_allowed():
+                    state, action = "verified", "cafe workflow --execute"
+            if review != selected["review"]:
+                state, reason, action = (
+                    "review_required",
+                    "Current source review no longer matches selection",
+                    "Resume the declared correction/review journey",
+                )
+        completed = self.blackboard.current_step == "done" and self.completion_allowed(
+            completed=True
+        )
+        if completed:
+            action = "No remaining integration work"
+        return {
+            "state": state,
+            "workflow_id": self.blackboard.workflow_id,
+            "review": review,
+            "selection": selected["selection"] if selected else None,
+            "selection_revision": selected["revision"] if selected else None,
+            "confirmed": bool(selected and selected["confirmation"]),
+            "task_ids": selected["tasks"] if selected else {},
+            "report": report,
+            "proof": proof,
+            "reason": reason,
+            "next_action": action,
+            "completed": completed,
+        }
 
     def completion_allowed(self, *, completed: bool = False) -> bool:
         try:

@@ -1602,8 +1602,8 @@ def _validate_prepare_metadata(
     """Validate prepare metadata templates, rigor constraints, and declarative fields."""
     prepare = resolve_prepare_config(model)
     declared_prepare = model.commands.prepare if model.commands else None
-    spec_manager = TemplateManager(template_type="spec")
-    plan_manager = TemplateManager(template_type="plan")
+    spec_manager = TemplateManager(template_type="spec", skill_loader=skill_loader)
+    plan_manager = TemplateManager(template_type="plan", skill_loader=skill_loader)
     template_managers = declared_template_managers(model, skill_loader)
 
     parsed_fields = resolve_prepare_fields(

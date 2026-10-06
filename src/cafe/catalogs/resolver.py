@@ -194,6 +194,30 @@ def discover_project_roots(start: Path, *, git_runner: GitRunner = _run_git) -> 
         return ProjectRoots(active=root, canonical=root)
 
 
+
+def filesystem_project_roots(start: Path) -> ProjectRoots:
+    """Resolve ordinary and linked worktree metadata for process-free projections.
+
+    Explicit read-only consumers use these roots with the existing catalog
+    precedence and validation. Default execution discovery remains unchanged.
+    """
+    start = Path(start).resolve()
+    for active in (start, *start.parents):
+        marker = active / ".git"
+        if marker.is_dir():
+            return ProjectRoots(active=active, canonical=active, git_discovered=True)
+        if marker.is_file():
+            text = marker.read_text(encoding="utf-8").strip()
+            if not text.startswith("gitdir: "):
+                raise ValueError("Invalid linked-worktree Git metadata")
+            git_dir = (active / text[8:]).resolve()
+            common_file = git_dir / "commondir"
+            common = (git_dir / common_file.read_text(encoding="utf-8").strip()).resolve() if common_file.is_file() else git_dir
+            return ProjectRoots(active=active, canonical=common.parent if common.name == ".git" else active,
+                                git_discovered=True)
+    root = _nearest_project_root(start)
+    return ProjectRoots(active=root, canonical=root)
+
 def content_digest(
     path: Path,
     *,
@@ -384,10 +408,11 @@ class CatalogResolver:
         builtin_root: Optional[Path] = None,
         git_runner: GitRunner = _run_git,
         read_only: bool = False,
+        project_roots: Optional[ProjectRoots] = None,
     ) -> None:
         self.read_only = read_only
         requested_root = Path(project_root).resolve() if project_root else None
-        roots = discover_project_roots(requested_root or Path.cwd(), git_runner=git_runner)
+        roots = project_roots or discover_project_roots(requested_root or Path.cwd(), git_runner=git_runner)
         self.project_root = (
             roots.active if roots.git_discovered or requested_root is None else requested_root
         )

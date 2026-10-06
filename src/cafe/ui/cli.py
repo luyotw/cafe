@@ -18,6 +18,7 @@ from cafe.ui.commands import lifecycle as lifecycle_commands
 from cafe.ui.commands import issues as issues_commands
 from cafe.ui.commands import templates as template_commands
 from cafe.ui.commands import catalog as catalog_commands
+from cafe.ui.commands import integration as integration_commands
 from cafe.ui.commands import tasks as task_commands
 from cafe.ui.commands import workflow as workflow_commands
 from cafe.ui.commands import audit as audit_commands
@@ -817,6 +818,7 @@ workflow = workflow_commands.workflow
 app.add_typer(constraints_app, name="constraints")
 app.add_typer(template_commands.template_app, name="template")
 app.add_typer(task_commands.task_app, name="task")
+app.add_typer(integration_commands.integration_app, name="integration")
 
 # Backward-compatible alias for TEMPLATE_TYPES (now defined in templates module)
 TEMPLATE_TYPES = template_commands.TEMPLATE_TYPES

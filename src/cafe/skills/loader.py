@@ -13,6 +13,7 @@ from cafe.catalogs.resolver import (
     CatalogEntry,
     CatalogKind,
     CatalogResolver,
+    ProjectRoots,
     global_catalog_lock,
 )
 from cafe.core.runtime_locales import owner_catalog_renderer
@@ -137,12 +138,14 @@ class SkillLoader:
         builtin_root: Optional[Path] = None,
         resolve_presentation: bool = True,
         read_only: bool = False,
+        project_roots: Optional[ProjectRoots] = None,
     ) -> None:
         self.resolver = CatalogResolver(
             project_root=project_root,
             global_root=global_root,
             builtin_root=builtin_root,
             read_only=read_only,
+            project_roots=project_roots,
         )
         self.read_only = read_only
         self.project_root = self.resolver.project_root

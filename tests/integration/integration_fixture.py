@@ -177,6 +177,18 @@ def create_journey(root: Path, monkeypatch):
             ArtifactEntry(name=name, updated_by=producer, path=str(path), kind=kind, version=1),
         )
 
+    board_store.append_capability_receipt(
+        board,
+        dict(
+            capability="cafe.pr.publish",
+            success=True,
+            inputs=dict(output=str(prepared_file)),
+            outputs=dict(pr_url="https://github.com/owner/repo/pull/17", pr_number="17"),
+            correlation_id="fixture-publication",
+            finished_at="2026-10-06T00:00:00+00:00",
+        ),
+    )
+
     class Journey:
         def __init__(self):
             self.root, self.issue_dir, self.playbook, self.source, self.base = (
@@ -231,18 +243,6 @@ def create_journey(root: Path, monkeypatch):
 
         def select(self, target="local_branch"):
             if target == "github_pr":
-                snapshot = self.service().records.read()["reviews"]
-                # Fixture publication is an existing trusted receipt, never a network mutation.
-                with self.service().records.transaction() as record:
-                    for value in record["reviews"].values():
-                        value["publication"] = dict(
-                            capability="cafe.pr.publish",
-                            success=True,
-                            step="package",
-                            outputs=dict(
-                                pr_url="https://github.com/owner/repo/pull/17", pr_number=17
-                            ),
-                        )
                 return self.service().propose(
                     target=target, repository="owner/repo", target_branch="main", pr=17
                 )
