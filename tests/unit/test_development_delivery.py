@@ -155,8 +155,11 @@ def test_registered_capability_requires_host_approval(tmp_path):
     assert run.receipt["outcome"] == "approval_required"
 
 
-def test_pending_or_lost_response_is_not_success(tmp_path, monkeypatch):
-    from cafe.delivery.operations import Commands, execute_action
+@pytest.mark.parametrize("timed_out", [False, True])
+def test_pending_or_lost_response_retains_process_evidence_after_reconciliation(
+    tmp_path, monkeypatch, timed_out
+):
+    from cafe.delivery.operations import Commands, OperationError, execute_action
 
     p = proposal()
     snapshot = approve_selection(p, authority(p, "integrate_only", ""))
@@ -169,13 +172,15 @@ def test_pending_or_lost_response_is_not_success(tmp_path, monkeypatch):
         return p.source_oid if args[0] == "rev-parse" else p.source_branch
 
     monkeypatch.setattr(Commands, "git", git)
+    remote = {"merged": False}
     monkeypatch.setattr(
         Commands,
         "api",
         lambda *args, **kwargs: {
             "number": 23,
             "state": "open",
-            "merged": False,
+            "merged": remote["merged"],
+            "merge_commit_sha": "c" * 40,
             "head": {"sha": p.source_oid, "ref": p.source_branch},
             "base": {
                 "sha": p.target_oid,
@@ -185,12 +190,27 @@ def test_pending_or_lost_response_is_not_success(tmp_path, monkeypatch):
         },
     )
     calls = []
-    monkeypatch.setattr(
-        Commands, "run", lambda self, argv, **kwargs: (calls.append(argv) or ("", 0))
-    )
+    def mutation(self, argv, **kwargs):
+        calls.append(argv)
+        if timed_out:
+            error = OperationError("child_timeout", state="unknown", returncode=-9)
+            error.timed_out = True
+            raise error
+        return "", 0
+
+    monkeypatch.setattr(Commands, "run", mutation)
     first = execute_action(tmp_path, tmp_path / "issue", snapshot, "integration")
     second = execute_action(tmp_path, tmp_path / "issue", snapshot, "integration")
     assert first["state"] == second["state"] == "unknown"
+    assert len(calls) == 1
+    assert first["process"]["returncode"] == (-9 if timed_out else 0)
+    assert first["process"]["timed_out"] == timed_out
+    assert second["process"] == first["process"]
+    remote["merged"] = True
+    observed = execute_action(tmp_path, tmp_path / "issue", snapshot, "integration")
+    assert observed["state"] == "succeeded" and observed["commit"] == "c" * 40
+    assert observed["process"] == first["process"]
+    assert ActionStore(tmp_path / "issue", snapshot).read("integration")["process"] == first["process"]
     assert len(calls) == 1
 
 

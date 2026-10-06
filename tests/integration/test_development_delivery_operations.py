@@ -50,6 +50,7 @@ def test_local_integration_reports_real_commit_and_restart_reuses_it(local_actio
     root, dest, issue, snapshot = local_action
     result = execute_action(root, issue, snapshot, "integration", timeout=20)
     assert result["state"] == "succeeded"
+    assert result["process"]["returncode"] == 0 and not result["process"]["timed_out"]
     assert result["commit"] == git(dest, "rev-parse", "HEAD") == snapshot.proposal.source_oid
     assert (dest / "result.txt").read_text() == "Reviewed change"
     # A second successful attempt must observe the result rather than rerun merge.
@@ -61,10 +62,9 @@ def test_local_integration_reports_real_commit_and_restart_reuses_it(local_actio
         return original(argv, *args, **kwargs)
 
     monkeypatch.setattr(subprocess, "Popen", no_merge)
-    assert (
-        execute_action(root, issue, snapshot, "integration", timeout=20)["commit"]
-        == result["commit"]
-    )
+    observed = execute_action(root, issue, snapshot, "integration", timeout=20)
+    assert observed["commit"] == result["commit"]
+    assert observed["process"] == result["process"]
 
 
 def test_dirty_destination_is_blocked_without_changing_it(local_action):

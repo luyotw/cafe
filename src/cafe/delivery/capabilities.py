@@ -1,5 +1,6 @@
 """Registered host adapters for three exact development delivery effects."""
 
+import json
 from pathlib import Path
 
 from cafe.delivery.operations import execute_action
@@ -53,7 +54,8 @@ def adapter(*, repo_root, request, manifest, output_file, timeout_sec):
             raise CapabilityExecutionError(
                 "delivery_operation", str(result.get("error", result["state"])), outputs=result
             )
-        return result, None
+        # Fixed capability outputs use the existing scalar schema; domain receipts stay structured.
+        return {**result, "process": json.dumps(result["process"], sort_keys=True)}, None
     except (OSError, ValueError, KeyError) as exc:
         raise CapabilityExecutionError(
             "delivery_binding", "invalid_action_binding", outputs={"reason": str(exc)[:1024]}

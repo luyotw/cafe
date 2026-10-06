@@ -16,8 +16,11 @@ arguments:
 outputs:
   required:
   - state
+  - process
   properties:
     state:
+      type: string
+    process:
       type: string
     commit:
       type: string

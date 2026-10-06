@@ -17,10 +17,11 @@ from cafe.delivery.records import ActionStore
 
 
 class OperationError(ValueError):
-    def __init__(self, code, *, state="blocked", returncode=None):
+    def __init__(self, code, *, state="blocked", returncode=None, timed_out=False):
         super().__init__(code)
         self.state = state
         self.returncode = returncode
+        self.timed_out = timed_out
 
 
 class Commands:
@@ -51,7 +52,7 @@ class Commands:
             os.killpg(child.pid, signal.SIGKILL)
             child.communicate(timeout=5)
             raise OperationError(
-                "child_timeout", state="unknown", returncode=child.returncode
+                "child_timeout", state="unknown", returncode=child.returncode, timed_out=True
             ) from exc
         except BaseException:
             os.killpg(child.pid, signal.SIGKILL)
@@ -203,6 +204,37 @@ def _issue_matches(commands, snapshot, item):
     raise OperationError("issue_observation_incomplete", state="unknown")
 
 
+
+def _dispatch(commands, store, action, argv, **kwargs):
+    """Persist mutation exit evidence before any separately observed outcome."""
+    try:
+        output, code = commands.run(argv, **kwargs)
+    except OperationError as exc:
+        store.finish(action, {
+            "state": "unknown",
+            "process": {
+                "status": "exited" if exc.returncode is not None else "not_started",
+                "returncode": exc.returncode,
+                "timed_out": exc.timed_out,
+                "error": str(exc),
+            },
+        })
+        raise
+    store.finish(action, {
+        "state": "unknown",
+        "process": {"status": "exited", "returncode": code, "timed_out": False},
+    })
+    return output, code
+
+
+def _process_evidence(store, action, prior):
+    receipt = store.read(action) or prior
+    if receipt and "process" in receipt:
+        return receipt["process"]
+    # A lost receipt after dispatch is different from an observed preexisting effect.
+    status = "unavailable" if receipt else "not_dispatched"
+    return {"status": status, "returncode": None, "timed_out": None}
+
 def execute_action(
     root: Path, issue_dir: Path, snapshot: ActionSnapshot, action: str, *, timeout=120
 ):
@@ -225,7 +257,8 @@ def execute_action(
                             raise OperationError("changed_destination")
                         store.start(action)
                         flag = "--ff-only" if p.strategy == "ff-only" else "--no-ff"
-                        _, code = commands.run(
+                        _, code = _dispatch(
+                            commands, store, action,
                             ["git", "-C", str(dest), "merge", flag, "--no-edit", p.source_oid],
                             allow_failure=True,
                         )
@@ -246,7 +279,8 @@ def execute_action(
                     ):
                         raise OperationError("changed_pr_base")
                     store.start(action)
-                    commands.run(
+                    _dispatch(
+                        commands, store, action,
                         [
                             "gh",
                             "pr",
@@ -271,17 +305,24 @@ def execute_action(
                     if prior and prior["state"] not in {"not_dispatched", "blocked"}:
                         raise OperationError("unreconciled_issue_attempt", state="unknown")
                     store.start(action)
-                    commands.api(
-                        f"repos/{p.issue_repository}/issues",
-                        payload={
+                    response, _ = _dispatch(
+                        commands, store, action,
+                        ["gh", "api", f"repos/{p.issue_repository}/issues",
+                         "--method", "POST", "--input", "-"],
+                        input=json.dumps({
                             "title": item.title,
                             "body": item.body + "\n\n" + snapshot.marker(item.id),
-                        },
+                        }),
                     )
+                    try:
+                        json.loads(response)
+                    except json.JSONDecodeError as exc:
+                        raise OperationError("malformed_observation", state="unknown") from exc
                     row = _issue_matches(commands, snapshot, item)
                     if row is None:
                         raise OperationError("issue_unobserved", state="unknown")
                 result = {"state": "succeeded", "url": row["html_url"], "proposal_id": item.id}
+            result["process"] = _process_evidence(store, action, prior)
             store.finish(action, result)
             return result
         except (OperationError, OSError, ValueError) as exc:
@@ -298,6 +339,7 @@ def execute_action(
                 "state": state,
                 "error": str(exc)[:1024],
                 "returncode": getattr(exc, "returncode", None),
+                "process": _process_evidence(store, action, prior),
             }
             if not (attempted and attempted["state"] == "succeeded"):
                 store.finish(action, result)

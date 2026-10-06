@@ -644,6 +644,10 @@ def test_public_phase_execute_forwards_declared_delivery_and_current_receipts(
     )
     completed = execute()
     assert completed.published and len(calls) == 1
+    audited = service.inspect(approval_task.id)["receipt"]["execution"]
+    assert audited["success"]
+    evidence = json.loads(audited["outputs"]["process"])
+    assert evidence["returncode"] == 0 and not evidence["timed_out"]
     assert any(task.policy_id == "delivery-outcome" for task in HumanTaskRecordStore(issue).tasks())
     assert state.current_step != "done"
 
