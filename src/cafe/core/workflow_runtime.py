@@ -4746,6 +4746,18 @@ class BlackboardWorkflowRuntime:
             delivery_id = delivery.get("delivery_id")
             if not isinstance(step, str) or not isinstance(delivery_id, str):
                 return None
+            original_id = delivery.get("recovered_from_delivery_id")
+            contract = self.blackboard.handoff_contract
+            if (
+                isinstance(original_id, str)
+                and self.blackboard.current_step == step
+                and contract is not None
+                and contract.to_step == step
+            ):
+                # A replacement preparation proves an owner recovery was already
+                # requested. Reuse its full validation before publishing a baton;
+                # ordinary resume must not reject it against the still-pinned one.
+                return self.recover_rejected_feedback_delivery(original_id)
         else:
             candidate = self._feedback_delivery_handoff_candidate()
             if candidate is None:

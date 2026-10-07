@@ -138,27 +138,14 @@ def test_supervisor_receipt_never_accepts_stale_task_or_result(tmp_path, section
     else:
         raw[section][0][field] = value
     path.write_text(json.dumps(raw))
-    # An iteration change produces no receipt; all other mismatches reject.
-    if field == "iteration":
-        assert (
-            supervisor_feedback_receipts(
-                tmp_path,
-                playbook=playbook,
-                workflow_id="workflow",
-                target_step="develop",
-                entries=(entry,),
-            )
-            == {}
+    with pytest.raises((WorkflowFeedbackError, ValueError)):
+        supervisor_feedback_receipts(
+            tmp_path,
+            playbook=playbook,
+            workflow_id="workflow",
+            target_step="develop",
+            entries=(entry,),
         )
-    else:
-        with pytest.raises((WorkflowFeedbackError, ValueError)):
-            supervisor_feedback_receipts(
-                tmp_path,
-                playbook=playbook,
-                workflow_id="workflow",
-                target_step="develop",
-                entries=(entry,),
-            )
 
 
 def _persisted_entry(**lifecycle: bool) -> dict[str, object]:

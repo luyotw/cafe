@@ -5799,11 +5799,8 @@ def test_owned_recovery_restart_never_reuses_the_rejected_operation(
     with pytest.raises(RuntimeError, match="owned recovery crash"):
         recovery.recover_rejected_feedback_delivery(rejected_id)
     resumed = _supervisor_curation_runtime(issue_dir, calls)
-    if boundary == "baton":
-        assert (
-            resumed.recover_rejected_feedback_delivery(rejected_id).final_status_code
-            != "INVALID_FEEDBACK_DELIVERY"
-        )
+    # Ordinary resume must preserve and finish the previously owner-authorized
+    # replacement even when its outbound baton has not been published yet.
     assert resumed.run(max_transitions=2).completed
     assert calls == ["curator", "consumer"]
     state = BlackboardStore(issue_dir).load_or_create("curator")
@@ -5812,6 +5809,50 @@ def test_owned_recovery_restart_never_reuses_the_rejected_operation(
     assert len(prepared) == 2
     assert len(delivered) == 1
     assert delivered[0].data["delivery_id"] != rejected_id
+
+
+@pytest.mark.parametrize("tamper", ["iteration", "source_identity", "source_kind"])
+def test_raw_only_supervisor_delivery_rejects_task_identity_lost_before_preparation(
+    tmp_path,
+    tamper,
+):
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+
+    issue_dir = tmp_path / "raw-only-stale-before-preparation"
+    calls = []
+    runtime = _supervisor_curation_runtime(issue_dir, calls)
+    runtime.playbook["steps"]["curator"]["behavior"] = {"completion": "baton"}
+    if tamper == "iteration":
+        path = HumanTaskRecordStore(issue_dir).file_path
+        raw = json.loads(path.read_text())
+        raw["tasks"][0]["iteration"] = 2
+    else:
+        path = WorkflowFeedbackLedger(issue_dir).path
+        raw = json.loads(path.read_text())
+        raw["entries"][0][tamper] = "forged-source"
+    path.write_text(json.dumps(raw))
+    result = runtime.run(start_step="curator", max_transitions=2)
+    assert result.final_status_code == "INVALID_FEEDBACK_DELIVERY"
+    assert calls == ["curator"]
+    assert WorkflowFeedbackLedger(issue_dir).pending(target_step="curator")
+    state = BlackboardStore(issue_dir).load_or_create("curator")
+    assert not any(event.event_type == "workflow_feedback_delivered" for event in state.events)
+
+
+def test_raw_only_supervisor_delivery_without_curator_mapping_remains_idempotent(tmp_path):
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+
+    issue_dir = tmp_path / "raw-only-valid"
+    calls = []
+    runtime = _supervisor_curation_runtime(issue_dir, calls)
+    runtime.playbook["steps"]["curator"]["behavior"] = {"completion": "baton"}
+    assert runtime.run(start_step="curator", max_transitions=2).completed
+    assert calls == ["curator", "consumer"]
+    assert WorkflowFeedbackLedger(issue_dir).pending(target_step="curator") == []
+    resumed = _supervisor_curation_runtime(issue_dir, calls)
+    resumed.playbook["steps"]["curator"]["behavior"] = {"completion": "baton"}
+    assert resumed.run(max_transitions=2).completed
+    assert calls == ["curator", "consumer"]
 
 
 def test_owned_supervisor_recovery_defers_sources_added_after_the_completed_batch(

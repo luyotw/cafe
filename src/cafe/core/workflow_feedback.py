@@ -96,6 +96,29 @@ def supervisor_feedback_receipts(
     selected = {entry.source_identity: entry for entry in entries}
     if not selected:
         return {}
+    required_receipts: set[str] = set()
+    curator_mappings = feedback_todo_mappings(playbook, target_step=target_step)
+    for producer, step in playbook.get("steps", {}).items():
+        for binding in step.get("human_tasks", ()) or ():
+            delivery = binding.get("feedback_delivery")
+            if not isinstance(delivery, Mapping):
+                continue
+            declared_targets = {
+                *binding.get("outcomes", {}).values(),
+                *(binding.get("allowed_targets", ()) or ()),
+            }
+            if target_step in declared_targets:
+                continue
+            source_prefix = f"{producer}:{binding.get('task_id')}:"
+            required_receipts.update(
+                identity
+                for identity in selected
+                if identity.partition(":")[2].startswith(source_prefix)
+                or (
+                    selected[identity].source_kind == delivery.get("source_kind")
+                    and selected[identity].source_kind not in curator_mappings
+                )
+            )
     records = HumanTaskRecordStore(issue_dir)
     receipts: dict[str, dict[str, str]] = {}
     try:
@@ -165,6 +188,8 @@ def supervisor_feedback_receipts(
                 "continuation": target_step,
                 "sha256": sha256_bytes(entry.content.encode("utf-8")),
             }
+    if not required_receipts.issubset(receipts):
+        raise WorkflowFeedbackError("supervisor feedback ownership proof is missing")
     return receipts
 
 
