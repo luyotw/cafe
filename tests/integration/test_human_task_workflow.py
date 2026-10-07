@@ -625,6 +625,180 @@ def test_durable_local_review_delivers_feedback_and_completes_one_task(tmp_path:
     assert not (issue_dir / "develop" / "iteration_001" / "user_input.md").exists()
 
 
+@pytest.mark.parametrize("restart", [False, True])
+@pytest.mark.parametrize("selected_target", [False, True])
+def test_pr_supervisor_continuation_reaches_qa_without_recurating_raw_feedback(
+    tmp_path, monkeypatch, restart, selected_target
+):
+    """PR review -> supervisor-owned Develop -> QA preserves another curator mapping."""
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+
+    issue_dir = tmp_path / "supervisor-develop-qa"
+    playbook = PlaybookLoader().load("standard")
+    playbook["steps"]["develop"] = {
+        "skill": "phase",
+        "role": "developer",
+        "assignee_type": "agent",
+        "output_artifact": "development_result",
+        "behavior": {"completion": "baton"},
+        "on": {"await_agent": "qa"},
+    }
+    playbook["steps"]["qa"] = {
+        "skill": "phase",
+        "role": "developer",
+        "assignee_type": "agent",
+        "on": {"await_agent": "_done"},
+    }
+    store, state = _paused_default_state(
+        issue_dir,
+        from_step="pr",
+        intent=HandoffIntent.CONFIRM_OUTPUT,
+    )
+    policy, binding = resolve_step_human_task(
+        playbook_data=playbook, step_name="pr", trigger="confirm_output"
+    )
+    if selected_target:
+        import yaml
+
+        # A project-authored policy exercises target selection through real
+        # composition and HumanTask completion, without replacing a resolver.
+        policy_data = policy.model_dump(mode="json")
+        policy_data["allowed_targets"] = ["pr"]
+        for decision in policy_data["decisions"]:
+            if decision["id"] == "fix_now":
+                decision["requires_target"] = True
+        skill_dir = tmp_path / ".cafe" / "skills" / "target-review"
+        skill_dir.mkdir(parents=True)
+        skill_dir.joinpath("SKILL.md").write_text(
+            "---\n" + yaml.safe_dump({
+                "name": "target-review",
+                "description": "Review with a selected correction target",
+                "workflow": {"human_tasks": [policy_data]},
+            }) + "---\nReview the result.\n"
+        )
+        monkeypatch.chdir(tmp_path)
+        playbook["steps"]["pr"]["skill"] = "target-review"
+        raw_binding = next(
+            b for b in playbook["steps"]["pr"]["human_tasks"]
+            if b["trigger"] == "confirm_output"
+        )
+        raw_binding["outcomes"].pop("fix_now")
+        raw_binding["allowed_targets"] = ["pr"]
+        policy, binding = resolve_step_human_task(
+            playbook_data=playbook, step_name="pr", trigger="confirm_output"
+        )
+    task = HumanTaskRecordStore(issue_dir).materialize(
+        workflow_id=state.workflow_id, step="pr", iteration=1,
+        trigger="confirm_output", policy_id=policy.id, prompt=policy.prompt,
+        expected_result=policy.model_dump(mode="json"),
+        continuations=binding.outcomes, assignee_type="user",
+    )
+    payload = {
+        "task": "local-review",
+        "decision": "fix_now",
+        "feedback": "Fix it.",
+        "human_task_id": task.id,
+    }
+    if selected_target:
+        payload["target"] = "pr"
+    if restart:
+        with monkeypatch.context() as interrupted:
+            interrupted.setattr(
+                "cafe.ui.human_tasks._write_next_iteration_user_input",
+                lambda **kwargs: (_ for _ in ()).throw(RuntimeError("projection crash")),
+            )
+            with pytest.raises(RuntimeError, match="projection crash"):
+                apply_human_task_payload(
+                    issue_dir=issue_dir,
+                    playbook_data=playbook,
+                    blackboard=state,
+                    from_step="pr",
+                    trigger="confirm_output",
+                    raw_payload=payload,
+                    source="command",
+                    supervisor_handoff_to="develop",
+                )
+        state = store.load_or_create("pr")
+    applied = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="pr",
+        trigger="confirm_output",
+        raw_payload=payload,
+        source="command",
+        supervisor_handoff_to="develop",
+    )
+    assert applied.target == "develop"
+    from cafe.core.workflow_feedback import supervisor_feedback_receipts
+
+    receipts = supervisor_feedback_receipts(
+        issue_dir, playbook=playbook, workflow_id=state.workflow_id,
+        target_step="develop",
+        entries=WorkflowFeedbackLedger(issue_dir).pending(target_step="develop"),
+    )
+    assert receipts["local_review:pr:local-review:1"]["declared_continuation"] == "pr"
+    assert receipts["local_review:pr:local-review:1"]["continuation"] == "develop"
+    # A completed answer cannot be applied twice or redirect the receiver.
+    assert (
+        apply_human_task_payload(
+            issue_dir=issue_dir,
+            playbook_data=playbook,
+            blackboard=state,
+            from_step="pr",
+            trigger="confirm_output",
+            raw_payload=payload,
+            source="command",
+        ).target
+        is None
+    )
+    calls = []
+
+    def executor(step_name, step, current_state):
+        calls.append(step_name)
+        if step_name == "qa":
+            assert WorkflowFeedbackLedger(issue_dir).pending(target_step="develop") == []
+            store.update_handoff_contract(
+                current_state,
+                from_step="qa",
+                to_owner=HandoffOwner.DONE,
+                to_step="done",
+                intent=HandoffIntent.WORKFLOW_COMPLETE,
+            )
+            return StepExecutionResult(response="verified", artifacts={})
+        output = issue_dir / "develop" / "iteration_001" / "output.md"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text("Implemented supervisor request.\n", encoding="utf-8")
+        output.parent.joinpath("checklist.md").write_text("[x] complete\n", encoding="utf-8")
+        output.parent.joinpath("iteration.json").write_text(
+            json.dumps({"iteration": 1, "step_name": "develop"}),
+            encoding="utf-8",
+        )
+        store.update_handoff_contract(
+            current_state,
+            from_step="develop",
+            to_owner=HandoffOwner.AGENT,
+            to_step="qa",
+            intent=HandoffIntent.AWAIT_AGENT,
+        )
+        return StepExecutionResult(
+            response="implemented",
+            artifacts={"development_result": str(output)},
+            agent_invoked=True,
+            feedback_source_identities=("local_review:pr:local-review:1",),
+        )
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    ).run(max_transitions=2)
+    assert result.completed
+    assert calls == ["develop", "qa"]
+    assert len(HumanTaskRecordStore(issue_dir).results()) == 1
+    assert len(WorkflowFeedbackLedger(issue_dir).load()) == 1
+
+
 def test_completed_durable_result_recovers_the_declared_continuation_after_a_restart(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
