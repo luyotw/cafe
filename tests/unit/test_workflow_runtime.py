@@ -5855,6 +5855,40 @@ def test_raw_only_supervisor_delivery_without_curator_mapping_remains_idempotent
     assert calls == ["curator", "consumer"]
 
 
+def test_feedback_free_cycle_after_supervisor_delivery_resumes_its_consumer(tmp_path):
+    issue_dir = tmp_path / "supervisor-then-feedback-free"
+    calls = []
+    runtime = _supervisor_curation_runtime(issue_dir, calls)
+    runtime.playbook["steps"]["curator"]["behavior"] = {"completion": "baton"}
+    assert runtime.run(start_step="curator", max_transitions=2).completed
+    later = _supervisor_curation_runtime(issue_dir, calls)
+    later.playbook["steps"]["curator"]["behavior"] = {"completion": "baton"}
+    original_executor = later.executor
+
+    def executor(step_name, step, state):
+        result = original_executor(step_name, step, state)
+        assert result.feedback_source_identities == ()
+        output = issue_dir / "curator" / "iteration_002" / "output.md"
+        output.parent.mkdir(parents=True)
+        output.write_text("Completed a later feedback-free change.\n")
+        output.parent.joinpath("checklist.md").write_text("[x] complete\n")
+        output.parent.joinpath("iteration.json").write_text(
+            json.dumps({"iteration": 2, "step_name": "curator"})
+        )
+        result.artifacts["curated_result"] = str(output)
+        return result
+
+    later.executor = executor
+    later.run(start_step="curator", single_step=True)
+    resumed = _supervisor_curation_runtime(issue_dir, calls)
+    resumed.playbook["steps"]["curator"]["behavior"] = {"completion": "baton"}
+    assert resumed.run(max_transitions=2).completed
+    assert calls == ["curator", "consumer", "curator", "consumer"]
+    state = BlackboardStore(issue_dir).load_or_create("curator")
+    assert not any(e.event_type == "workflow_feedback_delivery_rejected" for e in state.events)
+    assert len([e for e in state.events if e.event_type == "workflow_feedback_delivered"]) == 1
+
+
 def test_owned_supervisor_recovery_defers_sources_added_after_the_completed_batch(
     tmp_path, monkeypatch
 ):

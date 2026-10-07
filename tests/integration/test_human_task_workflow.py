@@ -655,8 +655,9 @@ def test_durable_local_review_delivers_feedback_and_completes_one_task(tmp_path:
 
 
 @pytest.mark.parametrize("restart", [False, True])
+@pytest.mark.parametrize("selected_target", [False, True])
 def test_pr_supervisor_continuation_reaches_qa_without_recurating_raw_feedback(
-    tmp_path, monkeypatch, restart
+    tmp_path, monkeypatch, restart, selected_target
 ):
     """PR review -> supervisor-owned Develop -> QA preserves another curator mapping."""
     from cafe.core.workflow_feedback import WorkflowFeedbackLedger
@@ -682,13 +683,53 @@ def test_pr_supervisor_continuation_reaches_qa_without_recurating_raw_feedback(
         from_step="pr",
         intent=HandoffIntent.CONFIRM_OUTPUT,
     )
-    task = _materialize_default_task(issue_dir, state, from_step="pr", trigger="confirm_output")
+    policy, binding = resolve_step_human_task(
+        playbook_data=playbook, step_name="pr", trigger="confirm_output"
+    )
+    if selected_target:
+        import yaml
+
+        # A project-authored policy exercises target selection through real
+        # composition and HumanTask completion, without replacing a resolver.
+        policy_data = policy.model_dump(mode="json")
+        policy_data["allowed_targets"] = ["pr"]
+        for decision in policy_data["decisions"]:
+            if decision["id"] == "fix_now":
+                decision["requires_target"] = True
+        skill_dir = tmp_path / ".cafe" / "skills" / "target-review"
+        skill_dir.mkdir(parents=True)
+        skill_dir.joinpath("SKILL.md").write_text(
+            "---\n" + yaml.safe_dump({
+                "name": "target-review",
+                "description": "Review with a selected correction target",
+                "workflow": {"human_tasks": [policy_data]},
+            }) + "---\nReview the result.\n"
+        )
+        monkeypatch.chdir(tmp_path)
+        playbook["steps"]["pr"]["skill"] = "target-review"
+        raw_binding = next(
+            b for b in playbook["steps"]["pr"]["human_tasks"]
+            if b["trigger"] == "confirm_output"
+        )
+        raw_binding["outcomes"].pop("fix_now")
+        raw_binding["allowed_targets"] = ["pr"]
+        policy, binding = resolve_step_human_task(
+            playbook_data=playbook, step_name="pr", trigger="confirm_output"
+        )
+    task = HumanTaskRecordStore(issue_dir).materialize(
+        workflow_id=state.workflow_id, step="pr", iteration=1,
+        trigger="confirm_output", policy_id=policy.id, prompt=policy.prompt,
+        expected_result=policy.model_dump(mode="json"),
+        continuations=binding.outcomes, assignee_type="user",
+    )
     payload = {
         "task": "local-review",
         "decision": "fix_now",
         "feedback": "Fix it.",
         "human_task_id": task.id,
     }
+    if selected_target:
+        payload["target"] = "pr"
     if restart:
         with monkeypatch.context() as interrupted:
             interrupted.setattr(
@@ -718,6 +759,15 @@ def test_pr_supervisor_continuation_reaches_qa_without_recurating_raw_feedback(
         supervisor_handoff_to="develop",
     )
     assert applied.target == "develop"
+    from cafe.core.workflow_feedback import supervisor_feedback_receipts
+
+    receipts = supervisor_feedback_receipts(
+        issue_dir, playbook=playbook, workflow_id=state.workflow_id,
+        target_step="develop",
+        entries=WorkflowFeedbackLedger(issue_dir).pending(target_step="develop"),
+    )
+    assert receipts["local_review:pr:local-review:1"]["declared_continuation"] == "pr"
+    assert receipts["local_review:pr:local-review:1"]["continuation"] == "develop"
     # A completed answer cannot be applied twice or redirect the receiver.
     assert (
         apply_human_task_payload(

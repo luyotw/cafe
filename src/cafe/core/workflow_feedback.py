@@ -146,10 +146,28 @@ def supervisor_feedback_receipts(
         delivery = binding.get("feedback_delivery")
         payload = result.payload
         declared = task.continuations.get(str(payload.get("decision")))
-        correction = any(
-            decision.get("id") == payload.get("decision") and decision.get("correction") is True
-            for decision in task.expected_result.get("decisions", ())
+        decision = next(
+            (
+                item
+                for item in task.expected_result.get("decisions", ())
+                if item.get("id") == payload.get("decision")
+            ),
+            {},
         )
+        correction = decision.get("correction") is True
+        if decision.get("requires_target") is True:
+            declared = payload.get("target")
+            policy_targets = task.expected_result.get("allowed_targets", ())
+            binding_targets = binding.get("allowed_targets") or policy_targets
+            if (
+                not isinstance(declared, str)
+                or declared not in policy_targets
+                or declared not in binding_targets
+                or declared not in playbook.get("steps", {})
+            ):
+                raise WorkflowFeedbackError("supervisor feedback selected target is invalid")
+        elif payload.get("target") is not None:
+            raise WorkflowFeedbackError("supervisor feedback decision does not accept a target")
         if task.expected_result.get("input_schema") == "feedback":
             declared = task.continuations.get("submit")
             correction = True

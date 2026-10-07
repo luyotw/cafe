@@ -4714,6 +4714,25 @@ class BlackboardWorkflowRuntime:
             isinstance(delivery_id, str)
             and delivery_id in self._feedback_delivery_terminal_ids()
         ):
+            prepared_artifact = prepared.get("artifact", {})
+            if (
+                self._feedback_delivery_event_exists(delivery_id)
+                and isinstance(prepared_artifact, Mapping)
+                and isinstance(prepared_artifact.get("version"), int)
+                and artifact.version > prepared_artifact["version"]
+                and self.blackboard.current_step == contract.to_step
+                and any(
+                    event.event_type == "transition"
+                    and event.data.get("from") == current_step
+                    and event.data.get("to") == contract.to_step
+                    and event.data.get("source_artifact") == artifact.to_dict()
+                    for event in reversed(self.blackboard.events)
+                )
+            ):
+                # A later committed, feedback-free handoff owns its new artifact.
+                # The older delivered operation still fences its original output,
+                # but cannot be reconciled against this newer completed cycle.
+                return None
             validation_contract = contract
             target = prepared.get("target")
             if (
