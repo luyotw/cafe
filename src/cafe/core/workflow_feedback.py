@@ -126,10 +126,25 @@ def supervisor_feedback_receipts(
         results = {result.task_id: result for result in records.results()}
     except HumanTaskRecordError as exc:
         raise WorkflowFeedbackError("supervisor feedback task records are invalid") from exc
+    task_sources = {
+        f"{task.step}:{task.policy_id}:{task.iteration}"
+        for task in tasks
+        if task.workflow_id == workflow_id
+    }
     for task in tasks:
         result = results.get(task.id)
         if result is None or "supervisor_handoff_to" not in result.payload:
             continue
+        source_prefix = f"{task.step}:{task.policy_id}:"
+        # Being an allowed curator target cannot turn a supervisor source with
+        # a missing exact task into ordinary curated feedback. Preserve later
+        # normal task iterations that still have their own exact durable task.
+        required_receipts.update(
+            identity
+            for identity in selected
+            if identity.partition(":")[2].startswith(source_prefix)
+            and identity.partition(":")[2] not in task_sources
+        )
         step = playbook.get("steps", {}).get(task.step, {})
         bindings = [
             binding

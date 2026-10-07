@@ -191,6 +191,60 @@ def test_supervisor_receipt_never_accepts_stale_task_or_result(tmp_path, section
         )
 
 
+def test_supervisor_receipt_rejects_stale_task_when_receiver_is_also_allowed(tmp_path):
+    from cafe.core.human_task_records import HumanTaskRecordStore
+    from cafe.core.workflow_feedback import supervisor_feedback_receipts
+
+    playbook, _, _, entry = _supervisor_feedback(tmp_path, selected_target=True)
+    binding = playbook["steps"]["pr"]["human_tasks"][0]
+    binding["allowed_targets"].append("develop")
+    binding["feedback_delivery"].update(todo_source="local_review", todo_id_prefix="LR")
+    playbook["steps"]["develop"] = {}
+    path = HumanTaskRecordStore(tmp_path).file_path
+    raw = json.loads(path.read_text())
+    raw["tasks"][0]["expected_result"]["allowed_targets"].append("develop")
+    raw["tasks"][0]["iteration"] = 2
+    path.write_text(json.dumps(raw))
+
+    with pytest.raises(WorkflowFeedbackError, match="ownership proof is missing"):
+        supervisor_feedback_receipts(
+            tmp_path, playbook=playbook, workflow_id="workflow",
+            target_step="develop", entries=(entry,),
+        )
+
+
+def test_later_normal_curator_task_is_not_owned_by_an_older_supervisor(tmp_path):
+    from cafe.core.human_task_records import HumanTaskRecordStore
+    from cafe.core.workflow_feedback import supervisor_feedback_receipts
+
+    playbook, original, _, _ = _supervisor_feedback(tmp_path, selected_target=True)
+    binding = playbook["steps"]["pr"]["human_tasks"][0]
+    binding["allowed_targets"].append("develop")
+    binding["feedback_delivery"].update(todo_source="local_review", todo_id_prefix="LR")
+    records = HumanTaskRecordStore(tmp_path)
+    policy = {**original.expected_result, "allowed_targets": ["pr", "develop"]}
+    task = records.materialize(
+        workflow_id="workflow", step="pr", iteration=2, trigger="confirm_output",
+        policy_id="local-review", prompt="Review next revision", assignee_type="user",
+        expected_result=policy, continuations={},
+    )
+    records.complete(
+        workflow_id="workflow", task_id=task.id, source="command",
+        payload={"task": "local-review", "decision": "fix_now", "target": "develop",
+                 "feedback": "Next correction", "declared_continuation": "develop",
+                 "continuation": "develop"},
+    )
+    _, entry = WorkflowFeedbackLedger(tmp_path).record(
+        source_identity="local_review:pr:local-review:2", source_kind="local_review",
+        target_step="develop", content="Next correction",
+    )
+
+    assert supervisor_feedback_receipts(
+        tmp_path, playbook=playbook, workflow_id="workflow",
+        target_step="develop", entries=(entry,),
+    ) == {}
+
+
 def _persisted_entry(**lifecycle: bool) -> dict[str, object]:
     return {
         "source_identity": "github-pr:348:comment-1",
