@@ -9,6 +9,158 @@ import pytest
 from cafe.core.workflow_feedback import WorkflowFeedbackError, WorkflowFeedbackLedger
 
 
+def _supervisor_feedback(issue_dir):
+    """Persist one completed task through the owning record store."""
+    from cafe.core.human_task_records import HumanTaskRecordStore
+
+    playbook = {
+        "steps": {
+            "pr": {
+                "human_tasks": [
+                    {
+                        "trigger": "confirm_output",
+                        "task_id": "local-review",
+                        "outcomes": {"fix_now": "pr"},
+                        "feedback_delivery": {"source_kind": "local_review"},
+                    }
+                ]
+            }
+        }
+    }
+    records = HumanTaskRecordStore(issue_dir)
+    task = records.materialize(
+        workflow_id="workflow",
+        step="pr",
+        iteration=1,
+        trigger="confirm_output",
+        policy_id="local-review",
+        prompt="Review",
+        assignee_type="user",
+        expected_result={
+            "input_schema": "decision",
+            "decisions": [{"id": "fix_now", "correction": True}],
+        },
+        continuations={"fix_now": "pr"},
+    )
+    result = records.complete(
+        workflow_id="workflow",
+        task_id=task.id,
+        source="command",
+        payload={
+            "task": "local-review",
+            "decision": "fix_now",
+            "feedback": "Fix it.",
+            "declared_continuation": "pr",
+            "continuation": "develop",
+            "supervisor_handoff_to": "develop",
+        },
+    )
+    _, entry = WorkflowFeedbackLedger(issue_dir).record(
+        source_identity="local_review:pr:local-review:1",
+        source_kind="local_review",
+        target_step="develop",
+        content="Fix it.",
+    )
+    return playbook, task, result, entry
+
+
+def test_supervisor_feedback_ownership_binds_exact_completed_task_and_content(tmp_path):
+    from cafe.core.workflow_feedback import supervisor_feedback_receipts
+
+    playbook, task, result, entry = _supervisor_feedback(tmp_path)
+    receipts = supervisor_feedback_receipts(
+        tmp_path,
+        playbook=playbook,
+        workflow_id="workflow",
+        target_step="develop",
+        entries=(entry,),
+    )
+    assert receipts[entry.source_identity]["task_id"] == task.id
+    assert receipts[entry.source_identity]["result_id"] == result.id
+    assert (
+        supervisor_feedback_receipts(
+            tmp_path,
+            playbook=playbook,
+            workflow_id="workflow",
+            target_step="develop",
+            entries=(),
+        )
+        == {}
+    )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("content", "Changed request"),
+        ("source_kind", "forged"),
+        ("target_step", "qa"),
+    ],
+)
+def test_supervisor_feedback_rejects_stale_or_forged_entry(tmp_path, field, value):
+    from dataclasses import replace
+    from cafe.core.workflow_feedback import supervisor_feedback_receipts
+
+    playbook, _, _, entry = _supervisor_feedback(tmp_path)
+    with pytest.raises(WorkflowFeedbackError):
+        supervisor_feedback_receipts(
+            tmp_path,
+            playbook=playbook,
+            workflow_id="workflow",
+            target_step="develop",
+            entries=(replace(entry, **{field: value}),),
+        )
+
+
+@pytest.mark.parametrize(
+    "section,field,value",
+    [
+        ("tasks", "status", "cancelled"),
+        ("tasks", "iteration", 2),
+        ("tasks", "continuations", {"fix_now": "qa"}),
+        ("results", "workflow_id", "another-workflow"),
+        ("payload", "task", "forged-task"),
+        ("payload", "declared_continuation", "qa"),
+        ("payload", "continuation", "qa"),
+        ("payload", "supervisor_handoff_to", "qa"),
+        ("payload", "feedback", "Changed durable request"),
+    ],
+)
+def test_supervisor_receipt_never_accepts_stale_task_or_result(tmp_path, section, field, value):
+    from cafe.core.human_task_records import HumanTaskRecordStore
+    from cafe.core.workflow_feedback import supervisor_feedback_receipts
+
+    playbook, _, _, entry = _supervisor_feedback(tmp_path)
+    path = HumanTaskRecordStore(tmp_path).file_path
+    raw = json.loads(path.read_text())
+    if section == "payload":
+        raw["results"][0]["payload"][field] = value
+    else:
+        raw[section][0][field] = value
+    path.write_text(json.dumps(raw))
+    # An iteration change produces no receipt; all other mismatches reject.
+    if field == "iteration":
+        assert (
+            supervisor_feedback_receipts(
+                tmp_path,
+                playbook=playbook,
+                workflow_id="workflow",
+                target_step="develop",
+                entries=(entry,),
+            )
+            == {}
+        )
+    else:
+        with pytest.raises((WorkflowFeedbackError, ValueError)):
+            supervisor_feedback_receipts(
+                tmp_path,
+                playbook=playbook,
+                workflow_id="workflow",
+                target_step="develop",
+                entries=(entry,),
+            )
+
+
 def _persisted_entry(**lifecycle: bool) -> dict[str, object]:
     return {
         "source_identity": "github-pr:348:comment-1",
