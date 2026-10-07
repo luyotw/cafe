@@ -9,7 +9,7 @@ import pytest
 from cafe.core.workflow_feedback import WorkflowFeedbackError, WorkflowFeedbackLedger
 
 
-def _supervisor_feedback(issue_dir, *, selected_target=False):
+def _supervisor_feedback(issue_dir, *, selected_target=False, selected_continuation="pr"):
     """Persist one completed task through the owning record store."""
     from cafe.core.human_task_records import HumanTaskRecordStore
 
@@ -21,7 +21,7 @@ def _supervisor_feedback(issue_dir, *, selected_target=False):
                         "trigger": "confirm_output",
                         "task_id": "local-review",
                         "outcomes": {} if selected_target else {"fix_now": "pr"},
-                        "allowed_targets": ["pr"] if selected_target else [],
+                        "allowed_targets": [selected_continuation] if selected_target else [],
                         "feedback_delivery": {"source_kind": "local_review"},
                     }
                 ]
@@ -43,7 +43,7 @@ def _supervisor_feedback(issue_dir, *, selected_target=False):
                 "id": "fix_now", "correction": True,
                 "requires_target": selected_target,
             }],
-            "allowed_targets": ["pr"] if selected_target else [],
+            "allowed_targets": [selected_continuation] if selected_target else [],
         },
         continuations={} if selected_target else {"fix_now": "pr"},
     )
@@ -55,10 +55,10 @@ def _supervisor_feedback(issue_dir, *, selected_target=False):
             "task": "local-review",
             "decision": "fix_now",
             "feedback": "Fix it.",
-            "declared_continuation": "pr",
+            "declared_continuation": selected_continuation if selected_target else "pr",
             "continuation": "develop",
             "supervisor_handoff_to": "develop",
-            **({"target": "pr"} if selected_target else {}),
+            **({"target": selected_continuation} if selected_target else {}),
         },
     )
     _, entry = WorkflowFeedbackLedger(issue_dir).record(
@@ -96,11 +96,16 @@ def test_supervisor_feedback_ownership_binds_exact_completed_task_and_content(tm
 
 
 @pytest.mark.parametrize("tamper", [None, "target", "declared", "allowed", "unexpected"])
-def test_supervisor_selected_correction_target_is_bound_to_its_declaration(tmp_path, tamper):
+@pytest.mark.parametrize("continuation", ["pr", "_done"])
+def test_supervisor_selected_correction_target_is_bound_to_its_declaration(
+    tmp_path, tamper, continuation
+):
     from cafe.core.human_task_records import HumanTaskRecordStore
     from cafe.core.workflow_feedback import supervisor_feedback_receipts
 
-    playbook, _, _, entry = _supervisor_feedback(tmp_path, selected_target=True)
+    playbook, _, _, entry = _supervisor_feedback(
+        tmp_path, selected_target=True, selected_continuation=continuation
+    )
     if tamper:
         path = HumanTaskRecordStore(tmp_path).file_path
         raw = json.loads(path.read_text())
@@ -124,7 +129,7 @@ def test_supervisor_selected_correction_target_is_bound_to_its_declaration(tmp_p
             tmp_path, playbook=playbook, workflow_id="workflow",
             target_step="develop", entries=(entry,),
         )
-        assert receipts[entry.source_identity]["declared_continuation"] == "pr"
+        assert receipts[entry.source_identity]["declared_continuation"] == continuation
 
 
 @pytest.mark.parametrize(

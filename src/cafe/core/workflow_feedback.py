@@ -163,7 +163,7 @@ def supervisor_feedback_receipts(
                 not isinstance(declared, str)
                 or declared not in policy_targets
                 or declared not in binding_targets
-                or declared not in playbook.get("steps", {})
+                or (declared != "_done" and declared not in playbook.get("steps", {}))
             ):
                 raise WorkflowFeedbackError("supervisor feedback selected target is invalid")
         elif payload.get("target") is not None:
