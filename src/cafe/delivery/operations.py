@@ -12,7 +12,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-from cafe.delivery.contracts import ActionSnapshot
+from cafe.delivery.contracts import ActionSnapshot, digest
 from cafe.delivery.records import ActionStore
 
 
@@ -133,6 +133,55 @@ def _local_result(commands, dest, proposal):
     return None
 
 
+def _local_evidence(commands, dest):
+    pending = []
+    for name in ("MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply"):
+        path = Path(commands.git(dest, "rev-parse", "--git-path", name))
+        if (path if path.is_absolute() else dest / path).exists():
+            pending.append(name)
+    return {
+        "head": commands.git(dest, "rev-parse", "HEAD"),
+        "tree": commands.git(dest, "rev-parse", "HEAD^{tree}"),
+        "clean": not commands.git(dest, "status", "--porcelain", "--untracked-files=all"),
+        "pending": pending,
+    }
+
+
+def _settled_local_attempt(commands, dest, prior, proposal):
+    """A failed child alone is insufficient: require the exact pristine pre-effect state."""
+    before = prior.get("local_before")
+    process = prior.get("process", {})
+    code = process.get("returncode")
+    if (
+        process.get("status") != "exited"
+        or process.get("timed_out") is not False
+        or not isinstance(code, int)
+        or isinstance(code, bool)
+        or code <= 0
+    ):
+        return None
+    if before is None:
+        # Previous adapter versions checked this exact pinned HEAD and clean destination
+        # before dispatch, but did not persist the tree. Retain their recorded authority.
+        before = {
+            "head": proposal.target_oid,
+            "tree": commands.git(dest, "rev-parse", proposal.target_oid + "^{tree}"),
+            "clean": True,
+            "pending": [],
+        }
+    if not before.get("clean") or before.get("pending"):
+        return None
+    after = _local_evidence(commands, dest)
+    if after != before:
+        return None
+    return {
+        "state": "settled",
+        "local_before": before,
+        "settlement": {"reason": "verified_failed_no_effect", "before": before, "after": after},
+        "process": process,
+    }
+
+
 def _github_pr(commands, root, proposal, *, reconcile_only=False):
     remote = commands.git(root, "remote", "get-url", "origin").removesuffix(".git")
     if remote not in {
@@ -174,35 +223,131 @@ def _merged(data):
     return None
 
 
-def _issue_matches(commands, snapshot, item):
+def _issue_identity(row, repo):
+    if not isinstance(row, dict) or "pull_request" in row:
+        raise OperationError("issue_marker_identity_changed", state="unknown")
+    url = str(row.get("html_url", ""))
+    match = re.fullmatch(f"https://github.com/{re.escape(repo)}/issues/([1-9][0-9]*)", url)
+    if not match or row.get("number", int(match[1])) != int(match[1]):
+        raise OperationError("issue_marker_identity_changed", state="unknown")
+    if "number" in row and (not isinstance(row["number"], int) or isinstance(row["number"], bool)):
+        raise OperationError("issue_marker_identity_changed", state="unknown")
+    return {"number": int(match[1]), "url": url}
+
+
+def _verify_issue(row, snapshot, item):
+    identity = _issue_identity(row, snapshot.proposal.issue_repository)
+    if row.get("title") != item.title or row.get("body") != item.body + "\n\n" + snapshot.marker(
+        item.id
+    ):
+        raise OperationError("issue_marker_identity_changed", state="unknown")
+    return identity
+
+
+def _known_issue(commands, snapshot, item, identity):
+    repo = snapshot.proposal.issue_repository
+    number = identity.get("number") if isinstance(identity, dict) else None
+    if (
+        not isinstance(number, int)
+        or isinstance(number, bool)
+        or number < 1
+        or identity.get("url") != f"https://github.com/{repo}/issues/{number}"
+    ):
+        raise OperationError("issue_marker_identity_changed", state="unknown")
+    row = commands.api(f"repos/{repo}/issues/{identity['number']}")
+    if _verify_issue(row, snapshot, item) != identity:
+        raise OperationError("issue_marker_identity_changed", state="unknown")
+    return row
+
+
+def _issue_matches(commands, snapshot, item, store, prior):
+    """Persist at most ten pages per invocation; an incomplete scan never permits replay."""
     repo = snapshot.proposal.issue_repository
     marker = snapshot.marker(item.id)
-    # Paginate the repository listing; search indexing is not proof of absence.
-    matches = []
-    for page in range(1, 11):
-        rows = commands.api(f"repos/{repo}/issues?state=all&per_page=100&page={page}")
-        if not isinstance(rows, list):
+    scan = (prior or {}).get("issue_observation") or {
+        "next_page": 1,
+        "matches": [],
+        "marker": marker,
+    }
+    if (
+        scan.get("marker") != marker
+        or not isinstance(scan.get("next_page"), int)
+        or isinstance(scan.get("next_page"), bool)
+        or scan["next_page"] < 1
+        or not isinstance(scan.get("matches"), list)
+        or len(scan["matches"]) > 2
+    ):
+        raise OperationError("invalid_issue_observation", state="unknown")
+    matches = list(scan["matches"])
+    observed = {}
+    if len(matches) > 1:
+        raise OperationError("ambiguous_issue_marker", state="unknown")
+    budget = 10
+
+    def endpoint(page):
+        return f"repos/{repo}/issues?state=all&per_page=100&page={page}&sort=created&direction=asc"
+
+    if scan["next_page"] > 1:
+        anchor = scan.get("anchor", {})
+        if anchor.get("page") != scan["next_page"] - 1:
+            raise OperationError("invalid_issue_observation", state="unknown")
+        rows = commands.api(endpoint(anchor["page"]))
+        budget -= 1
+        if digest(rows) != anchor.get("sha256"):
+            # Deletions or edits must not silently shift pagination past a possible duplicate.
+            scan = {"next_page": 1, "matches": [], "marker": marker}
+            matches = []
+    for page in range(scan["next_page"], scan["next_page"] + budget):
+        # Creation order is stable as new issues/PRs append, unlike updated-time ordering.
+        rows = commands.api(endpoint(page))
+        if not isinstance(rows, list) or len(rows) > 100:
             raise OperationError("issue_observation_unavailable", state="unknown")
         for row in rows:
             if not isinstance(row, dict) or not isinstance(row.get("body") or "", str):
                 raise OperationError("issue_observation_unavailable", state="unknown")
             if marker in (row.get("body") or "") and "pull_request" not in row:
-                if (
-                    row.get("title") != item.title
-                    or row.get("body") != item.body + "\n\n" + marker
-                    or not re.fullmatch(
-                        f"https://github.com/{re.escape(repo)}/issues/[1-9][0-9]*",
-                        str(row.get("html_url", "")),
+                identity = _verify_issue(row, snapshot, item)
+                matches.append(identity)
+                observed[identity["number"]] = row
+                if len(matches) > 1:
+                    store.finish(
+                        item.id,
+                        {
+                            "state": (prior or {}).get("state", "not_dispatched"),
+                            "issue_observation": {
+                                "next_page": page,
+                                "matches": matches,
+                                "marker": marker,
+                            },
+                        },
                     )
-                ):
-                    raise OperationError("issue_marker_identity_changed", state="unknown")
-                matches.append(row)
+                    raise OperationError("ambiguous_issue_marker", state="unknown")
+        scan = {
+            "next_page": page + 1,
+            "matches": matches,
+            "marker": marker,
+            "anchor": {"page": page, "sha256": digest(rows)},
+        }
+        store.finish(
+            item.id,
+            {
+                "state": (prior or {}).get("state", "not_dispatched"),
+                "issue_observation": scan,
+                **({"process": prior["process"]} if prior and "process" in prior else {}),
+            },
+        )
         if len(rows) < 100:
-            if len(matches) > 1:
-                raise OperationError("ambiguous_issue_marker", state="unknown")
-            return matches[0] if matches else None
+            # Clear the cursor only after complete observation. Exact identity is verified directly.
+            store.finish(
+                item.id,
+                {"state": (prior or {}).get("state", "not_dispatched"), "issue_observation": None},
+            )
+            if not matches:
+                return None
+            return observed.get(matches[0]["number"]) or _known_issue(
+                commands, snapshot, item, matches[0]
+            )
     raise OperationError("issue_observation_incomplete", state="unknown")
-
 
 
 def _dispatch(commands, store, action, argv, **kwargs):
@@ -210,20 +355,26 @@ def _dispatch(commands, store, action, argv, **kwargs):
     try:
         output, code = commands.run(argv, **kwargs)
     except OperationError as exc:
-        store.finish(action, {
-            "state": "unknown",
-            "process": {
-                "status": "exited" if exc.returncode is not None else "not_started",
-                "returncode": exc.returncode,
-                "timed_out": exc.timed_out,
-                "error": str(exc),
+        store.finish(
+            action,
+            {
+                "state": "unknown",
+                "process": {
+                    "status": "exited" if exc.returncode is not None else "not_started",
+                    "returncode": exc.returncode,
+                    "timed_out": exc.timed_out,
+                    "error": str(exc),
+                },
             },
-        })
+        )
         raise
-    store.finish(action, {
-        "state": "unknown",
-        "process": {"status": "exited", "returncode": code, "timed_out": False},
-    })
+    store.finish(
+        action,
+        {
+            "state": "unknown",
+            "process": {"status": "exited", "returncode": code, "timed_out": False},
+        },
+    )
     return output, code
 
 
@@ -235,16 +386,25 @@ def _process_evidence(store, action, prior):
     status = "unavailable" if receipt else "not_dispatched"
     return {"status": status, "returncode": None, "timed_out": None}
 
+
 def execute_action(
-    root: Path, issue_dir: Path, snapshot: ActionSnapshot, action: str, *, timeout=120
+    root: Path,
+    issue_dir: Path,
+    snapshot: ActionSnapshot,
+    action: str,
+    *,
+    timeout=120,
+    observe_only=False,
 ):
-    """Called only by registered host adapters after exact capability approval."""
+    """Mutate only through approved adapters; recovery/observe_only paths are read-only."""
     commands = Commands(timeout)
     store = ActionStore(issue_dir, snapshot)
     p = snapshot.proposal
     with store.locked():
         prior = store.read(action) or store.correlated_attempt(action)
-        reconcile_only = bool(prior and prior["state"] in {"unknown", "succeeded"})
+        if prior and prior["state"] == "settled":
+            return prior
+        reconcile_only = bool(prior and prior["state"] in {"unknown", "succeeded", "settled"})
         try:
             if action == "integration" and p.mode == "local":
                 with _destination_lock(p.destination):
@@ -252,20 +412,29 @@ def execute_action(
                     result = _local_result(commands, dest, p)
                     if result is None:
                         if prior and prior["state"] not in {"not_dispatched", "blocked"}:
+                            settled = _settled_local_attempt(commands, dest, prior, p)
+                            if settled:
+                                store.finish(action, settled)
+                                return store.read(action)
                             raise OperationError("unreconciled_local_attempt", state="unknown")
                         if commands.git(dest, "rev-parse", "HEAD") != p.target_oid:
                             raise OperationError("changed_destination")
-                        store.start(action)
+                        before = _local_evidence(commands, dest)
+                        if before["pending"]:
+                            raise OperationError("unfinished_destination_operation")
+                        store.start(action, local_before=before)
                         flag = "--ff-only" if p.strategy == "ff-only" else "--no-ff"
                         _, code = _dispatch(
-                            commands, store, action,
+                            commands,
+                            store,
+                            action,
                             ["git", "-C", str(dest), "merge", flag, "--no-edit", p.source_oid],
                             allow_failure=True,
                         )
-                        if code:
-                            raise OperationError("integration_conflict", returncode=code)
                         result = _local_result(commands, dest, p)
                         if result is None:
+                            if code:
+                                raise OperationError("integration_conflict", returncode=code)
                             raise OperationError("integration_unobserved", state="unknown")
             elif action == "integration":
                 data = _github_pr(commands, root, p, reconcile_only=reconcile_only)
@@ -280,7 +449,9 @@ def execute_action(
                         raise OperationError("changed_pr_base")
                     store.start(action)
                     _dispatch(
-                        commands, store, action,
+                        commands,
+                        store,
+                        action,
                         [
                             "gh",
                             "pr",
@@ -291,7 +462,7 @@ def execute_action(
                             "--" + p.strategy,
                             "--match-head-commit",
                             p.source_oid,
-                        ]
+                        ],
                     )
                     result = _merged(_github_pr(commands, root, p))
                     if result is None:
@@ -300,31 +471,72 @@ def execute_action(
                 item = next((item for item in snapshot.selected if item.id == action), None)
                 if item is None:
                     raise OperationError("unselected_issue")
-                row = _issue_matches(commands, snapshot, item)
+                identity = (prior or {}).get("issue_identity")
+                row = (
+                    _known_issue(commands, snapshot, item, identity)
+                    if identity
+                    else (
+                        None
+                        if prior
+                        and prior.get("issue_observation_ready")
+                        and prior["state"] in {"not_dispatched", "blocked"}
+                        and not observe_only
+                        else _issue_matches(commands, snapshot, item, store, prior)
+                    )
+                )
                 if row is None:
                     if prior and prior["state"] not in {"not_dispatched", "blocked"}:
                         raise OperationError("unreconciled_issue_attempt", state="unknown")
+                    if observe_only:
+                        result = {"state": "not_dispatched", "issue_observation_ready": True}
+                        store.finish(action, result)
+                        return store.read(action)
                     store.start(action)
                     response, _ = _dispatch(
-                        commands, store, action,
-                        ["gh", "api", f"repos/{p.issue_repository}/issues",
-                         "--method", "POST", "--input", "-"],
-                        input=json.dumps({
-                            "title": item.title,
-                            "body": item.body + "\n\n" + snapshot.marker(item.id),
-                        }),
+                        commands,
+                        store,
+                        action,
+                        [
+                            "gh",
+                            "api",
+                            f"repos/{p.issue_repository}/issues",
+                            "--method",
+                            "POST",
+                            "--input",
+                            "-",
+                        ],
+                        input=json.dumps(
+                            {
+                                "title": item.title,
+                                "body": item.body + "\n\n" + snapshot.marker(item.id),
+                            }
+                        ),
                     )
                     try:
-                        json.loads(response)
+                        identity = _verify_issue(json.loads(response), snapshot, item)
                     except json.JSONDecodeError as exc:
                         raise OperationError("malformed_observation", state="unknown") from exc
-                    row = _issue_matches(commands, snapshot, item)
-                    if row is None:
-                        raise OperationError("issue_unobserved", state="unknown")
-                result = {"state": "succeeded", "url": row["html_url"], "proposal_id": item.id}
+                    # Retain the positive creation response before another I/O boundary.
+                    store.finish(
+                        action,
+                        {
+                            "state": "unknown",
+                            "issue_identity": identity,
+                            "process": _process_evidence(store, action, prior),
+                        },
+                    )
+                    row = _known_issue(commands, snapshot, item, identity)
+                identity = _verify_issue(row, snapshot, item)
+                result = {
+                    "state": "succeeded",
+                    "url": identity["url"],
+                    "number": identity["number"],
+                    "proposal_id": item.id,
+                    "issue_identity": identity,
+                }
             result["process"] = _process_evidence(store, action, prior)
             store.finish(action, result)
-            return result
+            return store.read(action)
         except (OperationError, OSError, ValueError) as exc:
             # Once dispatched, uncertainty must never be converted into retry permission.
             attempted = store.read(action)

@@ -866,29 +866,25 @@ def _apply_human_task_payload(
             },
         )
         return HumanTaskApplication(target=None, policy=policy, rejection=durable_rejection)
-    delivery_declaration = playbook_data.get("steps", {}).get(from_step, {}).get("delivery")
-    if delivery_declaration and durable_task is None:
-        from cafe.delivery.contracts import DeliveryBinding
-        action_binding = DeliveryBinding.model_validate(delivery_declaration)
-        if policy.id in {action_binding.approval_task, action_binding.result_task}:
-            return _durable_task_routing_rejection(
-                issue_dir=issue_dir, blackboard=blackboard, task_id=policy.id,
-                message="The exact host-produced action/result task is required before this response.",
-            )
+    try:
+        from cafe.delivery.selection import validate_task_response
+
+        validate_task_response(
+            issue_dir,
+            playbook_data.get("steps", {}).get(from_step, {}),
+            policy,
+            durable_task,
+            raw_payload,
+        )
+    except (OSError, TypeError, ValueError) as exc:
+        return _durable_task_routing_rejection(
+            issue_dir=issue_dir,
+            blackboard=blackboard,
+            task_id=durable_task.id if durable_task is not None else policy.id,
+            message=f"The saved human task has an invalid response contract: {exc}",
+        )
     if durable_task is not None:
         try:
-            delivery = playbook_data.get("steps", {}).get(from_step, {}).get("delivery")
-            if delivery:
-                from cafe.core.human_tasks import _parse_payload
-                from cafe.delivery.contracts import DeliveryBinding
-                from cafe.delivery.selection import validate_response
-
-                validate_response(
-                    issue_dir,
-                    DeliveryBinding.model_validate(delivery),
-                    durable_task,
-                    _parse_payload(policy, raw_payload),
-                )
             snapshot = HumanTaskPolicy.model_validate(durable_task.expected_result)
             if _task_machine_contract(snapshot) != _task_machine_contract(policy):
                 raise ValueError("Saved task policy does not match the current declaration")

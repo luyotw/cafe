@@ -112,6 +112,24 @@ def snapshot_from_args(args) -> ActionSnapshot:
     return ActionSnapshot.model_validate(json.loads(raw))
 
 
+def validate_task_response(issue_dir, step_definition, policy, task, raw_payload):
+    """The existing response entry delegates delivery rules without a generic registry."""
+    declaration = step_definition.get("delivery")
+    if not declaration:
+        return
+    from cafe.core.human_tasks import _parse_payload
+    from cafe.delivery.contracts import DeliveryBinding
+
+    binding = DeliveryBinding.model_validate(declaration)
+    if task is None:
+        if policy.id in {binding.approval_task, binding.result_task}:
+            raise ValueError(
+                "The exact host-produced action/result task is required before this response."
+            )
+        return
+    validate_response(issue_dir, binding, task, _parse_payload(policy, raw_payload))
+
+
 def validate_response(issue_dir, binding, task, payload):
     """Validate only the declared delivery tasks; no universal terminal validator."""
     if not isinstance(payload, dict):
@@ -194,8 +212,8 @@ def validate_complete_report(issue_dir, snapshot, report):
         previous_store = ActionStore(issue_dir, previous)
         for action in ["integration", *[item.id for item in previous.selected]]:
             receipt = previous_store.read(action)
-            if receipt and receipt["state"] in {"unknown", "succeeded"}:
-                if receipt["state"] != "succeeded":
+            if receipt and receipt["state"] in {"unknown", "succeeded", "settled"}:
+                if receipt["state"] not in {"succeeded", "settled"}:
                     raise ValueError("an earlier effect is still unknown")
                 retained[f"{previous.digest}:{action}"] = effect(receipt)
     shown = {key: effect(value) for key, value in report.get("previous_results", {}).items()}

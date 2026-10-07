@@ -103,3 +103,58 @@ def test_completed_integration_can_be_observed_after_source_advances(local_actio
     observed = execute_action(root, issue, snapshot, "integration", timeout=20)
     assert observed["state"] == "succeeded"
     assert observed["commit"] == completed["commit"] == git(dest, "rev-parse", "HEAD")
+
+
+@pytest.mark.parametrize("uncertainty", ["dirty", "zero_exit", "timeout"])
+def test_local_abort_does_not_settle_unproven_effects(local_action, uncertainty):
+    import json
+    from cafe.delivery.records import ActionStore
+
+    root, dest, issue, initial = local_action
+    (dest / "result.txt").write_text("Competing target")
+    git(dest, "add", "result.txt")
+    git(dest, "commit", "-m", "Competing target")
+    target = git(dest, "rev-parse", "HEAD")
+    p = initial.proposal.model_copy(update={"strategy": "merge-commit", "target_oid": target})
+    snapshot = approve_selection(p, authority(p, "integrate_only", ""))
+    assert execute_action(root, issue, snapshot, "integration")["state"] == "unknown"
+    git(dest, "merge", "--abort")
+    store = ActionStore(issue, snapshot)
+    if uncertainty == "dirty":
+        (dest / "uncertain-effect.txt").write_text("Unsettled effect")
+    else:
+        receipt = store.read("integration")
+        receipt["process"] = {
+            "status": "exited",
+            "returncode": 0 if uncertainty == "zero_exit" else -9,
+            "timed_out": uncertainty == "timeout",
+        }
+        store.path("integration").write_text(json.dumps(receipt))
+    observed = execute_action(root, issue, snapshot, "integration")
+    assert observed["state"] == "unknown"
+    assert git(dest, "rev-parse", "HEAD") == target
+    assert store.read("integration")["state"] == "unknown"
+
+
+def test_nonzero_exit_after_actual_integration_retains_positive_effect(local_action, monkeypatch):
+    from cafe.delivery.operations import Commands
+
+    root, dest, issue, snapshot = local_action
+    run = Commands.run
+    mutations = []
+
+    def nonzero_after_effect(self, argv, **kwargs):
+        output, code = run(self, argv, **kwargs)
+        if "merge" in argv:
+            mutations.append(argv)
+            return output, 1
+        return output, code
+
+    monkeypatch.setattr(Commands, "run", nonzero_after_effect)
+    completed = execute_action(root, issue, snapshot, "integration")
+    assert completed["state"] == "succeeded"
+    assert completed["commit"] == git(dest, "rev-parse", "HEAD") == snapshot.proposal.source_oid
+    assert completed["process"]["returncode"] == 1
+    observed = execute_action(root, issue, snapshot, "integration")
+    assert observed["state"] == "succeeded" and observed["process"] == completed["process"]
+    assert len(mutations) == 1

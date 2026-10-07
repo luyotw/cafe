@@ -77,7 +77,7 @@ def execute_snapshot(
         previous_store = ActionStore(issue_dir, previous)
         for action in ["integration", *[item.id for item in previous.selected]]:
             receipt = previous_store.read(action)
-            if not receipt or receipt["state"] not in {"unknown", "succeeded"}:
+            if not receipt or receipt["state"] not in {"unknown", "succeeded", "settled"}:
                 continue
             if receipt["state"] == "unknown" and deadline - time.monotonic() > 5:
                 # Existing unknown attempts permit observation only, even if a revision drops them.
@@ -88,7 +88,7 @@ def execute_snapshot(
     unresolved_history = [
         "previous:" + key
         for key, value in previous_results.items()
-        if value["state"] != "succeeded"
+        if value["state"] not in {"succeeded", "settled"}
     ]
     # Resolve retained uncertainty before any newly approved effect or host approval request.
     for action in (actions if not unresolved_history else []):
@@ -97,13 +97,26 @@ def execute_snapshot(
             results[action] = {"state": "not_dispatched", "error": "batch_deadline"}
             break
         prior = store.read(action) or store.correlated_attempt(action)
-        if prior and prior["state"] in {"unknown", "succeeded"}:
+        if prior and prior["state"] in {"unknown", "succeeded", "settled"}:
             # Observation is read-only. It never replays an unknown/successful effect.
             result = execute_action(root, issue_dir, snapshot, action, timeout=remaining)
             results[action] = result
             if result["state"] != "succeeded":
                 break
             continue
+        if action != "integration":
+            # Finish bounded read-only observation before opening a mutating host attempt.
+            # A partial scan cannot consume the one-shot capability execution or bypass it.
+            result = execute_action(
+                root, issue_dir, snapshot, action, timeout=remaining, observe_only=True
+            )
+            if result["state"] == "succeeded":
+                results[action] = result
+                continue
+            if not result.get("issue_observation_ready"):
+                results[action] = result
+                break
+            remaining = deadline - time.monotonic()
         request = action_request(registry, snapshot, issue_dir, action)
         evaluation = evaluate_capability_request(registry, request)
         if evaluation.decision == PolicyDecision.REQUIRE_APPROVAL:

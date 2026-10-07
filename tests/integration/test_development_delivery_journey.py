@@ -89,7 +89,14 @@ def pause(issue, state, step, intent=HandoffIntent.CONFIRM_OUTPUT):
 
 
 def setup_action(
-    local_action, tmp_path, *, renamed=False, github=False, proposals=(), playbook="direct"
+    local_action,
+    tmp_path,
+    *,
+    renamed=False,
+    github=False,
+    proposals=(),
+    playbook="direct",
+    strategy=None,
 ):
     root, dest, _, local = local_action
     data = graph(root, renamed=renamed, playbook=playbook)
@@ -106,7 +113,7 @@ def setup_action(
     )
     request = {
         "mode": "github" if github else "local",
-        "strategy": "merge" if github else "ff-only",
+        "strategy": strategy or ("merge" if github else "ff-only"),
         "target_branch": "develop",
         "destination": "" if github else str(dest),
         "issue_repository": "owner/repo" if proposals else "",
@@ -306,11 +313,14 @@ if argv[:2] == ['pr', 'merge']:
     path.write_text(json.dumps(state))
     sys.exit(0)
 endpoint = argv[1]
+state.setdefault('observations', []).append(endpoint)
+path.write_text(json.dumps(state))
 if '/pulls/' in endpoint:
     print(json.dumps(state['pr']))
 elif '--method' in argv:
     draft = json.load(sys.stdin)
-    draft['html_url'] = 'https://github.com/owner/repo/issues/' + str(len(state['issues'])+1)
+    draft['number'] = max((row['number'] for row in state['issues']), default=0) + 1
+    draft['html_url'] = 'https://github.com/owner/repo/issues/' + str(draft['number'])
     state['issues'].append(draft)
     state['effects'].append('issue')
     path.write_text(json.dumps(state))
@@ -318,7 +328,20 @@ elif '--method' in argv:
         sys.exit(1)
     print(json.dumps(draft))
 else:
-    print(json.dumps(state['issues']))
+    from urllib.parse import parse_qs, urlparse
+    parsed = urlparse(endpoint)
+    identity = parsed.path.rsplit('/', 1)[-1]
+    if identity.isdigit():
+        if state.get('fail_issue_observation'):
+            sys.exit(1)
+        row = next((row for row in state['issues'] if row['number'] == int(identity)), None)
+        if row is None:
+            sys.exit(1)
+        print(json.dumps(row))
+    else:
+        page = int(parse_qs(parsed.query).get('page', ['1'])[0])
+        rows = sorted(state['issues'], key=lambda row: row['number'])
+        print(json.dumps(rows[(page-1)*100:page*100]))
 """)
     gh.chmod(0o755)
     import os

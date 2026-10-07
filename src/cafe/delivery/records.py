@@ -46,8 +46,37 @@ class ActionStore:
         record = json.loads(path.read_text())
         if record.get("snapshot") != self.snapshot.digest or record.get("action") != action:
             raise ValueError("action receipt identity changed")
-        if record.get("state") not in {"unknown", "succeeded", "not_dispatched", "blocked"}:
+        if record.get("state") not in {
+            "unknown",
+            "succeeded",
+            "settled",
+            "not_dispatched",
+            "blocked",
+        }:
             raise ValueError("invalid action state")
+        if record["state"] == "settled":
+            proof = record.get("settlement", {})
+            before = record.get("local_before")
+            process = record.get("process", {})
+            code = process.get("returncode")
+            if (
+                action != "integration"
+                or self.snapshot.proposal.mode != "local"
+                or not before
+                or before.get("head") != self.snapshot.proposal.target_oid
+                or not re.fullmatch(r"[0-9a-f]{40}", str(before.get("tree", "")))
+                or not before.get("clean")
+                or before.get("pending")
+                or proof.get("reason") != "verified_failed_no_effect"
+                or proof.get("before") != before
+                or proof.get("after") != before
+                or process.get("status") != "exited"
+                or process.get("timed_out") is not False
+                or not isinstance(code, int)
+                or isinstance(code, bool)
+                or code <= 0
+            ):
+                raise ValueError("local settlement lacks positive failure/no-effect evidence")
         return record
 
     def correlated_attempt(self, action: str):
@@ -89,17 +118,32 @@ class ActionStore:
                 return record
         return None
 
-    def start(self, action: str):
+    def start(self, action: str, **evidence):
         prior = self.read(action)
         if prior is not None and prior["state"] not in {"not_dispatched", "blocked"}:
             raise ValueError("action needs reconciliation before retry")
-        self.finish(action, {"state": "unknown"})
+        self.finish(
+            action,
+            {
+                "state": "unknown",
+                **evidence,
+                "process": {"status": "dispatching", "returncode": None, "timed_out": None},
+            },
+        )
 
     def finish(self, action: str, result: dict):
+        prior = self.read(action) or {}
+        # Observation cursors and dispatch identity survive later process/error receipts.
+        retained = {
+            key: prior[key]
+            for key in ("local_before", "issue_identity", "issue_observation", "process")
+            if key in prior
+        }
         atomic_write_bytes(
             self.path(action),
             canonical_json(
                 {
+                    **retained,
                     **result,
                     "snapshot": self.snapshot.digest,
                     "action": action,
