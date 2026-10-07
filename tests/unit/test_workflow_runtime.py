@@ -1094,6 +1094,29 @@ def test_local_review_task_reports_an_emitted_pr_url_only(
     _write_publication_contract(issue_dir, persisted=choice)
     playbook = PlaybookLoader().load("standard")
     url = "https://github.com/acme/widgets/pull/467"
+    # This stub exercises legacy local review, not the delivery-review action
+    # proposal produced by the current PR publication hooks.
+    playbook["steps"]["pr"]["human_tasks"] = [
+        binding
+        for binding in playbook["steps"]["pr"]["human_tasks"]
+        if binding["trigger"] != "confirm_output"
+    ] + [
+        {
+            "trigger": "confirm_output",
+            "task_id": "local-review",
+            "outcomes": {
+                "fix_now": "pr",
+                "create_follow_up": "_done",
+                "continue_without_issue": "_done",
+            },
+            "feedback_delivery": {
+                "artifact": "workflow_feedback",
+                "source_kind": "local_review",
+                "todo_source": "workflow_feedback",
+                "todo_id_prefix": "WF",
+            },
+        }
+    ]
 
     def executor(step: str, *_args: object, **_kwargs: object) -> StepExecutionResult:
         _write_baton(
@@ -1124,11 +1147,13 @@ def test_local_review_task_reports_an_emitted_pr_url_only(
 
     assert result.final_status_code == "BATON_CONFIRM_OUTPUT"
     task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    assert task.policy_id == "local-review"
+    assert "https://github.com/stale/project/pull/1" not in task.prompt
     if choice:
-        assert f"Verified PR URL: {url}" in task.prompt
+        assert url in task.prompt
     else:
+        assert url not in task.prompt
         assert "Publication mode:" not in task.prompt
-        assert "https://github.com/stale/project/pull/1" not in task.prompt
 
 
 @pytest.mark.parametrize(

@@ -1,3 +1,9 @@
+# Phase-owned development delivery
+
+For an adopting graph, the declared delivery phase owns exact integration and selected issue effects, durable receipts, recovery and mandatory final user acceptance. Manager observes this phase once and retains coordination and separately confirmed cleanup. Unknown, partial or approval-pending actions remain nonterminal. Manager must never replay an action through closeout or a Git conflict repair fallback. Send implementation conflicts and changed code to the declared Develop correction route; revised action selection returns to the declared PR review.
+
+Fresh nested contract version 5 has cleanup only. Use archive-only CAFE cleanup to avoid implicit local integration. Existing legacy versions and compact routes keep their original authority and receipts; legacy merge commands lacking an exact target/source binding pause rather than guessing or migrating.
+
 # Completion And Action Authority
 
 ## Compact route
@@ -118,7 +124,7 @@ issue worktree. Keep every argv exactly as confirmed; do not add, remove,
 reorder, rewrite, shell-wrap, retry, or replay a command. Stop and report the
 first command failure.
 
-For each confirmed `deliver` or `cleanup` command, use
+For each confirmed `cleanup` command (or a narrowly bound recorded legacy `deliver` command), use
 `scripts/execute_closeout.py` as the sole command execution path. It reads the
 confirmed Manager contract immediately before execution and records the exact
 ordered argv, contract digest, issue/workflow identity, worktree target, and each

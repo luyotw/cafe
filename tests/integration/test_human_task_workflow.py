@@ -31,6 +31,33 @@ DEVELOPMENT_PLAYBOOKS = (
 )
 
 
+def legacy_development_graph(playbook_id="standard"):
+    data = PlaybookLoader().load(playbook_id)
+    data["steps"].pop("deliver", None)
+    pr = data["steps"]["pr"]
+    pr.pop("delivery", None)
+
+    pr["human_tasks"] = tuple(
+        [task for task in pr["human_tasks"] if task["trigger"] != "confirm_output"]
+        + [
+            {
+                "trigger": "confirm_output",
+                "task_id": "local-review",
+                "outcomes": {
+                    "fix_now": "pr",
+                    "create_follow_up": "_done",
+                    "continue_without_issue": "_done",
+                },
+                "feedback_delivery": {"artifact": "workflow_feedback", "source_kind": "local_review", "todo_source": "workflow_feedback", "todo_id_prefix": "WF"},
+            }
+        ]
+    )
+    pr["hooks"]["publish_output"] = [
+        hook for hook in pr["hooks"]["publish_output"] if hook != "DevelopmentActionContext"
+    ]
+    return data
+
+
 def _configure_publication(issue_dir: Path, *, playbook_id: str, enabled: bool = False) -> None:
     issue_dir.mkdir(parents=True, exist_ok=True)
     (issue_dir / "issue.yaml").write_text(
@@ -62,7 +89,7 @@ def _materialize_default_task(
     trigger: str,
     workflow_id: str | None = None,
 ):
-    playbook = PlaybookLoader().load("standard")
+    playbook = legacy_development_graph() if from_step == "pr" else PlaybookLoader().load("standard")
     policy, binding = resolve_step_human_task(
         playbook_data=playbook, step_name=from_step, trigger=trigger
     )
@@ -80,7 +107,9 @@ def _materialize_default_task(
 
 
 @pytest.mark.parametrize("playbook_id", DEVELOPMENT_PLAYBOOKS)
-def test_builtin_pr_pauses_for_local_review_before_done(tmp_path: Path, playbook_id: str) -> None:
+def test_builtin_pr_pauses_for_action_review_before_delivery(
+    tmp_path: Path, playbook_id: str
+) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / f"{playbook_id}-pr-review"
     _configure_publication(issue_dir, playbook_id=playbook_id)
     playbook = PlaybookLoader().load(playbook_id, strict=True)
@@ -144,7 +173,7 @@ def test_builtin_pr_pauses_for_local_review_before_done(tmp_path: Path, playbook
     assert state.current_step == "user"
     assert attempts == 2
     assert len(pending) == 1
-    assert pending[0].policy_id == "local-review"
+    assert pending[0].policy_id == "delivery-review"
     assert any(
         event.event_type == "baton_rejected"
         and event.data.get("invalid_value") == "workflow_complete"
@@ -158,15 +187,15 @@ def test_builtin_pr_pauses_for_local_review_before_done(tmp_path: Path, playbook
         from_step="pr",
         trigger="confirm_output",
         raw_payload={
-            "task": "local-review",
-            "decision": "continue_without_issue",
+            "task": "delivery-review",
+            "decision": "review_only",
             "human_task_id": pending[0].id,
         },
         source="integration",
     )
 
-    assert approval.target == "done"
-    assert BlackboardStore(issue_dir).load_or_create("pr").current_step == "done"
+    assert approval.target == "pr"
+    assert BlackboardStore(issue_dir).load_or_create("pr").current_step == "pr"
 
 
 def test_custom_pr_keeps_its_declared_terminal_route(tmp_path: Path) -> None:
@@ -523,7 +552,7 @@ def test_default_local_review_continue_does_not_create_durable_feedback(tmp_path
     from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 
     issue_dir = tmp_path / ".cafe" / "issues" / "local-review-approval"
-    playbook = PlaybookLoader().load("standard")
+    playbook = legacy_development_graph()
     store, state = _paused_default_state(
         issue_dir, from_step="pr", intent=HandoffIntent.CONFIRM_OUTPUT
     )
@@ -556,7 +585,7 @@ def test_local_review_follow_up_dispositions_are_durable_terminal_decisions(
     from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 
     issue_dir = tmp_path / ".cafe" / "issues" / f"local-review-{decision}"
-    playbook = PlaybookLoader().load("standard")
+    playbook = legacy_development_graph()
     store, state = _paused_default_state(
         issue_dir, from_step="pr", intent=HandoffIntent.CONFIRM_OUTPUT
     )
@@ -592,7 +621,7 @@ def test_durable_local_review_delivers_feedback_and_completes_one_task(tmp_path:
     from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 
     issue_dir = tmp_path / ".cafe" / "issues" / "durable-local-review"
-    playbook = PlaybookLoader().load("standard")
+    playbook = legacy_development_graph()
     store, state = _paused_default_state(
         issue_dir, from_step="pr", intent=HandoffIntent.CONFIRM_OUTPUT
     )
@@ -634,7 +663,7 @@ def test_pr_supervisor_continuation_reaches_qa_without_recurating_raw_feedback(
     from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 
     issue_dir = tmp_path / "supervisor-develop-qa"
-    playbook = PlaybookLoader().load("standard")
+    playbook = legacy_development_graph()
     playbook["steps"]["develop"] = {
         "skill": "phase",
         "role": "developer",

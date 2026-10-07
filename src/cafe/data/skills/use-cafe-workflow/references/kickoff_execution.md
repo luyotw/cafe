@@ -44,8 +44,6 @@ Read this direct-CLI example only when using the formatter without that helper.
 python3 <skill-dir>/scripts/format_kickoff_contract.py <playbook-id> \
   --issue-name <issue-name> \
   --delivery-contract '<compact version-3 product JSON without closeout_plan>' \
-  --deliver '[["literal-executable", "literal-argument"]]' \
-  --deliver-description "<action and target in the conversation language>" \
   --cleanup '[["literal-executable", "literal-argument"]]' \
   --cleanup-description "<action and target in the conversation language>" \
   --update-preflight '<bounded runtime-update JSON>' \

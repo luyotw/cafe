@@ -2422,12 +2422,13 @@ def test_builtin_hotfix_and_simple_playbooks_load(cached_builtin_playbook_models
     simple = loader.load_model("simple").model
 
     assert hotfix.entry_point == "develop"
-    assert list(hotfix.steps.keys()) == ["develop", "review", "pr"]
+    assert list(hotfix.steps.keys()) == ["develop", "review", "pr", "deliver"]
     assert hotfix.steps["review"].max_attempts_per_cycle == 1
     assert hotfix.steps["develop"].input_artifacts == [
         "review_feedback",
         "pr_result",
         "workflow_feedback",
+        "delivery_result",
     ]
     assert tdd.steps["develop"].input_artifacts == [
         "spec",
@@ -2435,10 +2436,11 @@ def test_builtin_hotfix_and_simple_playbooks_load(cached_builtin_playbook_models
         "review_feedback",
         "pr_result",
         "workflow_feedback",
+        "delivery_result",
     ]
 
     assert simple.entry_point == "spec"
-    assert list(simple.steps.keys()) == ["spec", "develop", "qa", "pr"]
+    assert list(simple.steps.keys()) == ["spec", "develop", "qa", "pr", "deliver"]
     assert simple.steps["develop"].on["await_agent"] == "qa"
     assert simple.steps["qa"].on["await_agent"] == "pr"
 

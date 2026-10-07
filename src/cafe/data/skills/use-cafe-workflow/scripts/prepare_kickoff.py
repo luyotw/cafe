@@ -273,19 +273,7 @@ def _request_command(args: argparse.Namespace) -> int:
         templates = request.get("preference_templates") or {}
         if isinstance(templates, dict):
             templates = dict(templates)
-        delivery = discovery.get("delivery", {})
-        if isinstance(templates, dict) and delivery.get("status") == "hit" and delivery.get("delivery_template") is not None:
-            # Only forward an unchanged validated template; current overrides may differ.
-            template = delivery["delivery_template"]
-            fields = assembled["formatter_inputs"]
-            context = {"issue_name": fields["issue_name"], "issue_id": request.get("issue_id", ""),
-                       "project_root": fields["project_root"], "worktree": fields.get("worktree") or fields["project_root"]}
-            try:
-                expanded = kickoff_inputs._load_local_module("kickoff_delivery").render_delivery_template(template, context)
-            except (ValueError, TypeError, KeyError):
-                expanded = None  # An inapplicable cache candidate must not block explicit current actions.
-            if expanded is not None and all(expanded[k] == fields[k] for k in ("deliver", "deliver_description")):
-                templates.setdefault("delivery.convention", template)
+
         rendered = kickoff_inputs.render_kickoff(
             assembled.get("formatter_inputs"),
             preference_store=kickoff_preferences.PreferenceStore(args.config_dir, repository_root=Path(request["project_root"])),
