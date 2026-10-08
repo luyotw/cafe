@@ -44,7 +44,13 @@ checkpoints immediately follow their owning phase. Keep task-authority diagnosti
 fields in task inspection output. The default diagram is a
 latest-state projection: it shows each phase's newest durable status and the
 Manager-review or user-confirmation checkpoint currently represented for that
-phase. The default projection never adds correction arrows or a historical
+phase. In phase-owned delivery graphs, the delivery result owner replaces the
+old Manager delivery node: execution and final user acceptance share one node.
+That node shows the user confirmation label while awaiting acceptance and is
+completed only after acceptance is proven. Other phase checkpoints retain their
+own nodes. New kickoff defaults do not add a Manager proactive review of this
+result owner; explicit review choices and existing confirmed contracts remain
+authoritative. The default projection never adds correction arrows or a historical
 trail; later iteration evidence supersedes earlier states. If a phase's newest
 durable state is itself returned, the phase line uses the returned symbol and
 status. A durable manual handoff back to an upstream phase is a return even

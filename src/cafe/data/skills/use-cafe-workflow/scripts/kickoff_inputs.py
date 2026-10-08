@@ -724,7 +724,8 @@ def _prefill_saved_inputs(values: dict[str, Any], *, store: Any, request: dict[s
         if set(value) - set(phases):
             raise ValueError("saved review selectors do not match the selected graph")
         rows = owner._proactive_review_decisions([f"{k}={value[k]}" for k in phases if k in value], agent_phases=list(phases),
-            eligible_phases=set(owner.confirmation_gate_steps(model)) | set(owner.mandatory_confirmation_gate_steps(model)))
+            eligible_phases=set(owner.confirmation_gate_steps(model)) | set(owner.mandatory_confirmation_gate_steps(model)),
+            default_not_required=owner.delivery_result_steps(model))
         return {"proactive_review_decision": [f"{r['phase']}={r['decision']}" for r in rows]}
     apply("review.decisions", {"proactive_review_decision"}, "proactive_review_decision" not in values, reviews)
 
@@ -824,6 +825,7 @@ def _prefill_configured_inputs(values: dict[str, Any], *, project_root: Path, so
         reviews = owner._proactive_review_decisions(
             [], agent_phases=list(phases),
             eligible_phases=set(gates) | set(owner.mandatory_confirmation_gate_steps(model)),
+            default_not_required=owner.delivery_result_steps(model),
         )
         fill("proactive_review_decision", [f"{r['phase']}={r['decision']}" for r in reviews],
              "formatter review default")

@@ -151,9 +151,9 @@ operation replaces it.
 
 For graphs declaring `delivery`, integration and selected follow-up issue creation belong to the development delivery phase. Kickoff confirms the product outcome and separately proposed cleanup. Do not supply Manager `deliver` argv or descriptions, infer them from templates, or execute phase operations through closeout.
 
-Repository delivery discovery retains descriptive conventions, source coverage, freshness and gaps. Resolve exact PR/source/target/strategy or local destination when the PR action review presents actual immutable artifacts. The user selects an explicit subset of original Review drafts or an empty selection. Action selection, host capability approval and final result acceptance are separate HumanTasks; only user confirmation authorizes execution of the shown action bundle.
+Repository delivery discovery retains descriptive conventions, source coverage, freshness and gaps. Resolve exact PR/source/target/strategy or local destination when the PR action review presents actual immutable artifacts. The user selects an explicit subset of original Review drafts or an empty selection. The displayed PR decision covers action selection and its host capability boundaries together, while preserving distinct durable approvals. Final result acceptance remains a separate user decision; only user confirmation authorizes execution of the shown action bundle. Legacy proposals without displayed host boundaries retain separate capability approval.
 
-The formatter produces a version-5 nested `delivery_contract` for adopting graphs with `closeout_plan.cleanup` only. Keep exact literal cleanup argv and one description per action. The default proposal closes a verified bound GitHub issue, then archives CAFE state with `cafe close --archive-only`. Archive-only retains the checkout and branch; removing those resources needs separate explicit commands and authority. Ordinary `cafe close` can integrate a local branch and is not a fresh phase-owned cleanup fallback.
+The formatter produces a version-5 nested `delivery_contract` for adopting graphs with `closeout_plan.cleanup` only. Keep exact literal cleanup argv and one description per action. The default proposal closes a verified bound GitHub issue, then archives CAFE state with `cafe close --archive-only`. Archive-only retains the checkout and branch; removing those resources needs separate explicit commands and authority. Ordinary `cafe close` can integrate a local branch and is not a fresh phase-owned cleanup fallback. The PR decision explicitly covers the displayed action and host capability boundaries together. Delivery acceptance also selects cleanup, archive-only, or leaving external state unchanged in the same reply; Manager executes the recorded selection after completion without a second terminal question.
 
 For a verified repository and issue, a literal cleanup proposal is:
 
@@ -187,7 +187,10 @@ obtain explicit user confirmation of:
 - the effective proactive-review decision for every agent or hybrid phase with
   an existing scheduled confirmation pause. Default every assignable scheduled
   confirmation gate to `manager_confirmable` with proactive review `required`;
-  default mandatory gates to `required` while they remain user-owned, and let
+  default mandatory gates to `required` while they remain user-owned, except
+  the declared delivery result owner, whose proactive review defaults to
+  `not_required` because PR action review and receipt validation already cover
+  the delivery boundary. Its final acceptance remains user-owned. Let
   direct user overrides take precedence. Normalize ineligible phases internally
   to `not_required`; they require no kickoff choice;
 - the exact ordered CLI/model chain for every phase, containing one primary and
@@ -322,7 +325,8 @@ confirmation before preparation or workflow execution.
    Reject unknown steps, missing candidates, overlaps, role names, and steps
    that do not declare `on.confirm_output`.
 5. Present every mandatory HumanTask step as an informational, non-configurable
-   user stop with proactive review `required` by default. A clean review never
+   user stop with proactive review `required` by default, except the declared
+   delivery result owner defaults to `not_required`. A clean review never
    replaces its user decision. If no assignable candidates exist, explicitly
    say so without implying that mandatory stops are absent.
 6. Do not ask for proactive-review decisions on agent phases without a

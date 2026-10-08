@@ -83,6 +83,9 @@ def activate(
             raise ValueError(
                 "a different confirmed contract already exists; reconfirmation is required"
             )
+        from cafe.manager.delivery import publish_delivery_closeout
+
+        publish_delivery_closeout(issue_dir, current, current_sha)
         return current["revision"]["generation"], current_sha, False
 
 

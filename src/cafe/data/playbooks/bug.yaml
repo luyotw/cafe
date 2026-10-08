@@ -349,6 +349,8 @@ steps:
         todo_source: workflow_feedback
         todo_id_prefix: DLV
       outcomes:
+        confirm_cleanup: _done
+        confirm_archive: _done
         confirm: _done
         revise: deliver
     - trigger: need_clarification

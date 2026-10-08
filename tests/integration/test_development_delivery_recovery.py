@@ -238,7 +238,6 @@ def test_lost_response_large_observation_resumes_and_never_recreates(
     external = json.loads(fake_github.read_text())
     external["lose_issue_response"] = True
     fake_github.write_text(json.dumps(external))
-    run_and_approve_host(context)
     lost = report(run_and_approve_host(context))
     assert not lost["complete"] and lost["actions"]["FUP-001"]["state"] == "unknown"
     external = json.loads(fake_github.read_text())
@@ -295,7 +294,6 @@ def test_unknown_observation_never_authorizes_recreation_and_resumes_conservativ
     external = json.loads(fake_github.read_text())
     external["lose_issue_response"] = True
     fake_github.write_text(json.dumps(external))
-    run_and_approve_host(context)
     lost = report(run_and_approve_host(context))
     assert lost["actions"]["FUP-001"]["state"] == "unknown"
     external = json.loads(fake_github.read_text())
@@ -368,7 +366,6 @@ def test_creation_response_identity_survives_failed_verification_and_large_histo
     external["fail_issue_observation"] = True
     fake_github.write_text(json.dumps(external))
     context = select_one(local_action, tmp_path)
-    run_and_approve_host(context)
     partial = report(run_and_approve_host(context))
     assert not partial["complete"]
     action = partial["actions"]["FUP-001"]

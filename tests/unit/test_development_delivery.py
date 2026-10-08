@@ -63,6 +63,18 @@ def test_selected_drafts_are_frozen_and_empty_selection_does_not_expand():
     assert selected.proposal_digest != ActionProposal.model_validate(later).digest
 
 
+def test_legacy_proposal_bytes_keep_their_original_digest():
+    from cafe.delivery.contracts import digest
+
+    p = proposal()
+    legacy = p.model_dump(mode="json")
+    assert "capability_review" not in legacy
+    assert p.digest == digest(legacy)
+    assert ActionProposal.model_validate(legacy).digest == p.digest
+    reviewed = p.model_copy(update={"capability_review": {"integration": {"manifest": {}}}})
+    assert reviewed.digest != p.digest
+
+
 @pytest.mark.parametrize(
     "feedback", ["FUP-099", "FUP-001 FUP-001", "", "FUP-001 and everything else"]
 )

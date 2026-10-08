@@ -278,6 +278,9 @@ def write_contract(
     if len(content) > MAX_CONTRACT_BYTES:
         raise ValueError("contract exceeds the maximum bounded size")
     atomic_write_bytes(path, content)
+    from cafe.manager.delivery import publish_delivery_closeout
+
+    publish_delivery_closeout(issue_dir, validated, sha256_bytes(content))
     try:
         os.chmod(path, 0o600)
     except OSError:
@@ -303,6 +306,9 @@ def write_updated_contract(
     if len(content) > MAX_CONTRACT_BYTES:
         raise ValueError("contract exceeds the maximum bounded size")
     atomic_write_bytes(path, content)
+    from cafe.manager.delivery import publish_delivery_closeout
+
+    publish_delivery_closeout(issue_dir, validated, sha256_bytes(content))
     try:
         os.chmod(path, 0o600)
     except OSError:

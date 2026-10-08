@@ -19,10 +19,27 @@ def test_new_phase_owned_contract_has_only_cleanup_authority():
     fresh["schema_version"] = 5
     fresh["closeout_plan"] = {"cleanup": []}
     assert normalize_delivery_contract(fresh) == fresh
+    combined = {**fresh, "terminal_selection": "delivery_outcome"}
+    assert normalize_delivery_contract(combined) == combined
+    with pytest.raises(ValueError):
+        normalize_delivery_contract({**fresh, "terminal_selection": "skip"})
     fresh["closeout_plan"]["deliver"] = []
     with pytest.raises(ValueError):
         normalize_delivery_contract(fresh)
     assert old == original
+
+
+def test_confirmed_legacy_v5_does_not_gain_combined_terminal_authority(tmp_path):
+    from cafe.manager.delivery import publish_delivery_closeout
+
+    delivery = delivery_contract()
+    delivery.update(schema_version=5, closeout_plan={"cleanup": []})
+    contract = {"delivery_contract": delivery, "identity": {"workflow_id": "test"}}
+    publish_delivery_closeout(tmp_path, contract, "0" * 64)
+    assert not (tmp_path / "delivery" / "closeout.json").exists()
+    delivery["terminal_selection"] = "delivery_outcome"
+    publish_delivery_closeout(tmp_path, contract, "0" * 64)
+    assert (tmp_path / "delivery" / "closeout.json").is_file()
 
 
 def test_kickoff_schema_does_not_offer_manager_delivery():

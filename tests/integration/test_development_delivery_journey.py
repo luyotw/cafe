@@ -98,6 +98,7 @@ def setup_action(
     proposals=(),
     playbook="direct",
     strategy=None,
+    bundled=True,
 ):
     root, dest, _, local = local_action
     data = graph(root, renamed=renamed, playbook=playbook)
@@ -170,7 +171,12 @@ def setup_action(
     from cafe.skills.loader import SkillLoader
 
     engine = GenericPhase(SkillLoader(project_root=root, global_root=tmp_path))
-    result = hook(engine, "publish_output", "DevelopmentActionContext", kwargs)
+    from unittest.mock import patch
+    from contextlib import nullcontext
+
+    legacy = patch("cafe.delivery.approvals.collect_review", return_value=None) if not bundled else nullcontext()
+    with legacy:
+        result = hook(engine, "publish_output", "DevelopmentActionContext", kwargs)
     assert result.continue_pipeline, result.context_updates
     task = HumanTaskRecordStore(issue).get_task(
         result.context_updates["delivery_action_review_task"]
@@ -419,7 +425,6 @@ def test_lost_issue_response_preserves_partial_result_and_reconciles_without_dup
         ],
     )
     approve_action(context, selected="FUP-001")
-    run_and_approve_host(context)
     result = run_and_approve_host(context)
     report = json.loads(Path(result.context_updates["delivery_receipts_file"]).read_text())
     assert not report["complete"]
@@ -489,7 +494,7 @@ def test_changed_source_blocks_dispatch_after_host_approval(local_action, tmp_pa
 
 
 def test_denied_host_approval_remains_nonterminal_without_dispatch(local_action, tmp_path):
-    context = setup_action(local_action, tmp_path)
+    context = setup_action(local_action, tmp_path, bundled=False)
     approve_action(context)
     root, dest, issue, state, phase, data, engine, kwargs, task, delivery = context
     pending = hook(engine, "prepare_input", "DevelopmentDeliveryExecutor", kwargs)
@@ -526,7 +531,6 @@ def test_revised_selection_reconciles_earlier_unknown_before_new_effects(
     proposals = [{"id": "FUP-001", "title": "Selected", "body": "Original", "evidence": "path:1"}]
     context = setup_action(local_action, tmp_path, proposals=proposals)
     approve_action(context, selected="FUP-001")
-    run_and_approve_host(context)
     run_and_approve_host(context)
     root, dest, issue, state, phase, data, engine, kwargs, old_task, delivery = context
     old = json.loads(next((issue / "delivery").glob("*/result.json")).read_text())
@@ -614,7 +618,7 @@ def test_delivery_recovery_accepts_declared_mapping_feedback_route(local_action,
 def test_public_phase_execute_forwards_declared_delivery_and_current_receipts(
     local_action, tmp_path, renamed
 ):
-    context = setup_action(local_action, tmp_path, renamed=renamed)
+    context = setup_action(local_action, tmp_path, renamed=renamed, bundled=False)
     approve_action(context)
     root, dest, issue, state, phase, data, engine, kwargs, task, delivery = context
     calls = []
