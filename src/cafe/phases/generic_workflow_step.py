@@ -68,6 +68,7 @@ from cafe.core.restart_policy import (
     load_restart_context,
     resolve_restart_policy,
     restart_eligible,
+    selected_configured_order_recovery,
 )
 from cafe.core.resume_user_input import (
     is_interrupted_iteration,
@@ -680,7 +681,10 @@ class GenericWorkflowStepExecutor(Phase):
         self._resolved_iteration_user_input = None
         self._session_recovery = None
         self._restart_recovery = None
-        self._invocation_order = None
+        if not (
+            same_invocation_retry and getattr(self, "_invocation_order_step", None) == step_name
+        ):
+            self._invocation_order = None
         self._delta_packet_metadata = None
         iteration_dir = self._get_iteration_dir(self.iteration)
         new_iteration = not iteration_dir.exists()
@@ -748,7 +752,7 @@ class GenericWorkflowStepExecutor(Phase):
             raise RuntimeError("Baton correction requires the exact producing session")
         self._apply_step_agent_model(step_name=step_name, step_def=step_def, agent_name=agent_name)
         resolve_order = getattr(self.agent_manager, "resolve_invocation_order", None)
-        if callable(resolve_order):
+        if self._invocation_order is None and callable(resolve_order):
             resolved_order = resolve_order(
                 agent_name,
                 phase_name=step_name,
@@ -756,6 +760,7 @@ class GenericWorkflowStepExecutor(Phase):
             )
             if isinstance(resolved_order, InvocationOrder):
                 self._invocation_order = resolved_order
+                self._invocation_order_step = step_name
         if self._restart_recovery is not None and self._invocation_order is None:
             raise RuntimeError("Configured-order recovery requires invocation-order support")
         effective_agent_config = self._resolve_execution_config_for_iteration(
@@ -2478,6 +2483,9 @@ class GenericWorkflowStepExecutor(Phase):
         return updated
 
     def _configured_clis_for_agent(self, agent_name: str) -> list[AgentCLI]:
+        order = getattr(self, "_invocation_order", None)
+        if order is not None:
+            return [AgentCLI(cli) for cli, _model in order.entries]
         try:
             config = self.agent_manager.get_agent(agent_name).config
         except Exception:
@@ -2672,71 +2680,15 @@ class GenericWorkflowStepExecutor(Phase):
         same_invocation_retry: bool,
     ) -> Optional[Dict[str, Any]]:
         """Validate a declared human result; settings alone never authorize execution."""
-        if not workflow_id:
-            return None
-        store = HumanTaskRecordStore(self.issue_dir)
-        if not store.exists:
-            return None
-        matching = [
-            t
-            for t in store.tasks()
-            if t.workflow_id == workflow_id
-            and t.step == self.phase_name
-            and t.iteration == self.iteration
-            and t.trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER
-            and t.policy_id == AGENT_EXECUTION_INTERRUPTED_TASK_ID
-            and t.status is HumanTaskStatus.COMPLETED
-        ]
-        if not matching:
-            return None
-        task = max(matching, key=lambda t: (t.completed_at or "", t.id))
-        result = store.get_result(task.id)
-        if result is None or result.payload.get("decision") != RETRY_CONFIGURED_ORDER:
-            return None
-        declared = task.expected_result.get("decisions", [])
-        if (
-            not any(
-                isinstance(d, Mapping) and d.get("id") == RETRY_CONFIGURED_ORDER for d in declared
-            )
-            or task.continuations.get(RETRY_CONFIGURED_ORDER) != self.phase_name
-        ):
-            raise RuntimeError("Configured-order recovery was not declared for the current step")
-        recovery = result.payload.get("restart_recovery")
-        binding = {
-            "schema_version": 1,
-            "decision": RETRY_CONFIGURED_ORDER,
-            "workflow_id": workflow_id,
-            "human_task_id": task.id,
-            "step": self.phase_name,
-            "iteration": self.iteration,
-        }
-        if not isinstance(recovery, Mapping) or any(
-            recovery.get(k) != v for k, v in binding.items()
-        ):
-            raise RuntimeError("Configured-order recovery does not match this workflow invocation")
-        interruption = recovery.get("interruption")
-        if (
-            not isinstance(interruption, Mapping)
-            or not restart_eligible(interruption.get("reason"))
-            or not isinstance(interruption.get("id"), str)
-            or not interruption["id"]
-            or any(interruption.get(k) != binding[k] for k in ("workflow_id", "step", "iteration"))
-        ):
-            raise RuntimeError("Configured-order recovery has no typed rate-limit evidence")
-        consumed = current_data.get("restart_recovery_consumption", {})
-        if (
-            isinstance(consumed, Mapping)
-            and consumed.get("result_id") == result.id
-            and consumed.get("human_task_id") == task.id
-            and consumed.get("interruption_id") == interruption.get("id")
-            and consumed.get("invocation_id")
-        ):
-            return None
-        if current_data.get("agent_interruption") != dict(interruption):
-            return None  # A newer interruption requires a new human decision.
         if same_invocation_retry:
             return None
-        return {**dict(recovery), "result_id": result.id}
+        return selected_configured_order_recovery(
+            issue_dir=self.issue_dir,
+            workflow_id=workflow_id,
+            step_name=self.phase_name,
+            iteration=self.iteration,
+            current_data=current_data,
+        )
 
     def _consume_restart_recovery(self, context_file: Path) -> None:
         """Consume only at the provider invocation boundary, independently of old markers."""

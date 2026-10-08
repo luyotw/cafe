@@ -566,3 +566,66 @@ def test_cli_settings_and_task_completion_authorize_current_primary(tmp_path, mo
     journey.reload()
     assert journey.runtime.run().completed
     assert journey.attempts == [("codex", "primary-model", None)]
+
+
+def test_preparation_failure_preserves_unconsumed_authorization_for_explicit_retry(
+    tmp_path, monkeypatch
+):
+    """U7/I6: failed preparation cannot consume or replace the rate-limit receipt."""
+    journey = Journey(tmp_path, monkeypatch, policy="recheck_priority", single=True)
+    task = journey.interrupt()
+    original = journey.data()["agent_interruption"]
+    prepare = journey.generic.prepare_skill
+
+    def unavailable(**_kwargs):
+        raise OSError("temporary skill installation failure")
+
+    monkeypatch.setattr(journey.generic, "prepare_skill", unavailable)
+    result = journey.restart(task, "retry_configured_order", {})
+    assert not result.completed and journey.attempts == []
+    data = journey.data()
+    assert "restart_recovery_consumption" not in data
+    assert data["agent_interruption"] == original
+    assert data["restart_preparation_failure"]["reason"] == "agent_error"
+    monkeypatch.setattr(journey.generic, "prepare_skill", prepare)
+    journey.reload()
+    # Explicit start uses the existing authorized start-step recovery route;
+    # ordinary run while waiting never auto-executes the preserved decision.
+    assert not journey.runtime.run().completed and journey.attempts == []
+    assert journey.runtime.run(start_step="compose").completed
+    assert journey.attempts == [("codex", "primary-model", None)]
+    marker = journey.data()["restart_recovery_consumption"]
+    assert marker["human_task_id"] == task.id
+    assert marker["result_id"] == HumanTaskRecordStore(journey.issue).get_result(task.id).id
+
+
+def test_public_correction_preserves_models_when_configuration_changes_mid_invocation(
+    tmp_path, monkeypatch
+):
+    """R4/U7/I5/I6: correction shares the original order/models/canonical snapshot."""
+    journey = Journey(tmp_path, monkeypatch, policy="recheck_priority")
+    task = journey.interrupt()
+
+    def change_config(_cli):
+        journey.on_provider_launch = None
+        journey.save_chain([("codex", "different-primary"), ("gemini", "different-fallback")])
+        journey.register_chain()
+
+    journey.on_provider_launch = change_config
+    result = journey.restart(
+        task, "retry_configured_order", {"codex": "limited", "bad_baton_once": True}
+    )
+    assert result.completed
+    assert journey.attempts == [
+        ("codex", "primary-model", None),
+        ("codex", "primary-model", "new-codex"),
+        ("codex", "primary-model", "new-codex"),
+        ("gemini", "fallback-model", None),
+        ("gemini", "fallback-model", "new-gemini"),
+    ]
+    sticky = json.loads((journey.issue / "active_clis.json").read_text())["Writer"]
+    assert sticky["configured_primary"] == "codex"
+    assert sticky["chain"] == [
+        {"cli": "codex", "model": "primary-model"},
+        {"cli": "gemini", "model": "fallback-model"},
+    ]

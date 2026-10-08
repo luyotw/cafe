@@ -69,6 +69,7 @@ from cafe.core.restart_policy import (
     load_restart_context,
     resolve_restart_policy,
     restart_eligible,
+    selected_configured_order_recovery,
 )
 from cafe.core.route_catalog import authorize_route_target, route_choices
 from cafe.core.status_codes import (
@@ -1243,10 +1244,22 @@ class BlackboardWorkflowRuntime:
         context_path = iteration_dir / "iteration.json"
         context = load_restart_context(context_path)
         if not replacement:
-            context["agent_interruption"] = {
-                "id": contract.created_at, "reason": reason,
+            unconsumed = selected_configured_order_recovery(
+                issue_dir=self.issue_dir,
+                workflow_id=self.blackboard.workflow_id,
+                step_name=current_step,
+                iteration=iteration,
+                current_data=context,
+            )
+            # A preparation failure did not reach the provider boundary. Keep
+            # its original human receipt retryable through existing recovery.
+            evidence_key = "restart_preparation_failure" if unconsumed else "agent_interruption"
+            context[evidence_key] = {
+                "id": contract.created_at,
+                "reason": reason,
                 "workflow_id": self.blackboard.workflow_id,
-                "step": current_step, "iteration": iteration,
+                "step": current_step,
+                "iteration": iteration,
             }
             iteration_dir.mkdir(parents=True, exist_ok=True)
             atomic_write_bytes(context_path, json.dumps(context, ensure_ascii=False, indent=2).encode())

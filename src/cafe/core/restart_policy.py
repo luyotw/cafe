@@ -103,3 +103,80 @@ def update_restart_policy_setting(request: SettingUpdateRequest) -> RestartPolic
             return RestartPolicyUpdateResult("unchanged", changes, authority)
         write_issue_config_atomic(authority, config)
         return RestartPolicyUpdateResult("saved", changes, authority)
+
+
+def selected_configured_order_recovery(
+    *,
+    issue_dir: Path,
+    workflow_id: str | None,
+    step_name: str,
+    iteration: int,
+    current_data: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Validate one unconsumed, declared human recovery against typed evidence."""
+    # Local imports keep the policy owner independent of task declarations.
+    from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
+    from cafe.core.human_tasks import (
+        AGENT_EXECUTION_INTERRUPTED_TASK_ID,
+        AGENT_EXECUTION_INTERRUPTED_TRIGGER,
+    )
+
+    if not workflow_id:
+        return None
+    store = HumanTaskRecordStore(issue_dir)
+    if not store.exists:
+        return None
+    matching = [
+        t
+        for t in store.tasks()
+        if t.workflow_id == workflow_id
+        and t.step == step_name
+        and t.iteration == iteration
+        and t.trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER
+        and t.policy_id == AGENT_EXECUTION_INTERRUPTED_TASK_ID
+        and t.status is HumanTaskStatus.COMPLETED
+    ]
+    if not matching:
+        return None
+    task = max(matching, key=lambda t: (t.completed_at or "", t.id))
+    result = store.get_result(task.id)
+    if result is None or result.payload.get("decision") != RETRY_CONFIGURED_ORDER:
+        return None
+    declared = task.expected_result.get("decisions", [])
+    if (
+        not any(isinstance(d, Mapping) and d.get("id") == RETRY_CONFIGURED_ORDER for d in declared)
+        or task.continuations.get(RETRY_CONFIGURED_ORDER) != step_name
+    ):
+        raise RuntimeError("Configured-order recovery was not declared for the current step")
+    recovery = result.payload.get("restart_recovery")
+    binding = {
+        "schema_version": 1,
+        "decision": RETRY_CONFIGURED_ORDER,
+        "workflow_id": workflow_id,
+        "human_task_id": task.id,
+        "step": step_name,
+        "iteration": iteration,
+    }
+    if not isinstance(recovery, Mapping) or any(recovery.get(k) != v for k, v in binding.items()):
+        raise RuntimeError("Configured-order recovery does not match this workflow invocation")
+    interruption = recovery.get("interruption")
+    if (
+        not isinstance(interruption, Mapping)
+        or not restart_eligible(interruption.get("reason"))
+        or not isinstance(interruption.get("id"), str)
+        or not interruption["id"]
+        or any(interruption.get(k) != binding[k] for k in ("workflow_id", "step", "iteration"))
+    ):
+        raise RuntimeError("Configured-order recovery has no typed rate-limit evidence")
+    consumed = current_data.get("restart_recovery_consumption", {})
+    if (
+        isinstance(consumed, Mapping)
+        and consumed.get("result_id") == result.id
+        and consumed.get("human_task_id") == task.id
+        and consumed.get("interruption_id") == interruption.get("id")
+        and consumed.get("invocation_id")
+    ):
+        return None
+    if current_data.get("agent_interruption") != dict(interruption):
+        return None  # A newer interruption requires a new human decision.
+    return {**dict(recovery), "result_id": result.id}
