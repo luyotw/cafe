@@ -4063,6 +4063,8 @@ class BlackboardWorkflowRuntime:
         """Validate the durable batch/artifact/operation binding for restart."""
         if not self._feedback_delivery_required(current_step=current_step):
             return None, []
+        if delivery_id is None and self._has_empty_feedback_batch(current_step=current_step):
+            return None, []
         prepared = [
             event.data
             for event in self.blackboard.events
@@ -4807,6 +4809,8 @@ class BlackboardWorkflowRuntime:
         )
         if artifact is None or artifact.updated_by != current_step:
             return None
+        if self._has_empty_feedback_batch(current_step=current_step):
+            return None
         # The durable artifact and outbound baton remain a recovery boundary even
         # after their source rows become resolved or stale.  Rechecking only the
         # live ledger here would let that lifecycle change bypass validation and
@@ -4823,7 +4827,8 @@ class BlackboardWorkflowRuntime:
             if (
                 self._feedback_delivery_event_exists(delivery_id)
                 and isinstance(prepared_artifact, Mapping)
-                and isinstance(prepared_artifact.get("version"), int)
+                and type(prepared_artifact.get("version")) is int
+                and prepared_artifact["version"] >= 1
                 and artifact.version > prepared_artifact["version"]
                 and self.blackboard.current_step == contract.to_step
                 and any(
@@ -4862,6 +4867,65 @@ class BlackboardWorkflowRuntime:
             if validated is not None:
                 return None
         return current_step, delivery_id if isinstance(delivery_id, str) else None
+
+    def _has_empty_feedback_batch(self, *, current_step: str) -> bool:
+        """Prove this artifact belongs to an invoked, feedback-free iteration.
+
+        A declaration does not mean feedback was present. Use the exact batch
+        exposed to this producer, never the ledger's later pending state. An
+        existing preparation for this iteration still owns its delivery fence.
+        """
+        iteration_dir = self._latest_iteration_dir(current_step)
+        artifact_name = self.steps.get(current_step, {}).get("output_artifact")
+        artifact = self.blackboard.artifacts.get(artifact_name)
+        if iteration_dir is None or artifact is None or artifact.updated_by != current_step:
+            return False
+        try:
+            iteration = int(iteration_dir.name.removeprefix("iteration_"))
+            if Path(artifact.path).resolve() != (iteration_dir / "output.md").resolve():
+                return False
+            metadata = json.loads((iteration_dir / "iteration.json").read_text(encoding="utf-8"))
+            batch = json.loads(
+                (iteration_dir / "workflow_feedback_batch.json").read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError, TypeError):
+            return False
+        if (
+            not isinstance(metadata, dict)
+            or metadata.get("agent_invoked") is not True
+            or metadata.get("step_name") != current_step
+            or type(metadata.get("iteration")) is not int
+            or metadata["iteration"] != iteration
+            or not isinstance(batch, dict)
+            or set(batch) != {"version", "entries"}
+            or type(batch.get("version")) is not int
+            or batch["version"] != 1
+            or batch["entries"] != []
+        ):
+            return False
+        prepared = self._latest_feedback_delivery_preparation(current_step=current_step)
+        if prepared is not None:
+            prepared_iteration = prepared.get("iteration")
+            prepared_artifact = prepared.get("artifact")
+            if (
+                not isinstance(prepared_iteration, Mapping)
+                or type(prepared_iteration.get("number")) is not int
+                or prepared_iteration["number"] < 1
+                or prepared_iteration["number"] >= iteration
+                or prepared_iteration.get("directory")
+                != str(Path(current_step) / f"iteration_{prepared_iteration['number']:03d}")
+                or not isinstance(prepared_artifact, Mapping)
+                or type(prepared_artifact.get("version")) is not int
+                or prepared_artifact["version"] < 1
+                or prepared_artifact["version"] >= artifact.version
+            ):
+                return False
+            try:
+                if Path(prepared_artifact["path"]).resolve() == Path(artifact.path).resolve():
+                    return False
+            except (OSError, ValueError, TypeError, KeyError):
+                return False
+        return True
 
     def _try_reconcile_pending_feedback_delivery(self) -> Optional[PlaybookRunResult]:
         delivery = self._latest_unreconciled_feedback_delivery()

@@ -5575,6 +5575,337 @@ def _recovery_fault_curation_runtime(
     )
 
 
+def _empty_batch_curation_runtime(issue_dir: Path, calls: list[str]):
+    runtime = _recovery_fault_curation_runtime(issue_dir=issue_dir, calls=calls)
+    original = runtime.executor
+
+    def executor(step_name, step, state):
+        result = original(step_name, step, state)
+        if step_name == "curator":
+            iteration_dir = Path(result.artifacts["curated_result"]).parent
+            (iteration_dir / "iteration.json").write_text(
+                json.dumps(
+                    {
+                        "iteration": 1,
+                        "step_name": "curator",
+                        "agent_invoked": True,
+                    }
+                )
+            )
+            (iteration_dir / "workflow_feedback_batch.json").write_text(
+                json.dumps({"version": 1, "entries": []})
+            )
+        return result
+
+    runtime.executor = executor
+    return runtime
+
+
+def test_empty_feedback_batch_resumes_without_rerunning_the_producer(tmp_path):
+    issue_dir = tmp_path / "empty-feedback-resume"
+    calls = []
+    first = _empty_batch_curation_runtime(issue_dir, calls)
+    first.run(start_step="curator", single_step=True)
+
+    resumed = _recovery_fault_curation_runtime(issue_dir=issue_dir, calls=calls)
+    # Preserve the production invocation metadata instead of the fixture's bootstrap.
+    (issue_dir / "curator/iteration_001/iteration.json").write_text(
+        json.dumps(
+            {
+                "iteration": 1,
+                "step_name": "curator",
+                "agent_invoked": True,
+            }
+        )
+    )
+    assert resumed.run(max_transitions=2).completed
+    assert resumed.run(max_transitions=2).completed
+    assert calls == ["curator", "consumer"]
+    assert not any(
+        e.event_type == "workflow_feedback_delivery_rejected" for e in resumed.blackboard.events
+    )
+
+
+def test_empty_feedback_batch_approval_continues_to_consumer(tmp_path):
+    from cafe.ui.human_tasks import apply_human_task_payload
+
+    issue_dir = tmp_path / "empty-feedback-approval"
+    calls = []
+    runtime = _empty_batch_curation_runtime(issue_dir, calls)
+    step = runtime.playbook["steps"]["curator"]
+    step["skill"] = "cafe-spec"
+    step["human_tasks"] = [
+        {
+            "trigger": "confirm_output",
+            "task_id": "output-review",
+            "outcomes": {"confirm": "consumer", "revise": "curator"},
+        }
+    ]
+    step["on"]["confirm_output"] = "curator"
+    original = runtime.executor
+
+    def executor(step_name, step, state):
+        result = original(step_name, step, state)
+        if step_name == "curator":
+            _write_baton(
+                issue_dir,
+                from_step="curator",
+                to_owner="user",
+                to_step="user",
+                intent="confirm_output",
+            )
+        return result
+
+    runtime.executor = executor
+    assert runtime.run(start_step="curator").final_status_code == "BATON_CONFIRM_OUTPUT"
+    records = HumanTaskRecordStore(issue_dir)
+    task = next(t for t in records.tasks() if t.status is HumanTaskStatus.PENDING)
+    applied = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=runtime.playbook,
+        blackboard=runtime.blackboard,
+        from_step="curator",
+        trigger="confirm_output",
+        raw_payload={"human_task_id": task.id, "task": "output-review", "decision": "confirm"},
+        source="test",
+    )
+    assert applied.target == "consumer", applied.rejection
+    resumed = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=runtime.playbook, executor=runtime.executor
+    )
+    assert resumed.run(max_transitions=2).completed
+    assert records.get_task(task.id).status is HumanTaskStatus.COMPLETED
+    assert calls == ["curator", "consumer"]
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        "missing",
+        "invalid_json",
+        "nonempty",
+        "version",
+        "bool_version",
+        "entries_type",
+        "metadata_step",
+        "metadata_iteration",
+        "metadata_bool_iteration",
+        "not_invoked",
+    ],
+)
+def test_empty_feedback_exemption_requires_exact_invocation_evidence(tmp_path, tamper):
+    issue_dir = tmp_path / "invalid-empty-feedback"
+    calls = []
+    runtime = _empty_batch_curation_runtime(issue_dir, calls)
+    runtime.run(start_step="curator", single_step=True)
+    iteration_dir = issue_dir / "curator/iteration_001"
+    batch_path = iteration_dir / "workflow_feedback_batch.json"
+    metadata_path = iteration_dir / "iteration.json"
+    if tamper == "missing":
+        batch_path.unlink()
+    elif tamper == "invalid_json":
+        batch_path.write_text("{")
+    elif tamper.startswith("metadata_") or tamper == "not_invoked":
+        metadata = json.loads(metadata_path.read_text())
+        key, value = {
+            "metadata_step": ("step_name", "other"),
+            "metadata_iteration": ("iteration", 2),
+            "metadata_bool_iteration": ("iteration", True),
+            "not_invoked": ("agent_invoked", False),
+        }[tamper]
+        metadata[key] = value
+        metadata_path.write_text(json.dumps(metadata))
+    else:
+        batch = json.loads(batch_path.read_text())
+        key, value = {
+            "nonempty": ("entries", [{"source_identity": "external:unprepared"}]),
+            "version": ("version", 2),
+            "bool_version": ("version", True),
+            "entries_type": ("entries", {}),
+        }[tamper]
+        batch[key] = value
+        batch_path.write_text(json.dumps(batch))
+    resumed = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=runtime.playbook, executor=runtime.executor
+    )
+    assert resumed.run(max_transitions=2).final_status_code == "INVALID_FEEDBACK_DELIVERY"
+    assert calls == ["curator"]
+
+
+def test_empty_feedback_crash_reconciliation_preserves_later_feedback(tmp_path, monkeypatch):
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+
+    issue_dir = tmp_path / "empty-feedback-crash"
+    calls = []
+    runtime = _empty_batch_curation_runtime(issue_dir, calls)
+
+    def crash(**_kwargs):
+        raise RuntimeError("before preparation")
+
+    monkeypatch.setattr(runtime, "_prepare_feedback_delivery", crash)
+    with pytest.raises(RuntimeError, match="before preparation"):
+        runtime.run(start_step="curator")
+    ledger = WorkflowFeedbackLedger(issue_dir)
+    _, later = ledger.record(
+        source_identity="external:later",
+        source_kind="external_note",
+        target_step="curator",
+        content="Arrived after the empty snapshot.",
+    )
+    resumed = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=runtime.playbook, executor=runtime.executor
+    )
+    assert resumed.run(max_transitions=2).completed
+    assert calls == ["curator", "consumer"]
+    assert ledger.pending(target_step="curator") == [later]
+
+
+def test_empty_snapshot_cannot_erase_an_existing_preparation(tmp_path, monkeypatch):
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+
+    issue_dir = tmp_path / "empty-snapshot-existing-preparation"
+    ledger = WorkflowFeedbackLedger(issue_dir)
+    ledger.record(
+        source_identity="external:prepared",
+        source_kind="external_note",
+        target_step="curator",
+        content="Must retain its preparation.",
+    )
+    calls = []
+    runtime = _empty_batch_curation_runtime(issue_dir, calls)
+
+    def crash(**_kwargs):
+        raise RuntimeError("before settlement")
+
+    monkeypatch.setattr(runtime, "_commit_delivered_feedback", crash)
+    with pytest.raises(RuntimeError, match="before settlement"):
+        runtime.run(start_step="curator")
+    output = issue_dir / "curator/iteration_001/output.md"
+    output.write_text("## Todo List\nNo actionable work.\n")
+    resumed = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=runtime.playbook, executor=runtime.executor
+    )
+    assert resumed.run(max_transitions=2).final_status_code == "INVALID_FEEDBACK_DELIVERY"
+    assert calls == ["curator"]
+    assert ledger.pending(target_step="curator")
+
+
+@pytest.mark.parametrize("tamper", ["zero", "older_number", "directory", "artifact_version"])
+def test_empty_batch_cannot_bypass_a_damaged_terminal_preparation(tmp_path, tamper):
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+
+    issue_dir = tmp_path / "damaged-terminal-empty-preparation"
+    ledger = WorkflowFeedbackLedger(issue_dir)
+    ledger.record(
+        source_identity="external:prepared",
+        source_kind="external_note",
+        target_step="curator",
+        content="Its terminal binding must still be validated.",
+    )
+    calls = []
+    runtime = _empty_batch_curation_runtime(issue_dir, calls)
+    runtime.run(start_step="curator", single_step=True)
+    resumed = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=runtime.playbook, executor=runtime.executor
+    )
+    prepared = next(
+        e.data
+        for e in resumed.blackboard.events
+        if e.event_type == "workflow_feedback_delivery_prepared"
+    )
+    if tamper == "zero":
+        prepared["iteration"]["number"] = 0
+    elif tamper == "older_number":
+        prepared["iteration"] = {"number": 1, "directory": "curator/iteration_001"}
+        iteration_dir = issue_dir / "curator/iteration_002"
+        iteration_dir.mkdir()
+        source_dir = issue_dir / "curator/iteration_001"
+        (iteration_dir / "workflow_feedback_batch.json").write_bytes(
+            (source_dir / "workflow_feedback_batch.json").read_bytes()
+        )
+        (iteration_dir / "iteration.json").write_text(
+            json.dumps(
+                {
+                    "iteration": 2,
+                    "step_name": "curator",
+                    "agent_invoked": True,
+                }
+            )
+        )
+        (iteration_dir / "output.md").write_bytes((source_dir / "output.md").read_bytes())
+        resumed.blackboard.artifacts["curated_result"].path = str(iteration_dir / "output.md")
+    elif tamper == "directory":
+        prepared["iteration"]["directory"] = "curator/iteration_000"
+    else:
+        prepared["artifact"]["version"] = 0
+    assert resumed.run(max_transitions=2).final_status_code == "INVALID_FEEDBACK_DELIVERY"
+    assert calls == ["curator"]
+
+
+def test_empty_batch_after_an_older_settled_delivery_resumes(tmp_path):
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+
+    issue_dir = tmp_path / "older-delivery-new-empty-batch"
+    ledger = WorkflowFeedbackLedger(issue_dir)
+    ledger.record(
+        source_identity="external:older",
+        source_kind="external_note",
+        target_step="curator",
+        content="Settled in the first iteration.",
+    )
+    calls = []
+    first = _recovery_fault_curation_runtime(issue_dir=issue_dir, calls=calls)
+    assert first.run(start_step="curator", max_transitions=2).completed
+    original = first.executor
+
+    def executor(step_name, step, state):
+        if step_name != "curator":
+            return original(step_name, step, state)
+        calls.append(step_name)
+        iteration_dir = issue_dir / "curator/iteration_002"
+        iteration_dir.mkdir()
+        (iteration_dir / "output.md").write_text("## Todo List\nNo actionable work.\n")
+        (iteration_dir / "checklist.md").write_text("[x] complete\n")
+        (iteration_dir / "iteration.json").write_text(
+            json.dumps(
+                {
+                    "iteration": 2,
+                    "step_name": "curator",
+                    "agent_invoked": True,
+                }
+            )
+        )
+        (iteration_dir / "workflow_feedback_batch.json").write_text(
+            json.dumps({"version": 1, "entries": []})
+        )
+        _write_baton(
+            issue_dir,
+            from_step="curator",
+            to_owner="agent",
+            to_step="consumer",
+            intent="manual_handoff",
+        )
+        return StepExecutionResult(
+            response="empty later batch",
+            agent_invoked=True,
+            feedback_source_identities=(),
+            artifacts={"curated_result": str(iteration_dir / "output.md")},
+        )
+
+    later = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=first.playbook, executor=executor
+    )
+    later.run(start_step="curator", single_step=True)
+    resumed = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=first.playbook, executor=executor
+    )
+    assert resumed.run(max_transitions=2).completed
+    assert calls == ["curator", "consumer", "curator", "consumer"]
+    assert not any(
+        e.event_type == "workflow_feedback_delivery_rejected" for e in resumed.blackboard.events
+    )
+
+
 def _supervisor_curation_runtime(issue_dir, calls, *, mixed=False):
     from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 
