@@ -5626,12 +5626,49 @@ def test_empty_feedback_batch_resumes_without_rerunning_the_producer(tmp_path):
     )
 
 
-def test_empty_feedback_batch_approval_continues_to_consumer(tmp_path):
+@pytest.mark.parametrize(
+    "with_feedback,tamper",
+    [
+        (False, None),
+        (True, None),
+        (True, "with_ids"),
+        *(
+            (True, value)
+            for value in [
+                "missing_result",
+                "task_iteration",
+                "task_policy",
+                "corrective",
+                "continuation",
+                "wrong_result_id",
+                "wrong_task_id",
+                "wrong_source",
+                "missing_settlement",
+                "changed_binding",
+                "changed_artifact",
+                "ambiguous_task",
+                "superseded",
+                "malformed_decisions",
+                "nonstring_decision",
+                "duplicate_decision",
+            ]
+        ),
+    ],
+)
+def test_feedback_batch_approval_continues_to_consumer(tmp_path, with_feedback, tamper):
     from cafe.ui.human_tasks import apply_human_task_payload
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 
     issue_dir = tmp_path / "empty-feedback-approval"
     calls = []
     runtime = _empty_batch_curation_runtime(issue_dir, calls)
+    if with_feedback:
+        WorkflowFeedbackLedger(issue_dir).record(
+            source_identity="external:reviewed",
+            source_kind="external_note",
+            target_step="curator",
+            content="Complete before asking for approval.",
+        )
     step = runtime.playbook["steps"]["curator"]
     step["skill"] = "cafe-spec"
     step["human_tasks"] = [
@@ -5647,6 +5684,11 @@ def test_empty_feedback_batch_approval_continues_to_consumer(tmp_path):
     def executor(step_name, step, state):
         result = original(step_name, step, state)
         if step_name == "curator":
+            WorkflowFeedbackLedger(issue_dir).write_pending_snapshot(
+                path=issue_dir / "curator/iteration_001/workflow_feedback_batch.json",
+                target_step="curator",
+                limit=20,
+            )
             _write_baton(
                 issue_dir,
                 from_step="curator",
@@ -5660,19 +5702,90 @@ def test_empty_feedback_batch_approval_continues_to_consumer(tmp_path):
     assert runtime.run(start_step="curator").final_status_code == "BATON_CONFIRM_OUTPUT"
     records = HumanTaskRecordStore(issue_dir)
     task = next(t for t in records.tasks() if t.status is HumanTaskStatus.PENDING)
+    payload = {"human_task_id": task.id, "task": "output-review", "decision": "confirm"}
+    if tamper == "with_ids":
+        payload["work_report"] = {
+            "summary": "User approved this exact output.",
+            "outcome": "Continue to the declared consumer.",
+        }
     applied = apply_human_task_payload(
         issue_dir=issue_dir,
         playbook_data=runtime.playbook,
         blackboard=runtime.blackboard,
         from_step="curator",
         trigger="confirm_output",
-        raw_payload={"human_task_id": task.id, "task": "output-review", "decision": "confirm"},
+        raw_payload=payload,
         source="test",
     )
     assert applied.target == "consumer", applied.rejection
+    if tamper in {
+        "missing_result",
+        "task_iteration",
+        "task_policy",
+        "corrective",
+        "continuation",
+        "ambiguous_task",
+        "superseded",
+        "malformed_decisions",
+        "nonstring_decision",
+        "duplicate_decision",
+    }:
+        raw = json.loads(records.file_path.read_text())
+        if tamper == "missing_result":
+            raw["results"] = []
+        elif tamper == "task_iteration":
+            raw["tasks"][0]["iteration"] = 2
+        elif tamper == "task_policy":
+            raw["tasks"][0]["policy_id"] = "unrelated"
+        elif tamper == "corrective":
+            raw["tasks"][0]["expected_result"]["decisions"][0]["correction"] = True
+        elif tamper == "continuation":
+            raw["results"][0]["payload"]["continuation"] = "curator"
+        elif tamper == "superseded":
+            raw["tasks"][0]["superseded_by_task_id"] = "new-task"
+        elif tamper == "malformed_decisions":
+            raw["tasks"][0]["expected_result"]["decisions"] = None
+        elif tamper == "nonstring_decision":
+            raw["results"][0]["payload"]["decision"] = ["confirm"]
+        elif tamper == "duplicate_decision":
+            decisions = raw["tasks"][0]["expected_result"]["decisions"]
+            decisions.append(dict(decisions[0]))
+        else:
+            other = json.loads(json.dumps(raw["tasks"][0]))
+            other["id"] = "other-task"
+            other["handoff_key"] = "other-handoff"
+            raw["tasks"].append(other)
+            other_result = json.loads(json.dumps(raw["results"][0]))
+            other_result.update(id="other-result", task_id=other["id"])
+            raw["results"].append(other_result)
+        records.file_path.write_text(json.dumps(raw))
+    if tamper == "changed_binding":
+        step["human_tasks"][0]["outcomes"]["confirm"] = "curator"
+    if tamper == "changed_artifact":
+        (issue_dir / "curator/iteration_001/output.md").write_text("Changed after approval.\n")
     resumed = BlackboardWorkflowRuntime(
         issue_dir=issue_dir, playbook=runtime.playbook, executor=runtime.executor
     )
+    if tamper in {"wrong_result_id", "wrong_task_id", "wrong_source"}:
+        completion = next(
+            e for e in resumed.blackboard.events if e.event_type == "human_task_completed"
+        )
+        completion.data[
+            {
+                "wrong_result_id": "result_id",
+                "wrong_task_id": "human_task_id",
+                "wrong_source": "source",
+            }[tamper]
+        ] = "unbound"
+    if tamper == "missing_settlement":
+        settlement = next(
+            e for e in resumed.blackboard.events if e.event_type == "workflow_feedback_delivered"
+        )
+        settlement.data["delivery_id"] = "unrelated-operation"
+    if tamper not in {None, "with_ids"}:
+        assert resumed.run(max_transitions=2).final_status_code == "INVALID_FEEDBACK_DELIVERY"
+        assert calls == ["curator"]
+        return
     assert resumed.run(max_transitions=2).completed
     assert records.get_task(task.id).status is HumanTaskStatus.COMPLETED
     assert calls == ["curator", "consumer"]

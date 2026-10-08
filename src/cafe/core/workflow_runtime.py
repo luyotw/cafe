@@ -4196,8 +4196,122 @@ class BlackboardWorkflowRuntime:
             or target.get("to_step") != contract.to_step
             or target.get("intent") != contract.intent.value
         ):
-            missing.append("feedback_delivery_target")
+            if not self._has_confirmed_feedback_continuation(
+                current_step=current_step, contract=contract, delivery=delivery
+            ):
+                missing.append("feedback_delivery_target")
         return (delivery if not missing else None), missing
+
+    def _has_confirmed_feedback_continuation(
+        self, *, current_step: str, contract: HandoffContract | None, delivery: Mapping[str, Any]
+    ) -> bool:
+        """Bind a settled confirmation handoff to its subsequent human result.
+
+        Confirmation changes the outbound target without changing the reviewed
+        artifact or settled batch. Only the exact non-corrective durable result
+        after that settlement may authorize this target difference.
+        """
+        target = delivery.get("target")
+        iteration = delivery.get("iteration")
+        if (
+            contract is None
+            or contract.from_step != current_step
+            or contract.to_owner is not HandoffOwner.AGENT
+            or contract.intent is not HandoffIntent.AWAIT_AGENT
+            or not isinstance(target, Mapping)
+            or target != {"to_owner": "user", "to_step": "user", "intent": "confirm_output"}
+            or not isinstance(iteration, Mapping)
+            or type(iteration.get("number")) is not int
+            or iteration["number"] < 1
+        ):
+            return False
+        indexed = list(enumerate(self.blackboard.events))
+        preparations = [
+            i
+            for i, event in indexed
+            if event.event_type == "workflow_feedback_delivery_prepared"
+            and event.data.get("delivery_id") == delivery.get("delivery_id")
+        ]
+        settlements = [
+            i
+            for i, event in indexed
+            if event.event_type == "workflow_feedback_delivered"
+            and event.data.get("delivery_id") == delivery.get("delivery_id")
+        ]
+        completions = [
+            (i, event)
+            for i, event in indexed
+            if event.event_type == "human_task_completed" and event.step == current_step
+        ]
+        if len(preparations) != 1 or len(settlements) != 1 or not completions:
+            return False
+        completion_index, completion = completions[-1]
+        if not preparations[0] < settlements[0] < completion_index:
+            return False
+        try:
+            records = HumanTaskRecordStore(self.issue_dir)
+            matching = [
+                task
+                for task in records.tasks()
+                if task.workflow_id == self.blackboard.workflow_id
+                and task.step == current_step
+                and task.iteration == iteration.get("number")
+                and task.policy_id == completion.data.get("task_id")
+                and task.trigger == completion.data.get("trigger")
+                and task.status is HumanTaskStatus.COMPLETED
+                and task.superseded_by_task_id is None
+            ]
+            if len(matching) != 1:
+                return False
+            task = matching[0]
+            result = records.get_result(task.id)
+        except (HumanTaskRecordError, OSError, ValueError, TypeError, KeyError):
+            return False
+        if (
+            task.workflow_id != self.blackboard.workflow_id
+            or task.step != current_step
+            or task.iteration != iteration.get("number")
+            or task.trigger != HandoffIntent.CONFIRM_OUTPUT.value
+            or task.status is not HumanTaskStatus.COMPLETED
+            or task.superseded_by_task_id is not None
+            or result is None
+            or result.workflow_id != self.blackboard.workflow_id
+            or not isinstance(result.payload.get("decision"), str)
+            or not result.payload["decision"]
+            or ("human_task_id" in completion.data and task.id != completion.data["human_task_id"])
+            or ("result_id" in completion.data and result.id != completion.data["result_id"])
+            or completion.data.get("task_id") != task.policy_id
+            or completion.data.get("trigger") != task.trigger
+            or completion.data.get("to_step") != contract.to_step
+            or contract.source != f"human_task.{completion.data.get('source')}"
+            or result.source != completion.data.get("source")
+            or result.payload.get("task") != task.policy_id
+            or result.payload.get("continuation") != contract.to_step
+            or task.continuations.get(result.payload.get("decision")) != contract.to_step
+        ):
+            return False
+        bindings = [
+            binding
+            for binding in self.steps[current_step].get("human_tasks", ())
+            if isinstance(binding, Mapping)
+            and binding.get("trigger") == task.trigger
+            and binding.get("task_id") == task.policy_id
+        ]
+        if (
+            len(bindings) != 1
+            or bindings[0].get("outcomes", {}).get(result.payload.get("decision"))
+            != contract.to_step
+        ):
+            return False
+        decisions = task.expected_result.get("decisions")
+        if not isinstance(decisions, list):
+            return False
+        selected = [
+            entry
+            for entry in decisions
+            if isinstance(entry, Mapping) and entry.get("id") == result.payload["decision"]
+        ]
+        return len(selected) == 1 and selected[0].get("correction", False) is False
 
     def _reconcile_feedback_delivery(
         self,
