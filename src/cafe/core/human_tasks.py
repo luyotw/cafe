@@ -15,8 +15,13 @@ from typing import Any, Literal, Mapping, Optional, Sequence
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 from cafe.core.conversation_locale import normalize_locale_tag
+from cafe.core.restart_policy import (
+    CONTINUE_LAST_SUCCESS,
+    RECHECK_PRIORITY,
+    RETRY_CONFIGURED_ORDER,
+    restart_eligible,
+)
 from cafe.core.runtime_locales import render_text
-from cafe.core.restart_policy import CONTINUE_LAST_SUCCESS, RECHECK_PRIORITY, RETRY_CONFIGURED_ORDER, restart_eligible
 
 HumanTaskPattern = Literal[
     "confirm_output",

@@ -892,8 +892,13 @@ def _apply_human_task_payload(
                     step_name=from_step, restart_policy="recheck_priority",
                     interruption_reason="agent_rate_limit",
                 )
-                if not {d.id for d in snapshot.decisions}.issubset({d.id for d in allowed.decisions}):
-                    raise ValueError("Saved interruption task has an unknown decision")
+                declared_ids = {d.id for d in snapshot.decisions}
+                if (snapshot.id != policy.id or snapshot.pattern != policy.pattern
+                        or snapshot.input_schema != "decision"
+                        or not declared_ids.issubset({d.id for d in allowed.decisions})
+                        or declared_ids != set(durable_task.continuations)
+                        or any(target != from_step for target in durable_task.continuations.values())):
+                    raise ValueError("Saved interruption task has an invalid decision contract")
                 binding = binding.model_copy(update={"outcomes": dict(durable_task.continuations)})
             elif _task_machine_contract(snapshot) != _task_machine_contract(policy):
                 raise ValueError("Saved task policy does not match the current declaration")

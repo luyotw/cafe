@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -35,6 +36,21 @@ def resolve_restart_policy(config: Mapping[str, Any]) -> str:
     return validate_restart_policy(execution["rate_limit_restart_policy"])
 
 
+def load_restart_context(path: Path) -> dict[str, Any]:
+    """Read bounded regular-file interruption evidence without accepting aliases."""
+    if not path.exists() and not path.is_symlink():
+        return {}
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 1_048_576:
+        raise ValueError("Restart context must be a bounded regular file")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Restart context is unreadable") from exc
+    if not isinstance(data, dict):
+        raise ValueError("Restart context must be a mapping")
+    return data
+
+
 def restart_eligible(reason: str | None, *, new_invocation: bool = True) -> bool:
     """Only the current typed interruption can qualify a new invocation."""
     return new_invocation and reason == "agent_rate_limit"
@@ -49,6 +65,8 @@ class InvocationOrder:
     """
 
     entries: tuple[tuple[str, str | None], ...]
+    configured_entries: tuple[tuple[str, str | None], ...] = ()
+    sticky_disposition: str = "absent"
 
 
 @dataclass(frozen=True)
@@ -75,7 +93,8 @@ def update_restart_policy_setting(request: SettingUpdateRequest) -> RestartPolic
         _, old = build()
         return RestartPolicyUpdateResult(
             "unchanged" if old == value else "proposed",
-            {SETTING: {"before": old, "after": value}}, authority,
+            {SETTING: {"before": old, "after": value}},
+            authority,
         )
     with issue_config_lock(authority):
         config, old = build()

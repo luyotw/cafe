@@ -15,11 +15,16 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional
+from uuid import uuid4
 
-from cafe.constraints.context import context_for_tools
-from cafe.core.workflow_tools import normalize_allowed_tools, runtime_granted_tools
-from cafe.skills.execution_profile import resolve_execution_profile
 from cafe.agents.manager import AgentManager
+from cafe.constraints.context import context_for_tools
+from cafe.core.artifact_validation import (
+    MAX_ARTIFACT_CORRECTIONS,
+    ArtifactCorrectionBudget,
+    ArtifactFormatError,
+    validate_artifact_syntax,
+)
 from cafe.core.blackboard import (
     ArtifactEntry,
     ArtifactKind,
@@ -42,6 +47,7 @@ from cafe.core.delta_packet import (
     persist_delta_packet,
 )
 from cafe.core.git import GitOperations
+from cafe.core.hooks import HookResult
 from cafe.core.human_task_records import (
     HumanTaskRecordError,
     HumanTaskRecordStore,
@@ -52,9 +58,17 @@ from cafe.core.human_tasks import (
     AGENT_EXECUTION_INTERRUPTED_TASK_ID,
     AGENT_EXECUTION_INTERRUPTED_TRIGGER,
 )
-from cafe.core.hooks import HookResult
+from cafe.core.packet_io import atomic_write_bytes
 from cafe.core.phase import Phase
 from cafe.core.playbook import resolve_playbook_skills, resolve_step_behavior
+from cafe.core.restart_policy import (
+    RECHECK_PRIORITY,
+    RETRY_CONFIGURED_ORDER,
+    InvocationOrder,
+    load_restart_context,
+    resolve_restart_policy,
+    restart_eligible,
+)
 from cafe.core.resume_user_input import (
     is_interrupted_iteration,
     load_prior_run_context,
@@ -84,12 +98,6 @@ from cafe.core.status_codes import (
     transition_map_key,
 )
 from cafe.core.takeover import build_takeover_snapshot
-from cafe.core.artifact_validation import (
-    ArtifactCorrectionBudget,
-    ArtifactFormatError,
-    MAX_ARTIFACT_CORRECTIONS,
-    validate_artifact_syntax,
-)
 from cafe.core.todo import (
     MAX_TODO_ITEMS,
     PlanTodoDocumentKind,
@@ -102,20 +110,21 @@ from cafe.core.todo import (
     workflow_feedback_matching_identities,
     workflow_feedback_todo_items,
 )
-from cafe.core.types import AgentCLI
+from cafe.core.types import AgentCLI, AgentConfig, CliEntry
 from cafe.core.workflow_feedback import (
     WorkflowFeedbackLedger,
     feedback_todo_mappings,
 )
 from cafe.core.workflow_models import BatonRejected, StepExecutionResult
+from cafe.core.workflow_tools import normalize_allowed_tools, runtime_granted_tools
 from cafe.core.workspace_artifact import (
+    DirtyWorkspaceError,
     WorkspaceArtifact,
     WorkspaceArtifactError,
-    DirtyWorkspaceError,
-    workspace_correction_prompt,
     bounded_workspace_reason,
     build_workspace_artifact,
     verify_workspace_artifact,
+    workspace_correction_prompt,
 )
 from cafe.core.workspace_lock import workspace_execution_lock
 from cafe.phases.generic_phase import GenericPhase
@@ -131,13 +140,18 @@ from cafe.skills.contracts import (
     resolve_packet_requested_placeholders,
     resolve_prompt_inputs,
 )
+from cafe.skills.execution_profile import resolve_execution_profile
 from cafe.skills.loader import SkillLoader, canonical_skill_name
 from cafe.skills.workflow_composition import (
     StepWorkflowComposition,
     resolve_step_workflow_composition,
 )
 from cafe.templates.manager import TemplateManager
-from cafe.utils.checklist_validator import completion_requires_checklist, validate_checklist, validate_projected_todos
+from cafe.utils.checklist_validator import (
+    completion_requires_checklist,
+    validate_checklist,
+    validate_projected_todos,
+)
 from cafe.utils.git_utils import get_git_toplevel, get_repo_root, to_cwd_relative_path
 from cafe.utils.phase_config import load_phase_step_model
 
@@ -520,6 +534,8 @@ class GenericWorkflowStepExecutor(Phase):
         # decision; AUTO only preserves legacy behavior for direct helper use.
         self._session_continuation = SessionContinuation.auto()
         self._session_recovery: Optional[Dict[str, Any]] = None
+        self._restart_recovery: Optional[Dict[str, Any]] = None
+        self._invocation_order = None
         self._delta_packet_metadata: Optional[Dict[str, Any]] = None
         self._config_allowed_directories: List[str] = list(config_allowed_directories or [])
         self._extra_allowed_directories: List[str] = list(extra_allowed_directories or [])
@@ -663,6 +679,8 @@ class GenericWorkflowStepExecutor(Phase):
         self.iteration = self._get_next_iteration_number(step_name, self.phase_dir)
         self._resolved_iteration_user_input = None
         self._session_recovery = None
+        self._restart_recovery = None
+        self._invocation_order = None
         self._delta_packet_metadata = None
         iteration_dir = self._get_iteration_dir(self.iteration)
         new_iteration = not iteration_dir.exists()
@@ -729,6 +747,17 @@ class GenericWorkflowStepExecutor(Phase):
         ):
             raise RuntimeError("Baton correction requires the exact producing session")
         self._apply_step_agent_model(step_name=step_name, step_def=step_def, agent_name=agent_name)
+        resolve_order = getattr(self.agent_manager, "resolve_invocation_order", None)
+        if callable(resolve_order):
+            resolved_order = resolve_order(
+                agent_name,
+                phase_name=step_name,
+                configured_order=self._restart_recovery is not None,
+            )
+            if isinstance(resolved_order, InvocationOrder):
+                self._invocation_order = resolved_order
+        if self._restart_recovery is not None and self._invocation_order is None:
+            raise RuntimeError("Configured-order recovery requires invocation-order support")
         effective_agent_config = self._resolve_execution_config_for_iteration(
             agent_name=agent_name,
             step_name=step_name,
@@ -835,6 +864,18 @@ class GenericWorkflowStepExecutor(Phase):
             phase_specific_data["native_review_configuration"] = execution_context["review_configuration"]
         if self._session_recovery is not None:
             phase_specific_data["session_recovery"] = dict(self._session_recovery)
+        self._restart_diagnostics = self._restart_diagnostics_for_invocation(
+            workflow_id=blackboard_state.workflow_id,
+            execution_config=effective_agent_config,
+            same_invocation_retry=same_invocation_retry,
+        )
+        phase_specific_data["restart_diagnostics"] = self._restart_diagnostics
+        if self._restart_diagnostics["human_decision"]:
+            print(
+                f"Restart: {self._restart_diagnostics['saved_policy']}; "
+                f"{self._restart_diagnostics['human_decision']}; "
+                f"first CLI: {effective_agent_config.cli.value}"
+            )
         require_status_code = self._step_requires_status_code(step_name)
 
         workspace_eligible = bool(step_def.get("workspace_artifact"))
@@ -1480,6 +1521,10 @@ class GenericWorkflowStepExecutor(Phase):
         effective_status = status_code
 
         events = [event for event in execution.events if isinstance(event, dict)]
+        if getattr(self, "_restart_diagnostics", None):
+            events.append(
+                {"type": "restart_policy_resolved", "step": step_name, **self._restart_diagnostics}
+            )
         if checklist_validation_failed:
             events.append(
                 {
@@ -2470,6 +2515,15 @@ class GenericWorkflowStepExecutor(Phase):
         configured_clis = self._configured_clis_for_agent(agent_name)
 
         if isinstance(current_data, dict):
+            self._restart_recovery = None
+            recovery = self._selected_configured_order_recovery(
+                workflow_id=workflow_id,
+                current_data=current_data,
+                same_invocation_retry=same_invocation_retry,
+            )
+            if recovery is not None:
+                self._restart_recovery = recovery
+                return SessionContinuation.new()
             recovery = self._selected_fresh_session_recovery(
                 workflow_id=workflow_id,
                 current_data=current_data,
@@ -2504,6 +2558,203 @@ class GenericWorkflowStepExecutor(Phase):
             return exact or SessionContinuation.new()
 
         return SessionContinuation.new()
+
+    def _restart_diagnostics_for_invocation(
+        self,
+        *,
+        workflow_id: str,
+        execution_config: AgentConfig,
+        same_invocation_retry: bool,
+    ) -> Dict[str, Any]:
+        from cafe.agents.diagnostics import sanitize_error_excerpt
+        from cafe.utils.issue_config import read_issue_config_strict
+
+        path = self.issue_dir / "issue.yaml"
+        saved = resolve_restart_policy(read_issue_config_strict(path) if path.exists() else {})
+        current = self._load_current_iteration_data() or {}
+        interruption = current.get("agent_interruption", {})
+        reason = interruption.get("reason") if isinstance(interruption, Mapping) else None
+        eligible = restart_eligible(
+            reason, new_invocation=not same_invocation_retry
+        ) and is_interrupted_iteration(
+            iteration=self.iteration,
+            previous_iteration_data=self._load_previous_iteration_data(),
+            current_iteration_data=current,
+        )
+        task = result = None
+        records = HumanTaskRecordStore(self.issue_dir)
+        if records.exists:
+            matching = [
+                t
+                for t in records.tasks()
+                if t.workflow_id == workflow_id
+                and t.step == self.phase_name
+                and t.iteration == self.iteration
+                and t.trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER
+            ]
+            if matching:
+                latest = max(matching, key=lambda t: (t.created_at, t.id))
+                if latest.status is HumanTaskStatus.COMPLETED:
+                    task, result = latest, records.get_result(latest.id)
+        decision = result.payload.get("decision") if result else None
+        recovery = getattr(self, "_restart_recovery", None)
+        override = {
+            "retry": "user_selected_existing_session",
+            AGENT_EXECUTION_FRESH_SESSION_DECISION: "user_selected_fresh_session",
+        }.get(decision)
+        if decision == RETRY_CONFIGURED_ORDER and recovery is None:
+            override = "configured_order_already_consumed_or_inapplicable"
+        order = getattr(self, "_invocation_order", None)
+
+        def present(entries):
+            return [
+                {"cli": cli, "model": sanitize_error_excerpt(ValueError(model)) if model else None}
+                for cli, model in entries
+            ]
+
+        effective = getattr(execution_config, "clis", None)
+        if not isinstance(effective, list) or not effective:
+            effective = [CliEntry(cli=execution_config.cli, model=getattr(execution_config, "model", None))]
+        return {
+            "saved_policy": saved,
+            "effective_policy": RECHECK_PRIORITY if recovery else "continue_last_success",
+            "eligible": eligible,
+            "eligibility_reason": (
+                "current_rate_limit_interruption" if eligible else "not_a_new_rate_limit_restart"
+            ),
+            "human_decision": decision,
+            "human_task_id": task.id if task else None,
+            "result_id": result.id if result else None,
+            "configured_order": present(
+                order.configured_entries
+                if order
+                else tuple((e.cli.value, e.resolve_model(self.phase_name)) for e in effective)
+            ),
+            "effective_order": present(
+                tuple((e.cli.value, e.resolve_model(self.phase_name)) for e in effective)
+            ),
+            "sticky_disposition": order.sticky_disposition if order else "unknown",
+            "override_reason": override,
+        }
+
+    def _recovery_allows_constraint_context_change(self, previous: Any, current: Any) -> bool:
+        """A correlated human retry admits its CLI/chain context, never changed limits.
+
+        Verify the prior registry digest using its original context first. This
+        preserves the material-change gate when any constraint definition has
+        changed, while allowing the selected current CLI's applicability.
+        """
+        from cafe.constraints.evidence import Snapshot, snapshot
+
+        diagnostics = getattr(self, "_restart_diagnostics", {})
+        if not diagnostics.get("human_task_id") or not diagnostics.get("result_id"):
+            return False
+        try:
+            old = Snapshot.model_validate(previous)
+            live = Snapshot.model_validate(current)
+        except ValueError:
+            return False
+        if snapshot(old.context)["digest"] != old.digest:
+            return False
+        old_context = old.context.model_dump()
+        live_context = live.context.model_dump()
+        return all(
+            old_context[k] == live_context[k]
+            for k in old_context
+            if k not in {"cli", "provider", "consumers"}
+        )
+
+    def _selected_configured_order_recovery(
+        self,
+        *,
+        workflow_id: Optional[str],
+        current_data: dict[str, Any],
+        same_invocation_retry: bool,
+    ) -> Optional[Dict[str, Any]]:
+        """Validate a declared human result; settings alone never authorize execution."""
+        if not workflow_id:
+            return None
+        store = HumanTaskRecordStore(self.issue_dir)
+        if not store.exists:
+            return None
+        matching = [
+            t
+            for t in store.tasks()
+            if t.workflow_id == workflow_id
+            and t.step == self.phase_name
+            and t.iteration == self.iteration
+            and t.trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER
+            and t.policy_id == AGENT_EXECUTION_INTERRUPTED_TASK_ID
+            and t.status is HumanTaskStatus.COMPLETED
+        ]
+        if not matching:
+            return None
+        task = max(matching, key=lambda t: (t.completed_at or "", t.id))
+        result = store.get_result(task.id)
+        if result is None or result.payload.get("decision") != RETRY_CONFIGURED_ORDER:
+            return None
+        declared = task.expected_result.get("decisions", [])
+        if (
+            not any(
+                isinstance(d, Mapping) and d.get("id") == RETRY_CONFIGURED_ORDER for d in declared
+            )
+            or task.continuations.get(RETRY_CONFIGURED_ORDER) != self.phase_name
+        ):
+            raise RuntimeError("Configured-order recovery was not declared for the current step")
+        recovery = result.payload.get("restart_recovery")
+        binding = {
+            "schema_version": 1,
+            "decision": RETRY_CONFIGURED_ORDER,
+            "workflow_id": workflow_id,
+            "human_task_id": task.id,
+            "step": self.phase_name,
+            "iteration": self.iteration,
+        }
+        if not isinstance(recovery, Mapping) or any(
+            recovery.get(k) != v for k, v in binding.items()
+        ):
+            raise RuntimeError("Configured-order recovery does not match this workflow invocation")
+        interruption = recovery.get("interruption")
+        if (
+            not isinstance(interruption, Mapping)
+            or not restart_eligible(interruption.get("reason"))
+            or not isinstance(interruption.get("id"), str)
+            or not interruption["id"]
+            or any(interruption.get(k) != binding[k] for k in ("workflow_id", "step", "iteration"))
+        ):
+            raise RuntimeError("Configured-order recovery has no typed rate-limit evidence")
+        consumed = current_data.get("restart_recovery_consumption", {})
+        if (
+            isinstance(consumed, Mapping)
+            and consumed.get("result_id") == result.id
+            and consumed.get("human_task_id") == task.id
+            and consumed.get("interruption_id") == interruption.get("id")
+            and consumed.get("invocation_id")
+        ):
+            return None
+        if current_data.get("agent_interruption") != dict(interruption):
+            return None  # A newer interruption requires a new human decision.
+        if same_invocation_retry:
+            return None
+        return {**dict(recovery), "result_id": result.id}
+
+    def _consume_restart_recovery(self, context_file: Path) -> None:
+        """Consume only at the provider invocation boundary, independently of old markers."""
+        recovery = getattr(self, "_restart_recovery", None)
+        if recovery is None:
+            return
+        context = load_restart_context(context_file)
+        marker = context.get("restart_recovery_consumption", {})
+        if isinstance(marker, Mapping) and marker.get("result_id") == recovery["result_id"]:
+            return
+        context["restart_recovery_consumption"] = {
+            "human_task_id": recovery["human_task_id"],
+            "result_id": recovery["result_id"],
+            "interruption_id": recovery["interruption"]["id"],
+            "invocation_id": str(uuid4()),
+        }
+        context["agent_invoked"] = True
+        atomic_write_bytes(context_file, json.dumps(context, ensure_ascii=False, indent=2).encode())
 
     def _selected_fresh_session_recovery(
         self,
@@ -2934,7 +3185,13 @@ class GenericWorkflowStepExecutor(Phase):
                 blackboard_state=blackboard_state,
             )
         )
-        if getattr(self, "_session_recovery", None) is not None:
+        if getattr(self, "_restart_recovery", None) is not None:
+            context["session_recovery"] = (
+                "The user selected configured-order recovery after a typed rate-limit interruption. "
+                "Use the current configured CLI/model order in a new provider session; preserve "
+                "the same workflow step, iteration, artifacts and authority."
+            )
+        elif getattr(self, "_session_recovery", None) is not None:
             context["session_recovery"] = (
                 "The user explicitly selected a fresh provider session after an interruption. "
                 "Continue the same phase, iteration, model, and authority. Reconstruct the "

@@ -58,13 +58,18 @@ from cafe.core.human_tasks import (
     resolve_step_human_task,
 )
 from cafe.core.packet_io import atomic_write_bytes, sha256_bytes
-from cafe.core.restart_policy import RECHECK_PRIORITY, RETRY_CONFIGURED_ORDER, resolve_restart_policy, restart_eligible
-from cafe.utils.issue_config import read_issue_config_strict
 from cafe.core.playbook import (
     resolve_step_attempt_limit,
     resolve_step_behavior,
 )
 from cafe.core.questions_schema import validate_questions_xml
+from cafe.core.restart_policy import (
+    RECHECK_PRIORITY,
+    RETRY_CONFIGURED_ORDER,
+    load_restart_context,
+    resolve_restart_policy,
+    restart_eligible,
+)
 from cafe.core.route_catalog import authorize_route_target, route_choices
 from cafe.core.status_codes import (
     PhaseStatusCode,
@@ -94,6 +99,7 @@ from cafe.core.workflow_models import (
 )
 from cafe.core.workspace_artifact import WorkspaceArtifact, WorkspaceArtifactError
 from cafe.utils.checklist_validator import completion_requires_checklist, validate_checklist
+from cafe.utils.issue_config import read_issue_config_strict
 
 STATUS_TOKEN_PATTERN = re.compile(r"\bCAFE_[A-Z0-9_]+\b")
 GOTO_PATTERN = re.compile(r"GOTO\s*:\s*([a-zA-Z0-9_-]+)")
@@ -1235,7 +1241,7 @@ class BlackboardWorkflowRuntime:
             raise RuntimeError("agent interruption did not create a handoff contract")
         iteration_dir = self.issue_dir / current_step / f"iteration_{iteration:03d}"
         context_path = iteration_dir / "iteration.json"
-        context = json.loads(context_path.read_text()) if context_path.is_file() else {}
+        context = load_restart_context(context_path)
         if not replacement:
             context["agent_interruption"] = {
                 "id": contract.created_at, "reason": reason,
@@ -1333,14 +1339,37 @@ class BlackboardWorkflowRuntime:
         if len(matching) != 1 or RETRY_CONFIGURED_ORDER in matching[0].continuations:
             return None
         path = self.issue_dir / contract.from_step / f"iteration_{matching[0].iteration:03d}" / "iteration.json"
-        context = json.loads(path.read_text()) if path.is_file() else {}
+        context = load_restart_context(path)
         interruption = context.get("agent_interruption", {})
+        if not interruption:
+            # Older tasks retain typed evidence in their exact materialization event.
+            event = next(
+                (
+                    e
+                    for e in reversed(self.blackboard.events)
+                    if e.event_type == "agent_execution_task_materialized"
+                    and e.data.get("task_id") == matching[0].id
+                    and e.data.get("step") == matching[0].step
+                ),
+                None,
+            )
+            if event is not None and restart_eligible(event.data.get("reason")):
+                interruption = {
+                    "id": contract.created_at,
+                    "reason": event.data["reason"],
+                    "workflow_id": self.blackboard.workflow_id,
+                    "step": matching[0].step,
+                    "iteration": matching[0].iteration,
+                }
         if not (isinstance(interruption, dict)
                 and interruption.get("workflow_id") == self.blackboard.workflow_id
                 and interruption.get("step") == matching[0].step
                 and interruption.get("iteration") == matching[0].iteration
                 and restart_eligible(interruption.get("reason"))):
             return None
+        if context.get("agent_interruption") != interruption:
+            context["agent_interruption"] = interruption
+            atomic_write_bytes(path, json.dumps(context, ensure_ascii=False, indent=2).encode())
         return self._pause_for_agent_execution_interruption(
             current_step=contract.from_step, reason="agent_rate_limit",
             runtime="restart_policy", replacement=True,
@@ -3863,7 +3892,11 @@ class BlackboardWorkflowRuntime:
         advancing = (post_contract.to_owner == HandoffOwner.DONE or
                      post_contract.to_owner == HandoffOwner.AGENT and post_contract.to_step != current_step)
         if advancing and "before_delivery" in execution.get("checkpoints", []):
-            from cafe.core.execution_checkpoints import load_review_evidence, require_verified_review, require_checkpoint
+            from cafe.core.execution_checkpoints import (
+                load_review_evidence,
+                require_checkpoint,
+                require_verified_review,
+            )
             try:
                 iteration = self._latest_iteration_dir(current_step)
                 if self.execution_context is None or iteration is None:
@@ -3875,8 +3908,8 @@ class BlackboardWorkflowRuntime:
                 if (readiness.get("authority_digest") != self.execution_context["authority_digest"] or
                         readiness.get("endpoint") != self.execution_context["delivery_endpoint"]):
                     raise ValueError("delivery readiness differs from the confirmed endpoint")
-                from cafe.core.packet_io import atomic_write_bytes
                 from cafe.core.execution_artifacts import bounded_execution_json
+                from cafe.core.packet_io import atomic_write_bytes
                 atomic_write_bytes(self.issue_dir / "execution_delivery.json", bounded_execution_json(readiness))
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 result = self._emit_pause(current_step=current_step, status_code="DELIVERY_READINESS_BLOCKED",
@@ -3892,8 +3925,8 @@ class BlackboardWorkflowRuntime:
                 observations = load_review_evidence(iteration / "native_invocations.json")
                 require_current_review(self.execution_context, evidence, native_observations=observations)
                 evidence["native_observations"] = observations
-                from cafe.core.packet_io import atomic_write_bytes
                 from cafe.core.execution_artifacts import bounded_execution_json
+                from cafe.core.packet_io import atomic_write_bytes
                 atomic_write_bytes(self.issue_dir / "execution_review.json", bounded_execution_json(evidence))
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 result = self._emit_pause(current_step=current_step, status_code="NATIVE_REVIEW_BLOCKED",
