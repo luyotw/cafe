@@ -58,6 +58,8 @@ from cafe.core.human_tasks import (
     resolve_step_human_task,
 )
 from cafe.core.packet_io import atomic_write_bytes, sha256_bytes
+from cafe.core.restart_policy import RECHECK_PRIORITY, RETRY_CONFIGURED_ORDER, resolve_restart_policy, restart_eligible
+from cafe.utils.issue_config import read_issue_config_strict
 from cafe.core.playbook import (
     resolve_step_attempt_limit,
     resolve_step_behavior,
@@ -1198,11 +1200,18 @@ class BlackboardWorkflowRuntime:
         current_step: str,
         reason: str,
         runtime: str,
+        replacement: bool = False,
     ) -> PlaybookRunResult:
         """Create one notified HumanTask instead of inferring completion from partial output."""
         records = HumanTaskRecordStore(self.issue_dir)
         iteration = self._human_task_iteration(current_step)
-        policy, binding = agent_execution_interrupted_human_task(step_name=current_step)
+        saved_policy = self._saved_restart_policy()
+        policy, binding = agent_execution_interrupted_human_task(
+            step_name=current_step, restart_policy=saved_policy, interruption_reason=reason,
+        )
+        replaced_handoff = self._replaced_user_handoff
+        if self.blackboard.current_step == "user":
+            replaced_handoff = self.blackboard.handoff_contract
         policy = self._policy_for_workflow_locale(policy)
         status_code = (
             "CHECKLIST_VALIDATION_FAILED"
@@ -1224,6 +1233,17 @@ class BlackboardWorkflowRuntime:
         contract = self.blackboard.handoff_contract
         if contract is None:
             raise RuntimeError("agent interruption did not create a handoff contract")
+        iteration_dir = self.issue_dir / current_step / f"iteration_{iteration:03d}"
+        context_path = iteration_dir / "iteration.json"
+        context = json.loads(context_path.read_text()) if context_path.is_file() else {}
+        if not replacement:
+            context["agent_interruption"] = {
+                "id": contract.created_at, "reason": reason,
+                "workflow_id": self.blackboard.workflow_id,
+                "step": current_step, "iteration": iteration,
+            }
+            iteration_dir.mkdir(parents=True, exist_ok=True)
+            atomic_write_bytes(context_path, json.dumps(context, ensure_ascii=False, indent=2).encode())
         prompt = policy.prompt
         if reason == "agent_artifact_format_exhausted":
             rejection = next((
@@ -1244,7 +1264,13 @@ class BlackboardWorkflowRuntime:
             continuations=binding.outcomes,
             assignee_type="user",
             handoff_key=self._human_task_handoff_key(contract),
+            superseded_task_ids=self._superseded_human_task_ids(
+                records, step=current_step, iteration=iteration,
+                trigger=AGENT_EXECUTION_INTERRUPTED_TRIGGER, policy_id=policy.id,
+                replaced_handoff=replaced_handoff,
+            ),
         )
+        self._replaced_user_handoff = None
         task = materialization.task
         self._mark_latest_iteration_completion_untrusted(current_step)
         self._notify_new_human_task(task)
@@ -1285,6 +1311,39 @@ class BlackboardWorkflowRuntime:
             final_status_code=result_status,
             completed=False,
             detail=task.id,
+        )
+
+    def _saved_restart_policy(self) -> str:
+        path = self.issue_dir / "issue.yaml"
+        return resolve_restart_policy(read_issue_config_strict(path) if path.exists() else {})
+
+    def _upgrade_pending_restart_task(self) -> Optional[PlaybookRunResult]:
+        """Offer an opt-in decision by replacing exactly the current pending handoff."""
+        if self.blackboard.current_step != "user" or self._saved_restart_policy() != RECHECK_PRIORITY:
+            return None
+        contract = self.blackboard.handoff_contract
+        if contract is None or contract.source != "workflow.agent_execution_interrupted":
+            return None
+        records = HumanTaskRecordStore(self.issue_dir)
+        predecessor_ids = self._replaced_human_task_ids(records, contract)
+        matching = [t for t in records.tasks() if t.id in predecessor_ids
+                    and t.trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER
+                    and t.step == contract.from_step
+                    and t.iteration == self._human_task_iteration(contract.from_step)]
+        if len(matching) != 1 or RETRY_CONFIGURED_ORDER in matching[0].continuations:
+            return None
+        path = self.issue_dir / contract.from_step / f"iteration_{matching[0].iteration:03d}" / "iteration.json"
+        context = json.loads(path.read_text()) if path.is_file() else {}
+        interruption = context.get("agent_interruption", {})
+        if not (isinstance(interruption, dict)
+                and interruption.get("workflow_id") == self.blackboard.workflow_id
+                and interruption.get("step") == matching[0].step
+                and interruption.get("iteration") == matching[0].iteration
+                and restart_eligible(interruption.get("reason"))):
+            return None
+        return self._pause_for_agent_execution_interruption(
+            current_step=contract.from_step, reason="agent_rate_limit",
+            runtime="restart_policy", replacement=True,
         )
 
     def _has_agent_execution_interruption_task(self, *, current_step: str) -> bool:
@@ -5736,6 +5795,12 @@ class BlackboardWorkflowRuntime:
         start_step: Optional[str] = None,
         single_step: bool = False,
     ) -> PlaybookRunResult:
+        # Validate explicit settings before provider execution, even on legacy resumes.
+        self._saved_restart_policy()
+        if start_step is None:
+            upgraded = self._upgrade_pending_restart_task()
+            if upgraded is not None:
+                return self._finalize_observed_result(upgraded)
         declared = any(step.get("execution", {}).get("checkpoints") for step in self.steps.values())
         if self.execution_context is not None or declared:
             from cafe.core.execution_checkpoints import checkpoint

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
@@ -19,7 +19,6 @@ from cafe.core.human_task_records import (
 from cafe.core.human_tasks import (
     AGENT_EXECUTION_INTERRUPTED_TASK_ID,
     AGENT_EXECUTION_INTERRUPTED_TRIGGER,
-    agent_execution_interrupted_human_task,
 )
 
 
@@ -296,33 +295,10 @@ class TaskInboxService:
         ):
             return record
 
-        policy, binding = agent_execution_interrupted_human_task(step_name=task.step)
-        expected_result = policy.model_dump(mode="json")
-        if (
-            task.prompt == policy.prompt
-            and task.expected_result == expected_result
-            and task.continuations == binding.outcomes
-        ):
-            return record
-
-        try:
-            refreshed = HumanTaskRecordStore(record.issue_dir).refresh_pending_contract(
-                workflow_id=record.workflow_id,
-                task_id=task.id,
-                prompt=policy.prompt,
-                expected_result=expected_result,
-                continuations=binding.outcomes,
-            )
-        except HumanTaskRecordError as exc:
-            raise TaskInboxError(
-                "task_contract_refresh_failed",
-                f"Pending interruption task {task.id} could not adopt the current contract: {exc}",
-                recovery="Inspect the owning workflow state before completing this task.",
-                task_id=task.id,
-                issue=record.issue,
-                workflow_id=record.workflow_id,
-            ) from exc
-        return replace(record, task=refreshed)
+        # Saved declarations are immutable and remain answerable as authored.
+        # The workflow boundary rematerializes an eligible opt-in replacement
+        # with a new handoff and explicit predecessor correlation.
+        return record
 
     def _archived_issues_for(self, task_id: str) -> list[str]:
         """Identify an archived owner without treating archives as live inbox data."""

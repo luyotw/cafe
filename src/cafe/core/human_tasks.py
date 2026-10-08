@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validat
 
 from cafe.core.conversation_locale import normalize_locale_tag
 from cafe.core.runtime_locales import render_text
+from cafe.core.restart_policy import CONTINUE_LAST_SUCCESS, RECHECK_PRIORITY, RETRY_CONFIGURED_ORDER, restart_eligible
 
 HumanTaskPattern = Literal[
     "confirm_output",
@@ -432,7 +433,8 @@ class HumanTaskRejection:
 
 
 def agent_execution_interrupted_human_task(
-    *, step_name: str
+    *, step_name: str, restart_policy: str = CONTINUE_LAST_SUCCESS,
+    interruption_reason: str | None = None,
 ) -> tuple[HumanTaskPolicy, HumanTaskBinding]:
     """Return the machine-owned task used after execution or completion validation fails.
 
@@ -443,27 +445,48 @@ def agent_execution_interrupted_human_task(
     the runtime to replace only the provider session.
     """
     normalized_step = _non_empty(step_name, field_name="step_name")
+    configured_decisions = ()
+    configured_outcomes = {}
+    if restart_policy == RECHECK_PRIORITY and restart_eligible(interruption_reason):
+        configured_decisions = (HumanTaskDecision(
+            id=RETRY_CONFIGURED_ORDER,
+            label="Retry in configured priority order (new session)",
+            label_locales={"zh-TW": "按設定順序重試（新 session）"},
+        ),)
+        configured_outcomes[RETRY_CONFIGURED_ORDER] = normalized_step
+    prompt = (
+        "Agent execution was interrupted or its completion failed validation. "
+        "Review saved diagnostics and choose an existing-session or fresh-session retry."
+    )
+    prompt_zh = "Agent 執行中斷或完成驗證失敗。請查看已保存的診斷，選擇原 session 或新 session 重試。"
+    if configured_decisions:
+        prompt += (
+            " Saved restart policy: recheck_priority. Configured-order recovery retries the same "
+            "step and iteration from the current primary CLI/model in a new session, then "
+            "uses the configured fallback chain if needed. Existing retry choices explicitly "
+            "override this strategy and do not change the saved setting. Primary retries "
+            "may add the existing rate-limit delays."
+        )
+        prompt_zh += " 已保存 recheck_priority；按設定順序重試會以目前 primary CLI/model 的新 session 執行同一步驟與 iteration，必要時依設定 fallback。原有重試選項會明確覆寫本次策略，不改保存設定；primary 重試可能增加既有 rate-limit 等待。"
     return (
         HumanTaskPolicy(
             id=AGENT_EXECUTION_INTERRUPTED_TASK_ID,
             pattern=AGENT_EXECUTION_INTERRUPTED_TRIGGER,
-            prompt=(
-                "Agent execution was interrupted or its completion failed validation. "
-                "Review the saved diagnostics, then choose "
-                "whether to retry the same workflow step in the existing session or a fresh "
-                "session. A fresh session preserves the step, iteration, model, and authority."
-            ),
+            prompt=prompt,
+            prompt_locales={"zh-TW": prompt_zh},
             input_schema="decision",
             decisions=(
                 HumanTaskDecision(
                     id=AGENT_EXECUTION_RETRY_DECISION,
                     label="Retry the interrupted workflow step",
+                    label_locales={"zh-TW": "以原 session 重試中斷步驟"},
                 ),
                 HumanTaskDecision(
                     id=AGENT_EXECUTION_FRESH_SESSION_DECISION,
                     label="Retry the interrupted workflow step in a fresh session",
+                    label_locales={"zh-TW": "以新 session 重試中斷步驟"},
                 ),
-            ),
+            ) + configured_decisions,
         ),
         HumanTaskBinding(
             trigger=AGENT_EXECUTION_INTERRUPTED_TRIGGER,
@@ -471,6 +494,7 @@ def agent_execution_interrupted_human_task(
             outcomes={
                 AGENT_EXECUTION_RETRY_DECISION: normalized_step,
                 AGENT_EXECUTION_FRESH_SESSION_DECISION: normalized_step,
+                **configured_outcomes,
             },
         ),
     )

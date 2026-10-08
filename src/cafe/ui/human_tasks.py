@@ -886,7 +886,16 @@ def _apply_human_task_payload(
     if durable_task is not None:
         try:
             snapshot = HumanTaskPolicy.model_validate(durable_task.expected_result)
-            if _task_machine_contract(snapshot) != _task_machine_contract(policy):
+            if trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER:
+                # Runtime interruption tasks own immutable, conditionally declared choices.
+                allowed, _ = agent_execution_interrupted_human_task(
+                    step_name=from_step, restart_policy="recheck_priority",
+                    interruption_reason="agent_rate_limit",
+                )
+                if not {d.id for d in snapshot.decisions}.issubset({d.id for d in allowed.decisions}):
+                    raise ValueError("Saved interruption task has an unknown decision")
+                binding = binding.model_copy(update={"outcomes": dict(durable_task.continuations)})
+            elif _task_machine_contract(snapshot) != _task_machine_contract(policy):
                 raise ValueError("Saved task policy does not match the current declaration")
         except (OSError, TypeError, ValueError) as exc:
             return _durable_task_routing_rejection(
@@ -1175,6 +1184,12 @@ def _apply_human_task_payload(
                         task_id=durable_task.id,
                         step_name=from_step,
                         iteration=iteration,
+                    )
+                if (trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER
+                        and validated_completion.decision == "retry_configured_order"):
+                    completion_payload["restart_recovery"] = _configured_order_recovery_payload(
+                        issue_dir=issue_dir, workflow_id=blackboard.workflow_id,
+                        task_id=durable_task.id, step_name=from_step, iteration=iteration,
                     )
                 durable_result = record_store.complete(
                     workflow_id=blackboard.workflow_id,
@@ -1647,6 +1662,29 @@ def _supervisor_handoff_continuation_input(
         "CAFE validated this explicit supervisor handoff for the selected phase:\n"
         f"{json.dumps(receipt, ensure_ascii=False, sort_keys=True)}"
     )
+
+
+def _configured_order_recovery_payload(
+    *, issue_dir: Path, workflow_id: str, task_id: str, step_name: str, iteration: int,
+) -> dict[str, Any]:
+    from cafe.core.restart_policy import restart_eligible
+
+    data = _load_recovery_json(issue_dir / step_name / f"iteration_{iteration:03d}" / "iteration.json")
+    interruption = data.get("agent_interruption")
+    if not isinstance(interruption, Mapping) or not all((
+        interruption.get("workflow_id") == workflow_id,
+        interruption.get("step") == step_name,
+        interruption.get("iteration") == iteration,
+        bool(interruption.get("id")),
+        restart_eligible(interruption.get("reason")),
+    )):
+        raise ValueError("Configured-order recovery requires the current typed rate-limit interruption")
+    return {
+        "schema_version": 1, "decision": "retry_configured_order",
+        "workflow_id": workflow_id, "human_task_id": task_id,
+        "step": step_name, "iteration": iteration,
+        "interruption": dict(interruption),
+    }
 
 
 def _fresh_session_recovery_payload(
