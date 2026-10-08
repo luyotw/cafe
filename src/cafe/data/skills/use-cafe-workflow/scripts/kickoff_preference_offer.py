@@ -274,7 +274,7 @@ def build_offer(args, proposal, model, *, store=None, templates=None, issue_id="
 
 def render_offer(offer, *, zh, table):
     """One visible optional operation next to the formatter's only confirmation prompt."""
-    if not offer["entries"] and not offer.get("problems") and not offer["unavailable_templates"]:
+    if not offer["entries"]:
         return "", None
     labels = {
         "conversation.locale": "對話語言" if zh else "Conversation language",
@@ -324,11 +324,6 @@ def render_offer(offer, *, zh, table):
     parts = [heading, offer["project"]]
     if rows:
         parts.extend([intro, table(["項目", "已存值", "本次設定"] if zh else ["Setting", "Saved", "This kickoff"], rows)])
-    omitted = {**{key: "Needs a reusable template matching this proposal" for key in offer["unavailable_templates"]},
-               **offer.get("problems", {})}
-    if omitted:
-        parts.append(("以下項目暫不可儲存，不影響本次啟動：" if zh else "Unavailable for saving; this does not block kickoff:") +
-                     "\n" + "\n".join(f"- {key}: {reason}" for key, reason in omitted.items()))
     return "\n\n".join(parts), prompt if rows else None
 
 

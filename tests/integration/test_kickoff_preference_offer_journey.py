@@ -93,7 +93,8 @@ def test_invalid_optional_template_keeps_valid_contract_renderable(ready_request
     rendered = json.loads(capsys.readouterr().out)["render"]
     assert rendered["status"] == "rendered"
     assert "cleanup.convention" in rendered["preference_offer"]["problems"]
-    assert "暫不可儲存" in rendered["output"]
+    assert "暫不可儲存" not in rendered["output"]
+    assert "cleanup.convention" not in rendered["output"]
     assert "preference_offer" not in rendered["proposal"]
 
 

@@ -165,9 +165,11 @@ permissions or suitability judgments. Worktree and action conventions must use
 verified reusable templates. For a route not covered by a saved/validated cache
 template or a built-in convention, provide `preference_templates` using the
 shapes in `kickoff_input_reference.md`; expansion must match the proposal and
-issue-specific names, IDs and paths must use placeholders. Unavailable or invalid
-optional preferences are reported in the final output, not silently saved or
-turned into an extra kickoff gate. Actual missing/invalid contract inputs still
+issue-specific names, IDs and paths must use placeholders. Keep unavailable or
+invalid optional preferences in the structured diagnostic output; omit them
+from the user-facing contract and offer only settings that can be saved. Omit
+the entire preference section when no settings can be saved. These diagnostics
+do not authorize saving or create an extra kickoff gate. Actual missing/invalid contract inputs still
 follow their existing validation. Inferred values need explicit adoption before
 being saved. Saving a preference never changes an existing confirmed workflow.
 
