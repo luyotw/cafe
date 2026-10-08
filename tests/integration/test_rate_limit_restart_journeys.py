@@ -568,11 +568,12 @@ def test_cli_settings_and_task_completion_authorize_current_primary(tmp_path, mo
     assert journey.attempts == [("codex", "primary-model", None)]
 
 
+@pytest.mark.parametrize("single", [True, False])
 def test_preparation_failure_preserves_unconsumed_authorization_for_explicit_retry(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, single
 ):
     """U7/I6: failed preparation cannot consume or replace the rate-limit receipt."""
-    journey = Journey(tmp_path, monkeypatch, policy="recheck_priority", single=True)
+    journey = Journey(tmp_path, monkeypatch, policy="recheck_priority", single=single)
     task = journey.interrupt()
     original = journey.data()["agent_interruption"]
     prepare = journey.generic.prepare_skill
@@ -597,6 +598,9 @@ def test_preparation_failure_preserves_unconsumed_authorization_for_explicit_ret
     marker = journey.data()["restart_recovery_consumption"]
     assert marker["human_task_id"] == task.id
     assert marker["result_id"] == HumanTaskRecordStore(journey.issue).get_result(task.id).id
+    diagnostics = journey.data()["restart_diagnostics"]
+    assert diagnostics["human_task_id"] == marker["human_task_id"]
+    assert diagnostics["result_id"] == marker["result_id"]
 
 
 def test_public_correction_preserves_models_when_configuration_changes_mid_invocation(

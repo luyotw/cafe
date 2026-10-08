@@ -2605,7 +2605,15 @@ class GenericWorkflowStepExecutor(Phase):
                 if latest.status is HumanTaskStatus.COMPLETED:
                     task, result = latest, records.get_result(latest.id)
         decision = result.payload.get("decision") if result else None
+        task_id = task.id if task else None
+        result_id = result.id if result else None
         recovery = getattr(self, "_restart_recovery", None)
+        if recovery is not None:
+            # Preparation recovery can outlive a newer pending/cancelled task.
+            # Its validated receipt supplies the active invocation correlation.
+            decision = recovery["decision"]
+            task_id = recovery["human_task_id"]
+            result_id = recovery["result_id"]
         override = {
             "retry": "user_selected_existing_session",
             AGENT_EXECUTION_FRESH_SESSION_DECISION: "user_selected_fresh_session",
@@ -2631,8 +2639,8 @@ class GenericWorkflowStepExecutor(Phase):
                 "current_rate_limit_interruption" if eligible else "not_a_new_rate_limit_restart"
             ),
             "human_decision": decision,
-            "human_task_id": task.id if task else None,
-            "result_id": result.id if result else None,
+            "human_task_id": task_id,
+            "result_id": result_id,
             "configured_order": present(
                 order.configured_entries
                 if order
