@@ -1737,6 +1737,7 @@ def test_kickoff_formatter_shows_only_task_decisions_without_mutating_the_projec
         assert visible_facts.count(fact) == 1
     for removed in (
         "schema_version",
+        "terminal_selection",
         "semantic_facts",
         "material_assumptions",
         "comparison_token",
@@ -1785,6 +1786,7 @@ def test_kickoff_formatter_shows_only_task_decisions_without_mutating_the_projec
     assert proposal["delivery_contract"] == {
         **product,
         "schema_version": 5,
+        "terminal_selection": "delivery_outcome",
         "closeout_plan": {
             "cleanup": [{"argv": ["git", "worktree", "remove", "/tmp/issue346"]}],
         },
@@ -3368,7 +3370,7 @@ def test_kickoff_derives_proactive_defaults_only_at_scheduled_pauses(
         "develop": "not_required",
         "review": "not_required",
         "pr": "required",
-        "deliver": "required",
+        "deliver": "not_required",
     }
     section = result.stdout.split("### Proactive review at scheduled pauses", 1)[1]
     section = section.split("### Reactive user handoffs", 1)[0]

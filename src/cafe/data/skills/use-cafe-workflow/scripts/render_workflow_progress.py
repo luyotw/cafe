@@ -251,6 +251,18 @@ def _forward_targets(playbook: Mapping[str, Any], step_name: str) -> list[str]:
             and target not in targets
         ):
             targets.append(target)
+    corrections = set(step.get("allowed_goto", []))
+    corrections.add(routes.get("manual_handoff"))
+    for task in step.get("human_tasks", []):
+        for outcome, target in task.get("outcomes", {}).items():
+            if (
+                outcome != "revise"
+                and target in steps
+                and target != step_name
+                and target not in corrections
+                and target not in targets
+            ):
+                targets.append(target)
     return targets
 
 
@@ -599,8 +611,9 @@ def render_progress(
     steps = list(model["steps"])
     policy = _mapping(contract or {}, "contract")
     required_reviews = _required_reviews(policy, set(steps))
-    from cafe.manager.delivery import phase_owned_contract, phase_owned_graph
+    from cafe.manager.delivery import phase_owned_contract, phase_owned_graph, delivery_result_steps
     phase_owned = phase_owned_contract(policy) if policy.get("delivery_contract") else phase_owned_graph(model)
+    combined_delivery = delivery_result_steps(model) if phase_owned else set()
     reviews, closeout = _manager_progress(manager_state, required_reviews=required_reviews, phase_owned=phase_owned)
     phase_statuses, iterations = _runtime_progress(issue_dir, model)
     user_required, manager_confirmable, mandatory = _confirmation_contract(policy)
@@ -652,13 +665,21 @@ def render_progress(
                 confirmation=text["confirmation"],
                 proxy=proxy,
             )
-            block.append(
-                _line(
-                    confirmation_statuses[step],
-                    confirmation_label,
-                    status_text,
+            if step in combined_delivery:
+                # This phase owns both execution and acceptance. Completion of
+                # execution alone must never make its one progress node green.
+                status = phase_statuses[step]
+                if status == "completed" or (
+                    status in {"pending", "awaiting_input"}
+                    and confirmation_statuses[step] == "awaiting_confirmation"
+                ):
+                    status = confirmation_statuses[step]
+                combined_label = (
+                    confirmation_label if status == "awaiting_confirmation" else label
                 )
-            )
+                block[0] = _line(status, combined_label, status_text)
+            else:
+                block.append(_line(confirmation_statuses[step], confirmation_label, status_text))
         phase_blocks.append((step, block))
 
     body = ""

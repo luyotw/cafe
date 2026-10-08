@@ -10,8 +10,8 @@ human_task.cafe_pr.local_review.prompt: Review the prepared local changes and th
 notification.step_labels.pr: PR preparation and review
 notification.action_labels.local_review: Review the changes and decide to fix or continue
 human_task.cafe_pr.delivery_review.prompt: Review the displayed exact integration
-  and issue drafts. Approval authorizes only the shown actions; host capability approval
-  remains separate. For selected follow-ups, enter only the displayed proposal IDs
+  and issue drafts. Approval authorizes only the shown actions and their displayed host capability
+  boundaries in this same decision. For selected follow-ups, enter only the displayed proposal IDs
   separated by spaces or commas.
 human_task.cafe_pr.delivery_review.fix_now: Request implementation corrections
 human_task.cafe_pr.delivery_review.integrate_selected: Authorize integration and selected

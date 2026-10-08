@@ -54,6 +54,11 @@ def approved_snapshot(issue_dir: Path, *, workflow_id: str, binding) -> ActionSn
     proposal = ActionProposal.model_validate_json(proposal_path(issue_dir, task.id).read_bytes())
     if f"Action proposal SHA256: {proposal.digest}" not in task.prompt:
         raise ValueError("task did not display this action proposal")
+    if proposal.capability_review is not None:
+        from cafe.delivery.approvals import review_text
+
+        if review_text(proposal.capability_review) not in task.prompt:
+            raise ValueError("task did not display the reviewed host capability boundary")
     validate_reviewed_artifact(issue_dir, proposal)
     return approve_selection(
         proposal,
@@ -143,6 +148,11 @@ def validate_response(issue_dir, binding, task, payload):
         )
         if f"Action proposal SHA256: {proposal.digest}" not in task.prompt:
             raise ValueError("shown proposal bytes changed")
+        if proposal.capability_review is not None:
+            from cafe.delivery.approvals import review_text
+
+            if review_text(proposal.capability_review) not in task.prompt:
+                raise ValueError("shown host capability review changed")
         validate_reviewed_artifact(issue_dir, proposal)
         validate_source_identity(issue_dir, proposal)
         approve_selection(
@@ -158,7 +168,9 @@ def validate_response(issue_dir, binding, task, payload):
                 "feedback": payload.get("feedback", ""),
             },
         )
-    if task.policy_id == binding.result_task and payload.get("decision") == "confirm":
+    from cafe.delivery.closeout import TERMINAL_DECISIONS, validate_choice
+
+    if task.policy_id == binding.result_task and payload.get("decision") in TERMINAL_DECISIONS:
         snapshot = approved_snapshot(issue_dir, workflow_id=task.workflow_id, binding=binding)
         validate_snapshot_authority(issue_dir, snapshot)
         path = issue_dir / "delivery" / snapshot.digest / "result.json"
@@ -171,6 +183,7 @@ def validate_response(issue_dir, binding, task, payload):
             or f"Delivery result SHA256: {digest(report)}" not in task.prompt
         ):
             raise ValueError("current complete result does not match the shown outcome")
+        validate_choice(issue_dir, snapshot, task, payload["decision"])
 
 
 def validate_complete_report(issue_dir, snapshot, report):

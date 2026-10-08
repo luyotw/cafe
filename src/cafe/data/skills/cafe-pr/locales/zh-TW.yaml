@@ -6,8 +6,7 @@ human_task.cafe_pr.local_review.prompt: 檢視已備妥的本機變更，以及 
   段落。你的決定會套用到所有未處理的 FUP，不支援逐項混合處置。請選擇現在修正全部提議、記錄全部提議另開 issue，或核可並在不開 issue 的情況下繼續。
 notification.step_labels.pr: PR 準備與審閱
 notification.action_labels.local_review: 審閱變更與後續建議，決定修正或確認繼續
-human_task.cafe_pr.delivery_review.prompt: 請審查下方精確的整合動作與議題草稿。批准僅授權顯示的動作，host capability
-  approval 仍須另行成立。選取後續議題時，僅輸入顯示的 proposal ID，以空白或逗號分隔。
+human_task.cafe_pr.delivery_review.prompt: 請審查下方精確的整合動作與議題草稿。批准會在同一次決策中授權顯示的動作與 host 權限範圍。選取後續議題時，僅輸入顯示的 proposal ID，以空白或逗號分隔。
 human_task.cafe_pr.delivery_review.fix_now: 要求修正實作
 human_task.cafe_pr.delivery_review.integrate_selected: 授權整合及選取的後續議題 ID
 human_task.cafe_pr.delivery_review.integrate_only: 授權整合，不建立後續議題

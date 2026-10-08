@@ -12,3 +12,7 @@ human_task.delivery.runtime_evidence: 'Read these current delivery sources befor
   - delivery_receipts_file: {receipts}
 
   - delivery_complete: {complete}'
+human_task.delivery.confirm: Accept results and leave external state unchanged
+human_task.delivery.confirm_cleanup: Accept results and run the displayed cleanup plan
+human_task.delivery.confirm_archive: Accept results and archive only; retain worktree and branch
+human_task.delivery.revise: Recover or revise delivery

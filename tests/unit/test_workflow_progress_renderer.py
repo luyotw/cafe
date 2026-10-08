@@ -77,6 +77,86 @@ def _contract() -> dict[str, object]:
     }
 
 
+def _delivery_graph():
+    binding = {
+        "approval_step": "package", "approval_task": "actions",
+        "result_artifact": "receipt", "result_task": "accept",
+    }
+    return {
+        "playbook": {"id": "delivery"}, "entry_point": "build",
+        "steps": {
+            "build": {"on": {"await_agent": "package"}},
+            "package": {
+                "delivery": binding,
+                "on": {"confirm_output": "package", "manual_handoff": "build"},
+                "allowed_goto": ["build"],
+                "human_tasks": [{"trigger": "confirm_output", "outcomes": {
+                    "integrate": "ship", "revise": "build",
+                }}],
+            },
+            "ship": {"delivery": binding, "output_artifact": "receipt",
+                     "on": {"confirm_output": "ship", "manual_handoff": "build"}},
+        },
+    }
+
+
+def test_delivery_replacement_preserves_normal_progress_node_count():
+    module = _module()
+    legacy_graph = _delivery_graph()
+    legacy_graph["steps"].pop("ship")
+    for step in legacy_graph["steps"].values():
+        step.pop("delivery", None)
+    policy = {"confirmation_contract": {"mandatory_human_stops": ["package"]}}
+    old = module.render_progress(
+        playbook=legacy_graph, contract=policy,
+        manager_state={"deliver": "pending", "cleanup": "pending"},
+    )
+    policy["confirmation_contract"]["mandatory_human_stops"].append("ship")
+    new = module.render_progress(
+        playbook=_delivery_graph(), contract=policy, manager_state={"cleanup": "pending"},
+    )
+    assert len(old.split("\n│\n")) == len(new.split("\n│\n")) == 5
+    assert "○ package: user confirmation (manager may not act) · Pending\n│\n○ ship" in new
+    assert "ship: user confirmation" not in new
+    assert module._forward_targets(_delivery_graph(), "package") == ["ship"]
+
+
+@pytest.mark.parametrize("state,decision,iteration,blocked,expected", [
+    ("pending", None, 1, False, "Awaiting confirmation"),
+    ("completed", "confirm", 1, False, "Completed"),
+    ("completed", "revise", 1, False, "Returned"),
+    ("completed", "invalid", 1, False, "Unknown"),
+    ("pending", None, 1, True, "Blocked"),
+    ("completed", "confirm", 2, False, "Pending"),
+])
+def test_single_delivery_node_retains_evidence_based_acceptance(
+    tmp_path, state, decision, iteration, blocked, expected
+):
+    issue_dir = tmp_path / "issue"
+    issue_dir.mkdir()
+    events = [{"event_type": "step_completed", "step": "ship", "data": {"iteration": iteration}}]
+    if blocked:
+        events.append({"event_type": "workflow_blocked", "step": "ship", "data": {}})
+    _write_runtime_state(issue_dir, {"workflow_id": "wf", "current_step": "user", "events": events})
+    (issue_dir / "human_tasks.json").write_text(json.dumps({
+        "tasks": [{"id": "outcome", "step": "ship", "iteration": 1,
+                   "trigger": "confirm_output", "status": state,
+                   "continuations": {"confirm": "_done", "revise": "ship"},
+                   "expected_result": {"decisions": [
+                       {"id": "confirm"}, {"id": "revise", "correction": True},
+                   ]}}],
+        "results": [] if decision is None else [{"task_id": "outcome", "payload": {"decision": decision}}],
+    }))
+    rendered = _module().render_progress(
+        playbook=_delivery_graph(), issue_dir=issue_dir,
+        contract={"confirmation_contract": {"mandatory_human_stops": ["ship"]}},
+        manager_state={"cleanup": "pending"},
+    )
+    ship_nodes = [line for line in rendered.splitlines() if "ship" in line]
+    assert len(ship_nodes) == 1
+    assert expected in ship_nodes[0]
+
+
 @pytest.fixture
 def compact_task_state(compact_proposal, compact_request):
     """Create a real compact authority and a durable user-owned task."""

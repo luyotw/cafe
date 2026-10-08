@@ -119,6 +119,11 @@ def execute_snapshot(
             remaining = deadline - time.monotonic()
         request = action_request(registry, snapshot, issue_dir, action)
         evaluation = evaluate_capability_request(registry, request)
+        from cafe.delivery.approvals import validate_reviewed_request
+
+        validate_reviewed_request(
+            issue_dir=issue_dir, snapshot=snapshot, action=action, evaluation=evaluation,
+        )
         if evaluation.decision == PolicyDecision.REQUIRE_APPROVAL:
             service = CapabilityApprovalService(
                 issue_dir=issue_dir,
@@ -130,6 +135,13 @@ def execute_snapshot(
                 request=evaluation.request, manifest=evaluation.manifest
             )
             approval = service.inspect(task.id)
+            if snapshot.proposal.capability_review is not None:
+                from cafe.delivery.approvals import approve_reviewed_request
+
+                approval = approve_reviewed_request(
+                    service, task, issue_dir=issue_dir, snapshot=snapshot,
+                    action=action, evaluation=evaluation,
+                )
             if approval["state"] == "pending":
                 pending_task = task.id
                 results[action] = {

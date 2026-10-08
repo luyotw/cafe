@@ -62,7 +62,10 @@ try:
     from cafe.core.runtime_locales import render_text
     from cafe.core.types import AgentCLI, AgentConfig
     from cafe.manager import ActivateConfirmedContract, activate_confirmed_contract
-    from cafe.manager.delivery import normalize_delivery_contract, validate_closeout_plan_policy, phase_owned_graph
+    from cafe.manager.delivery import (
+        normalize_delivery_contract, validate_closeout_plan_policy,
+        phase_owned_graph, delivery_result_steps,
+    )
     from cafe.playbooks.loader import PlaybookLoader
     from cafe.skills.execution_profile import resolve_execution_profile
     from cafe.skills.loader import SkillLoader
@@ -115,6 +118,7 @@ def _kickoff_delivery_contract(
         {
             **core,
             "schema_version": 5 if phase_owned else 3,
+            **({"terminal_selection": "delivery_outcome"} if phase_owned else {}),
             "closeout_plan": plan,
         }
     )
@@ -583,7 +587,8 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _proactive_review_decisions(
-    values: Iterable[str], *, agent_phases: list[str], eligible_phases: set[str]
+    values: Iterable[str], *, agent_phases: list[str], eligible_phases: set[str],
+    default_not_required: set[str] | None = None,
 ) -> list[dict[str, str]]:
     """Resolve sparse overrides into complete ordered review decisions."""
     decisions: dict[str, dict[str, str]] = {}
@@ -609,7 +614,11 @@ def _proactive_review_decisions(
             phase,
             {
                 "phase": phase,
-                "decision": "required" if phase in eligible_phases else "not_required",
+                "decision": (
+                    "required"
+                    if phase in eligible_phases and phase not in (default_not_required or set())
+                    else "not_required"
+                ),
             },
         )
         for phase in agent_phases
@@ -750,6 +759,7 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
                 args.proactive_review_decision,
                 agent_phases=[phase["name"] for phase in phases],
                 eligible_phases=set(candidates) | set(mandatory_human_tasks),
+                default_not_required=delivery_result_steps(model),
             )
         },
         "manager": {"mode": args.manager_mode},
@@ -961,7 +971,7 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
             "\n\n".join(
                 f"#### {key}\n\n{_fact(value)}"
                 for key, value in delivery.items()
-                if key not in {"closeout_plan", "schema_version"}
+                if key not in {"closeout_plan", "schema_version", "terminal_selection"}
             ),
             "Implementation direction is advisory; alternatives that satisfy scope, acceptance "
             "criteria, permissions and constraints do not require reconfirmation.",
@@ -1001,7 +1011,19 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
             ),
             "### Deliver and cleanup plan to confirm",
             _render_closeout(closeout, _closeout_descriptions(args, closeout), zh=zh),
-            text("commands_confirmation"),
+            (
+                (
+                    "交付結果確認時，同一次回覆選擇執行上述收尾計畫、僅封存，或保留現狀。"
+                    "流程完成後依選擇執行，不再另問一次；更改命令、順序、目標或影響時另行確認。"
+                    if zh else
+                    "Accepting the delivery results also selects the above cleanup plan, "
+                    "archive-only, or leaving external state unchanged. After workflow completion, "
+                    "the selected action runs without another confirmation; changed commands, "
+                    "order, targets or effects require fresh confirmation."
+                )
+                if delivery.get("terminal_selection") == "delivery_outcome"
+                else text("commands_confirmation")
+            ),
             *catalog_reminder,
             *([preference_section] if preference_section else []),
             confirmation_prompt,

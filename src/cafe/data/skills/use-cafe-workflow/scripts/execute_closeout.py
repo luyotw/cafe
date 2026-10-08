@@ -274,16 +274,25 @@ def main() -> int:
             command = commands[args.index]
             if command["status"] != "not_started":
                 raise ValueError("closeout command already attempted; never retry or replay")
+            from cafe.manager._store import load_contract, select_authority_directory
+            authority = {}
+            if select_authority_directory(args.issue_dir).name != "driver":
+                authority, _ = load_contract(args.issue_dir)
             if args.stage == "deliver":
                 from cafe.manager.delivery import validate_legacy_delivery_binding
                 validate_legacy_delivery_binding(command["argv"])
+            elif (
+                authority.get("delivery_contract", {}).get("terminal_selection") == "delivery_outcome"
+                or (args.issue_dir / "delivery" / "closeout.json").exists()
+            ):
+                from inspect_delivery_closeout import inspect
+
+                selected = inspect(args.issue_dir, args.workflow_id)
+                if selected["status"] != "accepted" or selected["selection"]["choice"] != "cleanup":
+                    raise ValueError("cleanup requires the recorded delivery terminal choice")
             command["status"] = "unknown"
             _write(path, record)
             try:
-                from cafe.manager._store import load_contract, select_authority_directory
-                authority = {}
-                if select_authority_directory(args.issue_dir).name != "driver":
-                    authority, _ = load_contract(args.issue_dir)
                 if authority.get("contract_mode") == "compact":
                     from cafe.manager.delivery import run_compact_closeout_command
                     result = run_compact_closeout_command(args.issue_dir, Path(record["worktree"]), command["argv"])

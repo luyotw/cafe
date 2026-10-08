@@ -107,15 +107,35 @@ a fixed shipping checklist to every playbook.
 
 ### Confirm cleanup, archive, or no action
 
-After the Manager has verified workflow completion, offer the user these terminal
-choices once:
+For phase-owned development delivery, inspect the combined acceptance first:
+
+```bash
+python3 <skill-dir>/scripts/inspect_delivery_closeout.py --issue-dir <issue-dir> --workflow-id <workflow-id>
+```
+
+An `accepted` selection is the user's already-recorded terminal decision, bound
+to the current exact cleanup contract and verified delivery receipts. Do not ask
+again: `cleanup` runs only that confirmed array through `execute_closeout.py`;
+`archive` runs only `cafe close --archive-only`; `leave` performs no terminal
+mutation. Manager executes after workflow completion and worker quiescence.
+Changed plans, invalid receipts, or mismatched authority require recovery, not
+inferred acceptance. The confirmed contract's `terminal_selection:
+delivery_outcome` selects this flow; a missing projection cannot switch it to
+legacy behavior. A new combined delivery flow with no recorded selection
+is incomplete authority; do not replace its missing acceptance with a generic
+terminal prompt.
+
+For an explicit `legacy` inspection result (a confirmed contract without that
+selection flag), after the Manager has
+verified workflow completion, offer the user these terminal choices once:
 
 1. Run the confirmed non-empty `cleanup` array.
 2. Archive without delivery by running exactly `cafe close --archive-only`.
 3. Leave all external state unchanged.
 
-The post-completion selection is required even when the cleanup plan appeared
-in kickoff. `deliver` remains owned by its declared workflow path or separate
+The terminal selection is required even when the cleanup plan appeared
+in kickoff; a verified combined delivery reply already supplies that selection.
+`deliver` remains owned by its declared workflow path or separate
 user authority; terminal closeout does not rerun it. Do not infer archive from
 terminal wording or from a declined cleanup plan.
 

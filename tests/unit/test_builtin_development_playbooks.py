@@ -47,7 +47,10 @@ def test_adopting_graphs_have_separate_action_review_and_result_acceptance():
         review = next(t for t in approval.human_tasks if t.trigger == "confirm_output")
         assert review.outcomes["integrate_only"] == review.outcomes["integrate_selected"] == "deliver"
         assert review.outcomes["review_only"] == "pr"
-        assert delivery.human_tasks[0].outcomes == {"confirm": "_done", "revise": "deliver"}
+        assert delivery.human_tasks[0].outcomes == {
+            "confirm": "_done", "confirm_cleanup": "_done",
+            "confirm_archive": "_done", "revise": "deliver",
+        }
         assert delivery.delivery.actions_artifact in delivery.input_artifacts
         assert delivery.delivery.correction_step in delivery.allowed_goto
 

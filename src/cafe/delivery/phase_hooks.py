@@ -187,6 +187,13 @@ class DevelopmentActionContext(NoOpHook):
                 reviewed_artifact=str(output.resolve().relative_to(phase.issue_dir.resolve())),
                 reviewed_artifact_sha256=hashlib.sha256(output.read_bytes()).hexdigest(),
             )
+            from cafe.core.capabilities import default_capability_definition_dirs, load_capability_registry
+            from cafe.delivery.approvals import collect_review, review_text
+
+            registry = load_capability_registry(default_capability_definition_dirs(root))
+            proposal = proposal.model_copy(update={
+                "capability_review": collect_review(proposal, phase.issue_dir, registry),
+            })
             from cafe.core.runtime_locales import render_text
 
             owner = SkillLoader(project_root=root).get_skill_dir(kwargs["step_def"]["skill"])
@@ -229,6 +236,8 @@ class DevelopmentActionContext(NoOpHook):
                     impact=item.impact,
                     confidence=item.confidence,
                 )
+            if proposal.capability_review is not None:
+                shown += "\n\n" + review_text(proposal.capability_review)
             shown += f"\n\nAction proposal SHA256: {proposal.digest}"
             task = _task(kwargs, shown)
             save_shown_proposal(phase.issue_dir, task, proposal)
@@ -346,10 +355,20 @@ class DevelopmentDeliveryOutcome(NoOpHook):
             path = phase.issue_dir / "delivery" / snapshot.digest / "result.json"
             report = json.loads(path.read_text())
             validate_complete_report(phase.issue_dir, snapshot, report)
+            from cafe.delivery.closeout import read_plan, plan_text
+
+            plan = read_plan(phase.issue_dir, snapshot.proposal.workflow_id)
+            evidence = (
+                f"Action snapshot SHA256: {snapshot.digest}\n"
+                f"Delivery result SHA256: {digest(report)}\n\n"
+                + json.dumps(report, ensure_ascii=False, indent=2)
+            )
+            if plan is not None:
+                evidence += "\n\n" + plan_text(plan)
+                evidence += "\n\nArchive only: cafe close --archive-only"
             _task(
                 kwargs,
-                f"Delivery result SHA256: {digest(report)}\n\n"
-                + json.dumps(report, ensure_ascii=False, indent=2),
+                evidence,
             )
             return HookResult(context_updates={"delivery_receipts_file": str(path)})
         except (OSError, ValueError, KeyError) as exc:

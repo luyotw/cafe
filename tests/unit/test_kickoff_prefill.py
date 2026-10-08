@@ -57,6 +57,35 @@ def test_configured_values_are_written_to_the_actual_draft_without_granting_acti
     assert not (tmp_path / ".cafe/issues").exists()
 
 
+@pytest.mark.parametrize("saved", [False, True])
+def test_delivery_replaces_closeout_without_an_extra_default_review(tmp_path, saved):
+    module = load_kickoff_module("kickoff_inputs")
+    prefs = load_kickoff_module("kickoff_preferences").PreferenceStore(
+        tmp_path / "prefs", repository_root=tmp_path
+    )
+    if saved:
+        prefs.set("review.decisions", {"pr": "required"}, scope="repository", origin="explicit")
+    report = module.assemble_kickoff(
+        {"schema_version": 1, "project_root": str(tmp_path),
+         "issue_name": "new", "playbook_id": "subagent-flow"},
+        preference_store=prefs,
+    )
+    assert report["formatter_draft"]["proactive_review_decision"] == [
+        "spec_plan=required", "develop=not_required", "pr=required", "deliver=not_required",
+    ]
+    assert not (tmp_path / ".cafe/issues").exists()
+
+
+def test_explicit_delivery_review_still_overrides_the_new_default(tmp_path):
+    module = load_kickoff_module("kickoff_inputs")
+    report = module.assemble_kickoff({
+        "schema_version": 1, "project_root": str(tmp_path),
+        "issue_name": "new", "playbook_id": "subagent-flow",
+        "current_explicit_inputs": {"proactive_review_decision": ["deliver=required"]},
+    })
+    assert report["formatter_draft"]["proactive_review_decision"] == ["deliver=required"]
+
+
 @pytest.mark.parametrize("source,expected", [("explicit", "zh-TW"), ("inferred", "fr-FR")])
 def test_schema_example_locale_uses_one_editable_map_and_preserves_precedence(tmp_path, source, expected):
     module = load_kickoff_module("kickoff_inputs")

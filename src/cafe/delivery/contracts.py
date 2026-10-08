@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 from cafe.core.packet_io import canonical_json
 
@@ -77,6 +77,15 @@ class ActionProposal(FrozenModel):
     review_source: ReviewSource | None = None
     reviewed_artifact: str = ""
     reviewed_artifact_sha256: str = Field(default="", pattern=r"^(?:[0-9a-f]{64})?$")
+    capability_review: dict[str, dict] | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        value = handler(self)
+        # Preserve the exact digest of already-shown legacy proposals.
+        if self.capability_review is None:
+            value.pop("capability_review", None)
+        return value
 
     @model_validator(mode="after")
     def exact_binding(self):

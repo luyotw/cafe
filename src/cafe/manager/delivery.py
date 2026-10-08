@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator, model_serializer
 
 from cafe.core.packet_io import canonical_json
 from cafe.core.git_delivery import git_text as _git, remote_identity as _remote_identity
@@ -24,6 +24,39 @@ def phase_owned_graph(graph) -> bool:
 
 def phase_owned_contract(contract) -> bool:
     return contract.get("delivery_contract", {}).get("schema_version") == 5
+
+
+def delivery_result_steps(graph) -> set[str]:
+    """Locate delivery execution/acceptance owners from their artifact declarations."""
+    if hasattr(graph, "model_dump"):
+        graph = graph.model_dump(mode="json")
+    return {
+        name
+        for name, step in graph.get("steps", {}).items()
+        if (binding := step.get("delivery"))
+        and name != binding["approval_step"]
+        and step.get("output_artifact") == binding["result_artifact"]
+    }
+
+
+def publish_delivery_closeout(issue_dir, contract, contract_sha256):
+    """Project exact Manager-owned cleanup commands for the delivery acceptance task."""
+    if contract.get("delivery_contract", {}).get("terminal_selection") != "delivery_outcome":
+        return
+    from cafe.core.packet_io import atomic_write_bytes
+
+    directory = Path(issue_dir) / "delivery"
+    if directory.is_symlink():
+        raise ValueError("delivery closeout directory must not be a symlink")
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / "closeout.json"
+    if path.is_symlink():
+        raise ValueError("delivery closeout plan must not be a symlink")
+    atomic_write_bytes(path, canonical_json({
+        "version": 1, "workflow_id": contract["identity"]["workflow_id"],
+        "contract_sha256": contract_sha256,
+        "cleanup": [item["argv"] for item in contract["delivery_contract"]["closeout_plan"]["cleanup"]],
+    }))
 
 
 def closeout_evidence_record(
@@ -243,6 +276,15 @@ class DeliveryContractV5(DeliveryContractV3):
     """Fresh phase-owned workflow; Manager holds only separately confirmed cleanup."""
 
     closeout_plan: CleanupCloseoutPlan
+    terminal_selection: Literal["delivery_outcome"] | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        result = handler(self)
+        # Preserve the exact normalization/digest of already confirmed v5 contracts.
+        if self.terminal_selection is None:
+            result.pop("terminal_selection", None)
+        return result
 
     @field_validator("schema_version")
     @classmethod
