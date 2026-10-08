@@ -53,7 +53,7 @@ def test_dispatch_rejects_unknown_or_duplicate_owner_before_call(monkeypatch) ->
 def test_packaged_setting_owner_adapters_are_declared_and_loadable() -> None:
     declared = _declared_setting_owners()
 
-    assert {entry.name for entry in declared} == {"manager", "driver", "pr.auto_create"}
+    assert {entry.name for entry in declared} == {"manager", "driver", "pr.auto_create", "execution.rate_limit_restart_policy"}
     assert all(callable(entry.load()) for entry in declared)
 
 
