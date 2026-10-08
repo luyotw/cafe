@@ -1,0 +1,3 @@
+notification.cafe_deliver.step_label: 交付準備
+human_task.cafe_deliver.clarification_feedback.prompt: 提供繼續交付準備所需的釐清說明。
+human_task.cafe_deliver.permission_answers.prompt: 提供繼續交付準備所需的權限決定或存取資訊。

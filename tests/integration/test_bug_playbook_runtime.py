@@ -24,7 +24,7 @@ from cafe.core.capability_approvals import CapabilityApprovalService
 from cafe.core.git import GitOperations
 from cafe.core.hooks.native import GitHubPRCreator
 from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
-from cafe.core.types import AgentCLI, TokenUsage
+from cafe.core.types import AgentCLI, AgentConfig, TokenUsage
 from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
@@ -57,7 +57,8 @@ class DefectAgent:
     def __init__(self, repo, issue_dir):
         self.repo, self.issue_dir = repo, issue_dir
         self.agent = SimpleNamespace(
-            config=SimpleNamespace(
+            config=AgentConfig(
+                name="David",
                 cli=AgentCLI.CODEX,
                 session_id="bug-test",
                 model=None,
@@ -67,6 +68,7 @@ class DefectAgent:
         self.actions = {}
         self.interrupt_at = None
         self.inconclusive = None
+        self.delivery_details_missing = False
         self.failed = False
         self.red = None
         self.green = None
@@ -222,6 +224,20 @@ class DefectAgent:
                     "- Commit: N/A (no repository changes): revalidated existing bounded repair\n"
                     "- Remaining work: None.\n- Next action: Independent assessment.\n\n"
                 )
+        if phase == "pr" and not self.delivery_details_missing:
+            config = yaml.safe_load((self.issue_dir / "issue.yaml").read_text())
+            github = config["pr"].get("auto_create") is True
+            (directory / "delivery_request.json").write_text(
+                json.dumps(
+                    {
+                        "mode": "github" if github else "local",
+                        "strategy": "merge" if github else "ff-only",
+                        "target_branch": "main",
+                        "destination": "" if github else str(self.repo.parent / "destination"),
+                        "issue_repository": "",
+                    }
+                )
+            )
         output = directory / "output.md"
         output.write_text(report)
         if self.interrupt_at == phase:
@@ -264,6 +280,9 @@ def journey(tmp_path, monkeypatch):
     (repo / "calc.py").write_text("def twice(value):\n    return value * 2 - 1\n")
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", "Initial defect")
+    _git(repo, "checkout", "-b", "bug-repair")
+    _git(repo, "worktree", "add", str(repo.parent / "destination"), "main")
+    _git(repo, "remote", "add", "origin", "https://github.com/example/defect.git")
     issue_dir = repo / ".cafe" / "issues" / "defect"
     issue_dir.mkdir(parents=True)
     (issue_dir / "issue.yaml").write_text(
@@ -362,9 +381,9 @@ def test_demonstrated_defect_reaches_distinct_review_and_human_pr(journey):
     assert journey.agent.red.returncode == 1 and journey.agent.green.returncode == 0
     assert _git(journey.repo, "status", "--porcelain") == ""
     task = _pending(journey)
-    assert task.policy_id == "local-review" and task.step == "pr"
-    _answer(journey, task, decision="continue_without_issue")
-    assert BlackboardStore(journey.issue_dir).load_or_create("diagnose").current_step == "done"
+    assert task.policy_id == "delivery-review" and task.step == "pr"
+    _answer(journey, task, decision="review_only")
+    assert BlackboardStore(journey.issue_dir).load_or_create("diagnose").current_step == "pr"
 
 
 @pytest.mark.parametrize("failure", ["passes", "setup", "unrelated", "disputed"])
@@ -427,7 +446,7 @@ def test_fourth_unfinished_attempt_is_blocked_and_authorized_resume_retains_scop
     _answer(journey, task, decision="resume")
     journey.run()
     assert sum(p == phase for p, _ in journey.agent.calls) == 4
-    assert _pending(journey).policy_id == "local-review"
+    assert _pending(journey).policy_id == "delivery-review"
 
 
 @pytest.mark.parametrize("phase", ["diagnose", "develop", "review"])
@@ -452,7 +471,7 @@ def test_human_response_resumes_affected_work_with_original_evidence(journey, ph
             resumed[1].get("checkpoint_output_file", resumed[1].get("develop_file", "")),
         ),
     )
-    assert _pending(journey).policy_id == "local-review"
+    assert _pending(journey).policy_id == "delivery-review"
 
 
 @pytest.mark.parametrize("feedback_kind", ["local", "mixed"])
@@ -473,7 +492,7 @@ def test_pr_feedback_is_curated_before_repair_and_review(journey, feedback_kind)
     assert "WF-" in journey.agent.inputs[-3][1]["causal_todo_file"]
     if feedback_kind in ("github", "mixed"):
         assert "PRC-" in journey.agent.inputs[-3][1]["causal_todo_file"]
-    assert _pending(journey).policy_id == "local-review"
+    assert _pending(journey).policy_id == "delivery-review"
 
 
 def test_publication_permission_approves_only_exact_request_then_returns_to_local_review(
@@ -576,7 +595,7 @@ def test_publication_permission_approves_only_exact_request_then_returns_to_loca
     ).run(start_step="pr")
     assert not resumed.completed
     assert published == ["published"], (resumed.final_status_code, resumed.detail)
-    assert _pending(journey).policy_id == "local-review"
+    assert _pending(journey).policy_id == "delivery-review"
 
 
 @pytest.mark.parametrize("phase", ["before_red", "diagnose", "develop", "review"])
@@ -597,4 +616,17 @@ def test_interrupted_proof_resumes_with_prior_output_and_cannot_skip_review(jour
         resumed.get("previous_output_file", resumed.get("checkpoint_output_file", "")),
     )
     assert ("RED proof unfinished" if phase == "before_red" else journey.agent.identity) in previous
-    assert _pending(journey).policy_id == "local-review"
+    assert _pending(journey).policy_id == "delivery-review"
+
+
+def test_missing_delivery_details_pause_for_clarification_without_corrupting_todo(journey):
+    from cafe.core.todo import parse_todo_list
+
+    journey.agent.delivery_details_missing = True
+    result = journey.run("diagnose")
+    assert not result.completed
+    task = _pending(journey)
+    assert task.policy_id == "delivery-details" and task.step == "pr"
+    output = journey.issue_dir / "pr/iteration_001/output.md"
+    assert parse_todo_list(output.read_text()) == ()
+    assert "## Delivery action details required" in output.read_text()

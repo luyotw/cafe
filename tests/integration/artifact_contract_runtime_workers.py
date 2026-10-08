@@ -37,7 +37,7 @@ class _CustomProductionAgent:
     def __init__(self, repo: Path) -> None:
         self.repo = repo
         self.agent = SimpleNamespace(
-            config=SimpleNamespace(cli=AgentCLI.CODEX, session_id="custom-session", model=None)
+            config=SimpleNamespace(native_review_configuration=None, cli=AgentCLI.CODEX, session_id="custom-session", model=None)
         )
         self.calls = 0
 
@@ -115,7 +115,7 @@ class _LegacyProductionAgent:
         self.repo = repo
         self.issue_dir = issue_dir
         self.agent = SimpleNamespace(
-            config=SimpleNamespace(cli=AgentCLI.CODEX, session_id="legacy-session", model=None)
+            config=SimpleNamespace(native_review_configuration=None, cli=AgentCLI.CODEX, session_id="legacy-session", model=None)
         )
         self.calls = 0
 

@@ -1,5 +1,12 @@
 # Running And Inspecting A Workflow
 
+## Compact route
+
+Compact launch forwards a digest/revision-bound generic execution context after
+a successful resume checkpoint. Scope expansion uses the existing user HumanTask
+and contract replacement; regenerate the projection before continuing. Do not
+reuse stale checkpoint or review receipts after content/authority changes.
+
 Read this reference after kickoff and whenever starting, resuming, inspecting,
 or retrying ordinary workflow work. Read `model_selection.md` before the first
 execution and whenever agent work remains.
@@ -216,6 +223,12 @@ does not infer delivery from model output or claim cross-provider context
 continuity. The callback remains an ordinary manager and uses only existing
 kickoff authority: confirmation contract, mandatory HumanTask stops, reactive
 user handoffs, and mandate. It cannot change confirmed models.
+
+The bounded same-session interruption recovery exception in
+`supervision_and_recovery.md` also applies to callbacks. It permits only the
+existing interruption task's `retry` outcome, up to three retries 30 seconds
+apart, with count reconstructed from durable history. It does not authorize
+other user-owned answers, fresh sessions, or an extra retry after exhaustion.
 
 ## Project confirmed user context into agent input
 

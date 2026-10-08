@@ -1,0 +1,4 @@
+human_task.single_review.iteration_limit.prompt: Review the retained blocker and decide
+  whether to grant another bounded correction cycle.
+human_task.single_review.iteration_limit.resume: Grant another bounded correction
+  cycle

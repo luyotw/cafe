@@ -169,7 +169,7 @@ def journey(tmp_path, monkeypatch):
 
         class Provider:
             def __init__(self):
-                self.agent = SimpleNamespace(config=SimpleNamespace(
+                self.agent = SimpleNamespace(config=SimpleNamespace(native_review_configuration=None,
                     cli=AgentCLI.CODEX, session_id="exact-report-session", model="test-model"))
                 self.calls = []
                 self.checklists = []

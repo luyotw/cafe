@@ -82,6 +82,8 @@ class PreferenceStore:
         origin: str,
         reuse: bool = True,
     ) -> bool:
+        if key == "delivery.convention":
+            raise ValueError("Manager delivery preferences are obsolete; use declared phase action review")
         if not reuse:
             return False
         if origin != "explicit":
@@ -137,6 +139,8 @@ def canonical_language_input(record: dict[str, Any]) -> dict[str, str]:
 
 
 def validate_reusable_value(key: str, value: Any, *, declarations: dict[str, Any]) -> ValidationResult:
+    if key == "delivery.convention":
+        return ValidationResult(None, "Obsolete Manager delivery preference; inspect only")
     if any(part in key.lower() for part in _FORBIDDEN_KEY_PARTS):
         return ValidationResult(None, "Authority-bearing values cannot be reused")
     if key == "confirmation.assignments" and isinstance(value, dict):

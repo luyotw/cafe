@@ -17,6 +17,7 @@ import yaml
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 UNIT_ROOT = PROJECT_ROOT / "tests/unit"
 sys.path.insert(0, str(UNIT_ROOT))
+sys.path.insert(0, str(PROJECT_ROOT / "src/cafe/data/skills/use-cafe-workflow/scripts"))
 import kickoff_inputs
 from _kickoff_test_support import load_kickoff_module
 
@@ -75,7 +76,7 @@ def phase_config(tmp_path: Path) -> Path:
     path.write_text(json.dumps({
         step: {"name": step, "role": role, "clis": [{"cli": "codex", "model": "fixture-model"}]}
         for step, role in (("spec", "pm"), ("plan", "developer"), ("develop", "developer"),
-                           ("review", "reviewer"), ("qa", "qa"), ("pr", "developer"))
+                           ("review", "reviewer"), ("qa", "qa"), ("pr", "developer"), ("deliver", "developer"))
     }))
     return path
 
@@ -104,9 +105,7 @@ def _formatter_inputs(issue_name: str) -> dict:
         "project_root": str(PROJECT_ROOT),
         "issue_name": issue_name,
         "delivery_contract": args.delivery_contract,
-        "deliver": args.deliver,
         "cleanup": args.cleanup,
-        "deliver_description": args.deliver_description,
         "cleanup_description": args.cleanup_description,
         "update_preflight": args.update_preflight,
         "catalog_preflight": args.catalog_preflight,
@@ -224,7 +223,7 @@ def test_compact_cli_reports_preserve_selected_facts_and_full_render(
          "phase_config": str(phase_config)}
     )
     formatter_inputs["phase_chain"].append("qa=gemini:qa-main,copilot:qa-fallback")
-    formatter_inputs["proactive_review_decision"].insert(-1, "qa=not_required")
+    formatter_inputs["proactive_review_decision"].insert(-2, "qa=not_required")
     request = {
         "schema_version": 1,
         "project_root": str(PROJECT_ROOT),
@@ -434,7 +433,6 @@ def test_public_draft_selection_and_in_place_overrides_render_without_duplicate_
     fields.update(effective_locale="fr-FR", locale_source="explicit")
     values = _formatter_inputs("new")
     fields["delivery_contract"] = values["delivery_contract"]
-    fields.update(deliver=[], deliver_description=[])
     for kind in ("update", "catalog"):
         report_file = tmp_path / f"{kind}.json"
         report_file.write_text(json.dumps(values[f"{kind}_preflight"]))
@@ -467,8 +465,14 @@ def test_cached_delivery_and_issue_defaults_reach_the_complete_formatter(tmp_pat
         "delivery_template": {"deliver": [["gh", "pr", "merge", "--merge"]],
                               "deliver_description": ["Merge the reviewed PR for {issue_name}."]}}))
     cache = tmp_path / "cache"
-    assert cli.main(["evidence", "refresh", "--category", "delivery", "--project-root", str(PROJECT_ROOT),
-                     "--cache-dir", str(cache), "--evidence-file", str(evidence)]) == 0
+    refresh = ["evidence", "refresh", "--category", "delivery", "--project-root", str(PROJECT_ROOT),
+               "--cache-dir", str(cache), "--evidence-file", str(evidence)]
+    assert cli.main(refresh) == 3
+    assert json.loads(capsys.readouterr().out)["diagnostic"] == "obsolete_manager_delivery_template"
+    descriptive = json.loads(evidence.read_text())
+    descriptive.pop("delivery_template")
+    evidence.write_text(json.dumps(descriptive))
+    assert cli.main(refresh) == 0
     capsys.readouterr()
     values = _formatter_inputs("issue999573")
     draft, output = [tmp_path / name for name in ("draft.json", "proposal.md")]
@@ -489,8 +493,8 @@ def test_cached_delivery_and_issue_defaults_reach_the_complete_formatter(tmp_pat
     assert "already exists" in json.loads(capsys.readouterr().out)["message"]
     assert draft.read_bytes() == original
     assert report["delivery"]["status"] == "hit"
-    assert fields["deliver"] == [["gh", "pr", "merge", "--merge"]]
-    assert fields["cleanup"] == [["gh", "issue", "close", "999573", "--repo", "example/project"], ["cafe", "close"]]
+    assert "deliver" not in fields and "deliver_description" not in fields
+    assert fields["cleanup"] == [["gh", "issue", "close", "999573", "--repo", "example/project"], ["cafe", "close", "--archive-only"]]
     assert fields["manager_mode"] == "event-driven" and fields["event_manager"] == ["codex"]
     assert fields["worktree"].endswith("/.cafe/worktrees/" + values["issue_name"])
     # Only fill the actual gaps; do not hand-copy any prefilled field.
@@ -499,7 +503,7 @@ def test_cached_delivery_and_issue_defaults_reach_the_complete_formatter(tmp_pat
     draft.write_text(json.dumps(request))
     assert cli.main(["render", "--request-file", str(draft), "--output", str(output), *stores]) == 0
     capsys.readouterr()
-    assert "gh pr merge --merge" in output.read_text()
+    assert "gh pr merge --merge" not in output.read_text()
     assert "gh issue close 999573 --repo example/project" in output.read_text()
     assert not Path(fields["worktree"]).exists()
     assert not (PROJECT_ROOT / ".cafe/issues" / values["issue_name"]).exists()
@@ -690,12 +694,12 @@ def test_confirmed_inputs_fill_selected_journey_without_copying_full_reports(
     assert partial["formatter_draft"]["issue_name"] == values["issue_name"]
     assert partial["formatter_draft"]["phase_chain"] == values["phase_chain"]
     assert {item["requirement"] for item in partial["missing_decisions"]} == {
-        "formatter input: delivery_contract", "formatter input: deliver"
+        "formatter input: delivery_contract"
     }
     assert partial["selected_graph"]["id"] == values["playbook_id"]
     assert partial["catalog"]["candidates"] == []
     assert partial["catalog"]["candidate_count"] > 1
-    request["formatter_inputs"] = {key: values[key] for key in ("delivery_contract", "deliver", "cleanup")}
+    request["formatter_inputs"] = {key: values[key] for key in ("delivery_contract", "cleanup")}
     path.write_text(json.dumps(request))
     assert cli.main(["assemble", *common, "--summary"]) == 0
     ready = json.loads(capsys.readouterr().out)
@@ -794,7 +798,7 @@ def test_selected_draft_supplies_owner_typed_contract_and_renders_without_repair
     assert schema["properties"] == {k: v for k, v in owner["properties"].items() if k != "closeout_plan"}
     assert isinstance(template["delivery_contract"]["implementation_direction"], str)
     assert set(template["delivery_contract"]) == set(values["delivery_contract"])
-    assert template["deliver"] is None and template["cleanup"] == [["cafe", "close"]]
+    assert "deliver" not in template and template["cleanup"] == [["cafe", "close", "--archive-only"]]
     assert cli.main(["assemble", *common, "--summary", "--draft-output", str(draft)]) == 3
     capsys.readouterr()
     draft_request = json.loads(draft.read_text())
@@ -807,7 +811,7 @@ def test_selected_draft_supplies_owner_typed_contract_and_renders_without_repair
     capsys.readouterr()
     for key, decision in values["delivery_contract"].items():
         draft_request["formatter_inputs"]["delivery_contract"][key] = decision
-    for key in ("deliver", "cleanup"):
+    for key in ("cleanup",):
         draft_request["formatter_inputs"][key] = values[key]
     draft.write_text(json.dumps(draft_request))
     output = tmp_path / "proposal.md"
@@ -829,13 +833,13 @@ def test_public_closeout_examples_follow_existing_policy_without_authority(
     schema = json.loads(capsys.readouterr().out)
     for example in schema["closeout_examples"]:
         try:
-            validate_closeout_plan_policy({"deliver": [], "cleanup": [{"argv": example["argv"]}]}, allow_squash=False)
+            validate_closeout_plan_policy({"cleanup": [{"argv": example["argv"]}]}, allow_squash=False)
             valid = True
         except ValueError:
             valid = False
         assert example["valid_in_pr_mode"] == valid
     archive = next(e for e in schema["closeout_examples"] if "--archive-only" in e["argv"])
-    assert not archive["valid_in_pr_mode"]
+    assert archive["valid_in_pr_mode"]
     assert schema["input_template"]["cleanup"] is None
 
 
@@ -911,10 +915,8 @@ def test_public_action_description_shapes_render_without_type_or_count_repairs(
     described = examples["described_action"]
     empty = examples["no_actions"]
     values = _formatter_inputs("issue573-action-description-journey")
-    values.update(deliver=described["actions"], deliver_description=described["descriptions"],
-                  cleanup=empty["actions"], cleanup_description=empty["descriptions"])
-    values["deliver"][0] = ["git", "commit", "-m", "Implement chosen outcome"]
-    values["deliver_description"][0] = "Commit the reviewed implementation locally."
+    values.update(cleanup=empty["actions"], cleanup_description=empty["descriptions"])
+    assert "deliver" not in schema["formatter_fields"]
     request = tmp_path / "request.json"
     request.write_text(json.dumps({"schema_version": 1, "project_root": str(PROJECT_ROOT),
         "issue_name": values["issue_name"], "playbook_id": values["playbook_id"], "formatter_inputs": values}))

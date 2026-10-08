@@ -15,8 +15,8 @@ from typing import Any
 from _kickoff_store import VersionedJsonStore, repository_identity
 
 _ALLOWED_FIELDS = {
-    "playbook_id", "project_root", "issue_name", "delivery_contract", "deliver", "cleanup",
-    "deliver_description", "cleanup_description", "update_preflight", "catalog_preflight",
+    "playbook_id", "project_root", "issue_name", "delivery_contract", "cleanup",
+    "cleanup_description", "update_preflight", "catalog_preflight",
     "manager_mode", "poll_interval_seconds", "event_manager", "phase_chain", "phase_config",
     "effective_locale", "locale_source", "repository_content_locale", "capability_choice",
     "user_required", "manager_confirmable", "worktree", "current_checkout",
@@ -24,17 +24,17 @@ _ALLOWED_FIELDS = {
     "alignment_checkpoint", "proactive_review_decision",
 }
 _REQUIRED_FIELDS = {
-    "playbook_id", "issue_name", "delivery_contract", "deliver", "cleanup",
+    "playbook_id", "issue_name", "delivery_contract", "cleanup",
     "update_preflight", "catalog_preflight", "repository_content_locale",
 }
 
 
 _JSON_FLAGS = {
-    "delivery_contract": "--delivery-contract", "deliver": "--deliver", "cleanup": "--cleanup",
+    "delivery_contract": "--delivery-contract", "cleanup": "--cleanup",
     "update_preflight": "--update-preflight", "catalog_preflight": "--catalog-preflight",
 }
 _REPEATED_FLAGS = {
-    "deliver_description": "--deliver-description", "cleanup_description": "--cleanup-description",
+    "cleanup_description": "--cleanup-description",
     "event_manager": "--event-manager", "phase_chain": "--phase-chain",
     "capability_choice": "--capability-choice", "task_user_required": "--task-user-required",
     "task_manager_confirmable": "--task-manager-confirmable",
@@ -91,14 +91,14 @@ def request_schema() -> dict[str, Any]:
     for argv in (["cafe", "close"], ["cafe", "close", "--archive-only"], ["cafe", "close", "--squash"]):
         example = {"argv": argv, "valid_in_pr_mode": True}
         try:
-            validate_closeout_plan_policy({"deliver": [], "cleanup": [{"argv": argv}]}, allow_squash=False)
+            validate_closeout_plan_policy({"cleanup": [{"argv": argv}]}, allow_squash=False)
         except ValueError as exc:
             example.update(valid_in_pr_mode=False, diagnostic=str(exc))
         closeout_examples.append(example)
     return {
         "schema_version": 1,
         "delivery_contract": contract_schema,
-        "input_template": {"delivery_contract": contract_template, "deliver": None, "cleanup": None,
+        "input_template": {"delivery_contract": contract_template, "cleanup": None,
                            "phase_chain": [], "capability_choice": []},
         "closeout_examples": closeout_examples,
         "action_input_examples": {
@@ -130,9 +130,9 @@ def request_schema() -> dict[str, Any]:
         "template_rules": {
             "null": "Unresolved: replace with a deliberate value; never rendered as a default.",
             "delivery_contract": "Fill all product decisions, including intentionally empty lists. closeout_plan is added by the formatter.",
-            "actions": "deliver/cleanup are literal argv arrays, not command objects or shell strings. Empty arrays require an explicit current decision.",
-            "action_descriptions": "deliver_description/cleanup_description are string arrays with exactly one nonempty explanation per command. An empty action array requires an empty description array; put resource-retention rationale in delivery_contract.constraints instead. Action examples describe shapes, never permission.",
-            "closeout": "Examples validate syntax only, never recommend or authorize an action. cafe close must be last cleanup; archive-only is a separate terminal action, not a closeout_plan command.",
+            "actions": "cleanup contains literal argv arrays, not command objects or shell strings. Empty arrays require an explicit current decision.",
+            "action_descriptions": "cleanup_description contains strings with exactly one nonempty explanation per command. An empty action array requires an empty description array; put resource-retention rationale in delivery_contract.constraints instead. Action examples describe shapes, never permission.",
+            "closeout": "Examples validate syntax only, never recommend or authorize an action. cafe close must be last cleanup; adopting graphs require archive-only to avoid another integration.",
             "preflight": "Pass full existing reports through preflight_files. Missing tokens/dates/decisions must be resolved through their owner, never synthesized.",
         },
         "formatter_fields": sorted(_ALLOWED_FIELDS),
@@ -151,7 +151,6 @@ def request_schema() -> dict[str, Any]:
         "decision_examples": {
             "phase_chain": ["develop=codex:<exact-model>"],
             "capability_choice": ["pr.auto_create=true"],
-            "deliver": [["<executable>", "<literal argument>"]],
             "cleanup": [],
         },
         "guidance": "Start with draft and edit existing formatter_inputs fields in place, without duplicating them in another input map. After assemble --draft-output, continue with that updated draft. Set effective_locale and its accurate locale_source together (explicit or inferred). Preserve generated_inputs and preflight references. kickoff_inputs.md documents preparation; kickoff.md owns delivery and authority rules. Examples are placeholders, never approved decisions.",
@@ -211,7 +210,7 @@ def normalize_formatter_inputs(values: dict[str, Any]) -> dict[str, Any]:
         ):
             diagnostics.append(f"{key}_must_be_an_array_of_nonempty_argv_arrays")
     for key in (
-        "deliver_description", "cleanup_description", "event_manager", "phase_chain",
+        "cleanup_description", "event_manager", "phase_chain",
         "capability_choice", "user_required", "manager_confirmable", "task_user_required",
         "task_manager_confirmable", "proactive_review_decision",
     ):
@@ -319,7 +318,7 @@ def _compact_candidate(candidate: Any) -> dict[str, Any]:
             steps[step_id] = {key: step[key] for key in step_fields if key in step}
             omitted_step_fields[step_id] = sorted(set(step) - set(step_fields))
     candidate_fields = (
-        "id", "eligible", "source", "fingerprint", "applicability", "behavior", "roles",
+        "id", "contract_mode", "eligible", "source", "fingerprint", "applicability", "behavior", "roles",
         "profiles", "skills", "native_subagent_steps", "confirmation_gates", "mandatory_confirmation_gates",
         "capability_requirements", "capability_setup", "diagnostics",
     )
@@ -417,7 +416,7 @@ def compact_discovery_summary(
             "diagnostics": delivery.get("diagnostics", []),
             "discovery_gap": delivery.get("discovery_gap"),
             "stable_conventions": delivery.get("stable_conventions", []),
-            "delivery_template": delivery.get("delivery_template"),
+            "delivery_template": None,
             "sources": delivery.get("sources", []),
             "current_observations": observations,
             "manifest": {
@@ -457,12 +456,29 @@ def discover_kickoff(
     from cafe.catalogs.resolver import CatalogResolver
 
     resolver = CatalogResolver(project_root=project_root)
-    catalog = _load_local_module("kickoff_catalog").discover_index(
+    catalog_owner = _load_local_module("kickoff_catalog")
+    catalog_args = dict(
         project_root=project_root,
         global_root=resolver.global_root,
         builtin_root=resolver.builtin_root,
         cache_file=(cache_dir or _default_cache_root()) / "catalog-v1.json",
     )
+    from cafe.manager.api import confirmed_contract_snapshot
+
+    confirmed = confirmed_contract_snapshot(project_root / ".cafe/issues" / issue_name)
+    if confirmed and confirmed.get("contract_mode") == "compact":
+        request = {**request, "playbook_id": confirmed["execution"]["playbook_id"]}
+    early_catalog = catalog_owner.discover_index(
+        **catalog_args, lightweight=True, selected_id=request.get("playbook_id"))
+    early_selected = next((item for item in early_catalog["candidates"]
+                           if item["id"] == request.get("playbook_id")), None)
+    mode = (confirmed.get("contract_mode", "full") if confirmed else
+            early_selected.get("contract_mode", "full") if early_selected else "full")
+    if mode == "compact":
+        return _load_local_module("compact_kickoff").discover(
+            request, catalog_args=catalog_args, early_catalog=early_catalog,
+            confirmed=confirmed, config_dir=config_dir, cache_dir=cache_dir)
+    catalog = catalog_owner.discover_index(**catalog_args) if early_selected else early_catalog
     preference_store = _load_local_module("kickoff_preferences").PreferenceStore(
         config_dir or _default_config_root(), repository_root=project_root
     )
@@ -531,6 +547,7 @@ def discover_kickoff(
         (item for item in catalog.get("candidates", []) if item.get("id") == selected), None
     ) if isinstance(selected, str) else None
     return {
+        "contract_mode": mode,
         "stage": "discovery", "status": "partial" if catalog.get("diagnostics") else "ready",
         "preferences": preferences, "catalog": catalog, "selected_candidate": selected_candidate,
         "delivery": delivery, "models": models, "diagnostics": list(catalog.get("diagnostics", [])),
@@ -719,7 +736,7 @@ def _prefill_saved_inputs(values: dict[str, Any], *, store: Any, request: dict[s
         rendered = delivery.render_delivery_template({"deliver": value[stage], "deliver_description": value[stage + "_description"]}, context())
         updates = {stage: rendered["deliver"], stage + "_description": rendered["deliver_description"]}
         return {key: value for key, value in updates.items() if unresolved(key)}
-    for stage in ("deliver", "cleanup"):
+    for stage in ("cleanup",):
         apply(stage.replace("deliver", "delivery") + ".convention", {stage, stage + "_description"}, unresolved(stage),
               lambda value, stage=stage: convention(stage, value))
     return blocked
@@ -740,7 +757,7 @@ def _prefill_configured_inputs(values: dict[str, Any], *, project_root: Path, so
             sources[key] = source
 
     def action_slot(key: str) -> bool:
-        return (key in {"deliver", "cleanup"} and values.get(key) is None
+        return (key == "cleanup" and values.get(key) is None
                 and key not in request.get("current_explicit_inputs", {}))
 
     from cafe.utils.git_utils import get_github_repo_name
@@ -761,26 +778,19 @@ def _prefill_configured_inputs(values: dict[str, Any], *, project_root: Path, so
             if repository:
                 commands.append(["gh", "issue", "close", issue_id, "--repo", repository])
                 descriptions.append(f"Close GitHub issue {repository}#{issue_id}.")
-        commands.append(["cafe", "close"])
-        descriptions.append("Archive this CAFE issue and remove its managed worktree and branch.")
+        from cafe.manager.delivery import phase_owned_graph
+        selected_graph = values.get("playbook_id")
+        phase_owned = bool(selected_graph) and phase_owned_graph(owner.PlaybookLoader(project_root=project_root).load_model(selected_graph).model)
+        commands.append(["cafe", "close", "--archive-only"] if phase_owned else ["cafe", "close"])
+        descriptions.append("Archive this CAFE issue without repeating integration; retain its worktree and branch." if phase_owned else "Archive this CAFE issue and remove its managed worktree and branch.")
         fill("cleanup", commands, "default issue cleanup proposal")
         fill("cleanup_description", descriptions, "default issue cleanup proposal")
-    delivery = (discovery or {}).get("delivery", {})
-    if "deliver" not in blocked and ("deliver" not in values or action_slot("deliver")) and delivery.get("status") == "hit" and delivery.get("delivery_template") is not None:
-        rendered = _load_local_module("kickoff_delivery").render_delivery_template(
-            delivery["delivery_template"], {"issue_name": values["issue_name"],
-                "issue_id": request.get("issue_id", ""), "project_root": str(project_root),
-                "worktree": values.get("worktree") or (str(project_root) if values.get("current_checkout") is True else "")},
-        )
-        for key, value in rendered.items():
-            fill(key, value, "validated repository delivery template")
-
     for key in ("need_permission", "need_clarification", "alignment_checkpoint"):
         fill(key, parser.get_default(key), "formatter default")
     if "repository_content_locale" not in values:
         context = load_strategic_context(project_root)
         fill("repository_content_locale", context.content_locale, "repository language policy")
-    for stage in ("deliver", "cleanup"):
+    for stage in ("cleanup",):
         if values.get(stage) == []:
             fill(stage + "_description", [], "explicit empty action plan")
 
@@ -797,6 +807,13 @@ def _prefill_configured_inputs(values: dict[str, Any], *, project_root: Path, so
             fill("effective_locale", snapshot["value"], snapshot["source"])
             fill("locale_source", snapshot["source"], "conversation locale owner")
 
+    from cafe.manager.delivery import phase_owned_graph
+    default_descriptions = {"Archive this CAFE issue without repeating integration; retain its worktree and branch.", "Archive this CAFE issue and remove its managed worktree and branch."}
+    if ("cleanup" not in request.get("current_explicit_inputs", {}) and values.get("cleanup_description") and values["cleanup_description"][-1] in default_descriptions and values.get("cleanup") and values["cleanup"][-1] in (["cafe", "close"], ["cafe", "close", "--archive-only"])):
+        phase_owned = phase_owned_graph(model)
+        values["cleanup"][-1] = ["cafe", "close", "--archive-only"] if phase_owned else ["cafe", "close"]
+        values["cleanup_description"][-1] = "Archive this CAFE issue without repeating integration; retain its worktree and branch." if phase_owned else "Archive this CAFE issue and remove its managed worktree and branch."
+        sources["cleanup"] = "default issue cleanup proposal"
     gates = owner.confirmation_gate_steps(model)
     if "user_required" not in values and "manager_confirmable" not in values:
         user, manager = owner._resolve_partition(candidates=gates, user_values=None, manager_values=None)
@@ -834,6 +851,8 @@ def assemble_kickoff(
     if not isinstance(request, dict) or request.get("schema_version") != 1:
         return {"status": "invalid", "selected_playbook": None, "diagnostics": ["unsupported_request_schema"], "missing_decisions": [], "formatter_inputs": None}
     request = normalize_request_identity(request)
+    if discovery and discovery.get("contract_mode") == "compact":
+        return _load_local_module("compact_kickoff").assemble(request, discovery=discovery)
     selected = request.get("playbook_id")
     if not isinstance(selected, str) or not selected.strip():
         selected = None
@@ -930,18 +949,8 @@ def assemble_kickoff(
     if not isinstance(bindings, dict):
         missing.append({"owner": "manager_research", "requirement": "invalid generated input provenance"})
         bindings = {}
-    dependency = _delivery_dependency(discovery, raw_inputs, request)
-    for field in ("deliver", "deliver_description"):
-        binding = bindings.get(field)
-        if binding is not None and field not in explicit:
-            if not isinstance(binding, dict):
-                missing.append({"owner": "manager_research", "requirement": f"invalid provenance for {field}"})
-            elif binding.get("value_fingerprint") == _input_fingerprint(raw_inputs.get(field)):
-                if dependency is None or binding.get("dependency") != dependency:
-                    missing.append({"owner": "manager_decision", "requirement": f"reassess source-backed {field}; evidence or target changed"})
-        if prefilled.get(field) == "validated repository delivery template":
-            generated[field] = {"origin": "delivery_evidence", "dependency": dependency,
-                                "value_fingerprint": _input_fingerprint(raw_inputs[field])}
+    if set(bindings) & {"deliver", "deliver_description"}:
+        missing.append({"owner": "manager_decision", "requirement": "obsolete Manager delivery provenance; retain the old record and use phase action review"})
     preflight_files = request.get("preflight_files", {})
     if isinstance(preflight_files, dict) and isinstance(raw_inputs, dict):
         for file_key, input_key in (("update", "update_preflight"), ("catalog", "catalog_preflight")):
@@ -959,12 +968,12 @@ def assemble_kickoff(
         from argparse import Namespace
 
         descriptions = {f"{stage}_description": raw_inputs.get(f"{stage}_description", [])
-                        for stage in ("deliver", "cleanup")}
+                        for stage in ("cleanup",)}
         try:
             # Assemble through the existing owner before advertising render readiness.
             # Low-level argv encoding remains compatible with partial formatter data.
             _load_local_module("format_kickoff_contract")._closeout_descriptions(
-                Namespace(**descriptions), {stage: raw_inputs[stage] for stage in ("deliver", "cleanup")}
+                Namespace(**descriptions), {stage: raw_inputs[stage] for stage in ("cleanup",)}
             )
         except ValueError as exc:
             normalized["status"] = "invalid"
@@ -997,6 +1006,8 @@ def assemble_kickoff(
 
 def render_kickoff(values: dict[str, Any], *, preference_store=None,
                    preference_templates=None, issue_id="") -> dict[str, Any]:
+    if isinstance(values, dict) and values.get("contract_mode") == "compact":
+        return _load_local_module("compact_kickoff").render(values)
     normalized = values if isinstance(values, dict) and values.get("status") in {"ready", "incomplete", "invalid"} else normalize_formatter_inputs(values)
     if normalized.get("status") != "ready":
         return {

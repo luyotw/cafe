@@ -1,5 +1,12 @@
 # Reusable kickoff inputs
 
+## Compact route
+
+Resolve the selected or confirmed `contract.mode` before the full request
+template. Compact `draft/discover/assemble/render` uses `compact_inputs` with
+`files`, `phases`, `review_configuration` and `delivery_contract`; exactly three
+decision groups are rendered. Follow `compact_kickoff.md` for this route.
+
 `prepare_kickoff.py` discovers reusable evidence, assembles one editable request,
 and passes completed inputs to the existing kickoff formatter. It does not
 activate a workflow or execute proposed delivery actions.
@@ -64,8 +71,6 @@ to copy them from the discovery report:
 - cleanup: close the explicitly identified GitHub issue in the current repository
   when a GitHub remote is available, then `cafe close`; without that binding,
   propose only `cafe close`;
-- `deliver` and its descriptions from a validated cached `delivery_template`,
-  expanding current issue/worktree values into literal argv;
 - repository content language through the existing strategic-context resolver;
 - conversation language through the existing workflow/playbook locale owner
   when no current preference was supplied;
@@ -79,12 +84,11 @@ The response's `prefilled` map identifies configuration/default sources. These
 are editable proposal values, not a confirmed contract. Model suitability still
 requires assessment. Missing or invalid configuration is reported instead of
 inventing a model or replacing the user's value. Cached narrative conventions
-alone are not executable templates. Store a structured delivery template once
-the repository route is established; source changes invalidate it normally.
+alone are not executable templates. Obsolete delivery templates remain inspectable diagnostics; they cannot prefill new executable actions.
 
 The caller still supplies the current product outcome, scope, acceptance,
 implementation direction, constraints and permission boundaries; chooses the
-playbook when unspecified; resolves a missing/stale delivery template and any
+playbook when unspecified; resolves missing descriptive delivery evidence and any
 non-default mode parameters; and makes capability/preflight decisions. Review
 prefilled choices, concrete targets and requested exceptions. The complete
 proposal still requires confirmation before creating a worktree or executing
@@ -107,10 +111,7 @@ does not repair stale evidence. Supplied false and empty values are preserved.
 An empty `phase_chain` requests no per-phase overrides; assembly fills configured
 chains for the selected graph. Product fields use the existing `DeliveryContractV3`
 schema. `implementation_direction` is a string; list fields are arrays.
-`closeout_plan` is built by the formatter. An unresolved delivery route remains
-null, not an automatic empty array. A null draft action slot may receive a
-valid template/default later; an explicit `[]` excludes that stage and wins over
-the defaults. Deliberate `deliver`/`cleanup` choices are literal
+`closeout_plan` is built by the formatter. The adopting graph owns exact integration review later; kickoff accepts cleanup only. A null cleanup slot may receive a valid default; explicit `[]` excludes cleanup. Deliberate `cleanup` choices are literal
 argv arrays, with one description per action. `schema` exposes all field types
 and the existing parser's allowed values without conditional filtering.
 An unknown or invalid field blocks rendering but preserves the editable values

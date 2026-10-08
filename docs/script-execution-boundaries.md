@@ -20,6 +20,7 @@ This inventory is executable documentation: the unit contract discovers every `s
 | --- | --- |
 | `src/cafe/agents/executor.py::_execute_streaming_process` | Internal agent CLI transport |
 | `src/cafe/agents/manager.py::_create_claude_session` | Internal agent CLI transport |
+| `src/cafe/delivery/operations.py::run` | Registered fixed Git/GitHub delivery capability adapter |
 | `src/cafe/core/capabilities.py::_current_repo_slug` | Internal fixed Git query |
 | `src/cafe/core/capabilities.py::_git_ref_exists` | Internal fixed Git query |
 | `src/cafe/core/capabilities.py::run_pr_publish_capability` | Registered host capability adapter |
@@ -112,3 +113,18 @@ trusted runtime owns its fixed `after_execute` + `confirmed` gate, binds the
 resolved issue destination and artifact digest into the capability request,
 and persists the capability receipt. Compatibility `sync_github.sh` wrappers
 must not be invoked by phase agents.
+
+Existing compact launchers are inventoried separately from the development delivery adapter; their authority and operation behavior remain unchanged.
+
+| Launcher identity | Classification |
+| --- | --- |
+| `src/cafe/core/execution_checkpoints.py::guard_execution_delivery` | Internal fixed delivery checkpoint query |
+| `src/cafe/core/pr_delivery.py::publish_resolved_pr.action.dispatch_check` | Registered compact PR pre-dispatch query |
+| `src/cafe/core/pr_delivery.py::publish_resolved_pr.action` | Registered compact PR capability adapter |
+| `src/cafe/core/file_scope.py::_git` | Internal fixed Git scope query |
+| `src/cafe/core/file_scope.py::working_git_entry` | Internal fixed Git scope query |
+| `src/cafe/core/git_delivery.py::git_text` | Internal fixed Git delivery query |
+| `src/cafe/manager/file_scope.py::prepare_file_scope` | Internal fixed Git scope query |
+| `src/cafe/manager/file_scope.py::execution_scope_projection` | Internal fixed Git scope query |
+| `src/cafe/manager/delivery.py::run_compact_closeout_command.action` ×6 | Registered compact closeout capability adapter |
+| `src/cafe/data/skills/use-cafe-workflow/scripts/compact_kickoff.py::discover` | Internal fixed Git discovery query |

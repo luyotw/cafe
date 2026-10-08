@@ -108,7 +108,7 @@ def _read(path: Path, *, issue_name: str, workflow_id: str) -> dict[str, Any] | 
         not isinstance(record, dict)
         or set(record)
         != {"version", "issue_name", "workflow_id", "contract_sha256", "worktree", "commands"}
-        or record["version"] != 1
+        or record["version"] not in {1, 2}
         or record["issue_name"] != issue_name
         or record["workflow_id"] != workflow_id
     ):
@@ -118,9 +118,9 @@ def _read(path: Path, *, issue_name: str, workflow_id: str) -> dict[str, Any] | 
     if not isinstance(record["worktree"], str) or not Path(record["worktree"]).is_absolute():
         raise ValueError("closeout worktree binding is invalid")
     commands = record["commands"]
-    if not isinstance(commands, dict) or set(commands) != set(STAGES):
+    if not isinstance(commands, dict) or set(commands) != ({"cleanup"} if record["version"] == 2 else set(STAGES)):
         raise ValueError("closeout command evidence is invalid")
-    for stage in STAGES:
+    for stage in commands:
         if not isinstance(commands[stage], list):
             raise ValueError("closeout command evidence is invalid")
         for command in commands[stage]:
@@ -205,8 +205,8 @@ def _initialize(
         if (
             prior["contract_sha256"] != digest
             or prior["worktree"] != str(worktree)
-            or {stage: [item["argv"] for item in prior["commands"][stage]] for stage in STAGES}
-            != {stage: [item["argv"] for item in record["commands"][stage]] for stage in STAGES}
+            or {stage: [item["argv"] for item in prior["commands"][stage]] for stage in record["commands"]}
+            != {stage: [item["argv"] for item in record["commands"][stage]] for stage in record["commands"]}
         ):
             raise ValueError("closeout evidence differs from the confirmed contract")
         return prior
@@ -264,6 +264,8 @@ def main() -> int:
                 return 0
             if args.stage is None or args.index is None or args.index < 0:
                 raise ValueError("execution requires a stage and nonnegative index")
+            if args.stage not in record["commands"]:
+                raise ValueError("phase-owned delivery has no Manager deliver executor")
             commands = record["commands"][args.stage]
             if args.index >= len(commands):
                 raise ValueError("command index is outside the confirmed plan")
@@ -272,10 +274,21 @@ def main() -> int:
             command = commands[args.index]
             if command["status"] != "not_started":
                 raise ValueError("closeout command already attempted; never retry or replay")
+            if args.stage == "deliver":
+                from cafe.manager.delivery import validate_legacy_delivery_binding
+                validate_legacy_delivery_binding(command["argv"])
             command["status"] = "unknown"
             _write(path, record)
             try:
-                result = subprocess.run(command["argv"], cwd=record["worktree"], check=False)
+                from cafe.manager._store import load_contract, select_authority_directory
+                authority = {}
+                if select_authority_directory(args.issue_dir).name != "driver":
+                    authority, _ = load_contract(args.issue_dir)
+                if authority.get("contract_mode") == "compact":
+                    from cafe.manager.delivery import run_compact_closeout_command
+                    result = run_compact_closeout_command(args.issue_dir, Path(record["worktree"]), command["argv"])
+                else:
+                    result = subprocess.run(command["argv"], cwd=record["worktree"], check=False)
             except OSError as exc:
                 raise ValueError("closeout command outcome is unknown; inspect read-only") from exc
             command["status"] = "succeeded" if result.returncode == 0 else "failed"

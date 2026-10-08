@@ -71,6 +71,161 @@ def feedback_todo_mappings(
     return mappings
 
 
+def supervisor_feedback_receipts(
+    issue_dir: Path,
+    *,
+    playbook: Mapping[str, Any],
+    workflow_id: str,
+    target_step: str,
+    entries: Iterable[WorkflowFeedbackEntry],
+) -> dict[str, dict[str, str]]:
+    """Prove raw feedback ownership from completed supervisor task results.
+
+    A source kind alone never grants an exception to curation. The source must
+    identify the exact task, its declared curator and its durable continuation.
+    Existing task/ledger schemas remain the authority; receipts live only in
+    the runtime's delivery audit event.
+    """
+    from cafe.core.human_task_records import (
+        HumanTaskRecordError,
+        HumanTaskRecordStore,
+        HumanTaskStatus,
+    )
+    from cafe.core.packet_io import sha256_bytes
+
+    selected = {entry.source_identity: entry for entry in entries}
+    if not selected:
+        return {}
+    required_receipts: set[str] = set()
+    curator_mappings = feedback_todo_mappings(playbook, target_step=target_step)
+    for producer, step in playbook.get("steps", {}).items():
+        for binding in step.get("human_tasks", ()) or ():
+            delivery = binding.get("feedback_delivery")
+            if not isinstance(delivery, Mapping):
+                continue
+            declared_targets = {
+                *binding.get("outcomes", {}).values(),
+                *(binding.get("allowed_targets", ()) or ()),
+            }
+            if target_step in declared_targets:
+                continue
+            source_prefix = f"{producer}:{binding.get('task_id')}:"
+            required_receipts.update(
+                identity
+                for identity in selected
+                if identity.partition(":")[2].startswith(source_prefix)
+                or (
+                    selected[identity].source_kind == delivery.get("source_kind")
+                    and selected[identity].source_kind not in curator_mappings
+                )
+            )
+    records = HumanTaskRecordStore(issue_dir)
+    receipts: dict[str, dict[str, str]] = {}
+    try:
+        tasks = records.tasks()
+        results = {result.task_id: result for result in records.results()}
+    except HumanTaskRecordError as exc:
+        raise WorkflowFeedbackError("supervisor feedback task records are invalid") from exc
+    task_sources = {
+        f"{task.step}:{task.policy_id}:{task.iteration}"
+        for task in tasks
+        if task.workflow_id == workflow_id
+    }
+    for task in tasks:
+        result = results.get(task.id)
+        if result is None or "supervisor_handoff_to" not in result.payload:
+            continue
+        source_prefix = f"{task.step}:{task.policy_id}:"
+        # Being an allowed curator target cannot turn a supervisor source with
+        # a missing exact task into ordinary curated feedback. Preserve later
+        # normal task iterations that still have their own exact durable task.
+        required_receipts.update(
+            identity
+            for identity in selected
+            if identity.partition(":")[2].startswith(source_prefix)
+            and identity.partition(":")[2] not in task_sources
+        )
+        step = playbook.get("steps", {}).get(task.step, {})
+        bindings = [
+            binding
+            for binding in step.get("human_tasks", ()) or ()
+            if binding.get("task_id") == task.policy_id and binding.get("trigger") == task.trigger
+        ]
+        suffix = f":{task.step}:{task.policy_id}:{task.iteration}"
+        matching = [entry for identity, entry in selected.items() if identity.endswith(suffix)]
+        if not matching:
+            continue
+        if len(bindings) != 1:
+            raise WorkflowFeedbackError("supervisor feedback task declaration changed")
+        binding = bindings[0]
+        delivery = binding.get("feedback_delivery")
+        payload = result.payload
+        declared = task.continuations.get(str(payload.get("decision")))
+        decision = next(
+            (
+                item
+                for item in task.expected_result.get("decisions", ())
+                if item.get("id") == payload.get("decision")
+            ),
+            {},
+        )
+        correction = decision.get("correction") is True
+        if decision.get("requires_target") is True:
+            declared = payload.get("target")
+            policy_targets = task.expected_result.get("allowed_targets", ())
+            binding_targets = binding.get("allowed_targets") or policy_targets
+            if (
+                not isinstance(declared, str)
+                or declared not in policy_targets
+                or declared not in binding_targets
+                or (declared != "_done" and declared not in playbook.get("steps", {}))
+            ):
+                raise WorkflowFeedbackError("supervisor feedback selected target is invalid")
+        elif payload.get("target") is not None:
+            raise WorkflowFeedbackError("supervisor feedback decision does not accept a target")
+        if task.expected_result.get("input_schema") == "feedback":
+            declared = task.continuations.get("submit")
+            correction = True
+        if (
+            task.status is not HumanTaskStatus.COMPLETED
+            or task.workflow_id != workflow_id
+            or result.workflow_id != workflow_id
+            or result.task_id != task.id
+            or payload.get("task") != task.policy_id
+            or not correction
+            or not isinstance(delivery, Mapping)
+            or not declared
+            or binding.get("outcomes") != task.continuations
+            or payload.get("declared_continuation") != declared
+            or payload.get("continuation") != target_step
+            or payload.get("supervisor_handoff_to") != target_step
+            or declared == target_step
+        ):
+            raise WorkflowFeedbackError("supervisor feedback ownership is not proven")
+        for entry in matching:
+            if (
+                entry.source_kind != delivery.get("source_kind")
+                or entry.source_identity != f"{entry.source_kind}{suffix}"
+                or entry.target_step != target_step
+                or not isinstance(payload.get("feedback"), str)
+                or payload["feedback"].strip() != entry.content
+                or entry.source_identity in receipts
+            ):
+                raise WorkflowFeedbackError(
+                    "supervisor feedback source identity or content changed"
+                )
+            receipts[entry.source_identity] = {
+                "task_id": task.id,
+                "result_id": result.id,
+                "declared_continuation": declared,
+                "continuation": target_step,
+                "sha256": sha256_bytes(entry.content.encode("utf-8")),
+            }
+    if not required_receipts.issubset(receipts):
+        raise WorkflowFeedbackError("supervisor feedback ownership proof is missing")
+    return receipts
+
+
 def _now() -> str:
     return datetime.now().astimezone().isoformat()
 

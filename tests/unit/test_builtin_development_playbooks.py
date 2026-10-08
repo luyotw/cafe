@@ -34,7 +34,23 @@ DEVELOPMENT_PLAYBOOKS = {
     "hotfix",
     "bug",
 }
-BUNDLED_PLAYBOOKS = DEVELOPMENT_PLAYBOOKS | {"editorial", "incident", "research"}
+BUNDLED_PLAYBOOKS = DEVELOPMENT_PLAYBOOKS | {"editorial", "incident", "research", "streamlined"}
+
+
+def test_adopting_graphs_have_separate_action_review_and_result_acceptance():
+    """U6: delivery approval and final acceptance are independent declared tasks."""
+    for name in DEVELOPMENT_PLAYBOOKS:
+        model = PlaybookLoader().load_model(name, strict=True).model
+        approval = model.steps["pr"]
+        delivery = model.steps["deliver"]
+        assert approval.delivery == delivery.delivery
+        assert "DevelopmentActionContext" in approval.hooks.publish_output
+        review = next(t for t in approval.human_tasks if t.trigger == "confirm_output")
+        assert review.outcomes["integrate_only"] == review.outcomes["integrate_selected"] == "deliver"
+        assert review.outcomes["review_only"] == "pr"
+        assert delivery.human_tasks[0].outcomes == {"confirm": "_done", "revise": "deliver"}
+        assert delivery.delivery.actions_artifact in delivery.input_artifacts
+        assert delivery.delivery.correction_step in delivery.allowed_goto
 
 
 def test_all_bundled_playbooks_have_distinct_bounded_applicability() -> None:
@@ -115,15 +131,16 @@ def test_every_builtin_pr_requires_local_review_before_done() -> None:
 
     for playbook_id in DEVELOPMENT_PLAYBOOKS:
         pr = loader.load_model(playbook_id, strict=True).model.steps["pr"]
-        local_review = next(task for task in pr.human_tasks if task.task_id == "local-review")
+        local_review = next(task for task in pr.human_tasks if task.task_id == "delivery-review")
 
         assert pr.on["confirm_output"] == "pr"
         assert "workflow_complete" not in pr.on
         assert local_review.trigger == "confirm_output"
         assert local_review.outcomes == {
             "fix_now": "pr",
-            "create_follow_up": "_done",
-            "continue_without_issue": "_done",
+            "integrate_selected": "deliver",
+            "integrate_only": "deliver",
+            "review_only": "pr",
         }
 
 
@@ -133,7 +150,7 @@ def test_every_builtin_pr_curates_corrective_feedback_before_development() -> No
 
     for playbook_id in DEVELOPMENT_PLAYBOOKS:
         pr = loader.load_model(playbook_id, strict=True).model.steps["pr"]
-        local_review = next(task for task in pr.human_tasks if task.task_id == "local-review")
+        local_review = next(task for task in pr.human_tasks if task.task_id == "delivery-review")
 
         assert pr.behavior.feedback_target == "pr"
         assert pr.behavior.feedback_artifact == "workflow_feedback"
@@ -247,7 +264,7 @@ def test_direct_is_the_reviewed_no_spec_no_plan_path() -> None:
     playbook = PlaybookLoader().load_model("direct", strict=True).model
 
     assert playbook.entry_point == "develop"
-    assert list(playbook.steps) == ["develop", "review", "pr"]
+    assert list(playbook.steps) == ["develop", "review", "pr", "deliver"]
     assert playbook.steps["develop"].on["await_agent"] == "review"
     assert playbook.steps["review"].on["await_agent"] == "pr"
     assert playbook.steps["review"].on["manual_handoff"] == "develop"
@@ -281,7 +298,7 @@ def test_direct_subagent_review_composes_develop_with_one_review_overlay() -> No
     raw_playbook = loader.load("direct-subagent-review")
 
     assert playbook.entry_point == "develop"
-    assert list(playbook.steps) == ["develop", "pr"]
+    assert list(playbook.steps) == ["develop", "pr", "deliver"]
     develop = playbook.steps["develop"]
     assert develop.skill == "cafe-develop"
     assert "Agent" in develop.allowed_tools
@@ -336,7 +353,7 @@ def test_standard_owns_the_established_full_development_graph() -> None:
     playbook = PlaybookLoader().load_model("standard", strict=True).model
 
     assert playbook.entry_point == "spec"
-    assert list(playbook.steps) == ["spec", "plan", "develop", "review", "pr"]
+    assert list(playbook.steps) == ["spec", "plan", "develop", "review", "pr", "deliver"]
     assert playbook.steps["spec"].on["await_agent"] == "plan"
     assert playbook.steps["plan"].on["await_agent"] == "develop"
     assert playbook.steps["develop"].on["await_agent"] == "review"
@@ -349,12 +366,12 @@ def test_joint_spec_plan_has_one_planning_gate_and_same_phase_revisions(playbook
     planning = playbook.steps["spec_plan"]
 
     assert playbook.entry_point == "spec_plan"
-    expected_steps = ["spec_plan", "develop", "pr"]
+    expected_steps = ["spec_plan", "develop", "pr", "deliver"]
     if playbook_id == "subagent-flow-qa":
         expected_steps.insert(2, "qa")
     assert list(playbook.steps) == expected_steps
     assert confirmation_gate_steps(playbook) == ("spec_plan",)
-    assert mandatory_confirmation_gate_steps(playbook) == ("pr",)
+    assert mandatory_confirmation_gate_steps(playbook) == ("pr", "deliver")
     assert planning.output_artifact == "plan"
     assert planning.input_artifacts == ["plan"]
     assert planning.todo_identity_input_artifact == "plan"
@@ -538,7 +555,7 @@ def test_simple_owns_the_spec_develop_qa_pr_graph() -> None:
     loader = PlaybookLoader()
 
     simple = loader.load_model("simple", strict=True).model
-    assert list(simple.steps) == ["spec", "develop", "qa", "pr"]
+    assert list(simple.steps) == ["spec", "develop", "qa", "pr", "deliver"]
     assert simple.steps["spec"].on["await_agent"] == "develop"
     assert simple.steps["develop"].on["await_agent"] == "qa"
     assert simple.steps["qa"].on["await_agent"] == "pr"
@@ -558,7 +575,7 @@ def test_direct_qa_owns_the_planless_reviewed_qa_graph() -> None:
     playbook = PlaybookLoader().load_model("direct-qa", strict=True).model
 
     assert playbook.entry_point == "develop"
-    assert list(playbook.steps) == ["develop", "review", "qa", "pr"]
+    assert list(playbook.steps) == ["develop", "review", "qa", "pr", "deliver"]
     assert playbook.steps["develop"].on["await_agent"] == "review"
     assert playbook.steps["review"].on["await_agent"] == "qa"
     assert playbook.steps["qa"].on["await_agent"] == "pr"
@@ -575,12 +592,12 @@ def test_existing_hotfix_and_tdd_paths_remain_unchanged() -> None:
 
     hotfix = loader.load_model("hotfix", strict=True).model
     assert hotfix.entry_point == "develop"
-    assert list(hotfix.steps) == ["develop", "review", "pr"]
+    assert list(hotfix.steps) == ["develop", "review", "pr", "deliver"]
     assert hotfix.steps["develop"].on["await_agent"] == "review"
     assert hotfix.steps["review"].on["await_agent"] == "pr"
 
     tdd = loader.load_model("tdd", strict=True).model
-    assert list(tdd.steps) == ["spec", "plan", "develop", "review", "pr"]
+    assert list(tdd.steps) == ["spec", "plan", "develop", "review", "pr", "deliver"]
     assert tdd.roles["developer"].default_agent == "Nick"
     assert tdd.steps["develop"].on["await_agent"] == "review"
     assert tdd.steps["review"].on["await_agent"] == "pr"
@@ -651,7 +668,7 @@ def test_builtin_develop_publishes_workspace_and_consumers_declare_it(
 def test_qa_variants_share_one_bounded_acceptance_phase(playbook_id: str) -> None:
     playbook = PlaybookLoader().load_model(playbook_id, strict=True).model
 
-    assert list(playbook.steps) == ["spec", "plan", "develop", "review", "qa", "pr"]
+    assert list(playbook.steps) == ["spec", "plan", "develop", "review", "qa", "pr", "deliver"]
     qa = playbook.steps["qa"]
     assert qa.skill == "cafe-qa"
     assert qa.role == "qa"

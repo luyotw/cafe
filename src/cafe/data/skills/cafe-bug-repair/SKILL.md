@@ -1,7 +1,7 @@
 ---
 name: cafe-bug-repair
 description: Minimal defect repair with unchanged RED/GREEN regression evidence
-version: 1.0.0
+version: 1.1.0
 workflow:
   execution_profile:
     workload: implementation
@@ -86,6 +86,9 @@ workflow:
   - artifacts:
     - review_feedback
     placeholder: review_feedback_file
+    required: false
+  - artifacts: [delivery_result]
+    placeholder: delivery_feedback_file
     required: false
   prompt_references:
     evidence_template: evidence.md

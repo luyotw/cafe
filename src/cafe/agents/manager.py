@@ -5,7 +5,7 @@ import os
 import subprocess
 import time
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from cafe.agents.diagnostics import (
     build_failed_attempt,
@@ -376,6 +376,7 @@ class AgentManager:
             and a.clis == b.clis
             and a.backup_clis == b.backup_clis
             and a.models_config == b.models_config
+            and a.native_review_configuration == b.native_review_configuration
         )
 
     def get_agent(self, name: str) -> AgentExecutor:
@@ -429,6 +430,7 @@ class AgentManager:
         backup_context_callback: Optional[Callable[[AgentExecutionError], str]] = None,
         execution_control: AgentExecutionControl | None = None,
         constraint_context: Context | None = None,
+        native_review_configuration: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, TokenUsage, List, Optional[List[str]], List[str], Optional[str]]:
         """Execute prompt with specified agent.
 
@@ -448,6 +450,7 @@ class AgentManager:
             AgentExecutionError: If all agents (primary + backups) fail
         """
         self._failed_attempts = []
+        self._last_native_review_observations = []
         saved_sessions: Dict[AgentCLI, str] = {}
         base_executor = self.get_agent(agent_name)
 
@@ -466,6 +469,8 @@ class AgentManager:
                 effective_continuation,
             )
 
+        if native_review_configuration is not None:
+            execution_config = execution_config.model_copy(update={"native_review_configuration": native_review_configuration})
         if not self._config_is_equivalent(base_executor.config, execution_config):
             executor = AgentExecutor(execution_config)
             executor.stream_output = self.stream_agent_output
@@ -602,6 +607,7 @@ class AgentManager:
         reported_model = agent_response.model
         model = reported_model
         actual_cli = agent_response.cli or executor.config.cli
+        self._last_native_review_observations = agent_response.native_review_observations
         actual_session_id = agent_response.session_id
         if model is None and actual_cli == executor.config.cli:
             model = executor.config.model
@@ -874,6 +880,7 @@ class AgentManager:
                 cli=entry.cli,
                 model=backup_model,
                 session_id=fallback_session_id,
+                native_review_configuration=config.native_review_configuration,
             )
             backup_executor = AgentExecutor(backup_config)
             backup_executor.stream_output = self.stream_agent_output
@@ -1107,6 +1114,9 @@ class AgentManager:
     def get_last_cli(self) -> Optional[AgentCLI]:
         """Get the actual CLI that produced the last response."""
         return self._last_cli
+
+    def get_last_native_review_observations(self):
+        return list(getattr(self, "_last_native_review_observations", []))
 
     def get_last_session_id(self) -> Optional[str]:
         """Get the actual session id from the last response, if any."""

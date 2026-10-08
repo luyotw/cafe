@@ -29,6 +29,7 @@ from cafe.core.prepare_fields import (
     validate_field_semantics,
 )
 from cafe.core.status_codes import PLAYBOOK_INTENT_KEYS, PhaseStatusCode
+from cafe.delivery.contracts import DeliveryBinding
 from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.loader import SkillLoader, canonical_skill_name
 from cafe.skills.selectors import skill_selector_names
@@ -593,6 +594,30 @@ def _behavior_value(
     return fallback if value is None else value
 
 
+class ExecutionRequirements(BaseModel):
+    """Semantic boundaries, independent of contract form and step names."""
+
+    model_config = ConfigDict(extra="forbid")
+    checkpoints: List[Literal["before_review", "resume", "before_delivery"]] = Field(default_factory=list)
+    review_policy: Optional[Literal["single_native"]] = None
+    review_evidence_artifact: Optional[str] = None
+    delivery_evidence_artifact: Optional[str] = None
+
+    @field_validator("review_evidence_artifact", "delivery_evidence_artifact")
+    @classmethod
+    def _literal_evidence_path(cls, value):
+        if value is not None and (not value or Path(value).is_absolute() or
+                any(part in {"", ".", ".."} for part in value.split("/")) or "\\" in value):
+            raise ValueError("execution evidence must use a literal relative path")
+        return value
+
+    @model_validator(mode="after")
+    def _review_requires_checkpoint(self):
+        if self.review_policy and ("before_review" not in self.checkpoints or not self.review_evidence_artifact):
+            raise ValueError("native review requires per-invocation checkpoints and evidence")
+        return self
+
+
 class StepConfig(BaseModel):
     """One playbook step."""
 
@@ -613,6 +638,8 @@ class StepConfig(BaseModel):
     workspace_artifact: Optional[str] = None
     workspace_input_artifact: Optional[str] = None
     initial_input: Optional[InitialInputDeclaration] = None
+    execution: ExecutionRequirements = Field(default_factory=ExecutionRequirements)
+    delivery: Optional["DeliveryBinding"] = None
     template: Optional[str] = None
     allowed_tools: List[str] = Field(default_factory=list)
     capability_requests: List[str] = Field(default_factory=list)
@@ -666,9 +693,7 @@ class StepConfig(BaseModel):
                 self.input_artifacts is None
                 or self.todo_identity_input_artifact not in self.input_artifacts
             ):
-                raise ValueError(
-                    "todo_identity_input_artifact must be listed in input_artifacts"
-                )
+                raise ValueError("todo_identity_input_artifact must be listed in input_artifacts")
         if self.automatic is not None and self.assignee_type != "auto":
             raise ValueError("automatic requires matching assignee_type=auto")
         if self.hybrid is not None and self.assignee_type != "hybrid":
@@ -694,14 +719,13 @@ class StepConfig(BaseModel):
             if self.workspace_artifact == self.output_artifact:
                 raise ValueError("workspace_artifact must differ from output_artifact")
         if self.workspace_input_artifact is not None:
-            if not re.fullmatch(
-                r"[A-Za-z][A-Za-z0-9_-]*", self.workspace_input_artifact.strip()
-            ):
+            if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", self.workspace_input_artifact.strip()):
                 raise ValueError("workspace_input_artifact must be a safe identifier")
-            if self.input_artifacts is None or self.workspace_input_artifact not in self.input_artifacts:
-                raise ValueError(
-                    "workspace_input_artifact must be listed in input_artifacts"
-                )
+            if (
+                self.input_artifacts is None
+                or self.workspace_input_artifact not in self.input_artifacts
+            ):
+                raise ValueError("workspace_input_artifact must be listed in input_artifacts")
             if self.output_artifact == self.workspace_input_artifact:
                 raise ValueError("workspace_input_artifact must differ from output_artifact")
         return self
@@ -1003,12 +1027,20 @@ def _has_mandatory_confirmation_gate(step: StepConfig) -> bool:
     )
 
 
+class ContractForm(BaseModel):
+    """Proposal form only; never changes the execution graph or its gates."""
+
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["full", "compact"] = "full"
+
+
 class PlaybookDefinition(BaseModel):
     """Top-level playbook definition."""
 
     model_config = ConfigDict(extra="forbid")
 
     playbook: PlaybookMeta
+    contract: ContractForm = Field(default_factory=ContractForm)
     roles: Dict[str, PlaybookRole] = Field(default_factory=dict)
     skills: Optional[PlaybookSkillEnvironments] = None
     behavior: StepBehaviorDeclaration = Field(default_factory=StepBehaviorDeclaration)
@@ -1043,12 +1075,31 @@ class PlaybookDefinition(BaseModel):
             ]
 
         route_declarations_present = any(
-            resolve_step_behavior(self, step_name).feedback_routes
-            for step_name in self.steps
+            resolve_step_behavior(self, step_name).feedback_routes for step_name in self.steps
         )
         step_order = {name: index for index, name in enumerate(self.steps)}
 
         for step_name, step in self.steps.items():
+            if step.delivery:
+                binding = step.delivery
+                if (
+                    binding.approval_step not in self.steps
+                    or binding.correction_step not in self.steps
+                ):
+                    raise ValueError("delivery approval and correction must name declared steps")
+                approval = self.steps[binding.approval_step]
+                if (
+                    approval.delivery != binding
+                    or binding.actions_artifact == binding.result_artifact
+                ):
+                    raise ValueError(
+                        "delivery declarations must share one exact artifact/task binding"
+                    )
+                if (
+                    step_name != binding.approval_step
+                    and step.output_artifact != binding.result_artifact
+                ):
+                    raise ValueError("delivery outcome artifact does not match declaration")
             behavior = resolve_step_behavior(self, step_name)
             routes = behavior.feedback_routes or {}
             for destination, route in routes.items():
@@ -1108,9 +1159,7 @@ class PlaybookDefinition(BaseModel):
             if (
                 target is not None
                 and behavior.feedback_artifact is not None
-                and not declares_feedback_artifact(
-                    self.steps[target], behavior.feedback_artifact
-                )
+                and not declares_feedback_artifact(self.steps[target], behavior.feedback_artifact)
             ):
                 raise ValueError(
                     f"steps.{step_name}.behavior.feedback_target {target!r} must declare "
@@ -2054,3 +2103,11 @@ def _collect_tool_warnings(step_name: str, allowed_tools: List[str]) -> List[str
             )
 
     return warnings
+
+
+def execution_graph_digest(graph: Mapping[str, Any]) -> str:
+    """Bind execution declarations separately from the confirmed contract form."""
+    import hashlib
+    import json
+    execution = {key: value for key, value in graph.items() if key != "contract"}
+    return hashlib.sha256(json.dumps(execution, sort_keys=True).encode()).hexdigest()

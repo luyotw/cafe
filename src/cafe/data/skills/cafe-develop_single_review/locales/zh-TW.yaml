@@ -1,0 +1,2 @@
+human_task.single_review.iteration_limit.prompt: 請檢視保留的阻礙，決定是否授予另一輪有界的修正次數。
+human_task.single_review.iteration_limit.resume: 授予另一輪有界的修正次數

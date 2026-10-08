@@ -1,0 +1,13 @@
+human_task.delivery.delivery_outcome: 請確認顯示的整合及已選議題結果是否達成目標。
+human_task.delivery.delivery_recovery: 請提供恢復資訊，或要求重新審查動作。重試前必須先核對未知效果。
+human_task.delivery.delivery_permission: 請透過對應的 durable task 處理待決的精確 host capability
+  approval；此回饋本身不授予 host 權限。
+human_task.delivery.runtime_evidence: '呈現交付結果前，請先讀取以下當前證據來源。
+
+  - delivery_actions_file: {actions}
+
+  - delivery_receipts_file: {receipts}
+
+  - delivery_complete: {complete}'
+human_task.delivery.confirm: 確認顯示的已完成結果
+human_task.delivery.revise: 恢復或修訂交付

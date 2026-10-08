@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.8.0] - 2026-10-08
+
+### Added
+
+- Add the focused `bug` playbook with verified diagnosis, unchanged RED/GREEN
+  regression proof, minimal repair and independent review (#434).
+- Add compact kickoff and the `streamlined` playbook with cumulative approved
+  file scope, provider-observed native review and exact delivery readiness (#598).
+- Separate development action review, approved integration/selected follow-up
+  issue execution, host capability approval and final result acceptance (#602).
+- Bound Manager same-session interruption recovery to three retries, 30 seconds
+  apart, with read-only accounting from existing durable tasks and results.
+
+### Fixed
+
+- Connect bug repair to delivery action review and result acceptance, including
+  independent review after delivery corrections.
+- Complete the compact delivery phase's role, output and execution profile
+  declarations so builtin audit and strict skill validation pass.
+- Keep missing delivery details outside canonical Todo List content so the
+  workflow requests clarification instead of reporting malformed output.
+- Preserve supervisor ownership, selected targets and correction recovery
+  across compact and full workflow handoffs.
+
+See [the v0.8.0 release notes](docs/releases/v0.8.0.md) for capabilities,
+recovery limits and upgrade guidance.
+
 ## [0.7.5] - 2026-10-05
 
 ### Fixed

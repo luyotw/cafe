@@ -82,6 +82,7 @@ from cafe.core.workflow_feedback import (
     WorkflowFeedbackError,
     WorkflowFeedbackLedger,
     feedback_todo_mappings,
+    supervisor_feedback_receipts,
 )
 from cafe.core.workflow_models import (
     BatonRejected,
@@ -454,10 +455,12 @@ class BlackboardWorkflowRuntime:
         executor: Any,
         automatic_registry: Optional[AutomaticExecutorRegistry] = None,
         workflow_event_callback: Callable[[Mapping[str, Any]], None] | None = None,
+        execution_context: Mapping[str, Any] | None = None,
     ) -> None:
         self.issue_dir = issue_dir
         self.playbook = playbook
         self.executor = executor
+        self.execution_context = dict(execution_context) if execution_context is not None else None
         self.automatic_registry = automatic_registry or default_automatic_executor_registry()
 
         playbook_meta = playbook["playbook"]
@@ -589,7 +592,8 @@ class BlackboardWorkflowRuntime:
     def _is_baton_driven_step(self, current_step: str) -> bool:
         return resolve_step_behavior(self.playbook, current_step).completion == "baton" or bool(
             self._required_capability_ids(current_step)
-        )
+        ) or bool(self.steps.get(current_step, {}).get("execution", {}).get("review_policy")
+                  or "before_delivery" in self.steps.get(current_step, {}).get("execution", {}).get("checkpoints", []))
 
     def _default_pause_intent(self, current_step: str, status_code: str) -> HandoffIntent:
         step_def = self.steps.get(current_step, {})
@@ -2597,6 +2601,13 @@ class BlackboardWorkflowRuntime:
         self._agent_baton_snapshot = self._baton_file_snapshot()
 
         try:
+            if self.execution_context is not None:
+                from cafe.core.execution_checkpoints import checkpoint
+                receipt = checkpoint(self.execution_context, "resume",
+                    round_id=f"{current_step}:{attempt_count}", parent_id="runtime")
+                self.blackboard_store.record_event(self.blackboard, "execution_checkpoint", receipt)
+                if not receipt["passed"]:
+                    raise ValueError("execution_checkpoint_blocked: " + json.dumps(receipt["findings"]))
             execute_kwargs = {
                 "extra_prompt": extra_prompt,
                 "same_invocation_retry": same_invocation_retry,
@@ -2604,6 +2615,8 @@ class BlackboardWorkflowRuntime:
                     current_step=current_step, path=path
                 ),
             }
+            if self.execution_context is not None:
+                execute_kwargs["execution_context"] = self.execution_context
             try:
                 execute_parameters = inspect.signature(self.executor).parameters
             except (TypeError, ValueError):
@@ -2736,7 +2749,7 @@ class BlackboardWorkflowRuntime:
         This record gives restart reconciliation the same bounded source set the
         agent saw, rather than inferring a new set from the live ledger.
         """
-        if not self._feedback_todo_mappings(current_step=current_step):
+        if not self._feedback_delivery_required(current_step=current_step):
             return None
         if not getattr(frame.execution_result, "agent_invoked", False):
             return None
@@ -2788,12 +2801,61 @@ class BlackboardWorkflowRuntime:
                 "intent": contract.intent.value,
             },
         }
+        try:
+            delivery["supervisor_sources"] = self._supervisor_feedback_receipts(
+                current_step=current_step, source_identities=frame.pending_feedback
+            )
+        except WorkflowFeedbackError:
+            # Retain the exact attempted batch even when ownership is invalid.
+            # Settlement below rejects it without consuming any source.
+            pass
         self.blackboard_store.record_event(
             self.blackboard,
             "workflow_feedback_delivery_prepared",
             delivery,
         )
         return delivery
+
+    def _supervisor_feedback_receipts(
+        self, *, current_step: str, source_identities: tuple[str, ...]
+    ) -> dict[str, dict[str, str]]:
+        entries = {
+            entry.source_identity: entry for entry in WorkflowFeedbackLedger(self.issue_dir).load()
+        }
+        if any(identity not in entries for identity in source_identities):
+            raise WorkflowFeedbackError("feedback delivery source is missing")
+        return supervisor_feedback_receipts(
+            self.issue_dir,
+            playbook=self.playbook,
+            workflow_id=self.blackboard.workflow_id,
+            target_step=current_step,
+            entries=(entries[identity] for identity in source_identities),
+        )
+
+    def _feedback_delivery_required(self, *, current_step: str) -> bool:
+        if self._feedback_todo_mappings(current_step=current_step):
+            return True
+        if any(
+            event.event_type == "workflow_feedback_delivery_prepared"
+            and event.data.get("step") == current_step
+            and event.data.get("supervisor_sources")
+            for event in self.blackboard.events
+        ):
+            # A changed task must not erase the already recorded delivery fence.
+            return True
+        identities = tuple(
+            entry.source_identity
+            for entry in WorkflowFeedbackLedger(self.issue_dir).load()
+            if entry.target_step == current_step
+        )
+        try:
+            return bool(
+                self._supervisor_feedback_receipts(
+                    current_step=current_step, source_identities=identities
+                )
+            )
+        except WorkflowFeedbackError:
+            return True
 
     def _feedback_delivery_event_exists(self, delivery_id: str) -> bool:
         return any(
@@ -2857,7 +2919,28 @@ class BlackboardWorkflowRuntime:
         if frame.feedback_batch_error is not None:
             return frame.feedback_batch_error
         mappings = self._feedback_todo_mappings(current_step=current_step)
-        if mappings and not frame.feedback_batch_provided:
+        try:
+            supervisor_sources = self._supervisor_feedback_receipts(
+                current_step=current_step, source_identities=frame.pending_feedback
+            )
+        except WorkflowFeedbackError as exc:
+            return str(exc)
+        if delivery_id is not None:
+            prepared = [
+                event.data
+                for event in self.blackboard.events
+                if event.event_type == "workflow_feedback_delivery_prepared"
+                and event.data.get("delivery_id") == delivery_id
+            ]
+            if len(prepared) != 1 or (
+                "supervisor_sources" in prepared[0]
+                and prepared[0]["supervisor_sources"] != supervisor_sources
+            ):
+                return "supervisor feedback ownership changed after delivery preparation"
+        curated_identities = tuple(
+            identity for identity in frame.pending_feedback if identity not in supervisor_sources
+        )
+        if (mappings or supervisor_sources) and not frame.feedback_batch_provided:
             if frame.pending_feedback:
                 return "the curated feedback batch was not exposed to the agent"
             return None
@@ -2866,7 +2949,7 @@ class BlackboardWorkflowRuntime:
         output_artifact = self.steps.get(current_step, {}).get("output_artifact")
         if not isinstance(output_artifact, str) or output_artifact not in frame.artifacts:
             return "the declared curated artifact is missing"
-        if not mappings:
+        if not mappings and not supervisor_sources:
             # Playbooks without the correction declarations retain their
             # historical consume-after-handoff behavior.
             delivered_feedback = WorkflowFeedbackLedger(self.issue_dir).consume_delivered(
@@ -2889,7 +2972,7 @@ class BlackboardWorkflowRuntime:
                 target_step=current_step,
                 source_by_kind={kind: values[0] for kind, values in mappings.items()},
                 id_prefix_by_kind={kind: values[1] for kind, values in mappings.items()},
-                source_identities=frame.pending_feedback,
+                source_identities=curated_identities,
             )
             output_path = Path(frame.artifacts[output_artifact])
             artifact_bytes = output_path.read_bytes()
@@ -2898,7 +2981,7 @@ class BlackboardWorkflowRuntime:
                 and sha256_bytes(artifact_bytes) != expected_artifact_sha256
             ):
                 return "the curated artifact changed after feedback delivery preparation"
-            actual_items = parse_todo_list(artifact_bytes.decode("utf-8"))
+            actual_items = parse_todo_list(artifact_bytes.decode("utf-8")) if curated_identities else ()
         except (OSError, UnicodeDecodeError, TodoContractError) as exc:
             return f"the curated Todo List is invalid: {exc}"
         expected_rows = {(item.item_id, item.source) for item in expected_items}
@@ -2907,14 +2990,20 @@ class BlackboardWorkflowRuntime:
             return "the curated Todo List has an invalid feedback source identity"
         expected_identity_by_row = {
             (item.item_id, item.source): identity
-            for identity, item in zip(frame.pending_feedback, expected_items)
+            for identity, item in zip(
+                (
+                    entry.source_identity
+                    for entry in WorkflowFeedbackLedger(self.issue_dir).load()
+                    if entry.source_identity in curated_identities
+                ),
+                expected_items,
+            )
         }
-        if (
-            len(expected_rows) != len(expected_items)
-            or len(expected_identity_by_row) != len(expected_items)
+        if len(expected_rows) != len(expected_items) or len(expected_identity_by_row) != len(
+            expected_items
         ):
             return "the curated Todo List has ambiguous feedback source identities"
-        represented_identity_set = {
+        represented_identity_set = set(supervisor_sources) | {
             expected_identity_by_row[row] for row in actual_rows
         }
         represented_identities = tuple(
@@ -3710,6 +3799,49 @@ class BlackboardWorkflowRuntime:
             })
         self._flush_phase_terminal()
 
+    def _execution_completion_gate(self, *, current_step, post_contract, runtime):
+        execution = self.steps[current_step].get("execution", {})
+        advancing = (post_contract.to_owner == HandoffOwner.DONE or
+                     post_contract.to_owner == HandoffOwner.AGENT and post_contract.to_step != current_step)
+        if advancing and "before_delivery" in execution.get("checkpoints", []):
+            from cafe.core.execution_checkpoints import load_review_evidence, require_verified_review, require_checkpoint
+            try:
+                iteration = self._latest_iteration_dir(current_step)
+                if self.execution_context is None or iteration is None:
+                    raise ValueError("delivery requires current resolved execution evidence")
+                readiness = load_review_evidence(iteration / execution["delivery_evidence_artifact"])
+                if self.execution_context.get("review_policy") == "single_native":
+                    require_verified_review(self.execution_context, load_review_evidence(self.issue_dir / "execution_review.json"))
+                require_checkpoint(self.execution_context, readiness.get("checkpoint"), "before_delivery")
+                if (readiness.get("authority_digest") != self.execution_context["authority_digest"] or
+                        readiness.get("endpoint") != self.execution_context["delivery_endpoint"]):
+                    raise ValueError("delivery readiness differs from the confirmed endpoint")
+                from cafe.core.packet_io import atomic_write_bytes
+                from cafe.core.execution_artifacts import bounded_execution_json
+                atomic_write_bytes(self.issue_dir / "execution_delivery.json", bounded_execution_json(readiness))
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                result = self._emit_pause(current_step=current_step, status_code="DELIVERY_READINESS_BLOCKED",
+                    runtime=runtime, reason=str(exc), pause_intent=HandoffIntent.NEED_CLARIFICATION)
+                return PostContractResult(status_code="DELIVERY_READINESS_BLOCKED", terminal_result=result)
+        if advancing and execution.get("review_policy") == "single_native":
+            from cafe.core.execution_checkpoints import load_review_evidence, require_current_review
+            try:
+                iteration = self._latest_iteration_dir(current_step)
+                if self.execution_context is None or iteration is None:
+                    raise ValueError("native review requires current resolved execution evidence")
+                evidence = load_review_evidence(iteration / execution["review_evidence_artifact"])
+                observations = load_review_evidence(iteration / "native_invocations.json")
+                require_current_review(self.execution_context, evidence, native_observations=observations)
+                evidence["native_observations"] = observations
+                from cafe.core.packet_io import atomic_write_bytes
+                from cafe.core.execution_artifacts import bounded_execution_json
+                atomic_write_bytes(self.issue_dir / "execution_review.json", bounded_execution_json(evidence))
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                result = self._emit_pause(current_step=current_step, status_code="NATIVE_REVIEW_BLOCKED",
+                    runtime=runtime, reason=str(exc), pause_intent=HandoffIntent.NEED_CLARIFICATION)
+                return PostContractResult(status_code="NATIVE_REVIEW_BLOCKED", terminal_result=result)
+        return None
+
     def _handle_post_contract(
         self,
         *,
@@ -3734,6 +3866,9 @@ class BlackboardWorkflowRuntime:
         resolved_status_code = (
             post_contract.status_code or f"BATON_{post_contract.intent.value.upper()}"
         )
+        gate = self._execution_completion_gate(current_step=current_step, post_contract=post_contract, runtime=runtime)
+        if gate is not None:
+            return gate
         if post_contract.to_owner == HandoffOwner.USER:
             result = self._emit_pause(
                 current_step=current_step,
@@ -3821,7 +3956,7 @@ class BlackboardWorkflowRuntime:
         delivery_id: str | None = None,
     ) -> tuple[dict[str, Any] | None, list[str]]:
         """Validate the durable batch/artifact/operation binding for restart."""
-        if not self._feedback_todo_mappings(current_step=current_step):
+        if not self._feedback_delivery_required(current_step=current_step):
             return None, []
         prepared = [
             event.data
@@ -3874,6 +4009,18 @@ class BlackboardWorkflowRuntime:
                 for identity in source_identities
             ):
                 missing.append("feedback_delivery_sources")
+            else:
+                try:
+                    receipts = self._supervisor_feedback_receipts(
+                        current_step=current_step, source_identities=tuple(source_identities)
+                    )
+                    if (
+                        "supervisor_sources" in delivery
+                        and delivery["supervisor_sources"] != receipts
+                    ):
+                        missing.append("feedback_delivery_supervisor_sources")
+                except WorkflowFeedbackError:
+                    missing.append("feedback_delivery_supervisor_sources")
 
         artifact = delivery.get("artifact")
         expected_artifact_name = self.steps.get(current_step, {}).get("output_artifact")
@@ -3993,13 +4140,14 @@ class BlackboardWorkflowRuntime:
         current_step: str,
         iteration_dir_override: Optional[Path] = None,
         feedback_delivery_id: str | None = None,
+        contract_override: HandoffContract | None = None,
     ) -> HandoffReconciliationResult:
         missing: list[str] = []
         validated: list[str] = []
         contract: Optional[HandoffContract] = None
 
         try:
-            contract = self.blackboard_store.load_handoff_contract(
+            contract = contract_override or self.blackboard_store.load_handoff_contract(
                 self.blackboard,
                 allowed_steps=list(self.steps.keys()),
             )
@@ -4087,6 +4235,137 @@ class BlackboardWorkflowRuntime:
             feedback_delivery=feedback_delivery,
         )
 
+    def recover_rejected_feedback_delivery(self, delivery_id: str) -> PlaybookRunResult:
+        """Owner-requested recovery of the former supervisor/curator collision.
+
+        Rejection stays terminal. A fully verified completed handoff receives a
+        new operation, so this never changes a rejected delivery into success.
+        It does not answer tasks or execute the downstream phase.
+        """
+        step = self.blackboard.current_step
+        failed = PlaybookRunResult(
+            final_step=step, final_status_code="INVALID_FEEDBACK_DELIVERY", completed=False
+        )
+        prepared = self._latest_feedback_delivery_preparation(current_step=step)
+        retry_operation = bool(
+            prepared and prepared.get("recovered_from_delivery_id") == delivery_id
+        )
+        if retry_operation:
+            if self._feedback_delivery_terminal_event_exists(prepared["delivery_id"]):
+                return failed
+            originals = [
+                event.data
+                for event in self.blackboard.events
+                if event.event_type == "workflow_feedback_delivery_prepared"
+                and event.data.get("delivery_id") == delivery_id
+            ]
+            if len(originals) != 1 or any(
+                prepared.get(key) != originals[0].get(key)
+                for key in ("step", "source_identities", "artifact", "iteration", "target")
+            ):
+                return failed
+        rejection = [
+            event
+            for event in self.blackboard.events
+            if event.event_type == "workflow_feedback_delivery_rejected"
+            and event.data.get("delivery_id") == delivery_id
+        ]
+        contract = self.blackboard.handoff_contract
+        if (
+            prepared is None
+            or (prepared.get("delivery_id") != delivery_id and not retry_operation)
+            or len(rejection) != 1
+            or rejection[0].data.get("step") != step
+            or rejection[0].data.get("source_identities") != prepared.get("source_identities")
+            or rejection[0].data.get("reason")
+            != ("the curated Todo List is invalid: workflow feedback source kind is not declared")
+            or contract is None
+            or contract.from_step != step
+            or contract.to_step != step
+            or contract.status_code != "INVALID_FEEDBACK_DELIVERY"
+        ):
+            return failed
+        try:
+            receipts = self._supervisor_feedback_receipts(
+                current_step=step, source_identities=tuple(prepared["source_identities"])
+            )
+            target = prepared["target"]
+            recovered_contract = self.blackboard_store.build_handoff_contract(
+                from_step=step,
+                to_owner=HandoffOwner(target["to_owner"]),
+                to_step=target["to_step"],
+                intent=HandoffIntent(target["intent"]),
+                source="workflow.feedback_delivery_recovery",
+            )
+            self._validate_mapped_handoff_target(current_step=step, contract=recovered_contract)
+        except (WorkflowFeedbackError, BatonRejected, KeyError, TypeError, ValueError):
+            return failed
+        if not receipts:
+            return failed
+        if any(
+            not entry.actionable
+            for entry in WorkflowFeedbackLedger(self.issue_dir).load()
+            if entry.source_identity in prepared["source_identities"]
+        ):
+            return failed
+        result = self._validate_reconciled_handoff(
+            current_step=step,
+            feedback_delivery_id=prepared["delivery_id"],
+            contract_override=recovered_contract,
+        )
+        if not result.reconciled:
+            self._record_reconciliation_failed(
+                current_step=step,
+                runtime="feedback_delivery_recovery",
+                missing_evidence=result.missing_evidence,
+            )
+            return failed
+        gate = self._execution_completion_gate(
+            current_step=step,
+            post_contract=recovered_contract,
+            runtime="feedback_delivery_recovery",
+        )
+        if gate is not None:
+            return gate.terminal_result
+        new_id = prepared["delivery_id"] if retry_operation else uuid4().hex
+        delivery = {
+            **prepared,
+            "delivery_id": new_id,
+            "operation": {"id": new_id, "kind": "feedback_delivery"},
+            "supervisor_sources": receipts,
+            "recovered_from_delivery_id": delivery_id,
+        }
+        if not retry_operation:
+            self.blackboard_store.record_event(
+                self.blackboard, "workflow_feedback_delivery_prepared", delivery
+            )
+        self.blackboard_store.write_handoff_contract(self.blackboard, recovered_contract)
+        reason = self._reconcile_feedback_delivery(current_step=step, delivery=delivery)
+        if reason is not None:
+            return self._reject_feedback_delivery(
+                current_step=step,
+                runtime="feedback_delivery_recovery",
+                reason=reason,
+                delivery=delivery,
+            )
+        self.blackboard_store.record_event(
+            self.blackboard,
+            "workflow_feedback_delivery_recovered",
+            {
+                "step": step,
+                "delivery_id": new_id,
+                "rejected_delivery_id": delivery_id,
+                "source_identities": delivery["source_identities"],
+                "supervisor_sources": receipts,
+            },
+        )
+        result.feedback_delivery = delivery
+        return self._apply_reconciled_handoff(
+            current_step=step,
+            runtime="feedback_delivery_recovery",
+            result=result,
+        )
+
     def _reconciliation_event_exists(
         self,
         *,
@@ -4159,6 +4438,11 @@ class BlackboardWorkflowRuntime:
 
         contract = result.contract
         status_code = result.status_code
+        gate = self._execution_completion_gate(
+            current_step=current_step, post_contract=contract, runtime=runtime
+        )
+        if gate is not None:
+            return gate.terminal_result
         self._patch_reconciled_iteration_metadata(result)
 
         # Reconciliation validates the baton directly from disk.  Publish that
@@ -4407,7 +4691,7 @@ class BlackboardWorkflowRuntime:
             or not isinstance(current_step, str)
             or current_step not in self.steps
             or contract.to_step == current_step
-            or not self._feedback_todo_mappings(current_step=current_step)
+            or not self._feedback_delivery_required(current_step=current_step)
         ):
             return None
         output_artifact = self.steps[current_step].get("output_artifact")
@@ -4430,6 +4714,25 @@ class BlackboardWorkflowRuntime:
             isinstance(delivery_id, str)
             and delivery_id in self._feedback_delivery_terminal_ids()
         ):
+            prepared_artifact = prepared.get("artifact", {})
+            if (
+                self._feedback_delivery_event_exists(delivery_id)
+                and isinstance(prepared_artifact, Mapping)
+                and isinstance(prepared_artifact.get("version"), int)
+                and artifact.version > prepared_artifact["version"]
+                and self.blackboard.current_step == contract.to_step
+                and any(
+                    event.event_type == "transition"
+                    and event.data.get("from") == current_step
+                    and event.data.get("to") == contract.to_step
+                    and event.data.get("source_artifact") == artifact.to_dict()
+                    for event in reversed(self.blackboard.events)
+                )
+            ):
+                # A later committed, feedback-free handoff owns its new artifact.
+                # The older delivered operation still fences its original output,
+                # but cannot be reconciled against this newer completed cycle.
+                return None
             validation_contract = contract
             target = prepared.get("target")
             if (
@@ -4462,6 +4765,18 @@ class BlackboardWorkflowRuntime:
             delivery_id = delivery.get("delivery_id")
             if not isinstance(step, str) or not isinstance(delivery_id, str):
                 return None
+            original_id = delivery.get("recovered_from_delivery_id")
+            contract = self.blackboard.handoff_contract
+            if (
+                isinstance(original_id, str)
+                and self.blackboard.current_step == step
+                and contract is not None
+                and contract.to_step == step
+            ):
+                # A replacement preparation proves an owner recovery was already
+                # requested. Reuse its full validation before publishing a baton;
+                # ordinary resume must not reject it against the still-pinned one.
+                return self.recover_rejected_feedback_delivery(original_id)
         else:
             candidate = self._feedback_delivery_handoff_candidate()
             if candidate is None:
@@ -4810,7 +5125,7 @@ class BlackboardWorkflowRuntime:
                 and frame.feedback_batch_error is None
                 and frame.feedback_batch_provided
                 and frame.pending_feedback
-                and self._feedback_todo_mappings(current_step=current_step)
+                and self._feedback_delivery_required(current_step=current_step)
             ):
                 return self._reject_feedback_delivery(
                     current_step=current_step,
@@ -4838,6 +5153,11 @@ class BlackboardWorkflowRuntime:
                     reason=feedback_delivery_rejection,
                     delivery=feedback_delivery,
                 )
+
+            gate = self._execution_completion_gate(
+                current_step=current_step, post_contract=contract, runtime=runtime_label)
+            if gate is not None:
+                return gate.terminal_result
 
             if next_step == "done":
                 return self._emit_complete(
@@ -5416,6 +5736,22 @@ class BlackboardWorkflowRuntime:
         start_step: Optional[str] = None,
         single_step: bool = False,
     ) -> PlaybookRunResult:
+        declared = any(step.get("execution", {}).get("checkpoints") for step in self.steps.values())
+        if self.execution_context is not None or declared:
+            from cafe.core.execution_checkpoints import checkpoint
+            current_step = self.blackboard.current_step
+            if current_step not in self.steps:
+                current_step = self.start_step
+            try:
+                if self.execution_context is None:
+                    raise ValueError("declared scope checkpoints require resolved execution context")
+                receipt = checkpoint(self.execution_context, "resume", round_id="runtime-entry", parent_id="runtime")
+                self.blackboard_store.record_event(self.blackboard, "execution_checkpoint", receipt)
+                if not receipt["passed"]:
+                    raise ValueError(json.dumps(receipt["findings"]))
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                return self._emit_pause(current_step=current_step, status_code="EXECUTION_CHECKPOINT_BLOCKED",
+                    runtime="execution_checkpoints", reason=str(exc), pause_intent=HandoffIntent.NEED_CLARIFICATION)
         if self._workflow_event_callback is not None:
             # Capture eligibility once; a failed open callback cannot be
             # selected again by events emitted later in this invocation.

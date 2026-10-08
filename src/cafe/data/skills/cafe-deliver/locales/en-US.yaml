@@ -1,0 +1,5 @@
+notification.cafe_deliver.step_label: Delivery readiness
+human_task.cafe_deliver.clarification_feedback.prompt: Provide the clarification needed
+  to continue delivery readiness.
+human_task.cafe_deliver.permission_answers.prompt: Provide the permission decision
+  or access details needed to continue delivery readiness.
