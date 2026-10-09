@@ -167,16 +167,24 @@ bootstraps a first-time installation, replaces an unsafe endpoint, changes the
 confirmed session, or retries an ambiguous event. A missing installation or
 failed recovery leaves an explicit pre-delivery failure. Restore the configured
 daemon, or explicitly confirm attached mode. Never start a second daemon to
-resume the same conversation or replace its binding. It reads the original
-thread and, when unloaded, resumes that exact thread before enqueueing the wake
-notice. `codex queue` alone wakes only loaded threads; resuming the bound thread
-makes delivery independent of opening its conversation in the UI. Resume
-supplies no model, cwd, sandbox, approval or configuration changes; the daemon restores the saved thread settings. Missing, archived,
-interrupted or otherwise unresumable threads require explicit recovery. No new
-daemon or Manager conversation is created, and no fallback inherits this host
-binding. This transport requires a Codex daemon exposing the experimental
-`thread/queue/*` and paginated turn-history APIs; an unsupported API leaves the
-failure visible rather than silently switching transports.
+resume the same conversation or replace its binding. Before launching background
+work, initialize a native connection, verify the exact thread and confirmed
+model, and check its queue API without enqueueing input. Socket availability
+alone does not prove that session delivery is supported.
+
+When the daemon reports the thread as unloaded, it tries to load that exact
+thread without model, cwd, sandbox, approval or configuration overrides. If the
+native store reports that this exact thread already has an active writer, leave
+ownership with that App/server and enqueue through the shared native queue. Its
+built-in queue watcher dispatches the message in the owning host. An unloaded
+server's persisted history can label an App-owned running turn as interrupted;
+that snapshot cannot override a confirmed live writer. Native queue dispatch
+preserves FIFO and user stops; CAFE never calls `turn/start` or `queue/start`.
+Other resume errors fail before enqueueing, with the sanitized failing RPC
+operation retained for diagnosis. No replacement Manager conversation is
+created. A genuinely interrupted thread loaded by this daemon still needs user
+recovery. The transport requires the experimental queue and turn-history APIs;
+an unavailable API blocks preflight rather than silently switching transports.
 
 The callback checks the original thread's status and latest turn, then adds a
 submission identified by the dispatched prompt. A running thread, including one

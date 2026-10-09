@@ -1414,9 +1414,8 @@ def _ensure_dispatch_event(
 
 
 def _classify_provider_failure(error: BaseException) -> str:
-    if isinstance(error, _HostTransportUnavailable):
-        # Checked before starting the proxy or sending any RPC; no delivery
-        # could have occurred. Do not label this as a lost acknowledgement.
+    if isinstance(error, (_HostTransportUnavailable, _HostPreEnqueueError)):
+        # No queue/add was attempted; this is not a lost acknowledgement.
         return "conclusive_nonacceptance"
     conclusive = {
         "cli_not_found",
@@ -1848,6 +1847,24 @@ def _with_current_task_authority(
 class _HostRPCError(RuntimeError):
     """A daemon rejection; never include provider output in durable errors."""
 
+    def __init__(self, message: str, *, method: str | None = None) -> None:
+        super().__init__(message)
+        self.error_type = (
+            "host_rpc_rejected_" + method.replace("/", "_") if method else "host_rpc_rejected"
+        )
+
+
+class _HostWriterActiveError(_HostRPCError):
+    """The native store confirms another server owns this exact thread."""
+
+
+class _HostPreEnqueueError(_HostRPCError):
+    """Failure before queue admission, with a sanitized operation for diagnosis."""
+
+    def __init__(self, cause: Exception) -> None:
+        super().__init__("Codex host preflight failed before any workflow input was queued.")
+        self.error_type = getattr(cause, "error_type", "host_pre_enqueue_failed")
+
 
 class _HostTransportUnavailable(ValueError):
     """The existing host endpoint is absent before any delivery is attempted."""
@@ -1964,7 +1981,14 @@ def validate_bound_host_transport(issue_dir: Path) -> None:
     session = first.get("acquisition", {}).get("session")
     if first.get("cli") == "codex" and isinstance(session, dict):
         if session.get("source") == "host_session":
-            _ensure_host_control_socket()
+            try:
+                with _connected_host() as connection:
+                    _prepare_host_thread(connection, session["id"], first.get("model"))
+                    queue = connection.request("thread/queue/list", {"threadId": session["id"]})
+                    if not isinstance(queue.get("data"), list):
+                        raise ValueError("Invalid Codex host queue capability response")
+            except Exception as exc:
+                raise _HostPreEnqueueError(exc) from exc
 
 
 class _HostConnection:
@@ -2113,7 +2137,17 @@ class _HostConnection:
             if message.get("id") != request_id:
                 raise ValueError("Unexpected Codex host response identity")
             if "error" in message:
-                raise _HostRPCError(f"Codex host rejected {method}")
+                error = message["error"]
+                if (
+                    method == "thread/resume"
+                    and isinstance(error, dict)
+                    and error.get("code") == -32600
+                    and error.get("message") == (
+                        f"thread {params.get('threadId')} already has an active writer"
+                    )
+                ):
+                    raise _HostWriterActiveError("The bound thread has an existing host writer.")
+                raise _HostRPCError(f"Codex host rejected {method}", method=method)
             result = message.get("result")
             if not isinstance(result, dict):
                 raise ValueError("Invalid Codex host response result")
@@ -2136,17 +2170,10 @@ def _host_thread(connection: _HostConnection, thread_id: str) -> dict[str, Any]:
     return thread
 
 
-def _queue_host_callback(
-    prompt: str,
-    *,
-    thread_id: str,
-    model: str | None,
-    repository_root: Path,
-) -> None:
-    """Load and wake the bound thread through the already running host daemon."""
+@contextmanager
+def _connected_host() -> Iterator[_HostConnection]:
+    """Connect only to the existing daemon and close only our byte proxy."""
     _ensure_host_control_socket()
-    # No new daemon, session, config, cwd, model or permission override. The
-    # repository root is already in the event prompt; the host owns its cwd.
     process = subprocess.Popen(
         ["codex", "app-server", "proxy"],
         stdin=subprocess.PIPE,
@@ -2163,66 +2190,7 @@ def _queue_host_callback(
             },
         )
         connection.send({"method": "initialized", "params": {}})
-        thread = _host_thread(connection, thread_id)
-        if thread.get("ephemeral") or thread.get("canAcceptDirectInput") is False:
-            raise _HostRPCError("Codex host thread cannot accept queued input")
-        if model is not None and thread.get("model") != model:
-            raise _HostRPCError("Codex host model differs from confirmed binding")
-        latest = connection.request(
-            "thread/turns/list",
-            {
-                "threadId": thread_id,
-                "limit": 1,
-                "sortDirection": "desc",
-                "itemsView": "notLoaded",
-            },
-        ).get("data")
-        if not isinstance(latest, list) or any(not isinstance(t, dict) for t in latest):
-            raise ValueError("Invalid Codex host turn history")
-        if thread["status"]["type"] == "systemError" or (
-            thread["status"]["type"] != "active"
-            and latest
-            and latest[0].get("status") == "interrupted"
-        ):
-            raise _HostRPCError("Codex host thread requires explicit user recovery")
-        if thread["status"]["type"] == "notLoaded":
-            resumed = connection.request(
-                "thread/resume",
-                {
-                    "threadId": thread_id,
-                    "excludeTurns": True,
-                },
-            ).get("thread")
-            if not isinstance(resumed, dict) or resumed.get("id") != thread_id:
-                raise ValueError("Codex host resumed a different thread")
-            thread = _host_thread(connection, thread_id)
-            if thread["status"]["type"] not in {"idle", "active"}:
-                raise _HostRPCError("Codex host thread did not become available")
-        client_id = "cafe-" + hashlib.sha256(prompt.encode()).hexdigest()
-        queued = connection.request(
-            "thread/queue/add",
-            {
-                "threadId": thread_id,
-                "clientUserMessageId": client_id,
-                "input": [{"type": "text", "text": prompt}],
-            },
-        ).get("queuedSubmission")
-        if (
-            not isinstance(queued, dict)
-            or not isinstance(queued.get("id"), str)
-            or not queued["id"]
-            or queued.get("clientUserMessageId") != client_id
-            or queued.get("input") != [{"type": "text", "text": prompt, "text_elements": []}]
-            and queued.get("input") != [{"type": "text", "text": prompt}]
-        ):
-            raise ValueError("Invalid Codex host queue acknowledgement")
-        # queue/add wakes the loaded thread through the daemon's dispatcher,
-        # which preserves FIFO and excludes user-interrupted threads. Never use
-        # queue/start here: its explicit selection can overtake a concurrently
-        # reordered user message or override a stop after our status snapshot.
-        thread = _host_thread(connection, thread_id)
-        if thread["status"]["type"] not in {"idle", "active"}:
-            raise RuntimeError("Codex host unloaded or failed after queue acceptance")
+        yield connection
     finally:
         # Only terminate our stdio proxy. Never unload/interrupt the thread or
         # stop the shared app-server when this short-lived connection closes.
@@ -2236,6 +2204,83 @@ def _queue_host_callback(
         for stream in (process.stdin, process.stdout):
             if stream is not None:
                 stream.close()
+
+
+
+def _prepare_host_thread(connection: _HostConnection, thread_id: str, model: str | None) -> bool:
+    """Return whether another host owns the thread, without stealing its writer."""
+    thread = _host_thread(connection, thread_id)
+    if thread.get("ephemeral") or thread.get("canAcceptDirectInput") is False:
+        raise _HostRPCError("Codex host thread cannot accept queued input")
+    if model is not None and thread.get("model") != model:
+        raise _HostRPCError("Codex host model differs from confirmed binding")
+    if thread["status"]["type"] == "systemError":
+        raise _HostRPCError("Codex host thread requires explicit user recovery")
+    latest = connection.request(
+        "thread/turns/list",
+        {"threadId": thread_id, "limit": 1, "sortDirection": "desc", "itemsView": "notLoaded"},
+    ).get("data")
+    if not isinstance(latest, list) or any(not isinstance(t, dict) for t in latest):
+        raise ValueError("Invalid Codex host turn history")
+    if thread["status"]["type"] == "notLoaded":
+        try:
+            resumed = connection.request(
+                "thread/resume", {"threadId": thread_id, "excludeTurns": True},
+            ).get("thread")
+        except _HostWriterActiveError:
+            # An App-owned live turn can look interrupted in persisted history.
+            # Native queue watchers in its owning host preserve FIFO and stops.
+            return True
+        if not isinstance(resumed, dict) or resumed.get("id") != thread_id:
+            raise ValueError("Codex host resumed a different thread")
+        thread = _host_thread(connection, thread_id)
+        if thread["status"]["type"] not in {"idle", "active"}:
+            raise _HostRPCError("Codex host thread did not become available")
+    if thread["status"]["type"] != "active" and latest and latest[0].get("status") == "interrupted":
+        raise _HostRPCError("Codex host thread requires explicit user recovery")
+    return False
+
+
+def _queue_host_callback(
+    prompt: str,
+    *,
+    thread_id: str,
+    model: str | None,
+    repository_root: Path,
+) -> None:
+    """Queue to the exact thread; its native owning host dispatches the input."""
+    enqueue_started = False
+    try:
+        with _connected_host() as connection:
+            external_writer = _prepare_host_thread(connection, thread_id, model)
+            client_id = "cafe-" + hashlib.sha256(prompt.encode()).hexdigest()
+            # Any failure from here may follow admission: never replay/fallback.
+            enqueue_started = True
+            queued = connection.request(
+                "thread/queue/add",
+                {
+                    "threadId": thread_id,
+                    "clientUserMessageId": client_id,
+                    "input": [{"type": "text", "text": prompt}],
+                },
+            ).get("queuedSubmission")
+            if (
+                not isinstance(queued, dict)
+                or not isinstance(queued.get("id"), str)
+                or not queued["id"]
+                or queued.get("clientUserMessageId") != client_id
+                or queued.get("input") != [{"type": "text", "text": prompt, "text_elements": []}]
+                and queued.get("input") != [{"type": "text", "text": prompt}]
+            ):
+                raise ValueError("Invalid Codex host queue acknowledgement")
+            if not external_writer:
+                thread = _host_thread(connection, thread_id)
+                if thread["status"]["type"] not in {"idle", "active"}:
+                    raise RuntimeError("Codex host unloaded or failed after queue acceptance")
+    except Exception as exc:
+        if not enqueue_started:
+            raise _HostPreEnqueueError(exc) from exc
+        raise
 
 
 def _accept_delivery(
