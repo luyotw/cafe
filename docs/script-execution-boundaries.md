@@ -49,7 +49,7 @@ This inventory is executable documentation: the unit contract discovers every `s
 | `src/cafe/data/skills/use-cafe-workflow/scripts/run_workflow.py::run` | Internal fixed CAFE workflow bootstrap |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/run_workflow.py::_bootstrap_isolated_runtime` | Internal fixed Python re-exec |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/workflow_event_callback.py::_ensure_host_control_socket` | Internal fixed configured Codex daemon recovery |
-| `src/cafe/data/skills/use-cafe-workflow/scripts/workflow_event_callback.py::_queue_host_callback` | Trusted builtin callback queue transport |
+| `src/cafe/data/skills/use-cafe-workflow/scripts/workflow_event_callback.py::_connected_host` | Trusted builtin callback queue transport |
 | `src/cafe/catalogs/resolver.py::_run_git` | Internal fixed Git root discovery query |
 | `src/cafe/install/bootstrap.py::_run` | Internal installer command family |
 | `src/cafe/skills/global_installer.py::_discover_git_roots` | Internal fixed Git root discovery query |
