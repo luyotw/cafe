@@ -303,8 +303,8 @@ def _validate_event_binding(
 
 
 def _validate_host_callback_transport(script: Path, issue_dir: Path) -> None:
-    # A local Desktop stdio session has a thread ID but no daemon control
-    # endpoint. Catch this before launching hours of background phase work.
+    # A reboot can stop the configured daemon while the App thread still exists.
+    # Recover its endpoint before launching background phase work.
     spec = importlib.util.spec_from_file_location("cafe_callback_transport_check", script)
     if spec is None or spec.loader is None:
         raise ValueError("trusted workflow callback transport check is unavailable")

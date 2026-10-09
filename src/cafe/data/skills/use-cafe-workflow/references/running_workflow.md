@@ -153,14 +153,19 @@ When the first entry is Codex and activation runs from the Codex App, its
 runtime-owned host thread is a best-effort hint for the first session. A
 persisted acquired session always wins, and host-binding failure warns without
 blocking workflow execution. A successfully bound host session connects through
-`codex app-server proxy` to the already running daemon. Local App stdio sessions
-may have a valid thread ID but no daemon control socket; a bound host's socket
-is checked read-only before event-driven launch and before callback delivery.
-An absent or unsafe socket fails before sending input, with a specific durable
-nonacceptance reason. Use an explicitly confirmed attached mode until the App
-is connected to a supported existing daemon; never start a second daemon to
-resume the same conversation, replace its binding, or replay an ambiguous
-historical event as a workaround. It reads the original
+`codex app-server proxy` to the managed daemon. Before event-driven launch and
+before callback delivery, the skill checks the bound host's socket. If it is
+missing after a reboot or service stop, a user-owned daemon identity and managed
+installation allow one bounded `codex app-server daemon start`, followed by
+socket validation. The native command reuses a running daemon and validates
+stale process identity; CAFE does not kill or restart a live daemon. Recovery
+uses `CODEX_HOME` and the installed CLI, with no machine-specific startup file,
+background watchdog, model invocation, or workflow-state change. It never
+bootstraps a first-time installation, replaces an unsafe endpoint, changes the
+confirmed session, or retries an ambiguous event. A missing installation or
+failed recovery leaves an explicit pre-delivery failure. Restore the configured
+daemon, or explicitly confirm attached mode. Never start a second daemon to
+resume the same conversation or replace its binding. It reads the original
 thread and, when unloaded, resumes that exact thread before enqueueing the wake
 notice. `codex queue` alone wakes only loaded threads; resuming the bound thread
 makes delivery independent of opening its conversation in the UI. Resume
