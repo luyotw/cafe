@@ -131,8 +131,9 @@ def _clear_host_session_binding(monkeypatch) -> None:
         endpoint.parent.mkdir(parents=True)
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
             listener.bind(str(endpoint))
-        monkeypatch.setenv("CODEX_HOME", str(home))
-        yield
+            listener.listen(socket.SOMAXCONN)
+            monkeypatch.setenv("CODEX_HOME", str(home))
+            yield
 
 
 def test_callback_prompt_allows_only_bounded_driver_confirmable_clarification(
@@ -2558,9 +2559,21 @@ def _stopped_managed_daemon():
     return home, endpoint
 
 
-def _restore_socket(endpoint):
-    with socket.socket(socket.AF_UNIX) as listener:
-        listener.bind(str(endpoint))
+@pytest.fixture
+def host_listeners():
+    listeners = []
+    try:
+        yield listeners
+    finally:
+        for listener in listeners:
+            listener.close()
+
+
+def _restore_socket(endpoint, listeners):
+    listener = socket.socket(socket.AF_UNIX)
+    listeners.append(listener)
+    listener.bind(str(endpoint))
+    listener.listen(socket.SOMAXCONN)
 
 
 def test_healthy_host_needs_no_daemon_start():
@@ -2569,7 +2582,7 @@ def test_healthy_host_needs_no_daemon_start():
         assert callback._ensure_host_control_socket() == callback._require_host_control_socket()
 
 
-def test_launch_preflight_restores_existing_daemon_before_work(monkeypatch):
+def test_launch_preflight_restores_existing_daemon_before_work(monkeypatch, host_listeners):
     callback = _callback_module()
     _home, endpoint = _stopped_managed_daemon()
     monkeypatch.setattr(callback, "read_status", lambda path: {
@@ -2579,7 +2592,8 @@ def test_launch_preflight_restores_existing_daemon_before_work(monkeypatch):
         }}}],
     })
     with patch.object(
-        callback.subprocess, "run", side_effect=lambda *a, **k: _restore_socket(endpoint)
+        callback.subprocess, "run",
+        side_effect=lambda *a, **k: _restore_socket(endpoint, host_listeners),
     ) as start:
         callback.validate_bound_host_transport(Path("unused-issue"))
         callback.validate_bound_host_transport(Path("unused-issue"))
@@ -2591,7 +2605,9 @@ def test_launch_preflight_restores_existing_daemon_before_work(monkeypatch):
     assert start.call_args.kwargs["stderr"] == subprocess.DEVNULL
 
 
-def test_callback_recovers_daemon_and_delivers_once_to_original_session(tmp_path, monkeypatch):
+def test_callback_recovers_daemon_and_delivers_once_to_original_session(
+    tmp_path, monkeypatch, host_listeners,
+):
     callback = _callback_module()
     monkeypatch.setenv("CODEX_THREAD_ID", "visible-thread")
     manager, _state, event = _contract_event_context(
@@ -2601,7 +2617,8 @@ def test_callback_recovers_daemon_and_delivers_once_to_original_session(tmp_path
     daemon = _HostDaemon(status="notLoaded")
     proxy = _HostProxy(daemon)
     with patch.object(
-        callback.subprocess, "run", side_effect=lambda *a, **k: _restore_socket(endpoint)
+        callback.subprocess, "run",
+        side_effect=lambda *a, **k: _restore_socket(endpoint, host_listeners),
     ) as start:
         with patch.object(callback.subprocess, "Popen", return_value=proxy) as launch:
             callback.run_callback(event, repository_root=tmp_path)
@@ -2643,16 +2660,17 @@ def test_daemon_start_success_requires_revalidated_socket():
 
 
 @pytest.mark.parametrize(
-    "invalid", ["missing-identity", "invalid-identity", "missing-binary", "unsafe-endpoint"]
+    "invalid", ["missing-directory", "unsafe-directory", "missing-binary", "unsafe-endpoint"]
 )
 def test_host_recovery_never_bootstraps_or_replaces_unsafe_installation(invalid):
     callback = _callback_module()
     home, endpoint = _stopped_managed_daemon()
-    marker = home / "app-server-daemon/daemon.pid"
-    if invalid == "missing-identity":
-        marker.unlink()
-    elif invalid == "invalid-identity":
-        marker.write_text(json.dumps({"pid": True}))
+    directory = home / "app-server-daemon"
+    if invalid in {"missing-directory", "unsafe-directory"}:
+        (directory / "daemon.pid").unlink()
+        directory.rmdir()
+        if invalid == "unsafe-directory":
+            directory.write_text("private-provider-token")
     elif invalid == "missing-binary":
         (home / "packages/app-server-daemon/current/bin/codex").unlink()
     else:
@@ -2663,15 +2681,58 @@ def test_host_recovery_never_bootstraps_or_replaces_unsafe_installation(invalid)
     assert "private-provider-token" not in str(raised.value)
 
 
-def test_recovery_accepts_owned_dangling_managed_socket_alias():
+def test_recovery_accepts_owned_dangling_managed_socket_alias(host_listeners):
     callback = _callback_module()
     home, endpoint = _stopped_managed_daemon()
     target = home / "daemon.sock"
     endpoint.symlink_to(target)
     with patch.object(
-        callback.subprocess, "run", side_effect=lambda *a, **k: _restore_socket(target)
+        callback.subprocess, "run",
+        side_effect=lambda *a, **k: _restore_socket(target, host_listeners),
     ) as start:
         assert callback._ensure_host_control_socket() == endpoint
+    assert start.call_count == 1
+
+
+def test_recovery_accepts_configured_installation_after_normal_stop(host_listeners):
+    callback = _callback_module()
+    home, endpoint = _stopped_managed_daemon()
+    (home / "app-server-daemon/daemon.pid").unlink()
+    with patch.object(
+        callback.subprocess, "run",
+        side_effect=lambda *a, **k: _restore_socket(endpoint, host_listeners),
+    ) as start:
+        assert callback._ensure_host_control_socket() == endpoint
+    assert start.call_count == 1
+
+
+@pytest.mark.parametrize("alias", [False, True])
+def test_recovery_restarts_daemon_with_owned_stale_socket(alias, host_listeners):
+    callback = _callback_module()
+    home, endpoint = _stopped_managed_daemon()
+    target = home / "daemon.sock" if alias else endpoint
+    with socket.socket(socket.AF_UNIX) as stale:
+        stale.bind(str(target))
+    if alias:
+        endpoint.symlink_to(target)
+
+    def native_start(*args, **kwargs):
+        target.unlink()
+        _restore_socket(target, host_listeners)
+
+    with patch.object(callback.subprocess, "run", side_effect=native_start) as start:
+        assert callback._ensure_host_control_socket() == endpoint
+    assert start.call_count == 1
+
+
+def test_daemon_start_success_with_stale_socket_still_fails():
+    callback = _callback_module()
+    _home, endpoint = _stopped_managed_daemon()
+    with socket.socket(socket.AF_UNIX) as stale:
+        stale.bind(str(endpoint))
+    with patch.object(callback.subprocess, "run") as start:
+        with pytest.raises(callback._HostTransportUnavailable):
+            callback._ensure_host_control_socket()
     assert start.call_count == 1
 
 

@@ -154,10 +154,12 @@ runtime-owned host thread is a best-effort hint for the first session. A
 persisted acquired session always wins, and host-binding failure warns without
 blocking workflow execution. A successfully bound host session connects through
 `codex app-server proxy` to the managed daemon. Before event-driven launch and
-before callback delivery, the skill checks the bound host's socket. If it is
-missing after a reboot or service stop, a user-owned daemon identity and managed
-installation allow one bounded `codex app-server daemon start`, followed by
-socket validation. The native command reuses a running daemon and validates
+before callback delivery, the skill checks ownership and makes a bounded,
+input-free connection probe of the bound host's socket. If it is missing or
+stale after a reboot or service stop, a user-owned managed installation allows
+one bounded `codex app-server daemon start`, followed by socket validation and
+another connection probe. A PID record is transient and is not required after
+normal stop. The native command reuses a running daemon and validates
 stale process identity; CAFE does not kill or restart a live daemon. Recovery
 uses `CODEX_HOME` and the installed CLI, with no machine-specific startup file,
 background watchdog, model invocation, or workflow-state change. It never
