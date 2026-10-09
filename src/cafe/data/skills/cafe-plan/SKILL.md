@@ -1,7 +1,7 @@
 ---
 name: cafe-plan
 description: "產出可執行的開發計畫"
-version: 1.11.0
+version: 1.11.1
 workflow:
   notification:
     step_label:
@@ -92,6 +92,7 @@ Read your agent file: {agent_file}
   runtime evaluates the fixed `cafe.github.issue_comment` capability gate.
 
 ## Instructions
+- When the confirmed scope includes deployment or post-integration checks, identify existing CI and verification tools in the Plan. Include missing checker or health-check implementation and fixture tests in this issue's Todo List. CAFE need not support the CI provider; the project/phase tool owns its semantics. Do not defer a known verification gap until delivery or require a separate issue for a small task.
 - Plan 必須在同一 phase 內依序完成兩個 stage，不得另建 phase：先完成 solution alignment，
   取得 user 明確確認後，才撰寫 detailed Plan。
 - Checklist 的 iteration selector 只區分首次進入與已有前次輸出的後續執行；它不代表

@@ -1,246 +1,113 @@
-"""Post-merge checks cannot be replaced by a merge receipt or stale Actions run."""
-
-from copy import deepcopy
-
+"""Approved observers are platform-neutral and fail closed on stale evidence."""
+import hashlib
+import json
+import subprocess
 import pytest
 
-from cafe.delivery.contracts import DeliveryVerification
-from cafe.delivery.operations import OperationError
-from cafe.delivery.verification import observe_delivery, validate_verification, wait_for_delivery
-from tests.unit.test_development_delivery import authority, proposal
-from cafe.delivery.contracts import approve_selection
+from cafe.delivery.contracts import DeliveryVerification, VerificationTool, approve_selection
+from cafe.delivery.verification import run_tool, tool_bytes, validate_observation
+from tests.unit.test_development_delivery import proposal, authority
 
 COMMIT = "c" * 40
-PATH = ".github/workflows/deploy.yml"
 
 
-def snapshot():
-    p = proposal(
-        proposals=[],
-        verification=DeliveryVerification.model_validate(
-            {
-                "workflows": [{"path": PATH, "jobs": {"deploy": ["Deploy", "Public checks"]}}],
-            }
-        ),
-    )
+def tool_snapshot(root, code):
+    path = root / "verify.py"
+    path.write_text(code)
+    tool = VerificationTool(owner="repository", path="verify.py",
+                            sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+                            options={"build_name": "custom CI"})
+    p = proposal(proposals=[], verification=DeliveryVerification(scope="Production release", tool=tool))
     return approve_selection(p, authority(p, "integrate_only", ""))
 
 
-def responses():
-    return {
-        "workflow_runs": [
-            {
-                "id": 123,
-                "run_attempt": 1,
-                "path": PATH,
-                "head_sha": COMMIT,
-                "head_branch": "develop",
-                "event": "push",
-                "repository": {"full_name": "owner/repo"},
-                "status": "completed",
-                "conclusion": "success",
-            }
-        ],
-    }, {
-        "total_count": 1,
-        "jobs": [
-            {
-                "name": "deploy",
-                "status": "completed",
-                "conclusion": "success",
-                "steps": [
-                    {"name": "Deploy", "status": "completed", "conclusion": "success"},
-                    {"name": "Public checks", "status": "completed", "conclusion": "success"},
-                ],
-            }
-        ],
-    }
+def checker(state="succeeded", commit=None, evidence=True):
+    return ("import json,sys\np=json.load(sys.stdin)\n"
+            "print(json.dumps({'state':" + repr(state) + ", 'commit':"
+            + (repr(commit) if commit else "p['commit']")
+            + ", 'evidence':" + ("{'release':'custom-build-23'}" if evidence else "{}") + "}))\n")
 
 
-def install(monkeypatch, runs=None, jobs=None):
-    defaults = responses()
-    runs = defaults[0] if runs is None else runs
-    jobs = defaults[1] if jobs is None else jobs
-    calls = []
-
-    def api(self, endpoint):
-        assert endpoint.startswith("repos/owner/repo/actions/")
-        calls.append(endpoint)
-        return deepcopy(jobs if "/jobs?" in endpoint else runs)
-
-    monkeypatch.setattr("cafe.delivery.verification.Commands.api", api)
-    return calls
+def test_custom_provider_needs_no_core_adapter(tmp_path):
+    snapshot = tool_snapshot(tmp_path, checker())
+    result = run_tool(tmp_path, snapshot, COMMIT)
+    assert result["state"] == "succeeded"
+    assert result["evidence"] == {"release": "custom-build-23"}
 
 
-def test_exact_commit_success_and_required_deploy_public_steps(monkeypatch):
-    calls = install(monkeypatch)
-    current = observe_delivery(snapshot(), COMMIT)
-    assert current["state"] == "succeeded"
-    assert current["commit"] == COMMIT and current["workflows"][0]["attempt"] == 1
-    assert "head_sha=" + COMMIT in calls[0] and "branch=develop" in calls[0]
-    validate_verification(
-        snapshot(), {"actions": {"integration": {"commit": COMMIT}}, "verification": current}
-    )
+@pytest.mark.parametrize("state", ["pending", "failed", "unknown"])
+def test_zero_exit_reports_actual_check_state(tmp_path, state):
+    assert run_tool(tmp_path, tool_snapshot(tmp_path, checker(state)), COMMIT)["state"] == state
 
 
-@pytest.mark.parametrize(
-    "field,value",
-    [
-        ("head_sha", "d" * 40),
-        ("event", "pull_request"),
-        ("head_branch", "main"),
-        ("path", ".github/workflows/other.yml"),
-        ("repository", {"full_name": "other/repo"}),
-    ],
-)
-def test_unrelated_workflow_is_unknown(monkeypatch, field, value):
-    runs, jobs = responses()
-    runs["workflow_runs"][0][field] = value
-    install(monkeypatch, runs, jobs)
-    assert observe_delivery(snapshot(), COMMIT)["state"] == "unknown"
+@pytest.mark.parametrize("code", [
+    "raise SystemExit(1)", "print('not-json')", checker(commit="d"*40),
+    checker(evidence=False), "print('{}')", "print('x'*70000)",
+    "import local_helper",
+])
+def test_invalid_exit_output_version_and_local_import_never_pass(tmp_path, code):
+    (tmp_path / "local_helper.py").write_text(checker())
+    result = run_tool(tmp_path, tool_snapshot(tmp_path, code), COMMIT)
+    assert result["state"] == "unknown" and not result["retryable"]
 
 
-@pytest.mark.parametrize(
-    "state,conclusion,expected",
-    [
-        ("queued", None, "pending"),
-        ("in_progress", None, "pending"),
-        ("completed", "failure", "failed"),
-        ("completed", "cancelled", "failed"),
-        ("completed", "skipped", "failed"),
-        ("completed", "timed_out", "failed"),
-    ],
-)
-def test_non_success_never_completes(monkeypatch, state, conclusion, expected):
-    runs, jobs = responses()
-    runs["workflow_runs"][0].update(status=state, conclusion=conclusion)
-    install(monkeypatch, runs, jobs)
-    assert wait_for_delivery(snapshot(), COMMIT, timeout=0)["state"] == expected
+def test_timeout_is_retryable_unknown(tmp_path, monkeypatch):
+    snapshot = tool_snapshot(tmp_path, checker())
+    def timeout(*a, **kw):
+        raise subprocess.TimeoutExpired("tool", 30)
+    monkeypatch.setattr("cafe.delivery.verification.subprocess.run", timeout)
+    assert run_tool(tmp_path, snapshot, COMMIT)["retryable"] is True
 
 
-@pytest.mark.parametrize(
-    "change",
-    [
-        "missing_job",
-        "duplicate_job",
-        "skipped_job",
-        "missing_public",
-        "skipped_deploy",
-        "failed_public",
-        "truncated_jobs",
-    ],
-)
-def test_successful_workflow_does_not_hide_unverified_obligations(monkeypatch, change):
-    runs, jobs = responses()
-    job = jobs["jobs"][0]
-    if change == "missing_job":
-        job["name"] = "other"
-    if change == "duplicate_job":
-        jobs["jobs"].append(deepcopy(job))
-        jobs["total_count"] = 2
-    if change == "skipped_job":
-        job["conclusion"] = "skipped"
-    if change == "missing_public":
-        job["steps"].pop()
-    if change == "skipped_deploy":
-        job["steps"][0]["conclusion"] = "skipped"
-    if change == "failed_public":
-        job["steps"][1]["conclusion"] = "failure"
-    if change == "truncated_jobs":
-        jobs["total_count"] = 2
-    install(monkeypatch, runs, jobs)
-    assert observe_delivery(snapshot(), COMMIT)["state"] in {"failed", "unknown"}
-
-
-def test_missing_run_waits_then_succeeds_without_mutation(monkeypatch):
-    runs, jobs = responses()
-    count = 0
-
-    def api(self, endpoint):
-        nonlocal count
-        if "/jobs?" in endpoint:
-            return jobs
-        count += 1
-        return {"workflow_runs": []} if count == 1 else runs
-
-    monkeypatch.setattr("cafe.delivery.verification.Commands.api", api)
-    sleeps = []
-    monkeypatch.setattr("cafe.delivery.verification.time.sleep", sleeps.append)
-    assert wait_for_delivery(snapshot(), COMMIT)["state"] == "succeeded"
-    assert count == 2 and sleeps == [10]
-
-
-def test_unknown_api_failure_does_not_loop_or_pass(monkeypatch):
-    def unavailable(*args):
-        raise OperationError("command_failed", state="unknown")
-
-    monkeypatch.setattr("cafe.delivery.verification.Commands.api", unavailable)
-    assert wait_for_delivery(snapshot(), COMMIT)["state"] == "unknown"
-
-
-def test_rerun_invalidates_shown_success(monkeypatch):
-    install(monkeypatch)
-    shown = observe_delivery(snapshot(), COMMIT)
-    runs, jobs = responses()
-    runs["workflow_runs"][0].update(run_attempt=2, status="in_progress", conclusion=None)
-    install(monkeypatch, runs, jobs)
+def test_replaced_script_is_not_executed(tmp_path):
+    snapshot = tool_snapshot(tmp_path, checker())
+    (tmp_path / "verify.py").write_text("raise SystemExit('replacement')")
     with pytest.raises(ValueError, match="changed"):
-        validate_verification(
-            snapshot(), {"actions": {"integration": {"commit": COMMIT}}, "verification": shown}
-        )
+        run_tool(tmp_path, snapshot, COMMIT)
 
 
-def test_legacy_missing_scope_and_explicit_offline_scope(monkeypatch):
-    monkeypatch.setattr("cafe.delivery.verification.Commands.api", lambda *a: pytest.fail("API"))
-    legacy = proposal(proposals=[])
-    old = approve_selection(legacy, authority(legacy, "integrate_only", ""))
-    assert observe_delivery(old, COMMIT)["state"] == "missing"
-    new = legacy.model_copy(
-        update={
-            "verification": DeliveryVerification(
-                not_required_reason="Confirmed local integration only; no publication."
-            )
-        }
-    )
-    offline = approve_selection(new, authority(new, "integrate_only", ""))
-    assert observe_delivery(offline, COMMIT)["state"] == "not_required"
-    with pytest.raises(ValueError):
-        validate_verification(
-            old,
-            {
-                "verification": {"state": "succeeded"},
-                "actions": {"integration": {"commit": COMMIT}},
-            },
-        )
+def test_child_executes_verified_bytes_even_if_path_changes(tmp_path, monkeypatch):
+    snapshot = tool_snapshot(tmp_path, checker())
+    real_run = subprocess.run
+    def replace_then_run(*a, **kw):
+        (tmp_path / "verify.py").write_text("raise SystemExit(99)")
+        return real_run(*a, **kw)
+    monkeypatch.setattr("cafe.delivery.verification.subprocess.run", replace_then_run)
+    assert run_tool(tmp_path, snapshot, COMMIT)["state"] == "succeeded"
 
 
-@pytest.mark.parametrize(
-    "raw",
-    [
-        {},
-        {"workflows": [], "not_required_reason": " "},
-        {"workflows": [{"path": PATH, "jobs": {"deploy": []}}], "not_required_reason": "skip"},
-        {"workflows": [{"path": "../other.yml", "jobs": {"deploy": []}}]},
-    ],
-)
-def test_scope_must_be_explicit_and_bounded(raw):
+def test_symlink_and_traversal_are_rejected(tmp_path):
+    snapshot = tool_snapshot(tmp_path, checker())
+    original = tmp_path / "verify.py"
+    external = tmp_path / "external.py"
+    original.rename(external)
+    original.symlink_to(external)
+    with pytest.raises(ValueError, match="approved owner"):
+        tool_bytes(tmp_path, snapshot.proposal.verification.tool)
+    for path in ("../verify.py", "/tmp/verify.py", "verify.sh"):
+        with pytest.raises(ValueError):
+            VerificationTool(owner="repository", path=path, sha256="a"*64)
+
+
+@pytest.mark.parametrize("raw", [
+    {}, {"scope": "CI"}, {"not_required_reason": " "},
+    {"scope": "CI", "tool": {"owner": "repository", "path": "x.py", "sha256": "a"*64},
+     "not_required_reason": "skip"},
+])
+def test_verification_scope_is_explicit(raw):
     with pytest.raises(ValueError):
         DeliveryVerification.model_validate(raw)
 
 
-@pytest.mark.parametrize("suffix", ["", "@develop", "@refs/heads/develop"])
-def test_documented_workflow_path_ref_representation(monkeypatch, suffix):
-    runs, jobs = responses()
-    runs["workflow_runs"][0]["path"] += suffix
-    install(monkeypatch, runs, jobs)
-    assert observe_delivery(snapshot(), COMMIT)["state"] == "succeeded"
+def test_scope_and_options_are_not_a_ci_dsl():
+    tool = VerificationTool(owner="repository", path="x.py", sha256="a"*64,
+                            options={"any_platform": {"build": 23}})
+    assert DeliveryVerification(scope="Agreed checks", tool=tool).tool.options["any_platform"]
 
 
-def test_different_workflow_path_ref_is_rejected(monkeypatch):
-    runs, jobs = responses()
-    runs["workflow_runs"][0]["path"] += "@main"
-    install(monkeypatch, runs, jobs)
-    assert observe_delivery(snapshot(), COMMIT)["state"] == "unknown"
+def test_success_requires_exact_commit_and_evidence():
+    with pytest.raises(ValueError):
+        validate_observation({"state": "succeeded", "commit": "d"*40, "evidence": "build"}, COMMIT)
 
 
 def test_completed_legacy_acceptance_survives_upgrade_but_pending_does_not(tmp_path, monkeypatch):

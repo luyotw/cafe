@@ -283,6 +283,7 @@ class DevelopmentDeliveryExecutor(NoOpHook):
             load_capability_registry,
         )
         from cafe.delivery.service import execute_snapshot
+        from cafe.delivery.verification import VerificationReviewRequired
 
         phase = kwargs["phase"]
         binding = _binding(kwargs)
@@ -345,7 +346,31 @@ class DevelopmentDeliveryExecutor(NoOpHook):
                         {"type": "capability_approval_pending", "task_id": report["pending_task"]}
                     ],
                 )
+            verification = report["verification"]
+            if not report["remaining"] and (verification["state"] == "pending" or (
+                verification["state"] == "unknown" and verification.get("retryable")
+            )):
+                from cafe.core.workflow_models import StepWaiting
+                raise StepWaiting(
+                    step=kwargs["step_name"],
+                    identity=snapshot.digest,
+                    delay=max(1, min(120, report["observation"]["next_check_at"]
+                                    - report["observation"]["checked_at"])),
+                    detail="Waiting for the approved delivery verification tool",
+                )
             return HookResult(context_updates=updates)
+        except VerificationReviewRequired as exc:
+            return HookResult(context_updates={
+                "delivery_complete": "false",
+                "delivery_verification_error": str(exc)[:1024],
+                "continuation_prompt": (
+                    "Verification needs implementation or fresh action review: "
+                    + str(exc)[:1024]
+                    + ". Help draft the missing tool and tests in the delivery output, "
+                    "normalize work into Todo List and use the injected correction route. "
+                    "Do not execute unapproved host code or request final acceptance."
+                ),
+            })
         except (OSError, ValueError, KeyError) as exc:
             kwargs["output_file"].write_text(f"# Delivery recovery required\n\n{str(exc)[:1024]}\n")
             return HookResult(

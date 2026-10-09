@@ -190,7 +190,7 @@ def validate_complete_report(issue_dir, snapshot, report):
     validate_effect_receipts(issue_dir, snapshot, report)
     from cafe.delivery.verification import validate_verification
 
-    validate_verification(snapshot, report)
+    validate_verification(issue_dir, snapshot, report)
 
 
 def validate_effect_receipts(issue_dir, snapshot, report):

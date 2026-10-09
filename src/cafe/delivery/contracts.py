@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
@@ -58,30 +58,38 @@ class FollowUp(FrozenModel):
     confidence: int = Field(ge=0, le=100)
 
 
-class WorkflowVerification(FrozenModel):
-    path: str = Field(pattern=r"^\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml$")
-    jobs: dict[str, tuple[str, ...]] = Field(min_length=1, max_length=20)
+class VerificationTool(FrozenModel):
+    """One approved Python observer; its options belong to the owning phase."""
+
+    capability: str = Field(default="cafe.delivery.verify", min_length=1, max_length=128)
+    owner: str = Field(pattern=r"^(?:repository|cafe-[A-Za-z0-9_-]+)$")
+    path: str = Field(min_length=1, max_length=512)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    options: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def bounded_checks(self):
-        names = [*self.jobs, *(step for steps in self.jobs.values() for step in steps)]
-        if any(not name.strip() or len(name) > 256 for name in names) or any(
-            len(steps) > 30 or len(set(steps)) != len(steps) for steps in self.jobs.values()
-        ):
-            raise ValueError("verification needs bounded, unique job and step names")
+    def bounded_tool(self):
+        path = Path(self.path)
+        if path.is_absolute() or ".." in path.parts or path.suffix != ".py":
+            raise ValueError("verification tool must be a relative Python file")
+        if self.owner != "repository" and path.parts[0] != "scripts":
+            raise ValueError("skill verification tool must belong to scripts/")
+        if len(canonical_json(self.options)) > 16384:
+            raise ValueError("verification tool options exceed the bounded input size")
         return self
 
 
 class DeliveryVerification(FrozenModel):
-    workflows: tuple[WorkflowVerification, ...] = Field(default=(), max_length=10)
+    scope: str = Field(default="", max_length=4096)
+    tool: VerificationTool | None = None
     not_required_reason: str = Field(default="", max_length=2048)
 
     @model_validator(mode="after")
     def explicit_scope(self):
-        if bool(self.workflows) == bool(self.not_required_reason.strip()):
-            raise ValueError("declare required workflows or an explicit no-verification reason")
-        if len({row.path for row in self.workflows}) != len(self.workflows):
-            raise ValueError("duplicate verification workflow")
+        if bool(self.tool) == bool(self.not_required_reason.strip()):
+            raise ValueError("declare a verification tool or an explicit no-verification reason")
+        if self.tool and not self.scope.strip():
+            raise ValueError("verification tool needs the agreed delivery scope")
         return self
 
 
@@ -119,8 +127,6 @@ class ActionProposal(FrozenModel):
 
     @model_validator(mode="after")
     def exact_binding(self):
-        if self.mode == "local" and self.verification and self.verification.workflows:
-            raise ValueError("GitHub workflow verification requires GitHub integration")
         if self.mode == "github" and not re.fullmatch(
             r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", self.repository
         ):

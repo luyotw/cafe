@@ -154,6 +154,7 @@ class CapabilityManifest(StrictCapabilityModel):
         "merge_github_pr",
         "integrate_local_branch",
         "create_selected_issue",
+        "verify_delivery_tool",
     ]
     arguments: ObjectSchema
     outputs: ObjectSchema
@@ -1245,7 +1246,13 @@ def _delivery_adapter(**kwargs):
     return adapter(**kwargs)
 
 
+def _verification_adapter(**kwargs):
+    from cafe.delivery.capabilities import verification_adapter
+    return verification_adapter(**kwargs)
+
+
 HOST_CAPABILITY_ADAPTERS: Mapping[str, Any] = {
+    "verify_delivery_tool": _verification_adapter,
     "sync_pr": _sync_pr_adapter,
     "open_current_pr": _open_current_pr_adapter,
     "sync_issue_comment": _sync_issue_comment_adapter,

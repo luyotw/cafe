@@ -1,0 +1,26 @@
+id: cafe.delivery.verify
+version: 1
+implementation: verify_delivery_tool
+arguments:
+  required: [snapshot, issue_dir, action]
+  properties:
+    snapshot: {type: string}
+    issue_dir: {type: string}
+    action: {type: string, enum: [verification]}
+outputs:
+  required: [state, payload]
+  properties:
+    state: {type: string, enum: [pending, succeeded, failed, unknown]}
+    payload: {type: string}
+effects:
+  writes: []
+  network_destinations: [github.com, api.github.com]
+  browser_open: []
+credentials: [gh]
+permissions:
+  writes: []
+  network: [github.com, api.github.com]
+idempotency: safe
+risk: medium
+approval: required
+policy: allow

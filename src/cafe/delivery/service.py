@@ -19,6 +19,8 @@ from cafe.delivery.selection import validate_snapshot_authority
 
 def action_request(registry, snapshot, issue_dir, action):
     cap = (
+        snapshot.proposal.verification.tool.capability
+        if action == "verification" else
         ("cafe.branch.integrate" if snapshot.proposal.mode == "local" else "cafe.github.pr.merge")
         if action == "integration"
         else "cafe.github.issue.create"
@@ -55,7 +57,8 @@ def execute_snapshot(
     from cafe.delivery.operations import execute_action
 
     if snapshot.proposal.verification is None:
-        raise ValueError("verification scope is missing; fresh PR action review is required")
+        from cafe.delivery.verification import VerificationReviewRequired
+        raise VerificationReviewRequired("verification scope is missing; fresh PR action review is required")
     validate_snapshot_authority(issue_dir, snapshot)
     deadline = time.monotonic() + min(timeout, 180)
     actions = ["integration", *[p.id for p in snapshot.selected]]
@@ -182,12 +185,29 @@ def execute_snapshot(
         r["state"] == "succeeded" for r in results.values()
     )
     complete = complete and not unresolved_history
+    effects_complete = complete
     verification = {"state": "pending", "error": "integration_not_complete"}
     if complete:
-        from cafe.delivery.verification import wait_for_delivery
+        from cafe.delivery.verification import observe_delivery
 
-        verification = wait_for_delivery(snapshot, results["integration"].get("commit"))
+        verification = observe_delivery(
+            snapshot, results["integration"].get("commit"), root=root,
+            issue_dir=issue_dir, registry=registry,
+        )
         complete = verification["state"] in {"succeeded", "not_required"}
+    path = store.directory / "result.json"
+    check_count = 0
+    if path.exists() and path.stat().st_size <= 1024 * 1024:
+        previous_report = json.loads(path.read_text())
+        if previous_report.get("snapshot") == snapshot.digest:
+            count = previous_report.get("observation", {}).get("check_count", 0)
+            if type(count) is int and 0 <= count < 100000:
+                check_count = count
+    waiting = effects_complete and (verification["state"] == "pending" or (
+        verification["state"] == "unknown" and verification.get("retryable")
+    ))
+    delay = min(120, 30 * 2 ** min(check_count, 2))
+    now = time.time()
     report = {
         "version": 1,
         "snapshot": snapshot.digest,
@@ -200,7 +220,15 @@ def execute_snapshot(
         + unresolved_history,
         "pending_task": pending_task,
         "verification": verification,
+        "observation": {
+            "checked_at": now,
+            "next_check_at": now + delay if waiting else None,
+            "check_count": check_count + 1,
+        },
     }
-    path = store.directory / "result.json"
+    if not waiting:
+        # Stable terminal evidence must remain equal on a fresh recheck. Time and
+        # scheduling belong only to an unfinished observation, not acceptance.
+        report.pop("observation")
     atomic_write_bytes(path, canonical_json(report))
     return report, path

@@ -1,7 +1,7 @@
 ---
 name: cafe-pr
 description: Prepare the local pull request title and description for publication
-version: 1.9.1
+version: 1.10.0
 workflow:
   notification:
     step_label:
@@ -241,8 +241,9 @@ When there is no corrective feedback for this cycle, or this batch has no applic
 
 When this step declares a `delivery` binding, prepare `delivery_request.json` beside the PR output with only `mode` (`local` or `github`), `strategy`, `target_branch`, `destination` (absolute clean target checkout for local), `issue_repository` (explicit GitHub destination for selected issues), and `verification`. Source/repository/PR identities and Review drafts are supplied and checked by the host. Ask for missing material details through the declared clarification task. Do not guess a strategy or convert publication into action approval. The host displays and freezes the exact bundle before `delivery-review`; users supply only the selected `FUP-NNN` IDs. The host executes nothing during this PR step.
 
-Derive `verification` from the already confirmed delivery scope and the repository's existing CI configuration, not from new acceptance requirements. Use `{"workflows":[{"path":".github/workflows/deploy.yml","jobs":{"deploy":["Deploy","Check public endpoints"]}}]}` for required target-branch push workflows. Job and step names must match the existing workflow; include every agreed CI, deployment and public-check obligation. Empty step lists require the named job to succeed. A successful workflow alone cannot substitute for skipped required jobs or steps. If no post-integration verification is agreed, write `{"not_required_reason":"<reason tied to the confirmed scope>"}`. Do not use that exemption when the scope includes publication or required post-merge checks. The host shows this plan in the existing PR action review and freezes it with that approval. Ask for clarification when an agreed check has no existing GitHub Actions implementation; do not invent commands, providers, deployment authority or successful evidence.
+Derive `verification` from the confirmed scope and existing project tools. Declare either `{"not_required_reason":"<reason tied to confirmed scope>"}` when no post-integration verification is required, or `{"scope":"<agreed checks>","tool":{"capability":"<reviewed capability ID>","owner":"<repository or skill name>","path":"<relative self-contained Python checker>","sha256":"<exact script hash>","options":{}}}`. Tool options are ordinary phase-owned data; CAFE core does not understand CI platforms. Read the selected delivery skill's `references/verification_tools.md` for the small execution contract and the optional bundled GitHub Actions tool. Use an already registered trusted host capability that covers the tool's real network and credential needs under the fixed verifier implementation. Repository manifests cannot grant host permissions; missing registration is execution-capability work, not a requirement to add a CI adapter.
 
+Ensure the checker exists, can obtain the actual deployed/build version, and covers every agreed test, deployment and public check before requesting action approval. Reuse suitable existing tools; do not require every repo to add a script. For a known missing checker, help draft the implementation and tests, normalize work into this issue's Todo List and use the injected correction route before publication/approval. Reserve clarification for unclear scope or missing material decisions. Use the no-verification exemption only when the agreed scope allows it. The host displays and freezes the exact script hash, options, scope and capability boundary, including repeated read-only host execution, in the current PR action review. Changed tools or scope require fresh review.
 ## Output
 Write PR content to: {output_file}
 

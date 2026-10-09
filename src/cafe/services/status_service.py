@@ -240,6 +240,15 @@ class StatusService:
                 )
             if any(task.status is HumanTaskStatus.CONFIGURATION_ERROR for task in tasks):
                 raise ValueError("task configuration error")
+            if (state.host_wait is not None
+                    and state.host_wait["step"] == state.current_step == step
+                    and baton.to_owner is HandoffOwner.AGENT):
+                status.update({
+                    "State": "Waiting for external verification",
+                    "Reason": "The approved tool has not completed verification",
+                    "Next": "cafe status",
+                })
+                return self._with_declared_diagnostic(issue_dir, state.workflow_id, status, audit)
 
             source = issue_dir / "blackboard.json"
             if baton.to_owner is HandoffOwner.DONE:

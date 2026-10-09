@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import errno
 import uuid
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Any, Callable
@@ -95,6 +96,15 @@ class WorkflowHost:
             raise WorkerAlreadyRunningError("workflow advancement is owned by another worker")
         try:
             identity = worker_id or str(uuid.uuid4())
-            return HostRunResult(hosting=hosting, worker_id=identity, result=runtime())
+            while True:
+                result = runtime()
+                delay = getattr(result, "wait_seconds", None)
+                if hosting != "background" or delay is None:
+                    return HostRunResult(hosting=hosting, worker_id=identity, result=result)
+                if not 1 <= delay <= 300:
+                    raise ValueError("invalid host wait interval")
+                # Phase execution has unwound its workspace lease; only workflow
+                # advancement ownership remains. No agent or timer service is used.
+                time.sleep(delay)
         finally:
             _release_advancement_process_lock(process_lock)
