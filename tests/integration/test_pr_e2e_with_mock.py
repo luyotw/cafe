@@ -245,6 +245,7 @@ def test_pr_review_handoff_tracks_published_or_local_only_journey(
         "strategy": "merge" if auto_create else "ff-only",
         "target_branch": "develop", "destination": "" if auto_create else str(destination),
         "issue_repository": "",
+        "verification": {"not_required_reason": "Offline integration; no post-merge checks in this fixture scope."},
     }))
     request_file = output.parent / "publish_request.json"
     request_file.write_text(json.dumps({

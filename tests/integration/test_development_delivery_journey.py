@@ -99,6 +99,7 @@ def setup_action(
     playbook="direct",
     strategy=None,
     bundled=True,
+    verification=None,
 ):
     root, dest, _, local = local_action
     data = graph(root, renamed=renamed, playbook=playbook)
@@ -119,6 +120,7 @@ def setup_action(
         "target_branch": "develop",
         "destination": "" if github else str(dest),
         "issue_repository": "owner/repo" if proposals else "",
+        "verification": verification or {"not_required_reason": "Offline integration; no post-merge checks in this fixture scope."},
     }
     (output.parent / "delivery_request.json").write_text(json.dumps(request))
     store = BlackboardStore(issue)
@@ -327,7 +329,11 @@ if argv[:2] == ['pr', 'merge']:
 endpoint = argv[1]
 state.setdefault('observations', []).append(endpoint)
 path.write_text(json.dumps(state))
-if '/pulls/' in endpoint:
+if '/actions/workflows/' in endpoint:
+    print(json.dumps(state['workflow_runs']))
+elif '/actions/runs/' in endpoint:
+    print(json.dumps(state['jobs']))
+elif '/pulls/' in endpoint:
     print(json.dumps(state['pr']))
 elif '--method' in argv:
     draft = json.load(sys.stdin)

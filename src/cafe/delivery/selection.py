@@ -187,6 +187,13 @@ def validate_response(issue_dir, binding, task, payload):
 
 
 def validate_complete_report(issue_dir, snapshot, report):
+    validate_effect_receipts(issue_dir, snapshot, report)
+    from cafe.delivery.verification import validate_verification
+
+    validate_verification(snapshot, report)
+
+
+def validate_effect_receipts(issue_dir, snapshot, report):
     """Completion derives from all current and retained effect receipts, never flags alone."""
     from cafe.delivery.records import ActionStore
 

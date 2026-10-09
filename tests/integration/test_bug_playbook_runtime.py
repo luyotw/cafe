@@ -235,6 +235,7 @@ class DefectAgent:
                         "target_branch": "main",
                         "destination": "" if github else str(self.repo.parent / "destination"),
                         "issue_repository": "",
+                        "verification": {"not_required_reason": "Offline integration; no post-merge checks in this fixture scope."},
                     }
                 )
             )

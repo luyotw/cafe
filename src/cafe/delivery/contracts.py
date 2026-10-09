@@ -58,6 +58,33 @@ class FollowUp(FrozenModel):
     confidence: int = Field(ge=0, le=100)
 
 
+class WorkflowVerification(FrozenModel):
+    path: str = Field(pattern=r"^\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml$")
+    jobs: dict[str, tuple[str, ...]] = Field(min_length=1, max_length=20)
+
+    @model_validator(mode="after")
+    def bounded_checks(self):
+        names = [*self.jobs, *(step for steps in self.jobs.values() for step in steps)]
+        if any(not name.strip() or len(name) > 256 for name in names) or any(
+            len(steps) > 30 or len(set(steps)) != len(steps) for steps in self.jobs.values()
+        ):
+            raise ValueError("verification needs bounded, unique job and step names")
+        return self
+
+
+class DeliveryVerification(FrozenModel):
+    workflows: tuple[WorkflowVerification, ...] = Field(default=(), max_length=10)
+    not_required_reason: str = Field(default="", max_length=2048)
+
+    @model_validator(mode="after")
+    def explicit_scope(self):
+        if bool(self.workflows) == bool(self.not_required_reason.strip()):
+            raise ValueError("declare required workflows or an explicit no-verification reason")
+        if len({row.path for row in self.workflows}) != len(self.workflows):
+            raise ValueError("duplicate verification workflow")
+        return self
+
+
 class ActionProposal(FrozenModel):
     version: Literal[1] = 1
     workflow_id: str = Field(min_length=1)
@@ -78,6 +105,7 @@ class ActionProposal(FrozenModel):
     reviewed_artifact: str = ""
     reviewed_artifact_sha256: str = Field(default="", pattern=r"^(?:[0-9a-f]{64})?$")
     capability_review: dict[str, dict] | None = None
+    verification: DeliveryVerification | None = None
 
     @model_serializer(mode="wrap")
     def serialize(self, handler):
@@ -85,10 +113,14 @@ class ActionProposal(FrozenModel):
         # Preserve the exact digest of already-shown legacy proposals.
         if self.capability_review is None:
             value.pop("capability_review", None)
+        if self.verification is None:
+            value.pop("verification", None)
         return value
 
     @model_validator(mode="after")
     def exact_binding(self):
+        if self.mode == "local" and self.verification and self.verification.workflows:
+            raise ValueError("GitHub workflow verification requires GitHub integration")
         if self.mode == "github" and not re.fullmatch(
             r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", self.repository
         ):

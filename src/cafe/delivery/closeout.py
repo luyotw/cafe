@@ -5,7 +5,7 @@ import re
 
 from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.delivery.contracts import ActionSnapshot, digest
-from cafe.delivery.selection import validate_complete_report
+from cafe.delivery.selection import validate_complete_report, validate_effect_receipts
 
 TERMINAL_DECISIONS = {
     "confirm": "leave",
@@ -104,7 +104,12 @@ def accepted_choice(issue_dir, *, workflow_id, contract_sha256, cleanup):
         or f"Delivery result SHA256: {digest(report)}" not in task.prompt
     ):
         raise ValueError("accepted delivery result changed")
-    validate_complete_report(issue_dir, snapshot, report)
+    if snapshot.proposal.verification is None:
+        # This task is already durably completed above. Preserve pre-upgrade acceptance,
+        # without letting a pending legacy task acquire new acceptance or action rights.
+        validate_effect_receipts(issue_dir, snapshot, report)
+    else:
+        validate_complete_report(issue_dir, snapshot, report)
     validate_choice(issue_dir, snapshot, task, decision)
     return {
         "choice": TERMINAL_DECISIONS[decision],

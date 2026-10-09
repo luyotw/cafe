@@ -233,6 +233,7 @@ def test_conflict_abort_develop_fix_fresh_review_and_authorization_deliver(
                 "target_branch": "develop",
                 "destination": str(dest),
                 "issue_repository": "",
+                "verification": {"not_required_reason": "Offline integration; no post-merge checks in this fixture scope."},
             }
         )
     )

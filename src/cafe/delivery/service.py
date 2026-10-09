@@ -54,6 +54,8 @@ def execute_snapshot(
     """One bounded batch; approval pauses before dispatch and successes survive iterations."""
     from cafe.delivery.operations import execute_action
 
+    if snapshot.proposal.verification is None:
+        raise ValueError("verification scope is missing; fresh PR action review is required")
     validate_snapshot_authority(issue_dir, snapshot)
     deadline = time.monotonic() + min(timeout, 180)
     actions = ["integration", *[p.id for p in snapshot.selected]]
@@ -180,6 +182,12 @@ def execute_snapshot(
         r["state"] == "succeeded" for r in results.values()
     )
     complete = complete and not unresolved_history
+    verification = {"state": "pending", "error": "integration_not_complete"}
+    if complete:
+        from cafe.delivery.verification import wait_for_delivery
+
+        verification = wait_for_delivery(snapshot, results["integration"].get("commit"))
+        complete = verification["state"] in {"succeeded", "not_required"}
     report = {
         "version": 1,
         "snapshot": snapshot.digest,
@@ -191,6 +199,7 @@ def execute_snapshot(
         "remaining": [a for a in actions if results.get(a, {}).get("state") != "succeeded"]
         + unresolved_history,
         "pending_task": pending_task,
+        "verification": verification,
     }
     path = store.directory / "result.json"
     atomic_write_bytes(path, canonical_json(report))

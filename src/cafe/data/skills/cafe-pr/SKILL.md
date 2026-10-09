@@ -1,7 +1,7 @@
 ---
 name: cafe-pr
 description: Prepare the local pull request title and description for publication
-version: 1.9.0
+version: 1.9.1
 workflow:
   notification:
     step_label:
@@ -237,12 +237,14 @@ When there is no corrective feedback for this cycle, or this batch has no applic
 - A missing remote branch or PR is normal before the hook runs and does not mean the PR phase is incomplete.
 - Do not restate PR content in the response; use the blackboard and next-step baton for handoff.
 
+### Declared development delivery review
+
+When this step declares a `delivery` binding, prepare `delivery_request.json` beside the PR output with only `mode` (`local` or `github`), `strategy`, `target_branch`, `destination` (absolute clean target checkout for local), `issue_repository` (explicit GitHub destination for selected issues), and `verification`. Source/repository/PR identities and Review drafts are supplied and checked by the host. Ask for missing material details through the declared clarification task. Do not guess a strategy or convert publication into action approval. The host displays and freezes the exact bundle before `delivery-review`; users supply only the selected `FUP-NNN` IDs. The host executes nothing during this PR step.
+
+Derive `verification` from the already confirmed delivery scope and the repository's existing CI configuration, not from new acceptance requirements. Use `{"workflows":[{"path":".github/workflows/deploy.yml","jobs":{"deploy":["Deploy","Check public endpoints"]}}]}` for required target-branch push workflows. Job and step names must match the existing workflow; include every agreed CI, deployment and public-check obligation. Empty step lists require the named job to succeed. A successful workflow alone cannot substitute for skipped required jobs or steps. If no post-integration verification is agreed, write `{"not_required_reason":"<reason tied to the confirmed scope>"}`. Do not use that exemption when the scope includes publication or required post-merge checks. The host shows this plan in the existing PR action review and freezes it with that approval. Ask for clarification when an agreed check has no existing GitHub Actions implementation; do not invent commands, providers, deployment authority or successful evidence.
+
 ## Output
 Write PR content to: {output_file}
 
 ## Handoff
 - Write the next-step baton for this result; the runtime updates the blackboard.
-
-### Declared development delivery review
-
-When this step declares a `delivery` binding, prepare `delivery_request.json` beside the PR output with only `mode` (`local` or `github`), `strategy`, `target_branch`, `destination` (absolute clean target checkout for local), and `issue_repository` (explicit GitHub destination for selected issues). Source/repository/PR identities and Review drafts are supplied and checked by the host. Ask for missing material details through the declared clarification task. Do not guess a strategy or convert publication into action approval. The host displays and freezes the exact bundle before `delivery-review`; users supply only the selected `FUP-NNN` IDs. The host executes nothing during this PR step.

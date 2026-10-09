@@ -129,9 +129,12 @@ class DevelopmentActionContext(NoOpHook):
         output = kwargs["output_file"]
         try:
             request = json.loads((output.parent / "delivery_request.json").read_text())
-            allowed = {"mode", "strategy", "target_branch", "destination", "issue_repository"}
+            allowed = {"mode", "strategy", "target_branch", "destination", "issue_repository", "verification"}
             if set(request) - allowed:
                 raise ValueError("action request contains unbound fields")
+            from cafe.delivery.contracts import DeliveryVerification
+
+            verification = DeliveryVerification.model_validate(request["verification"])
             commands = Commands(30)
             source = commands.git(root, "rev-parse", "HEAD")
             branch = commands.git(root, "symbolic-ref", "--short", "HEAD")
@@ -197,6 +200,7 @@ class DevelopmentActionContext(NoOpHook):
                 review_source=review_source,
                 reviewed_artifact=str(output.resolve().relative_to(phase.issue_dir.resolve())),
                 reviewed_artifact_sha256=hashlib.sha256(output.read_bytes()).hexdigest(),
+                verification=verification,
             )
             from cafe.core.capabilities import default_capability_definition_dirs, load_capability_registry
             from cafe.delivery.approvals import collect_review, review_text
@@ -249,6 +253,9 @@ class DevelopmentActionContext(NoOpHook):
                 )
             if proposal.capability_review is not None:
                 shown += "\n\n" + review_text(proposal.capability_review)
+            shown += "\n\nPost-integration verification:\n" + json.dumps(
+                verification.model_dump(mode="json"), ensure_ascii=False, indent=2
+            )
             shown += f"\n\nAction proposal SHA256: {proposal.digest}"
             task = _task(kwargs, shown)
             save_shown_proposal(phase.issue_dir, task, proposal)
