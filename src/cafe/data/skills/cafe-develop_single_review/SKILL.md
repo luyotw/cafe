@@ -1,21 +1,21 @@
 ---
 name: cafe-develop_single_review
 description: Single native reviewer overlay with per-invocation scope checkpoints.
-version: 1.0.0
+version: 1.0.1
 workflow:
   required_tools: [Agent]
   human_tasks:
     - id: iteration-limit
       pattern: confirm_output
-      prompt: Review the retained blocker and decide whether to grant another bounded correction cycle.
+      prompt: {message_key: human_task.single_review.iteration_limit.prompt}
       prompt_locales:
-        zh-TW: 請檢視保留的阻礙，決定是否授予另一輪有界的修正次數。
+        zh-TW: {message_key: human_task.single_review.iteration_limit.prompt}
       input_schema: decision
       decisions:
         - id: resume
-          label: Grant another bounded correction cycle
+          label: {message_key: human_task.single_review.iteration_limit.resume}
           label_locales:
-            zh-TW: 授予另一輪有界的修正次數
+            zh-TW: {message_key: human_task.single_review.iteration_limit.resume}
   checklist_overlay:
     variants:
       - when: {}

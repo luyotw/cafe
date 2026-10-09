@@ -89,9 +89,10 @@ Before recommending a new issue:
   user authorization.
 
 For unconfirmed or transient failures of a phase agent, follow the bounded retry
-rules in `supervision_and_recovery.md`. The Manager
-does not answer the user-owned interruption task or treat a recommendation as
-retry authority. Continue through a workaround only through an existing legal
+rules in `supervision_and_recovery.md`. Eligible stopped executions use its
+three same-session retries, 30 seconds apart, before a user handoff. Ineligible
+or exhausted interruption tasks remain user-owned; a diagnostic recommendation
+does not expand that exception or grant retry authority. Continue through a workaround only through an existing legal
 task, input, correction, or authorization path, and only when explicit
 action-specific authority permits it, it is reversible and within mandate, and
 it preserves the kickoff contract.

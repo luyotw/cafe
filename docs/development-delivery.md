@@ -1,6 +1,6 @@
 # Development delivery
 
-The eleven adopting development playbooks separate PR preparation from delivery. Their `delivery` declarations bind the action-review step/task, action and outcome artifacts, original Review proposal artifact and implementation correction route. Names are not runtime discriminators. Compact delivery remains a separate contract.
+The twelve adopting development playbooks separate PR preparation from delivery. Their `delivery` declarations bind the action-review step/task, action and outcome artifacts, original Review proposal artifact and implementation correction route. Names are not runtime discriminators. Compact delivery remains a separate contract.
 
 PR publication presents exact repository, PR or local destination, source and target commit identities, strategy, original FUP drafts, and the host capability manifests and material permission boundaries. The host freezes this bundle and the reviewed artifact digest. One correlated user decision authorizes integration and an explicit subset or empty issue selection, including only those displayed host boundaries. Delivery projects that existing decision into separate durable capability approvals with the originating task/result and snapshot identity. Registered `cafe.github.pr.merge`, `cafe.branch.integrate` and `cafe.github.issue.create` still use the existing policy revalidation and one-attempt fence; changed manifests or permissions require fresh review. Legacy proposals without a displayed host review retain their separate capability approval.
 

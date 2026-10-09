@@ -2,6 +2,10 @@
 
 from pathlib import Path
 
+from packaging.version import Version
+
+from cafe.skills.loader import read_skill_frontmatter
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -53,16 +57,18 @@ def test_behaviorally_changed_skills_have_minor_version_bumps() -> None:
     """Skill metadata tracks the delivered decomposition behavior."""
     builtin_root = PROJECT_ROOT / "src" / "cafe" / "data" / "skills"
 
-    expected_versions = {
-        "cafe-spec": "version: 1.7.0",
-        "cafe-plan": "version: 1.11.0",
-        "cafe-review": "version: 1.14.0",
-        "cafe-pr": "version: 1.8.0",
-        "cafe-workflow-common": "version: 1.9.0",
-        "use-cafe-workflow": "metadata: {version: 1.73.0}",
+    minimum_versions = {
+        "cafe-spec": "1.7.0",
+        "cafe-plan": "1.11.0",
+        "cafe-review": "1.15.0",
+        "cafe-pr": "1.9.0",
+        "cafe-workflow-common": "1.9.0",
+        "use-cafe-workflow": "1.74.0",
     }
-    for name, version in expected_versions.items():
-        assert version in _skill_text(builtin_root, name)
+    for name, version in minimum_versions.items():
+        frontmatter = read_skill_frontmatter(builtin_root / name / "SKILL.md")
+        actual = frontmatter.get("version") or frontmatter.get("metadata", {}).get("version")
+        assert Version(str(actual)) >= Version(version), name
 
 
 def test_spec_and_plan_skills_describe_runtime_owned_context_packets() -> None:

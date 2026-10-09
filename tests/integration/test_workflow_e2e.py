@@ -164,7 +164,7 @@ class _BatonWritingAgentManager:
         self.prompts: list[str] = []
         self.allowed_tools_calls: list[list[str] | None] = []
         self.agent = SimpleNamespace(
-            config=SimpleNamespace(cli=AgentCLI.CODEX, session_id="integration-test", model=None)
+            config=SimpleNamespace(native_review_configuration=None, cli=AgentCLI.CODEX, session_id="integration-test", model=None)
         )
 
     def get_agent(self, _name: str) -> SimpleNamespace:
@@ -463,7 +463,9 @@ def test_default_requested_changes_follow_declared_loop_without_publish_authorit
     from cafe.ui.human_tasks import apply_human_task_payload
 
     issue_dir = tmp_path / ".cafe" / "issues" / "default-correction"
-    playbook = PlaybookLoader().load("standard")
+    from tests.integration.test_human_task_workflow import legacy_development_graph
+
+    playbook = legacy_development_graph()
     store = BlackboardStore(issue_dir)
     state = store.load_or_create("pr", playbook_id="standard")
     store.set_current_step(state, "user")

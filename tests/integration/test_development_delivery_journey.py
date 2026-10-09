@@ -28,9 +28,11 @@ def local_action(tmp_path):
 def graph(tmp_path, *, renamed=False, playbook="direct"):
     data = PlaybookLoader(project_root=tmp_path, global_root=tmp_path).load(playbook)
     if renamed:
-        data = PlaybookLoader(project_root=tmp_path, global_root=tmp_path).load_model(
-            playbook
-        ).model.model_dump(mode="json", exclude_unset=True)
+        data = (
+            PlaybookLoader(project_root=tmp_path, global_root=tmp_path)
+            .load_model(playbook)
+            .model.model_dump(mode="json", exclude_unset=True)
+        )
         names = {"pr": "package", "deliver": "ship", "develop": "build"}
         # JSON substitution is limited to declared machine identities in this fixture.
         raw = json.dumps(data)
@@ -48,10 +50,9 @@ def graph(tmp_path, *, renamed=False, playbook="direct"):
         # An equivalent catalog must also declare the renamed correction artifact in its target skill.
         from cafe.skills.loader import SkillLoader
 
-        target_skill = tmp_path / ".cafe" / "skills" / "cafe-develop"
-        shutil.copytree(
-            SkillLoader(project_root=tmp_path).get_skill_dir("cafe-develop"), target_skill
-        )
+        target_name = data["steps"]["build"]["skill"]
+        target_skill = tmp_path / ".cafe" / "skills" / target_name
+        shutil.copytree(SkillLoader(project_root=tmp_path).get_skill_dir(target_name), target_skill)
         skill_file = target_skill / "SKILL.md"
         skill_file.write_text(skill_file.read_text().replace("delivery_result", "outcome_document"))
         catalog = tmp_path / ".cafe" / "playbooks"
@@ -127,8 +128,12 @@ def setup_action(
 
         review = issue / "review.md"
         proposals = [
-            {**item, "impact": "Important", "confidence": 98,
-             "evidence_head": local.proposal.source_oid}
+            {
+                **item,
+                "impact": "Important",
+                "confidence": 98,
+                "evidence_head": local.proposal.source_oid,
+            }
             for item in proposals
         ]
         review.write_text(
@@ -229,11 +234,12 @@ def run_and_approve_host(context):
     return result
 
 
+@pytest.mark.parametrize("playbook", ["direct", "bug"])
 @pytest.mark.parametrize("renamed", [False, True])
 def test_local_delivery_has_no_github_and_waits_for_exact_result_acceptance(
-    local_action, tmp_path, renamed
+    local_action, tmp_path, renamed, playbook
 ):
-    context = setup_action(local_action, tmp_path, renamed=renamed)
+    context = setup_action(local_action, tmp_path, renamed=renamed, playbook=playbook)
     approve_action(context)
     result = run_and_approve_host(context)
     assert result.context_updates["delivery_complete"] == "true"
@@ -376,7 +382,8 @@ def test_selected_subset_creates_only_frozen_drafts_and_restart_does_not_replay(
     from cafe.delivery.selection import approved_snapshot
 
     snapshot = approved_snapshot(
-        context[2], workflow_id=context[3].workflow_id,
+        context[2],
+        workflow_id=context[3].workflow_id,
         binding=DeliveryBinding.model_validate(context[5]["steps"][context[-1]]["delivery"]),
     )
     review = context[2] / "review.md"

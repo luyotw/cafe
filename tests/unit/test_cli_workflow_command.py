@@ -527,6 +527,89 @@ steps:
     assert not (tmp_path / ".cafe" / "issues" / "issue-custom-publish" / "blackboard.json").exists()
 
 
+@pytest.mark.parametrize("interactive", [False, True])
+def test_feedback_delivery_rejection_does_not_restart_publish_step(
+    tmp_path, monkeypatch, interactive
+):
+    monkeypatch.chdir(tmp_path)
+    if interactive:
+        monkeypatch.setenv("CAFE_FORCE_INTERACTIVE", "1")
+    else:
+        monkeypatch.delenv("CAFE_FORCE_INTERACTIVE", raising=False)
+    playbook_dir = tmp_path / ".cafe/playbooks"
+    playbook_dir.mkdir(parents=True)
+    (playbook_dir / "rejected-delivery.yaml").write_text(
+        """
+playbook:
+  id: rejected-delivery
+entry_point: receiver
+steps:
+  receiver:
+    skill: cafe-spec
+    role: developer
+    on: {await_agent: publisher}
+  publisher:
+    skill: cafe-pr
+    role: developer
+    capability_requests: [cafe.pr.publish]
+    behavior: {completion: baton, publish_confirmation: true}
+    on: {confirm_output: publisher}
+"""
+    )
+    issue_dir = tmp_path / ".cafe/issues/rejected-delivery"
+    _write_local_only_publication_contract(issue_dir)
+    calls = []
+
+    class RejectingRuntime:
+        def __init__(self, **_kwargs):
+            pass
+
+        def run(self, **_kwargs):
+            calls.append("run")
+            assert len(calls) == 1, "a rejected handoff must not restart its publisher"
+            store = BlackboardStore(issue_dir)
+            state = store.load_or_create("receiver", playbook_id="rejected-delivery")
+            store.set_current_step(state, "publisher")
+            store.update_handoff_contract(
+                state,
+                from_step="publisher",
+                to_owner=HandoffOwner.AGENT,
+                to_step="publisher",
+                intent=HandoffIntent.AWAIT_AGENT,
+                status_code="INVALID_FEEDBACK_DELIVERY",
+                source="test",
+            )
+            return PlaybookRunResult(
+                final_step="publisher",
+                final_status_code="INVALID_FEEDBACK_DELIVERY",
+                completed=False,
+            )
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.commands.workflow.BlackboardWorkflowRuntime", RejectingRuntime),
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=MagicMock()),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "rejected-delivery"
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--issue",
+                "rejected-delivery",
+                "--playbook",
+                "rejected-delivery",
+                "--execute",
+            ],
+        )
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    assert "INVALID_FEEDBACK_DELIVERY" in result.stdout
+    assert "no automatic phase restart" in " ".join(result.stdout.split())
+    assert calls == ["run"]
+
+
 def test_workflow_command_runs_execute_mode(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     _write_local_only_publication_contract(tmp_path / ".cafe" / "issues" / "issue-200")

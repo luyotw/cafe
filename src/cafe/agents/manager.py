@@ -12,11 +12,12 @@ from cafe.agents.diagnostics import (
     is_transient_same_cli_error,
     sanitize_error_excerpt,
 )
-from cafe.constraints import Context, resolve, replace_prompt_block, material_digest
-from cafe.constraints.context import context_for_tools
-from cafe.constraints.resolver import PROVIDERS
 from cafe.agents.executor import AgentExecutionControl, AgentExecutionError, AgentExecutor
 from cafe.agents.transport_types import _validated_evidence_scalar
+from cafe.constraints import Context, material_digest, replace_prompt_block, resolve
+from cafe.constraints.context import context_for_tools
+from cafe.constraints.resolver import PROVIDERS
+from cafe.core.restart_policy import InvocationOrder
 from cafe.core.session import SessionManager, SessionStore
 from cafe.core.session_continuation import (
     SessionContinuation,
@@ -216,11 +217,11 @@ class AgentManager:
         chain = self._normalize_chain(self._configured_chain_for_agent(config))
         return chain[0].cli if chain else None
 
-    def _resolve_execution_chain(
+    def _resolve_chain_with_disposition(
         self,
         config: AgentConfig,
         phase_name: Optional[str] = None,
-    ) -> list[CliEntry]:
+    ) -> tuple[list[CliEntry], str]:
         """Build execution chain with fallback preference from last successful CLI."""
         chain = self._normalize_chain(self._configured_chain_for_agent(config))
 
@@ -230,11 +231,11 @@ class AgentManager:
 
         last_success = self._load_active_cli_from_file(config.name)
         if not last_success:
-            return chain
+            return chain, "absent"
 
         preferred_cli, _, recorded_primary, recorded_chain = last_success
         if recorded_chain is not None and recorded_chain != configured_chain:
-            return chain
+            return chain, "stale"
 
         # Sticky reorder is a within-config fallback preference: keep using the
         # CLI that last succeeded so we don't thrash mid-issue. But an explicit
@@ -242,21 +243,47 @@ class AgentManager:
         # configured primary differs from what it was when this CLI was recorded
         # (or the record predates this field), treat the sticky record as stale.
         if chain and recorded_primary is not None and recorded_primary != chain[0].cli:
-            return chain
+            return chain, "stale"
         if chain and recorded_primary is None and preferred_cli != chain[0].cli:
-            return chain
+            return chain, "stale"
 
         cli_values = [entry.cli for entry in chain]
         if preferred_cli not in cli_values:
-            return chain
+            return chain, "stale"
 
         reordered = [entry for entry in chain if entry.cli != preferred_cli]
         preferred_entry = next((entry for entry in chain if entry.cli == preferred_cli), None)
         if preferred_entry is None:
-            return chain
+            return chain, "stale"
 
         reordered.insert(0, preferred_entry)
-        return self._normalize_chain(reordered)
+        return self._normalize_chain(reordered), "retained"
+
+    def _resolve_execution_chain(
+        self, config: AgentConfig, phase_name: Optional[str] = None
+    ) -> list[CliEntry]:
+        return self._resolve_chain_with_disposition(config, phase_name)[0]
+
+    def resolve_invocation_order(
+        self,
+        agent_name: str,
+        phase_name: Optional[str] = None,
+        *,
+        configured_order: bool = False,
+    ) -> InvocationOrder:
+        """Resolve current effective models and preference once for an invocation."""
+        base = self.get_agent(agent_name).config
+        canonical = self._normalize_chain(self._configured_chain_for_agent(base))
+        effective, disposition = self._resolve_chain_with_disposition(base, phase_name)
+        if configured_order:
+            effective = canonical
+            if disposition == "retained":
+                disposition = "bypassed"
+        return InvocationOrder(
+            entries=tuple((e.cli.value, e.resolve_model(phase_name)) for e in effective),
+            configured_entries=tuple((e.cli.value, e.resolve_model(phase_name)) for e in canonical),
+            sticky_disposition=disposition,
+        )
 
     def _session_id_for_cli(
         self,
@@ -310,11 +337,16 @@ class AgentManager:
         agent_name: str,
         phase_name: Optional[str] = None,
         continuation: Optional[SessionContinuation] = None,
+        invocation_order: Optional[InvocationOrder] = None,
     ) -> AgentConfig:
         """Return an AgentConfig adjusted for the effective CLI continuation target."""
         base = self.get_agent(agent_name).config
         continuation = continuation or SessionContinuation.auto()
-        chain = self._resolve_execution_chain(base, phase_name=phase_name)
+        chain = (
+            [CliEntry(cli=AgentCLI(cli), model=model) for cli, model in invocation_order.entries]
+            if invocation_order is not None
+            else self._resolve_execution_chain(base, phase_name=phase_name)
+        )
         if not chain:
             return self._base_config_for_continuation(base, continuation)
 
@@ -427,6 +459,7 @@ class AgentManager:
         streaming_output_file: Optional[str] = None,
         phase_name: Optional[str] = None,
         continuation: Optional[SessionContinuation] = None,
+        invocation_order: Optional[InvocationOrder] = None,
         backup_context_callback: Optional[Callable[[AgentExecutionError], str]] = None,
         execution_control: AgentExecutionControl | None = None,
         constraint_context: Context | None = None,
@@ -461,9 +494,10 @@ class AgentManager:
                 agent_name,
                 phase_name=phase_name,
                 continuation=effective_continuation,
+                invocation_order=invocation_order,
             )
         except Exception:
-            if effective_continuation.is_exact:
+            if effective_continuation.is_exact or invocation_order is not None:
                 raise
             execution_config = self._base_config_for_continuation(
                 base_executor.config,
@@ -537,6 +571,7 @@ class AgentManager:
             except AgentExecutionError as e:
                 self._record_failed_attempt(
                     cli=executor.config.cli,
+                    model=executor.config.model,
                     chain_role="primary",
                     attempt=primary_attempt,
                     error=e,
@@ -674,6 +709,7 @@ class AgentManager:
         allowed_directories: Optional[List[str]] = None,
         phase_name: Optional[str] = None,
         continuation: Optional[SessionContinuation] = None,
+        invocation_order: Optional[InvocationOrder] = None,
         execution_control: AgentExecutionControl | None = None,
         constraint_context: Context | None = None,
     ) -> Optional[List[str]]:
@@ -683,6 +719,7 @@ class AgentManager:
                 agent_name,
                 phase_name=phase_name,
                 continuation=continuation,
+                invocation_order=invocation_order,
             )
         )
         return executor.preview_cli_command_args(
@@ -697,6 +734,7 @@ class AgentManager:
         agent_name: str,
         phase_name: Optional[str] = None,
         continuation: Optional[SessionContinuation] = None,
+        invocation_order: Optional[InvocationOrder] = None,
     ) -> Optional[dict[str, str]]:
         """Build the CLI environment that would be used for execution."""
         executor = AgentExecutor(
@@ -704,6 +742,7 @@ class AgentManager:
                 agent_name,
                 phase_name=phase_name,
                 continuation=continuation,
+                invocation_order=invocation_order,
             )
         )
         return executor.preview_cli_environment()
@@ -931,6 +970,7 @@ class AgentManager:
                 except AgentExecutionError as backup_error:
                     self._record_failed_attempt(
                         cli=entry.cli,
+                        model=backup_model,
                         chain_role="fallback",
                         attempt=backup_attempt,
                         error=backup_error,
@@ -987,15 +1027,14 @@ class AgentManager:
         chain_role: str,
         attempt: int,
         error: AgentExecutionError,
+        model: Optional[str] = None,
     ) -> None:
         """Append one safe diagnostic record for the current execute call."""
-        self._failed_attempts.append(
-            build_failed_attempt(
-                cli=cli,
-                chain_role=chain_role,
-                attempt=attempt,
-                error=error,
-            )
+        record = build_failed_attempt(
+            cli=cli,
+            chain_role=chain_role,
+            attempt=attempt,
+            error=error,
         )
         from cafe.core.cost import account_cost
         from cafe.core.usage import merge_token_usage_stats
@@ -1016,6 +1055,11 @@ class AgentManager:
             **merge_token_usage_stats(self._total_token_usage.model_dump(exclude_unset=True), usage)
         )
         error.accounting_usage = self._failed_cost_usage.model_copy(deep=True)
+        if model is not None:
+            from cafe.agents.diagnostics import sanitize_error_excerpt
+
+            record["model"] = sanitize_error_excerpt(ValueError(model))
+        self._failed_attempts.append(record)
 
     @classmethod
     def _transient_retry_delay(

@@ -62,7 +62,7 @@ class _AgentManager:
     def __init__(self) -> None:
         self.prompts: list[str] = []
         self.agent = SimpleNamespace(
-            config=SimpleNamespace(cli=AgentCLI.CODEX, session_id=None, model=None)
+            config=SimpleNamespace(native_review_configuration=None, cli=AgentCLI.CODEX, session_id=None, model=None)
         )
 
     def get_agent(self, _name: str):
@@ -240,13 +240,18 @@ def _prepare_intake_issue(
 
 
 def _prepare_builtin_issue(
-    tmp_path: Path, *, playbook_id: str
+    tmp_path: Path, *, playbook_id: str, input_method: str = "manual"
 ) -> tuple[GenericWorkflowStepExecutor, _AgentManager, Path, dict[str, object]]:
     """Prepare one built-in workflow for its first-step compatibility journey."""
     from tests.conftest import create_minimal_config
 
     create_minimal_config(tmp_path)
     _write_phase_chains(tmp_path)
+    if playbook_id == "bug":
+        (tmp_path / ".cafe" / "phases.yaml").write_text(
+            "diagnose:\n  name: David\n  clis:\n    - cli: codex\n      model: test-model\n",
+            encoding="utf-8",
+        )
     config_path = tmp_path / ".cafe" / "config.yaml"
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     config["playbook"] = playbook_id
@@ -269,7 +274,8 @@ def _prepare_builtin_issue(
                 "prepare",
                 issue_name,
                 "--no-interactive",
-                "--input-method=manual",
+                f"--input-method={input_method}",
+                *(["--issue-id=434"] if input_method == "github" else []),
                 "--no-auto-create-pr",
             ],
         )
@@ -277,8 +283,22 @@ def _prepare_builtin_issue(
 
     issue_dir = tmp_path / ".cafe" / "issues" / issue_name
     playbook = PlaybookLoader(project_root=tmp_path).load(playbook_id)
-    step = playbook["steps"]["spec"]
+    step = playbook["steps"][playbook["entry_point"]]
     manager = _AgentManager()
+    git_ops = _GitOps()
+    if playbook_id == "bug":
+        from cafe.core.git import GitOperations
+        from tests.integration.test_bug_playbook_runtime import DefectAgent, _git
+
+        _git(tmp_path, "init", "-b", "main")
+        _git(tmp_path, "config", "user.email", "test@example.com")
+        _git(tmp_path, "config", "user.name", "Test")
+        (tmp_path / ".gitignore").write_text(".cafe/\n.codex/\n__pycache__/\n")
+        (tmp_path / "calc.py").write_text("def twice(value):\n    return value * 2 - 1\n")
+        _git(tmp_path, "add", ".")
+        _git(tmp_path, "commit", "-m", "Seed bounded defect")
+        manager = DefectAgent(tmp_path, issue_dir)
+        git_ops = GitOperations(str(tmp_path))
     loader = SkillLoader(project_root=tmp_path)
     loader.discover()
     generic_phase = GenericPhase(
@@ -291,10 +311,49 @@ def _prepare_builtin_issue(
         playbook=playbook,
         generic_phase=generic_phase,
         agent_manager=manager,
-        git_ops=_GitOps(),
-        role_agent_map={"pm": "Roger"},
+        git_ops=git_ops,
+        role_agent_map={"pm": "Roger", "developer": "David"},
+        step_user_inputs=(
+            {"diagnose": "Fix twice(3): expected 6, observed 5."}
+            if input_method == "manual"
+            else {}
+        ),
     )
     return executor, manager, issue_dir, step
+
+
+@pytest.mark.parametrize("input_method", ["manual", "github"])
+def test_bug_selection_prepares_diagnosis_and_trusted_initial_input(
+    tmp_path: Path,
+    monkeypatch,
+    input_method: str,
+) -> None:
+    """Issue434 I1: both existing entry methods retain an explicit bug selection."""
+    monkeypatch.chdir(tmp_path)
+    executor, manager, issue_dir, step = _prepare_builtin_issue(
+        tmp_path,
+        playbook_id="bug",
+        input_method=input_method,
+    )
+    config = yaml.safe_load((issue_dir / "issue.yaml").read_text())
+    assert config["playbook_id"] == "bug"
+    assert config["initial_input"]["provider"] == (
+        "github_issue" if input_method == "github" else "manual_text"
+    )
+    assert (issue_dir / "diagnose").is_dir() and not (issue_dir / "spec").exists()
+    state = BlackboardStore(issue_dir).load_or_create("diagnose", playbook_id="bug")
+    content = "Fix twice(3): expected 6, observed 5."
+    with patch(
+        "cafe.core.hooks.native.InitialInputProviderResolver._fetch_github_issue",
+        return_value=content,
+    ) as fetch:
+        executor.execute_step("diagnose", step, state)
+    if input_method == "github":
+        fetch.assert_called_once_with(434)
+    else:
+        fetch.assert_not_called()
+    assert content in manager.inputs[0][2]
+    assert executor.playbook["entry_point"] == "diagnose"
 
 
 def test_custom_manual_intake_delivers_one_input_to_artifact_and_agent(
@@ -347,9 +406,7 @@ def test_builtin_workflows_prepare_and_seed_their_first_spec_step(
     """I3 — the shared built-in contract preserves prepare and first-step seeding."""
     monkeypatch.chdir(tmp_path)
     playbook_id = "standard"
-    executor, manager, issue_dir, step = _prepare_builtin_issue(
-        tmp_path, playbook_id=playbook_id
-    )
+    executor, manager, issue_dir, step = _prepare_builtin_issue(tmp_path, playbook_id=playbook_id)
     config = yaml.safe_load((issue_dir / "issue.yaml").read_text(encoding="utf-8"))
     assert config["spec"]["input_method"] == "manual"
     assert config["initial_input"] == {"provider": "manual_text"}

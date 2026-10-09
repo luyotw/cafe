@@ -115,6 +115,27 @@ esac
 
 "$SMOKE_VENV/bin/cafe" --help >/dev/null
 
+echo "Verifying packaged pricing commands and all four offline rate snapshots..."
+CAFE_PRICING_AUTO_UPDATE=0 CAFE_PRICING_CACHE_DIR="$RELEASE_TEMP_DIR/pricing-cache" \
+    "$SMOKE_VENV/bin/python" - "$SMOKE_VENV/bin/cafe" <<'PYPRICING'
+import json
+import subprocess
+import sys
+from cafe.core.cost import account_cost, summarize_cost
+from cafe.core.types import TokenUsage
+
+result = subprocess.run(
+    [sys.argv[1], "pricing", "status", "--provider", "all", "--json"],
+    capture_output=True, text=True, check=True,
+)
+cards = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+assert {card["provider"] for card in cards} == {"openai", "copilot", "cursor", "gemini"}
+assert all(card["version"] and card["models"] for card in cards)
+reported = account_cost(TokenUsage(total_cost_usd=0), cli="claude", model=None)
+assert reported.cost_records[0]["provenance"] == "reported"
+assert summarize_cost(reported.cost_records)["unknown"] == 0
+PYPRICING
+
 echo "Verifying packaged Manager and diagnostic chat commands..."
 "$SMOKE_VENV/bin/python" - "$SMOKE_VENV/bin/cafe" <<'PYCODE'
 import subprocess
@@ -130,8 +151,8 @@ for arguments, options in (
             raise SystemExit(f"Installed command {arguments!r} is missing {option}")
 PYCODE
 
-echo "Verifying packaged subagent planning playbooks..."
-for playbook in subagent-flow subagent-flow-qa; do
+echo "Verifying packaged planning, bug and compact playbooks..."
+for playbook in subagent-flow subagent-flow-qa bug streamlined; do
     "$SMOKE_VENV/bin/cafe" playbook validate "$playbook" --strict >/dev/null
 done
 
@@ -155,5 +176,63 @@ PYCONSTRAINTS
 
 "$SMOKE_VENV/bin/cafe" audit >/dev/null
 "$SMOKE_VENV/bin/cafe" skill validate --strict >/dev/null
+
+echo "Verifying packaged development delivery capabilities..."
+"$SMOKE_VENV/bin/python" - <<'PYCAPABILITIES'
+from pathlib import Path
+from cafe.core.capabilities import default_capability_definition_dirs, load_capability_registry
+registry = load_capability_registry(default_capability_definition_dirs(Path.cwd()))
+for name in ("cafe.github.pr.merge", "cafe.branch.integrate", "cafe.github.issue.create"):
+    definition = registry[name]
+    assert definition.approval == "required", name
+PYCAPABILITIES
+
+echo "Verifying packaged rate-limit restart policy and settings owner..."
+"$SMOKE_VENV/bin/python" - <<'PYRESTART'
+import json
+from importlib import import_module
+from importlib.resources import files
+
+from cafe.core.restart_policy import (
+    CONTINUE_LAST_SUCCESS, RECHECK_PRIORITY, SETTING, resolve_restart_policy,
+)
+
+assert resolve_restart_policy({}) == CONTINUE_LAST_SUCCESS
+assert resolve_restart_policy({"execution": {"rate_limit_restart_policy": RECHECK_PRIORITY}}) == RECHECK_PRIORITY
+owners = json.loads(files("cafe").joinpath("data/setting_updates.json").read_text())
+module, attribute = owners[SETTING].split(":", 1)
+assert callable(getattr(import_module(module), attribute)), SETTING
+PYRESTART
+
+start_stage upgrade
+echo "Verifying v0.7.5 to current wheel upgrade with an in-flight legacy PR task..."
+BASELINE_SOURCE="$RELEASE_TEMP_DIR/baseline"
+BASELINE_DIST="$RELEASE_TEMP_DIR/baseline-dist"
+UPGRADE_VENV="$RELEASE_TEMP_DIR/upgrade-venv"
+UPGRADE_PROJECT="$RELEASE_TEMP_DIR/upgrade-project"
+mkdir -p "$BASELINE_SOURCE" "$UPGRADE_PROJECT"
+git -C "$PROJECT_ROOT" archive v0.7.5 | tar -x -C "$BASELINE_SOURCE"
+uv build "$BASELINE_SOURCE" --wheel --out-dir "$BASELINE_DIST" >/dev/null
+uv venv "$UPGRADE_VENV" >/dev/null
+uv pip install --python "$UPGRADE_VENV/bin/python" "$BASELINE_DIST"/*.whl >/dev/null
+"$UPGRADE_VENV/bin/python" "$PROJECT_ROOT/scripts/release-upgrade-smoke.py" seed --root "$UPGRADE_PROJECT"
+uv pip install --python "$UPGRADE_VENV/bin/python" "${wheels[0]}" >/dev/null
+uv pip check --python "$UPGRADE_VENV/bin/python"
+"$UPGRADE_VENV/bin/python" "$PROJECT_ROOT/scripts/release-upgrade-smoke.py" verify --root "$UPGRADE_PROJECT"
+
+echo "Verifying v0.8.0 pending delivery, restart settings and historical cost upgrade..."
+CURRENT_SOURCE="$RELEASE_TEMP_DIR/current-baseline"
+CURRENT_DIST="$RELEASE_TEMP_DIR/current-baseline-dist"
+CURRENT_VENV="$RELEASE_TEMP_DIR/current-upgrade-venv"
+CURRENT_PROJECT="$RELEASE_TEMP_DIR/current-upgrade-project"
+mkdir -p "$CURRENT_SOURCE" "$CURRENT_PROJECT"
+git -C "$PROJECT_ROOT" archive v0.8.0 | tar -x -C "$CURRENT_SOURCE"
+uv build "$CURRENT_SOURCE" --wheel --out-dir "$CURRENT_DIST" >/dev/null
+uv venv "$CURRENT_VENV" >/dev/null
+uv pip install --python "$CURRENT_VENV/bin/python" "$CURRENT_DIST"/*.whl >/dev/null
+"$CURRENT_VENV/bin/python" "$PROJECT_ROOT/scripts/release-upgrade-smoke.py" seed-current --root "$CURRENT_PROJECT"
+uv pip install --python "$CURRENT_VENV/bin/python" "${wheels[0]}" >/dev/null
+uv pip check --python "$CURRENT_VENV/bin/python"
+"$CURRENT_VENV/bin/python" "$PROJECT_ROOT/scripts/release-upgrade-smoke.py" verify-current --root "$CURRENT_PROJECT"
 
 echo "Release checks passed for cafe-engine $expected_version."

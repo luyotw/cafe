@@ -19,6 +19,8 @@ from cafe.core.human_task_records import (
 from cafe.core.human_tasks import (
     AGENT_EXECUTION_INTERRUPTED_TASK_ID,
     AGENT_EXECUTION_INTERRUPTED_TRIGGER,
+    AGENT_EXECUTION_RETRY_DECISION,
+    HumanTaskPolicy,
     agent_execution_interrupted_human_task,
 )
 
@@ -280,11 +282,16 @@ class TaskInboxService:
                 recovery="Repair the duplicate durable records before retrying.",
                 task_id=identifier,
             )
-        return self._refresh_runtime_owned_contract(matches[0]) if refresh else matches[0]
+        return self._refresh_legacy_retry_contract(matches[0]) if refresh else matches[0]
 
     @staticmethod
-    def _refresh_runtime_owned_contract(record: _Record) -> _Record:
-        """Upgrade one still-pending builtin interruption task after a runtime update."""
+    def _refresh_legacy_retry_contract(record: _Record) -> _Record:
+        """Preserve the legacy additive fresh-session upgrade, never opt into recheck.
+
+        Current interruption snapshots remain unchanged until workflow supersession.
+        Only the original retry-only builtin contract receives its preexisting
+        fresh-session choice; issue settings cannot broaden the declaration here.
+        """
         task = record.task
         if (
             task.status is not HumanTaskStatus.PENDING
@@ -293,30 +300,33 @@ class TaskInboxService:
             or task.capability_approval is not None
             or task.trigger != AGENT_EXECUTION_INTERRUPTED_TRIGGER
             or task.policy_id != AGENT_EXECUTION_INTERRUPTED_TASK_ID
+            or task.continuations != {AGENT_EXECUTION_RETRY_DECISION: task.step}
         ):
             return record
-
-        policy, binding = agent_execution_interrupted_human_task(step_name=task.step)
-        expected_result = policy.model_dump(mode="json")
+        try:
+            snapshot = HumanTaskPolicy.model_validate(task.expected_result)
+        except ValueError:
+            return record
         if (
-            task.prompt == policy.prompt
-            and task.expected_result == expected_result
-            and task.continuations == binding.outcomes
+            snapshot.id != task.policy_id
+            or snapshot.pattern != task.trigger
+            or snapshot.input_schema != "decision"
+            or tuple(d.id for d in snapshot.decisions) != (AGENT_EXECUTION_RETRY_DECISION,)
         ):
             return record
-
+        policy, binding = agent_execution_interrupted_human_task(step_name=task.step)
         try:
             refreshed = HumanTaskRecordStore(record.issue_dir).refresh_pending_contract(
                 workflow_id=record.workflow_id,
                 task_id=task.id,
                 prompt=policy.prompt,
-                expected_result=expected_result,
+                expected_result=policy.model_dump(mode="json"),
                 continuations=binding.outcomes,
             )
         except HumanTaskRecordError as exc:
             raise TaskInboxError(
                 "task_contract_refresh_failed",
-                f"Pending interruption task {task.id} could not adopt the current contract: {exc}",
+                f"Pending interruption task {task.id} could not adopt legacy recovery choices: {exc}",
                 recovery="Inspect the owning workflow state before completing this task.",
                 task_id=task.id,
                 issue=record.issue,

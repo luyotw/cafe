@@ -80,7 +80,7 @@ def test_runtime_returns_report_format_rejection_to_same_producer(
     class ReportAgent:
         def __init__(self):
             self.agent = SimpleNamespace(
-                config=SimpleNamespace(
+                config=SimpleNamespace(native_review_configuration=None,
                     cli=AgentCLI.CODEX, session_id="report-session", model="test-model"
                 )
             )
@@ -731,7 +731,7 @@ def test_post_use_workspace_mismatch_prevents_all_publication_boundaries(
     class ContaminatingAgent:
         def __init__(self) -> None:
             self.agent = SimpleNamespace(
-                config=SimpleNamespace(cli=AgentCLI.CODEX, session_id="post-use", model=None)
+                config=SimpleNamespace(native_review_configuration=None, cli=AgentCLI.CODEX, session_id="post-use", model=None)
             )
 
         def get_agent(self, _name: str) -> SimpleNamespace:

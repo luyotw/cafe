@@ -1285,6 +1285,16 @@ def workflow(
                 str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
                 playbook_id=str(playbook_data["playbook"]["id"]),
             )
+            if result.final_status_code == "INVALID_FEEDBACK_DELIVERY":
+                console.print(
+                    f"[yellow]Workflow paused[/yellow] step={result.final_step} "
+                    f"status={result.final_status_code}; no automatic phase restart"
+                )
+                _print_workflow_pause_guidance(
+                    step_name=result.final_step,
+                    status_code=result.final_status_code,
+                )
+                return
             if (
                 not single_step
                 and result.final_status_code != "BATON_POSITION_REALIGNED"

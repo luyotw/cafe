@@ -4,11 +4,71 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.9.0] - 2026-10-09
+
+### Added
+
+- Record provider-reported, estimated and unavailable invocation costs with
+  reproducible rate metadata, partial coverage and consistent workflow/chat
+  summaries (#607).
+- Add `cafe pricing status` and `refresh` for OpenAI, Copilot, Cursor and Gemini,
+  with bundled offline rates and non-blocking official rate updates (#607).
+
 ### Fixed
 
 - Synchronize and verify bundled CLI-native helper skills as part of an approved
   CAFE version update, using the newly installed package instead of a checkout.
   Report partial completion if helper synchronization fails.
+- Preserve user-scoped installations and complete helper synchronization after
+  upgrades performed by older CAFE updaters (#608, #610).
+- Recover previously configured Codex daemons before workflow launch and event
+  callbacks, retaining the existing Manager session (#611).
+- Validate only selected host delivery actions when a completed delivery returns
+  to development for correction; retain unrelated capability receipt gates (#613).
+- Preserve all v0.8.0 workflows, restart policies and upgrade contracts while
+  integrating the newer develop changes into the release.
+
+See [the v0.9.0 release notes](docs/releases/v0.9.0.md) for accounting coverage,
+update behavior and compatibility guidance.
+
+## [0.8.0] - 2026-10-09
+
+### Added
+
+- Add the focused `bug` playbook with verified diagnosis, unchanged RED/GREEN
+  regression proof, minimal repair and independent review (#434).
+- Add compact kickoff and the `streamlined` playbook with cumulative approved
+  file scope, provider-observed native review and exact delivery readiness (#598).
+- Add development action review, approved integration/selected follow-up issue
+  execution and final result acceptance (#602). PR confirmation approves the
+  displayed actions and host capability boundaries together, with separate
+  durable approval records.
+- Add an issue-scoped rate-limit restart policy with the compatible sticky
+  default and a user-authorized configured-priority recovery choice, including
+  inspectable invocation order and stale-preference handling (#455).
+- Bound Manager same-session interruption recovery to three retries, 30 seconds
+  apart, with read-only accounting from existing durable tasks and results.
+
+### Fixed
+
+- Connect bug repair to delivery action review and result acceptance, including
+  independent review after delivery corrections.
+- Complete the compact delivery phase's role, output and execution profile
+  declarations so builtin audit and strict skill validation pass.
+- Keep missing delivery details outside canonical Todo List content so the
+  workflow requests clarification instead of reporting malformed output.
+- Preserve supervisor ownership, selected targets and correction recovery
+  across compact and full workflow handoffs.
+- Accept delivery results with an explicit cleanup, archive-only or leave-as-is
+  choice, bound to the displayed receipts and exact cleanup plan.
+- Preserve settled feedback across approved delivery continuations and resume
+  verified empty-feedback handoffs without restarting the PR phase (#455).
+- Retain the legacy retry-only task upgrade that offers an explicit fresh-session
+  recovery choice without enabling configured-priority recovery.
+- Hide unavailable preference diagnostics from user-facing kickoff contracts.
+
+See [the v0.8.0 release notes](docs/releases/v0.8.0.md) for capabilities,
+recovery limits and upgrade guidance.
 
 ## [0.7.5] - 2026-10-05
 
