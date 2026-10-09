@@ -151,6 +151,9 @@ class CapabilityManifest(StrictCapabilityModel):
         "open_current_pr",
         "sync_issue_comment",
         "notify_slack_human_task",
+        "merge_github_pr",
+        "integrate_local_branch",
+        "create_selected_issue",
     ]
     arguments: ObjectSchema
     outputs: ObjectSchema
@@ -295,6 +298,17 @@ def _resolve_boundary_tokens(
     manifest: CapabilityManifest, request: ExecutionRequest
 ) -> tuple[CapabilityEffects, Mapping[str, Tuple[str, ...]]]:
     replacements: Dict[str, str] = {}
+    if manifest.implementation in {
+        "merge_github_pr",
+        "integrate_local_branch",
+        "create_selected_issue",
+    }:
+        from cafe.delivery.capabilities import boundaries
+
+        try:
+            replacements.update(boundaries(request))
+        except (ValueError, KeyError, TypeError):
+            return CapabilityEffects(writes=(), network_destinations=(), browser_open=()), {}
     if manifest.id == CAPABILITY_PR_PUBLISH_ID:
         output = str(request.args.get("output") or "")
         output_path = Path(output)
@@ -567,10 +581,7 @@ class PrPublishRun:
 
 def pr_synced_event_from_receipt(receipt: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
     """Build the trusted PR event only from a successful receipt with a URL."""
-    if (
-        receipt.get("capability") != CAPABILITY_PR_PUBLISH_ID
-        or receipt.get("success") is not True
-    ):
+    if receipt.get("capability") != CAPABILITY_PR_PUBLISH_ID or receipt.get("success") is not True:
         return None
     outputs = receipt.get("outputs")
     if not isinstance(outputs, Mapping):
@@ -728,6 +739,15 @@ def run_pr_publish_capability(
     )
     if base_arg:
         cmd.extend(["--base", base_arg])
+
+    if args.get("remote"):
+        cmd.extend(["--remote", str(args["remote"])])
+
+    from cafe.core.git_delivery import PUBLICATION_TARGET_FIELDS
+
+    for field in PUBLICATION_TARGET_FIELDS:
+        if field in args:
+            cmd.extend(["--" + field.replace("_", "-"), str(args[field])])
 
     # Package-owned publishers need the same dependencies as this CAFE process,
     # rather than an unrelated project venv or the first python3 on PATH.
@@ -1219,11 +1239,20 @@ def _notify_slack_human_task_adapter(
     }, None
 
 
+def _delivery_adapter(**kwargs):
+    from cafe.delivery.capabilities import adapter
+
+    return adapter(**kwargs)
+
+
 HOST_CAPABILITY_ADAPTERS: Mapping[str, Any] = {
     "sync_pr": _sync_pr_adapter,
     "open_current_pr": _open_current_pr_adapter,
     "sync_issue_comment": _sync_issue_comment_adapter,
     "notify_slack_human_task": _notify_slack_human_task_adapter,
+    "merge_github_pr": _delivery_adapter,
+    "integrate_local_branch": _delivery_adapter,
+    "create_selected_issue": _delivery_adapter,
 }
 
 
@@ -1234,6 +1263,7 @@ def run_capability_request(
     capability_request: Mapping[str, Any],
     output_file: Path,
     timeout_sec: float = 600.0,
+    before_dispatch=None,
     trusted_human_task_notification: bool = False,
     notification_presentation: NotificationPresentation | None = None,
 ) -> PrPublishRun:
@@ -1319,6 +1349,7 @@ def run_capability_request(
         output_file=output_file,
         timeout_sec=timeout_sec,
         correlation_id=correlation_id,
+        before_dispatch=before_dispatch,
         notification_presentation=(
             notification_presentation if cap_id == CAPABILITY_SLACK_HUMAN_TASK_ID else None
         ),
@@ -1332,6 +1363,7 @@ def dispatch_revalidated_capability_request(
     output_file: Path,
     timeout_sec: float = 600.0,
     correlation_id: Optional[str] = None,
+    before_dispatch=None,
     notification_presentation: NotificationPresentation | None = None,
 ) -> PrPublishRun:
     """Dispatch one exact evaluation after its caller has established authorization."""
@@ -1366,8 +1398,11 @@ def dispatch_revalidated_capability_request(
     try:
         presentation_args = (
             {"notification_presentation": notification_presentation}
-            if manifest.implementation == "notify_slack_human_task" else {}
+            if manifest.implementation == "notify_slack_human_task"
+            else {}
         )
+        if before_dispatch is not None:
+            before_dispatch()
         outputs, event = adapter(
             repo_root=repo_root,
             request=request,

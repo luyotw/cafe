@@ -238,6 +238,12 @@ def decide_task_authority(
         return _facts(route, owner, "confirmation_user_required")
     if route == "need_permission" or task.get("capability_approval") is not None:
         return _facts(route, owner, "permission_or_capability")
+    if policy.get("contract_mode") == "compact":
+        # Compact contracts deliberately omit task_contract: unresolved tasks
+        # remain user-owned and cannot acquire Manager authority from evidence.
+        if task.get("id") != current_task_id or not current_task_id:
+            return _facts(route, owner, "stale_task_identity")
+        return _facts(route, owner, "compact_user_required")
     version = policy["schema_version"]
     key = {"phase": phase, "task_id": task_name}
     overall_clarification = (

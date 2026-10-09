@@ -1,5 +1,12 @@
 # Kickoff execution and direct formatter reference
 
+## Compact route
+
+For compact proposals, activate the same Manager authority only after user
+confirmation. Preserve exact paths, baseline, execution and delivery decisions.
+Run the owning scope adapter before launch/resume; a failed checkpoint requires
+the existing focused handoff. No full-only questionnaire is added.
+
 Read the preparation policy in `kickoff.md` first. These are the unchanged
 operating instructions for direct formatter invocation and for preparation,
 activation or polling after the required confirmation. A proposal-only session
@@ -37,8 +44,6 @@ Read this direct-CLI example only when using the formatter without that helper.
 python3 <skill-dir>/scripts/format_kickoff_contract.py <playbook-id> \
   --issue-name <issue-name> \
   --delivery-contract '<compact version-3 product JSON without closeout_plan>' \
-  --deliver '[["literal-executable", "literal-argument"]]' \
-  --deliver-description "<action and target in the conversation language>" \
   --cleanup '[["literal-executable", "literal-argument"]]' \
   --cleanup-description "<action and target in the conversation language>" \
   --update-preflight '<bounded runtime-update JSON>' \

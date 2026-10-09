@@ -9,6 +9,242 @@ import pytest
 from cafe.core.workflow_feedback import WorkflowFeedbackError, WorkflowFeedbackLedger
 
 
+def _supervisor_feedback(issue_dir, *, selected_target=False, selected_continuation="pr"):
+    """Persist one completed task through the owning record store."""
+    from cafe.core.human_task_records import HumanTaskRecordStore
+
+    playbook = {
+        "steps": {
+            "pr": {
+                "human_tasks": [
+                    {
+                        "trigger": "confirm_output",
+                        "task_id": "local-review",
+                        "outcomes": {} if selected_target else {"fix_now": "pr"},
+                        "allowed_targets": [selected_continuation] if selected_target else [],
+                        "feedback_delivery": {"source_kind": "local_review"},
+                    }
+                ]
+            }
+        }
+    }
+    records = HumanTaskRecordStore(issue_dir)
+    task = records.materialize(
+        workflow_id="workflow",
+        step="pr",
+        iteration=1,
+        trigger="confirm_output",
+        policy_id="local-review",
+        prompt="Review",
+        assignee_type="user",
+        expected_result={
+            "input_schema": "decision",
+            "decisions": [{
+                "id": "fix_now", "correction": True,
+                "requires_target": selected_target,
+            }],
+            "allowed_targets": [selected_continuation] if selected_target else [],
+        },
+        continuations={} if selected_target else {"fix_now": "pr"},
+    )
+    result = records.complete(
+        workflow_id="workflow",
+        task_id=task.id,
+        source="command",
+        payload={
+            "task": "local-review",
+            "decision": "fix_now",
+            "feedback": "Fix it.",
+            "declared_continuation": selected_continuation if selected_target else "pr",
+            "continuation": "develop",
+            "supervisor_handoff_to": "develop",
+            **({"target": selected_continuation} if selected_target else {}),
+        },
+    )
+    _, entry = WorkflowFeedbackLedger(issue_dir).record(
+        source_identity="local_review:pr:local-review:1",
+        source_kind="local_review",
+        target_step="develop",
+        content="Fix it.",
+    )
+    return playbook, task, result, entry
+
+
+def test_supervisor_feedback_ownership_binds_exact_completed_task_and_content(tmp_path):
+    from cafe.core.workflow_feedback import supervisor_feedback_receipts
+
+    playbook, task, result, entry = _supervisor_feedback(tmp_path)
+    receipts = supervisor_feedback_receipts(
+        tmp_path,
+        playbook=playbook,
+        workflow_id="workflow",
+        target_step="develop",
+        entries=(entry,),
+    )
+    assert receipts[entry.source_identity]["task_id"] == task.id
+    assert receipts[entry.source_identity]["result_id"] == result.id
+    assert (
+        supervisor_feedback_receipts(
+            tmp_path,
+            playbook=playbook,
+            workflow_id="workflow",
+            target_step="develop",
+            entries=(),
+        )
+        == {}
+    )
+
+
+@pytest.mark.parametrize("tamper", [None, "target", "declared", "allowed", "unexpected"])
+@pytest.mark.parametrize("continuation", ["pr", "_done"])
+def test_supervisor_selected_correction_target_is_bound_to_its_declaration(
+    tmp_path, tamper, continuation
+):
+    from cafe.core.human_task_records import HumanTaskRecordStore
+    from cafe.core.workflow_feedback import supervisor_feedback_receipts
+
+    playbook, _, _, entry = _supervisor_feedback(
+        tmp_path, selected_target=True, selected_continuation=continuation
+    )
+    if tamper:
+        path = HumanTaskRecordStore(tmp_path).file_path
+        raw = json.loads(path.read_text())
+        if tamper == "target":
+            raw["results"][0]["payload"]["target"] = "qa"
+        elif tamper == "declared":
+            raw["results"][0]["payload"]["declared_continuation"] = "qa"
+        elif tamper == "allowed":
+            raw["tasks"][0]["expected_result"]["allowed_targets"] = ["qa"]
+        else:
+            raw["tasks"][0]["expected_result"]["decisions"][0]["requires_target"] = False
+        path.write_text(json.dumps(raw))
+    if tamper:
+        with pytest.raises(WorkflowFeedbackError):
+            supervisor_feedback_receipts(
+                tmp_path, playbook=playbook, workflow_id="workflow",
+                target_step="develop", entries=(entry,),
+            )
+    else:
+        receipts = supervisor_feedback_receipts(
+            tmp_path, playbook=playbook, workflow_id="workflow",
+            target_step="develop", entries=(entry,),
+        )
+        assert receipts[entry.source_identity]["declared_continuation"] == continuation
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("content", "Changed request"),
+        ("source_kind", "forged"),
+        ("target_step", "qa"),
+    ],
+)
+def test_supervisor_feedback_rejects_stale_or_forged_entry(tmp_path, field, value):
+    from dataclasses import replace
+    from cafe.core.workflow_feedback import supervisor_feedback_receipts
+
+    playbook, _, _, entry = _supervisor_feedback(tmp_path)
+    with pytest.raises(WorkflowFeedbackError):
+        supervisor_feedback_receipts(
+            tmp_path,
+            playbook=playbook,
+            workflow_id="workflow",
+            target_step="develop",
+            entries=(replace(entry, **{field: value}),),
+        )
+
+
+@pytest.mark.parametrize(
+    "section,field,value",
+    [
+        ("tasks", "status", "cancelled"),
+        ("tasks", "iteration", 2),
+        ("tasks", "continuations", {"fix_now": "qa"}),
+        ("results", "workflow_id", "another-workflow"),
+        ("payload", "task", "forged-task"),
+        ("payload", "declared_continuation", "qa"),
+        ("payload", "continuation", "qa"),
+        ("payload", "supervisor_handoff_to", "qa"),
+        ("payload", "feedback", "Changed durable request"),
+    ],
+)
+def test_supervisor_receipt_never_accepts_stale_task_or_result(tmp_path, section, field, value):
+    from cafe.core.human_task_records import HumanTaskRecordStore
+    from cafe.core.workflow_feedback import supervisor_feedback_receipts
+
+    playbook, _, _, entry = _supervisor_feedback(tmp_path)
+    path = HumanTaskRecordStore(tmp_path).file_path
+    raw = json.loads(path.read_text())
+    if section == "payload":
+        raw["results"][0]["payload"][field] = value
+    else:
+        raw[section][0][field] = value
+    path.write_text(json.dumps(raw))
+    with pytest.raises((WorkflowFeedbackError, ValueError)):
+        supervisor_feedback_receipts(
+            tmp_path,
+            playbook=playbook,
+            workflow_id="workflow",
+            target_step="develop",
+            entries=(entry,),
+        )
+
+
+def test_supervisor_receipt_rejects_stale_task_when_receiver_is_also_allowed(tmp_path):
+    from cafe.core.human_task_records import HumanTaskRecordStore
+    from cafe.core.workflow_feedback import supervisor_feedback_receipts
+
+    playbook, _, _, entry = _supervisor_feedback(tmp_path, selected_target=True)
+    binding = playbook["steps"]["pr"]["human_tasks"][0]
+    binding["allowed_targets"].append("develop")
+    binding["feedback_delivery"].update(todo_source="local_review", todo_id_prefix="LR")
+    playbook["steps"]["develop"] = {}
+    path = HumanTaskRecordStore(tmp_path).file_path
+    raw = json.loads(path.read_text())
+    raw["tasks"][0]["expected_result"]["allowed_targets"].append("develop")
+    raw["tasks"][0]["iteration"] = 2
+    path.write_text(json.dumps(raw))
+
+    with pytest.raises(WorkflowFeedbackError, match="ownership proof is missing"):
+        supervisor_feedback_receipts(
+            tmp_path, playbook=playbook, workflow_id="workflow",
+            target_step="develop", entries=(entry,),
+        )
+
+
+def test_later_normal_curator_task_is_not_owned_by_an_older_supervisor(tmp_path):
+    from cafe.core.human_task_records import HumanTaskRecordStore
+    from cafe.core.workflow_feedback import supervisor_feedback_receipts
+
+    playbook, original, _, _ = _supervisor_feedback(tmp_path, selected_target=True)
+    binding = playbook["steps"]["pr"]["human_tasks"][0]
+    binding["allowed_targets"].append("develop")
+    binding["feedback_delivery"].update(todo_source="local_review", todo_id_prefix="LR")
+    records = HumanTaskRecordStore(tmp_path)
+    policy = {**original.expected_result, "allowed_targets": ["pr", "develop"]}
+    task = records.materialize(
+        workflow_id="workflow", step="pr", iteration=2, trigger="confirm_output",
+        policy_id="local-review", prompt="Review next revision", assignee_type="user",
+        expected_result=policy, continuations={},
+    )
+    records.complete(
+        workflow_id="workflow", task_id=task.id, source="command",
+        payload={"task": "local-review", "decision": "fix_now", "target": "develop",
+                 "feedback": "Next correction", "declared_continuation": "develop",
+                 "continuation": "develop"},
+    )
+    _, entry = WorkflowFeedbackLedger(tmp_path).record(
+        source_identity="local_review:pr:local-review:2", source_kind="local_review",
+        target_step="develop", content="Next correction",
+    )
+
+    assert supervisor_feedback_receipts(
+        tmp_path, playbook=playbook, workflow_id="workflow",
+        target_step="develop", entries=(entry,),
+    ) == {}
+
+
 def _persisted_entry(**lifecycle: bool) -> dict[str, object]:
     return {
         "source_identity": "github-pr:348:comment-1",

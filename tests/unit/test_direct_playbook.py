@@ -21,7 +21,7 @@ def test_direct_is_the_reviewed_no_spec_no_plan_path() -> None:
     pr = playbook.steps["pr"]
 
     assert playbook.entry_point == "develop"
-    assert list(playbook.steps) == ["develop", "review", "pr"]
+    assert list(playbook.steps) == ["develop", "review", "pr", "deliver"]
     assert develop.initial_input.providers == ["manual_text", "github_issue"]
     assert develop.initial_input.bind.artifact is None
     assert develop.initial_input.bind.prompt_context == "user_input"

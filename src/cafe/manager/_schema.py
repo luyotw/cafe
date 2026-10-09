@@ -9,6 +9,7 @@ from typing import Any, Mapping
 
 from cafe.core.packet_io import canonical_json
 from cafe.core.types import AgentCLI
+from cafe.core.file_scope import validate_scope_paths
 
 from .constraints import capture_constraints, validate_evidence
 from .delivery import normalize_delivery_contract, validate_closeout_plan_policy
@@ -90,6 +91,75 @@ _POLICY_SEMANTIC_FIELDS = (
     "checkout",
 )
 _NEW_POLICY_SEMANTIC_FIELDS = _POLICY_SEMANTIC_FIELDS + ("task_contract",)
+_COMPACT_FIELDS = ("contract_mode", "file_scope", "review_configuration", "execution")
+_COMPACT_PROPOSAL_KEYS = _PROPOSAL_KEYS | set(_COMPACT_FIELDS)
+_COMPACT_CONTRACT_KEYS = _COMPACT_PROPOSAL_KEYS | {"schema_version", "identity", "revision", "provenance"}
+_COMPACT_SEMANTIC_FIELDS = _POLICY_SEMANTIC_FIELDS + _COMPACT_FIELDS
+
+
+def validate_compact_proposal(proposal):
+    """Validate compact policy directly without fabricating full-only fields."""
+    raw = _mapping(proposal, "compact proposal", keys=_COMPACT_PROPOSAL_KEYS)
+    if raw["contract_mode"] != "compact":
+        raise ValueError("invalid compact contract mode")
+    scope = _mapping(raw["file_scope"], "file_scope", keys={"paths", "baseline_commit", "preexisting"})
+    scope["paths"] = validate_scope_paths(scope["paths"])
+    import re
+    if not isinstance(scope["baseline_commit"], str) or not re.fullmatch(r"[a-f0-9]{40}", scope["baseline_commit"]):
+        raise ValueError("file scope baseline must be a commit SHA")
+    if not isinstance(scope["preexisting"], list) or len(scope["preexisting"]) > 1024:
+        raise ValueError("preexisting workspace evidence must be bounded")
+    for record in scope["preexisting"]:
+        if not isinstance(record, dict) or set(record) != {"path", "content"}:
+            raise ValueError("preexisting evidence must identify literal files and content")
+        validate_scope_paths([record["path"]])
+        if record["content"] != "missing" and not re.fullmatch(r"[a-f0-9]{64}", record["content"]):
+            raise ValueError("preexisting evidence requires content fingerprints")
+    execution = _mapping(raw["execution"], "execution")
+    legacy_fields = {"playbook_id", "graph_digest"}
+    if set(execution) not in (legacy_fields, legacy_fields | {"review_policy"}):
+        raise ValueError("execution has unsupported or missing fields")
+    _string(execution["playbook_id"], "playbook_id")
+    if not re.fullmatch(r"[a-f0-9]{64}", execution["graph_digest"]):
+        raise ValueError("invalid graph digest")
+    if execution.get("review_policy") not in (None, "single_native"):
+        raise ValueError("unsupported declared review policy")
+    phases = _validate_phases(raw["phases"])
+    # Legacy contracts retain their strict reviewer validation. Only an
+    # explicitly declared graph without native review permits absent config.
+    no_review = "review_policy" in execution and execution["review_policy"] is None
+    review = None
+    if raw["review_configuration"] is not None or not no_review:
+        review = _mapping(raw["review_configuration"], "review_configuration", keys={
+            "cli", "model", "provider_version", "read_only", "model_behavior", "checkpoint_interface"})
+        if review["read_only"] is not True or review["checkpoint_interface"] != "parent_command":
+            raise ValueError("native review requires read-only checkpoint support")
+        if review["model_behavior"] not in {"inherits_parent", "independent_override"}:
+            raise ValueError("invalid effective reviewer model behavior")
+        for field in ("cli", "model", "provider_version"):
+            _string(review[field], "review_configuration." + field)
+        if not any(e["cli"] == review["cli"] and (review["model_behavior"] == "independent_override"
+                        or e["model"] == review["model"])
+                   for p in phases for e in p["chain"]):
+            raise ValueError("review configuration must belong to the selected chain")
+    delivery = normalize_delivery_contract(raw["delivery_contract"])
+    if delivery["schema_version"] != 4:
+        raise ValueError("compact contract requires compact delivery")
+    reactive = _mapping(raw["reactive_user_handoffs"], "reactive_user_handoffs",
+                       keys={"need_clarification", "need_permission", "alignment_checkpoint"})
+    if any(v != "user_required" for v in reactive.values()):
+        raise ValueError("compact unresolved authority remains user-owned")
+    result = {"contract_mode": "compact", "file_scope": scope, "execution": execution,
+            "review_configuration": review, "phases": phases, "delivery_contract": delivery,
+            "locales": _validate_locales(raw["locales"]),
+            "confirmation_contract": _validate_confirmation(raw["confirmation_contract"]),
+            "reactive_user_handoffs": reactive,
+            "proactive_review": _validate_proactive(raw["proactive_review"], phases),
+            "manager": _validate_manager(raw["manager"]), "checkout": _validate_checkout(raw["checkout"])}
+
+    from ._compact_capacity import require_compact_capacity
+    require_compact_capacity(result)
+    return result
 
 
 def _mapping(value: Any, label: str, *, keys: set[str] | None = None) -> dict[str, Any]:
@@ -310,6 +380,8 @@ def _validate_checkout(value: Any) -> dict[str, Any]:
 
 
 def _validate_policy(proposal: Mapping[str, Any]) -> dict[str, Any]:
+    if proposal.get("contract_mode") == "compact":
+        return validate_compact_proposal(proposal)
     raw = _mapping(proposal, "confirmed proposal", keys=set(proposal))
     if _RUNTIME_KEYS & set(raw):
         raise ValueError("mutable runtime state does not belong in the confirmed contract")
@@ -335,8 +407,8 @@ def _validate_policy(proposal: Mapping[str, Any]) -> dict[str, Any]:
         "checkout": _validate_checkout(raw["checkout"]),
     }
     delivery = normalize_delivery_contract(raw["delivery_contract"])
-    if delivery["schema_version"] != 3:
-        raise ValueError("Manager v8 requires Delivery Contract version 3")
+    if delivery["schema_version"] not in {3, 5}:
+        raise ValueError("Manager v8 requires legacy or phase-owned Delivery Contract facts")
     validate_closeout_plan_policy(delivery["closeout_plan"], allow_squash=None)
     result["delivery_contract"] = delivery
     for field in result["reactive_user_handoffs"]:
@@ -418,6 +490,7 @@ def _semantic_projection_from_validated(contract: Mapping[str, Any]) -> dict[str
     version = contract.get("schema_version")
     legacy = version in {3, 4}
     fields = ("identity",) + (
+        _COMPACT_SEMANTIC_FIELDS if contract.get("contract_mode") == "compact" else
         _LEGACY_POLICY_SEMANTIC_FIELDS
         if legacy
         else _NEW_POLICY_SEMANTIC_FIELDS if version == SCHEMA_VERSION else _POLICY_SEMANTIC_FIELDS
@@ -432,6 +505,7 @@ def freshness_semantic_facts(contract: Mapping[str, Any]) -> dict[str, Any]:
     """Project the current policy into the caller's fresh-facts envelope."""
     current = validate_contract(contract)
     fields = (
+        _COMPACT_SEMANTIC_FIELDS if current.get("contract_mode") == "compact" else
         _NEW_POLICY_SEMANTIC_FIELDS
         if current["schema_version"] == SCHEMA_VERSION
         else _POLICY_SEMANTIC_FIELDS
@@ -487,6 +561,8 @@ def build_initial_contract(
     if provenance_kind not in {"initial", "user_reconfirmation"}:
         raise ValueError("provenance kind is invalid")
     policy = _validate_policy(proposal)
+    if policy.get("contract_mode") == "compact" and confirmed_by != "user":
+        raise ValueError("compact activation requires explicit user confirmation")
     document: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "identity": {
@@ -530,6 +606,8 @@ def validate_contract(
             else _NEW_CONTRACT_KEYS if version_is_int and raw_version == SCHEMA_VERSION else _CONTRACT_KEYS
         )
     )
+    if raw.get("contract_mode") == "compact":
+        keys = _COMPACT_CONTRACT_KEYS
     if set(raw) != keys:
         raise ValueError("contract has unsupported or missing fields")
     schema_version = raw["schema_version"]

@@ -13,6 +13,8 @@ import pytest
 
 from cafe.core.audit_events import AuditEventStore
 from cafe.playbooks.loader import PlaybookLoader
+from tests.unit.test_compact_contract import compact_proposal
+from tests.unit.test_compact_kickoff import compact_request
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = PROJECT_ROOT / "src/cafe/data/skills/use-cafe-workflow/scripts/render_workflow_progress.py"
@@ -73,6 +75,230 @@ def _contract() -> dict[str, object]:
             ]
         },
     }
+
+
+def _delivery_graph():
+    binding = {
+        "approval_step": "package", "approval_task": "actions",
+        "result_artifact": "receipt", "result_task": "accept",
+    }
+    return {
+        "playbook": {"id": "delivery"}, "entry_point": "build",
+        "steps": {
+            "build": {"on": {"await_agent": "package"}},
+            "package": {
+                "delivery": binding,
+                "on": {"confirm_output": "package", "manual_handoff": "build"},
+                "allowed_goto": ["build"],
+                "human_tasks": [{"trigger": "confirm_output", "outcomes": {
+                    "integrate": "ship", "revise": "build",
+                }}],
+            },
+            "ship": {"delivery": binding, "output_artifact": "receipt",
+                     "on": {"confirm_output": "ship", "manual_handoff": "build"}},
+        },
+    }
+
+
+def test_delivery_replacement_preserves_normal_progress_node_count():
+    module = _module()
+    legacy_graph = _delivery_graph()
+    legacy_graph["steps"].pop("ship")
+    for step in legacy_graph["steps"].values():
+        step.pop("delivery", None)
+    policy = {"confirmation_contract": {"mandatory_human_stops": ["package"]}}
+    old = module.render_progress(
+        playbook=legacy_graph, contract=policy,
+        manager_state={"deliver": "pending", "cleanup": "pending"},
+    )
+    policy["confirmation_contract"]["mandatory_human_stops"].append("ship")
+    new = module.render_progress(
+        playbook=_delivery_graph(), contract=policy, manager_state={"cleanup": "pending"},
+    )
+    assert len(old.split("\n│\n")) == len(new.split("\n│\n")) == 5
+    assert "○ package: user confirmation (manager may not act) · Pending\n│\n○ ship" in new
+    assert "ship: user confirmation" not in new
+    assert module._forward_targets(_delivery_graph(), "package") == ["ship"]
+
+
+@pytest.mark.parametrize("state,decision,iteration,blocked,expected", [
+    ("pending", None, 1, False, "Awaiting confirmation"),
+    ("completed", "confirm", 1, False, "Completed"),
+    ("completed", "revise", 1, False, "Returned"),
+    ("completed", "invalid", 1, False, "Unknown"),
+    ("pending", None, 1, True, "Blocked"),
+    ("completed", "confirm", 2, False, "Pending"),
+])
+def test_single_delivery_node_retains_evidence_based_acceptance(
+    tmp_path, state, decision, iteration, blocked, expected
+):
+    issue_dir = tmp_path / "issue"
+    issue_dir.mkdir()
+    events = [{"event_type": "step_completed", "step": "ship", "data": {"iteration": iteration}}]
+    if blocked:
+        events.append({"event_type": "workflow_blocked", "step": "ship", "data": {}})
+    _write_runtime_state(issue_dir, {"workflow_id": "wf", "current_step": "user", "events": events})
+    (issue_dir / "human_tasks.json").write_text(json.dumps({
+        "tasks": [{"id": "outcome", "step": "ship", "iteration": 1,
+                   "trigger": "confirm_output", "status": state,
+                   "continuations": {"confirm": "_done", "revise": "ship"},
+                   "expected_result": {"decisions": [
+                       {"id": "confirm"}, {"id": "revise", "correction": True},
+                   ]}}],
+        "results": [] if decision is None else [{"task_id": "outcome", "payload": {"decision": decision}}],
+    }))
+    rendered = _module().render_progress(
+        playbook=_delivery_graph(), issue_dir=issue_dir,
+        contract={"confirmation_contract": {"mandatory_human_stops": ["ship"]}},
+        manager_state={"cleanup": "pending"},
+    )
+    ship_nodes = [line for line in rendered.splitlines() if "ship" in line]
+    assert len(ship_nodes) == 1
+    assert expected in ship_nodes[0]
+
+
+@pytest.fixture
+def compact_task_state(compact_proposal, compact_request):
+    """Create a real compact authority and a durable user-owned task."""
+    from datetime import datetime, timezone
+    from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+    from cafe.core.human_task_records import HumanTaskRecordStore
+    from cafe.manager.api import ActivateConfirmedContract, activate_confirmed_contract
+    from cafe.manager._store import load_contract
+
+    issue_dir = Path(compact_request["project_root"]) / ".cafe" / "issues" / "sample"
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("build", playbook_id="selected")
+    compact_proposal["confirmation_contract"] = {
+        "user_required": [],
+        "manager_confirmable": [],
+        "mandatory_human_stops": [],
+    }
+    activate_confirmed_contract(
+        ActivateConfirmedContract(
+            issue_dir,
+            "sample",
+            state.workflow_id,
+            "user",
+            datetime.now(timezone.utc),
+            compact_proposal,
+        )
+    )
+    store.set_current_step(state, "user")
+    store.update_handoff_contract(
+        state,
+        from_step="build",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.NEED_CLARIFICATION,
+    )
+    task = HumanTaskRecordStore(issue_dir).materialize(
+        workflow_id=state.workflow_id,
+        step="build",
+        iteration=1,
+        trigger="need_clarification",
+        policy_id="clarification-feedback",
+        prompt="Clarify",
+        expected_result={
+            "id": "clarification-feedback",
+            "pattern": "revision_feedback",
+            "prompt": "Clarify",
+            "input_schema": "feedback",
+        },
+        continuations={"submit": "build"},
+        assignee_type="user",
+    )
+    contract, _ = load_contract(issue_dir)
+    assert contract["schema_version"] == 8
+    assert "task_contract" not in contract
+    return issue_dir, task, contract
+
+
+def test_compact_pending_task_renders_with_user_owned_authority(compact_task_state):
+    from cafe.manager.task_inspection import inspect_task_authority
+
+    issue_dir, task, contract = compact_task_state
+    before = {path: path.read_bytes() for path in issue_dir.rglob("*.json")}
+    authority = inspect_task_authority(issue_dir, task.id)
+    assert authority["resolution_owner"] == "user_required"
+    assert authority["allowed"] is False
+    rendered = _module().render_progress(
+        playbook=PlaybookLoader(project_root=issue_dir.parent.parent.parent).load("selected"),
+        contract=contract,
+        locale="en-US",
+        issue_dir=issue_dir,
+        driver_state=_unknown_closeout_state(),
+    )
+    assert "build" in rendered
+    assert _module()._active_task_authority(issue_dir)["resolution_owner"] == "user_required"
+    assert {path: path.read_bytes() for path in issue_dir.rglob("*.json")} == before
+
+
+@pytest.mark.parametrize(
+    "guard,reason",
+    [
+        ("compact", "compact_user_required"),
+        ("permission", "permission_or_capability"),
+        ("capability", "permission_or_capability"),
+        ("mandatory", "mandatory_human_stop"),
+        ("issue", "contract_identity_mismatch"),
+        ("workflow", "contract_identity_mismatch"),
+        ("task", "stale_task_identity"),
+    ],
+)
+def test_compact_authority_retains_identity_and_human_stops(compact_task_state, guard, reason):
+    from cafe.core.task_inbox import TaskInboxService
+    from cafe.manager.task_authority import decide_task_authority
+
+    issue_dir, durable_task, contract = compact_task_state
+    task = TaskInboxService(issue_dir.parent.parent).inspect_read_only(durable_task.id).to_dict()
+    current_task_id = durable_task.id
+    if guard == "permission":
+        task["provenance"]["trigger"] = "need_permission"
+    elif guard == "capability":
+        task["capability_approval"] = {"capability": "cafe.pr.publish"}
+    elif guard == "mandatory":
+        from cafe.manager._schema import build_initial_contract
+
+        task["provenance"]["trigger"] = "confirm_output"
+        contract["confirmation_contract"]["mandatory_human_stops"] = ["build"]
+        contract["confirmation_contract"]["user_required"] = ["build"]
+        contract = build_initial_contract(
+            proposal={
+                key: value
+                for key, value in contract.items()
+                if key not in {"schema_version", "identity", "revision", "provenance"}
+            },
+            issue_name="sample",
+            workflow_id=durable_task.workflow_id,
+            confirmed_by="user",
+            confirmed_at="2026-10-07T00:00:00+00:00",
+        )
+    elif guard == "issue":
+        task["issue"] = "other"
+    elif guard == "workflow":
+        task["workflow_id"] = "other"
+    elif guard == "task":
+        current_task_id = "stale-task"
+    result = decide_task_authority(
+        task=task,
+        contract=contract,
+        current_task_id=current_task_id,
+        response={
+            "task": durable_task.policy_id,
+            "human_task_id": "stale-task",
+            "feedback": "Old answer",
+        },
+        evidence={
+            "basis": "confirmed",
+            "exhaustive": True,
+            "citations": [{"source": "artifact:stale", "excerpt": "Old evidence"}],
+        },
+        confirmed_sources={"artifact:stale": "Old evidence"},
+    )
+    assert result["allowed"] is False
+    assert result["resolution_owner"] == "user_required"
+    assert result["evidence_reason"] == reason
 
 
 def _unknown_closeout_state() -> dict[str, str]:
@@ -475,6 +701,7 @@ def test_direct_playbook_and_archived_issue_cli_are_supported(tmp_path: Path) ->
         json.dumps(
             {
                 "policy": {
+                    "delivery_contract": {"schema_version": 3},
                     "confirmation_contract": {
                         "user_required": [],
                         "driver_confirmable": [],
@@ -513,7 +740,7 @@ def test_direct_playbook_and_archived_issue_cli_are_supported(tmp_path: Path) ->
     assert "\ufe0f" not in result.stdout
 
 
-def test_cli_requires_both_fixed_closeout_states() -> None:
+def test_cli_requires_cleanup_without_duplicate_delivery() -> None:
     base = [
         sys.executable,
         str(SCRIPT),
@@ -537,9 +764,9 @@ def test_cli_requires_both_fixed_closeout_states() -> None:
     )
 
     assert missing_state.returncode == 2
-    assert "must provide required closeout items: deliver, cleanup" in missing_state.stderr
+    assert "must provide required closeout items: cleanup" in missing_state.stderr
     assert missing_cleanup.returncode == 2
-    assert "missing required closeout item: cleanup" in missing_cleanup.stderr
+    assert "runtime phase" in missing_cleanup.stderr
 
 
 def test_previous_revision_does_not_approve_the_new_iteration(tmp_path: Path) -> None:

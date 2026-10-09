@@ -12,16 +12,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _kickoff_test_support import load_kickoff_module
 
 
-def test_delivery_template_is_reusable_only_while_its_source_is_valid(tmp_path):
+def test_obsolete_delivery_template_is_inspectable_but_not_reusable(tmp_path):
     module = load_kickoff_module("kickoff_delivery")
     now = datetime.now(timezone.utc)
     record = _record(module, tmp_path, observed_at=now)
-    record["delivery_template"] = {"deliver": [["gh", "pr", "merge", "--merge"]],
-                                   "deliver_description": ["Merge the PR for {issue_name}."]}
+    record["delivery_template"] = {"deliver": [["gh", "pr", "merge", "--merge"]], "deliver_description": ["Merge the PR."]}
+    refreshed = module.refresh_delivery({}, evidence=record, project_root=tmp_path, now=now)
+    assert not refreshed["refreshed"]
+    assert refreshed["diagnostic"] == "obsolete_manager_delivery_template"
+    warm = module.assess_delivery(record, project_root=tmp_path, now=now)
+    assert warm["delivery_template"] is None and warm["legacy_template_diagnostic"]
+    assert "delivery_template" in record
+    record.pop("delivery_template")
     refreshed = module.refresh_delivery({}, evidence=record, project_root=tmp_path, now=now)
     assert refreshed["refreshed"]
-    warm = module.assess_delivery(refreshed["record"], project_root=tmp_path, now=now)
-    assert warm["delivery_template"] == record["delivery_template"]
     (tmp_path / "docs/delivery.md").write_text("New delivery route")
     stale = module.assess_delivery(refreshed["record"], project_root=tmp_path, now=now)
     assert stale["status"] == "miss" and stale["delivery_template"] is None

@@ -38,6 +38,9 @@ def _iter_edges(model: PlaybookDefinition) -> List[Tuple[str, str, str]]:
     for step_name, step in model.steps.items():
         for intent_key, target in step.on.items():
             edges.append((step_name, str(intent_key), normalize_route_target(target)))
+        for task in step.human_tasks:
+            for outcome, target in task.outcomes.items():
+                edges.append((step_name, f"{task.task_id}.{outcome}", normalize_route_target(target)))
     return edges
 
 
@@ -63,6 +66,7 @@ def _reachable_step_names(model: PlaybookDefinition) -> Set[str]:
         if step is None:
             continue
         targets = [*step.on.values(), *step.allowed_goto]
+        targets.extend(target for task in step.human_tasks for target in task.outcomes.values())
         for raw_target in targets:
             tgt = normalize_route_target(raw_target)
             if tgt in {"done", "user"}:

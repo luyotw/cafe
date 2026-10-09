@@ -483,3 +483,71 @@ class ClaudeCLI(AbstractCLI):
     def create_session(self) -> str:
         """Claude sessions are created by the real prompt execution."""
         return ""
+    def project_native_review(self, command: List[str]) -> List[str]:
+        configuration = self.config.native_review_configuration
+        if configuration is None:
+            return command
+        if (configuration.get("cli") != "claude" or configuration.get("read_only") is not True or
+                configuration.get("checkpoint_interface") != "parent_command"):
+            raise ValueError("unsupported native reviewer configuration")
+        behavior = configuration.get("model_behavior")
+        if behavior == "inherits_parent" and configuration.get("model") != self.config.model:
+            raise ValueError("inherited reviewer model differs from the effective parent")
+        if behavior not in {"inherits_parent", "independent_override"}:
+            raise ValueError("unsupported native reviewer model behavior")
+        agent = {"description": "Independent read-only implementation reviewer",
+                 "prompt": "Review correctness, completeness, unnecessary changes, architecture and tests. Never modify files or workflow state. Return explicit blocking/nonblocking findings.",
+                 "tools": ["Read", "Glob", "Grep"],
+                 "model": "inherit" if behavior == "inherits_parent" else configuration["model"]}
+        return [*command, "--agents", json.dumps({"cafe_reviewer": agent})]
+
+    def native_review_observations(self, output_lines: List[str], *, observed_at=None) -> List[dict]:
+        """Retain bounded protocol metadata, never reviewer text or tool payloads."""
+        from datetime import datetime, timezone
+        invocations = {}
+        for line in output_lines:
+            try:
+                record = json.loads(line)
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(record, dict) or not isinstance(record.get("message", {}), dict):
+                continue
+            content = record.get("message", {}).get("content", [])
+            if not isinstance(content, list):
+                continue
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                args = item.get("input", {})
+                if (item.get("type") == "tool_use" and item.get("name") in {"Agent", "Task"}
+                        and isinstance(args, dict) and args.get("subagent_type") == "cafe_reviewer"):
+                    marker = re.search(r"CAFE_REVIEW_CHECKPOINT:([A-Za-z0-9-]+)", str(args.get("prompt", "")))
+                    invocation_id = item.get("id")
+                    if not isinstance(invocation_id, str) or len(invocations) >= 16:
+                        continue
+                    invocations[invocation_id] = {
+                        "reviewer_id": invocation_id, "receipt_id": marker.group(1) if marker else None,
+                        "configuration": self.config.native_review_configuration,
+                        "observed_at": (observed_at.get(id(line)) if observed_at is not None else datetime.now(timezone.utc).isoformat()),
+                        "terminal": None, "exit_status": None,
+                        "background": args.get("run_in_background", False)}
+                if item.get("type") == "tool_result" and item.get("tool_use_id") in invocations:
+                    observed = invocations[item["tool_use_id"]]
+                    if not observed["background"] and not item.get("is_error", False):
+                        observed.update(terminal="result", exit_status=0)
+                        payload = item.get("content", "")
+                        if isinstance(payload, list):
+                            payload = "\n".join(v.get("text", "") for v in payload if isinstance(v, dict))
+                        if isinstance(payload, str) and len(payload.encode()) <= 128 * 1024:
+                            decoder = json.JSONDecoder()
+                            conclusions = []
+                            for match in re.finditer(r"\{", payload):
+                                try:
+                                    conclusion, _ = decoder.raw_decode(payload[match.start():])
+                                except ValueError:
+                                    continue
+                                if isinstance(conclusion, dict) and set(conclusion) == {"findings", "targeted_tests"}:
+                                    conclusions.append(conclusion)
+                            if len(conclusions) == 1:
+                                observed.update(conclusions[0])
+        return list(invocations.values())

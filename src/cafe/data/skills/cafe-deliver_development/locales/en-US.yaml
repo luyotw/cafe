@@ -1,0 +1,18 @@
+human_task.delivery.delivery_outcome: Confirm whether the displayed completed integration
+  and selected issue results satisfy the goal.
+human_task.delivery.delivery_recovery: Provide recovery details or request a revised
+  action review. Unknown effects must be reconciled before retry.
+human_task.delivery.delivery_permission: Resolve the pending exact host capability
+  approval using its durable task; this feedback grants no host authority.
+human_task.delivery.runtime_evidence: 'Read these current delivery sources before
+  presenting the outcome.
+
+  - delivery_actions_file: {actions}
+
+  - delivery_receipts_file: {receipts}
+
+  - delivery_complete: {complete}'
+human_task.delivery.confirm: Accept results and leave external state unchanged
+human_task.delivery.confirm_cleanup: Accept results and run the displayed cleanup plan
+human_task.delivery.confirm_archive: Accept results and archive only; retain worktree and branch
+human_task.delivery.revise: Recover or revise delivery

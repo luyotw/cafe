@@ -1,4 +1,24 @@
+# Phase-owned development delivery
+
+For an adopting graph, the declared delivery phase owns exact integration and selected issue effects, durable receipts, recovery and mandatory final user acceptance. Manager observes this phase once and retains coordination and separately confirmed cleanup. Unknown, partial or approval-pending actions remain nonterminal. Manager must never replay an action through closeout or a Git conflict repair fallback. Send implementation conflicts and changed code to the declared Develop correction route; revised action selection returns to the declared PR review.
+
+Fresh nested contract version 5 has cleanup only. Use archive-only CAFE cleanup to avoid implicit local integration. Existing legacy versions and compact routes keep their original authority and receipts; legacy merge commands lacking an exact target/source binding pause rather than guessing or migrating.
+
 # Completion And Action Authority
+
+## Compact route
+
+For confirmed compact delivery, verify terminal readiness and worker quiescence,
+then complete the recorded route without asking again for unchanged initial
+effects. PR: use `scripts/deliver_compact.py --issue-dir <issue> --root <worktree>
+--pr-output <material>`; host-required approval returns an existing HumanTask ID
+and correlation ID, whose verified result is resumed with `--approval-task-id`
+and `--correlation-id`. Direct: initialize and execute the exact `deliver` argv
+through `scripts/execute_closeout.py`. Both adapters recheck current scope, review
+and endpoint immediately before action. Report only verified returned PR or
+pushed branch/SHA evidence; failed/unknown attempts cannot be replayed. This
+initial authority grants no merge, issue closure or cleanup. The remaining
+closeout instructions keep their existing authority boundaries.
 
 ## Complete the declared workflow
 
@@ -87,15 +107,35 @@ a fixed shipping checklist to every playbook.
 
 ### Confirm cleanup, archive, or no action
 
-After the Manager has verified workflow completion, offer the user these terminal
-choices once:
+For phase-owned development delivery, inspect the combined acceptance first:
+
+```bash
+python3 <skill-dir>/scripts/inspect_delivery_closeout.py --issue-dir <issue-dir> --workflow-id <workflow-id>
+```
+
+An `accepted` selection is the user's already-recorded terminal decision, bound
+to the current exact cleanup contract and verified delivery receipts. Do not ask
+again: `cleanup` runs only that confirmed array through `execute_closeout.py`;
+`archive` runs only `cafe close --archive-only`; `leave` performs no terminal
+mutation. Manager executes after workflow completion and worker quiescence.
+Changed plans, invalid receipts, or mismatched authority require recovery, not
+inferred acceptance. The confirmed contract's `terminal_selection:
+delivery_outcome` selects this flow; a missing projection cannot switch it to
+legacy behavior. A new combined delivery flow with no recorded selection
+is incomplete authority; do not replace its missing acceptance with a generic
+terminal prompt.
+
+For an explicit `legacy` inspection result (a confirmed contract without that
+selection flag), after the Manager has
+verified workflow completion, offer the user these terminal choices once:
 
 1. Run the confirmed non-empty `cleanup` array.
 2. Archive without delivery by running exactly `cafe close --archive-only`.
 3. Leave all external state unchanged.
 
-The post-completion selection is required even when the cleanup plan appeared
-in kickoff. `deliver` remains owned by its declared workflow path or separate
+The terminal selection is required even when the cleanup plan appeared
+in kickoff; a verified combined delivery reply already supplies that selection.
+`deliver` remains owned by its declared workflow path or separate
 user authority; terminal closeout does not rerun it. Do not infer archive from
 terminal wording or from a declined cleanup plan.
 
@@ -104,7 +144,7 @@ issue worktree. Keep every argv exactly as confirmed; do not add, remove,
 reorder, rewrite, shell-wrap, retry, or replay a command. Stop and report the
 first command failure.
 
-For each confirmed `deliver` or `cleanup` command, use
+For each confirmed `cleanup` command (or a narrowly bound recorded legacy `deliver` command), use
 `scripts/execute_closeout.py` as the sole command execution path. It reads the
 confirmed Manager contract immediately before execution and records the exact
 ordered argv, contract digest, issue/workflow identity, worktree target, and each

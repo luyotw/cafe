@@ -372,9 +372,19 @@ def test_deferred_terminal_completion_wakes_driver_from_callback_worker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    from tests.integration.test_human_task_workflow import legacy_development_graph
+
+    graph = legacy_development_graph()
+    graph["playbook"]["id"] = "legacy-inbox"
+    for definition in graph["steps"].values():
+        definition.get("initial_input", {}).pop("legacy_presentation", None)
+    catalog = tmp_path / ".cafe" / "playbooks"
+    catalog.mkdir(parents=True)
+    (catalog / "legacy-inbox.yaml").write_text(json.dumps(dict(graph)))
     issue_dir, task = _pending_issue(
         tmp_path / ".cafe",
         "deferred-terminal",
+        playbook_id="legacy-inbox",
         step="pr",
     )
 

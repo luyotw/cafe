@@ -563,7 +563,7 @@ class JourneyAgent:
         self.calls = 0
         self.prompts = []
         self.agent = SimpleNamespace(
-            config=SimpleNamespace(cli=AgentCLI.CODEX, session_id="journey-session", model=None)
+            config=SimpleNamespace(native_review_configuration=None, cli=AgentCLI.CODEX, session_id="journey-session", model=None)
         )
 
     def get_agent(self, name):

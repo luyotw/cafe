@@ -115,6 +115,7 @@ def check_agent_clis_available(
     active_role: Optional[str] = None,
     phase_config_local_path: Optional[Path] = None,
     phase_config_repo_path: Optional[Path] = None,
+    execution_chain: Optional[List[Dict[str, str]]] = None,
 ) -> List[str]:
     """Check the active phase-configured CLI chain."""
 
@@ -148,6 +149,9 @@ def check_agent_clis_available(
                 return Path(config_dir) / "phases.yaml", None
         return None, None
 
+    if execution_chain is not None:
+        return _check_chain([entry["cli"] for entry in execution_chain], context="resolved execution chain")
+
     if active_step is not None and active_step not in {"user", "done"}:
         local_path, repo_path = _resolve_phase_config_paths()
         phase_resolution = load_phase_step_model(
@@ -180,6 +184,7 @@ def setup_agents(
     cafe_dir: Optional[Path] = None,
     stream_agent_output: bool = True,
     playbook_data: Optional[Mapping[str, Any]] = None,
+    execution_chain: Optional[List[Dict[str, str]]] = None,
 ) -> AgentManager:
     """Build the active workflow agent from its complete phase chain."""
     if not issue_name or not phase_name:
@@ -203,7 +208,19 @@ def setup_agents(
             return local_path, repo_path, fallback_cafe_dir.parent
 
     local_path, repo_path, project_root = _resolve_phase_config_paths()
-    if playbook_data is None:
+    if execution_chain is not None:
+        from cafe.utils.phase_config import PhaseStepModelResolution
+        chain = [CliEntry.model_validate(entry) for entry in execution_chain]
+        if not chain or playbook_data is None:
+            raise ValueError("resolved execution chain requires an active declared step")
+        role = playbook_data["steps"][phase_name]["role"]
+        name = _build_workflow_role_agent_map(config_manager, playbook_data).get(role)
+        if not name:
+            raise ValueError("resolved execution step has no agent")
+        resolved = PhaseStepModelResolution(name=name, role=role,
+            clis=tuple((entry.cli.value, entry.model) for entry in chain), model=chain[0].model,
+            source="resolved_execution_context", chain=("resolved_execution_context",))
+    elif playbook_data is None:
         resolved = load_phase_step_model(
             step_name=phase_name,
             local_path=local_path,
@@ -519,6 +536,7 @@ def _build_workflow_step_executor(
     open_pr: bool = False,
     extra_allowed_directories: Optional[List[str]] = None,
     stream_agent_output: bool = True,
+    execution_chain: Optional[List[Dict[str, str]]] = None,
 ) -> GenericWorkflowStepExecutor:
     """Create the GenericPhase-backed executor for workflow steps."""
     role_agent_map = _build_workflow_role_agent_map(config_manager, playbook_data)
@@ -535,6 +553,7 @@ def _build_workflow_step_executor(
             phase_name=phase_name,
             stream_agent_output=stream_agent_output,
             playbook_data=playbook_data,
+            **({"execution_chain": execution_chain} if execution_chain is not None else {}),
         ),
         git_ops=_get_git_operations_cls()(),
         role_agent_map=role_agent_map,

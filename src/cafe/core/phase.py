@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
-import inspect
 from abc import ABC, abstractmethod
 from copy import copy
 from datetime import datetime
@@ -14,23 +14,25 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Optional
 logger = logging.getLogger(__name__)
 
 from cafe.constraints import Context
-from cafe.constraints.evidence import snapshot, compare_snapshot
+from cafe.constraints.evidence import compare_snapshot, snapshot
 
 if TYPE_CHECKING:
     from cafe.core.git import GitOperations
 
+from cafe.agents.executor import AgentExecutionError, AgentExecutor
 from cafe.core.phase_checklist_mixin import PhaseChecklistMixin
-from cafe.core.phase_sandbox_mixin import PhaseSandboxMixin
 from cafe.core.phase_review_mixin import PhaseReviewMixin
-from cafe.core.phase_state_mixin import PhaseStateMixin
+from cafe.core.phase_sandbox_mixin import PhaseSandboxMixin
+
+# Backward-compat re-export for test imports
+from cafe.core.phase_state_mixin import (
+    PhaseStateMixin,
+    ensure_agent_file_exists,  # noqa: F401
+)
 from cafe.core.session_continuation import (
     SessionContinuation,
     SessionContinuationPolicy,
 )
-from cafe.agents.executor import AgentExecutor, AgentExecutionError
-
-# Backward-compat re-export for test imports
-from cafe.core.phase_state_mixin import ensure_agent_file_exists  # noqa: F401
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
 from cafe.core.types import (
     AgentCLI,
@@ -403,6 +405,9 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
 
     def _configured_primary_cli_value(self, agent_name: str) -> Optional[str]:
         """Crew-configured primary CLI for this agent as a plain string, if resolvable."""
+        order = getattr(self, "_invocation_order", None)
+        if order is not None and order.configured_entries:
+            return order.configured_entries[0][0]
         getter = getattr(self.agent_manager, "configured_primary_cli", None)
         if not callable(getter):
             return None
@@ -421,6 +426,10 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         fallback: Optional[Iterable[Any]],
     ) -> Optional[Iterable[Any]]:
         """Return the registered execution chain without invocation-local reordering."""
+        order = getattr(self, "_invocation_order", None)
+        if order is not None:
+            return [f"{cli}:{model or ''}" for cli, model in order.configured_entries]
+
         getter = getattr(self.agent_manager, "configured_execution_chain", None)
         if callable(getter):
             try:
@@ -553,8 +562,15 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                 for param in signature.parameters.values()
             ):
                 kwargs["continuation"] = requested_continuation
+            order = getattr(self, "_invocation_order", None)
+            if order is not None and self._call_accepts_keyword(
+                get_execution_config, "invocation_order"
+            ):
+                kwargs["invocation_order"] = order
             execution_config = get_execution_config(agent_name, **kwargs)
         except Exception:
+            if getattr(self, "_invocation_order", None) is not None:
+                raise
             return self._fail_closed_execution_config(
                 default_config,
                 requested_continuation,
@@ -848,7 +864,15 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         raw_context = initial_phase_data.get("constraint_context")
         if raw_context:
             current_evidence = snapshot(Context.model_validate(raw_context))
-            constraint_freshness = compare_snapshot(prior_data.get("runtime_constraints"), current_evidence)
+            previous_evidence = prior_data.get("runtime_constraints")
+            constraint_freshness = compare_snapshot(previous_evidence, current_evidence)
+            admits_context = getattr(self, "_recovery_allows_constraint_context_change", None)
+            if (
+                constraint_freshness == "material_change"
+                and callable(admits_context)
+                and admits_context(previous_evidence, current_evidence)
+            ):
+                constraint_freshness = "authorized_recovery_context"
             initial_phase_data["runtime_constraints"] = current_evidence
             initial_phase_data["constraint_freshness"] = constraint_freshness
         self._save_user_input(
@@ -889,6 +913,11 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                     preview_kwargs["phase_name"] = execution_phase_name
                 if self._call_accepts_keyword(preview_cli_command_args, "continuation"):
                     preview_kwargs["continuation"] = requested_continuation
+                order = getattr(self, "_invocation_order", None)
+                if order is not None and self._call_accepts_keyword(
+                    preview_cli_command_args, "invocation_order"
+                ):
+                    preview_kwargs["invocation_order"] = order
                 cli_command_args = preview_cli_command_args(
                     agent_name,
                     prompt,
@@ -920,6 +949,11 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                 environment_kwargs["phase_name"] = execution_phase_name
             if self._call_accepts_keyword(preview_cli_environment, "continuation"):
                 environment_kwargs["continuation"] = requested_continuation
+            order = getattr(self, "_invocation_order", None)
+            if order is not None and self._call_accepts_keyword(
+                preview_cli_environment, "invocation_order"
+            ):
+                environment_kwargs["invocation_order"] = order
             cli_environment = preview_cli_environment(agent_name, **environment_kwargs) or {}
         else:
             cli_environment = AgentExecutor(execution_config).preview_cli_environment() or {}
@@ -1009,6 +1043,9 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                 "streaming_output_file": str(streaming_jsonl_file),
             }
             execute_signature = inspect.signature(self.agent_manager.execute)
+            native_review_configuration = (phase_specific_data or {}).get("native_review_configuration")
+            if native_review_configuration is not None:
+                execute_kwargs["native_review_configuration"] = native_review_configuration
             if "phase_name" in execute_signature.parameters or any(
                 param.kind == inspect.Parameter.VAR_KEYWORD
                 for param in execute_signature.parameters.values()
@@ -1033,6 +1070,14 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             if raw_constraints and "constraint_context" in execute_signature.parameters:
                 execute_kwargs["constraint_context"] = Context.model_validate(raw_constraints)
 
+            order = getattr(self, "_invocation_order", None)
+            if order is not None and self._call_accepts_keyword(
+                self.agent_manager.execute, "invocation_order"
+            ):
+                execute_kwargs["invocation_order"] = order
+            consume_recovery = getattr(self, "_consume_restart_recovery", None)
+            if callable(consume_recovery):
+                consume_recovery(context_file)
             response, token_usage, permission_denials, cli_command_args, streaming_log, model = (
                 self.agent_manager.execute(
                     agent_name,
@@ -1041,6 +1086,13 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                 )
             )
             failed_attempts = get_failed_attempts()
+            if native_review_configuration is not None:
+                observer = getattr(self.agent_manager, "get_last_native_review_observations", None)
+                observations = observer() if callable(observer) else []
+                from cafe.core.packet_io import atomic_write_bytes, canonical_json
+                atomic_write_bytes(iteration_dir / "native_invocations.json", canonical_json({
+                    "version": 1, "parent_id": self.agent_manager.get_last_session_id(),
+                    "observations": observations}))
             constraints_getter = getattr(self.agent_manager, "get_last_constraints", None)
             latest_constraints = constraints_getter() if callable(constraints_getter) else None
             if isinstance(latest_constraints, dict):
@@ -1048,7 +1100,6 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                 metadata = json.loads(context_path.read_text(encoding="utf-8"))
                 metadata["runtime_constraints"] = latest_constraints
                 context_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
-
 
             actual_agent_cli = getattr(self.agent_manager, "get_last_cli", lambda: None)()
             if (
@@ -1094,9 +1145,8 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
 
         except Exception as e:
             # Agent execution failed - attempt recovery
-            from cafe.core.types import CriticalPhaseError
-
             from cafe.agents.diagnostics import sanitize_error_excerpt
+            from cafe.core.types import CriticalPhaseError
 
             failed_attempts = get_failed_attempts()
             # Failed calls still identify the provider thread. Retain the final
@@ -1119,6 +1169,8 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                         if context_file.exists():
                             context_data = json.loads(context_file.read_text(encoding="utf-8"))
                             context_data["cli"] = agent_cli
+                            if isinstance(last_attempt.get("model"), str):
+                                context_data["model"] = last_attempt["model"]
                             context_data["session_id"] = agent_session_id
                             context_data["session_continuation"] = self._session_continuation.to_dict()
                             context_file.write_text(

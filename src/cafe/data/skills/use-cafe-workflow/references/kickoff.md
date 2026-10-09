@@ -1,5 +1,12 @@
 # Kickoff And Preparation
 
+## Compact route
+
+Select the effective contract mode with lightweight playbook discovery first.
+For compact mode, use `compact_kickoff.md` before loading full-only model,
+strategy, questionnaire or preflight references. The full instructions below
+apply to full contracts. Confirmed authority takes precedence on resume.
+
 Use `kickoff_inputs.md` for the preparation CLI and editable draft. Apply this
 reference and the model, strategy and playbook policies to the current request.
 Execution and activation instructions are in `kickoff_execution.md`.
@@ -140,101 +147,23 @@ operation replaces it.
 - [ ] Keep engineering artifacts — spec, plan, review, and PR prose — in this
   repository content language even when the conversation language differs.
 
-## Repository-informed deliver and cleanup plan
+## Repository-informed delivery and cleanup plan
 
-At the beginning of every new kickoff, inspect the validated delivery summary
-from assembly: source-backed conventions, routes, discovery coverage, freshness
-and gaps. Sufficient valid facts satisfy inspection of the unchanged documentation,
-CI/CD configuration and scripts they cover; apply them to the current endpoint.
-Open original sources only for uncovered facts, invalidation or contradictions,
-and verify current action targets separately. A valid cached delivery template
-prefills the proposed actions with current issue values; standard worktree and
-cleanup conventions are also prefilled. Review these values against the current
-request. A hit does not authorize execution. Do not enumerate vendors or invent
-a generic merge/deploy route when the repository has no reusable template.
+For graphs declaring `delivery`, integration and selected follow-up issue creation belong to the development delivery phase. Kickoff confirms the product outcome and separately proposed cleanup. Do not supply Manager `deliver` argv or descriptions, infer them from templates, or execute phase operations through closeout.
 
-Discover the intended end state beyond merely opening a PR. Propose the
-repository-appropriate delivery and cleanup actions for user approval; an action
-not yet authorized is not a reason to leave it out of the proposal. Do not
-invent a PR-only endpoint or exclusions for merge, issue closure or worktree
-removal to avoid asking for that approval. Respect an explicit user choice to
-stop at a PR, preserve resources, or exclude an action. Repository context
-informs the recommendation; only user confirmation authorizes execution.
+Repository delivery discovery retains descriptive conventions, source coverage, freshness and gaps. Resolve exact PR/source/target/strategy or local destination when the PR action review presents actual immutable artifacts. The user selects an explicit subset of original Review drafts or an empty selection. The displayed PR decision covers action selection and its host capability boundaries together, while preserving distinct durable approvals. Final result acceptance remains a separate user decision; only user confirmation authorizes execution of the shown action bundle. Legacy proposals without displayed host boundaries retain separate capability approval.
 
-When delivery includes merging a GitHub PR, propose a merge commit by default:
-`gh pr merge --merge` from the verified issue worktree, or with an exact verified
-PR selector. This preserves the branch commits and fixes the strategy for
-non-interactive execution. Propose `--squash` or `--rebase` only when the user
-explicitly chose that strategy. If repository policy disallows merge commits,
-resolve the available strategy with the user before rendering the contract.
-An existing confirmed closeout plan takes precedence; changing its strategy
-requires reconfirmation.
+The formatter produces a version-5 nested `delivery_contract` for adopting graphs with `closeout_plan.cleanup` only. Keep exact literal cleanup argv and one description per action. The default proposal closes a verified bound GitHub issue, then archives CAFE state with `cafe close --archive-only`. Archive-only retains the checkout and branch; removing those resources needs separate explicit commands and authority. Ordinary `cafe close` can integrate a local branch and is not a fresh phase-owned cleanup fallback. The PR decision explicitly covers the displayed action and host capability boundaries together. Delivery acceptance also selects cleanup, archive-only, or leaving external state unchanged in the same reply; Manager executes the recorded selection after completion without a second terminal question.
 
-Default the cleanup proposal to closing the verified, bound GitHub issue and
-then running `cafe close`, in that order. Use the issue's verified numeric ID
-in the first exact argv array:
+For a verified repository and issue, a literal cleanup proposal is:
 
 ```yaml
 cleanup:
-  - argv: [gh, issue, close, "123"]
-  - argv: [cafe, close]
+  - argv: [gh, issue, close, "123", --repo, owner/repo]
+  - argv: [cafe, close, --archive-only]
 ```
 
-`gh issue close` is applicable only when the issue has a verified GitHub
-binding; when it does not, omit that command but retain `cafe close` as the
-default. An explicit user choice to preserve the GitHub issue or CAFE issue
-state overrides the default. Never use an issue-like name, an unresolved
-placeholder, or a guessed ID. The complete proposal remains subject to the
-same kickoff confirmation as every other external action.
-
-Turn the discovered route into two ordered lists of exact host-side commands:
-
-```yaml
-deliver:
-  - argv: [command, argument]
-cleanup:
-  - argv: [command, argument]
-```
-
-Both fields are required in every new contract. Use an explicit `[]` for
-a stage with genuinely no remaining action or one the user explicitly excludes;
-make the reason clear in the existing scope or constraints. Lack of CI/CD
-configuration, lack of existing permission, or an unresolved future target does
-not mean nothing remains. Do not fill `[]` as a discovery fallback, omit the
-field, or invent a no-op. In particular, do not use `[]` as a substitute for
-the default issue closure and `cafe close` cleanup route without recording the
-user's exclusion or the inapplicable GitHub binding.
-
-Every argument must be concrete at kickoff: no shell strings, templates,
-placeholders, or future identifiers that will be filled in later. When a future
-identifier is unavailable, use an existing stable selector only after verifying
-it identifies the intended target, or obtain a fresh confirmation once the
-concrete command exists. Inspect whether integration already triggers delivery
-before proposing another deployment command.
-
-Validate lifecycle commands before presenting the contract. `cafe close` must
-be the final cleanup command and use the literal `cafe` executable. Its
-`--squash` and optional message arguments are local-review behavior only; reject
-them when the confirmed automatic-PR capability choice enables PR creation.
-This rule does not apply when a remote PR merge command uses the same flag to
-select its merge strategy rather than the local close path.
-
-When the intended action or target is unresolved, identify the missing choice
-and ask a focused question instead of presenting an empty plan as settled. Do
-not activate a plan with an unresolved stage: obtain concrete argv or a verified
-stable selector, then render it for confirmation. The user may instead choose
-a narrower endpoint, such as stopping at a PR; record that choice in the
-existing scope or constraints. A later expansion requires a newly confirmed
-plan, not filling in the original `[]` after kickoff.
-
-Present both exact command lists, grounded in the repository context above, without
-adding an evidence report to the contract. The user confirms the complete
-kickoff, including their command order and effects. That
-confirmation is durable authority for the Manager to execute exactly those arrays
-at closeout; it is not authority for a changed command, reordered command, or
-materially changed target/effect. Never silently discard restrictions from an
-older confirmed contract; a user reconfirmation is required to replace it with
-the compact contract below.
+Omit GitHub issue closure when no binding is available. An explicit empty cleanup list is valid when the user excludes cleanup. Unknown endpoints remain gaps. Inspect actual targets and worker quiescence before any authorized cleanup. Existing confirmed legacy contracts retain their original exact argv, digest and receipts; incomplete merge bindings pause for clarification. Compact and non-adopting graphs retain their declared delivery path.
 
 ## Kickoff contract: first blocking gate
 
@@ -242,7 +171,7 @@ Before `cafe prepare`, any repository mutation, or the first workflow execution,
 obtain explicit user confirmation of:
 
 - the versioned `delivery_contract` described below, including the user-confirmed
-  exact `deliver` and `cleanup` argv arrays derived from repository evidence;
+  exact `cleanup` argv arrays derived from repository evidence for adopting graphs;
 - `playbook_id`;
 - `conversation_locale` with source;
 - `repository_content_locale`;
@@ -258,7 +187,10 @@ obtain explicit user confirmation of:
 - the effective proactive-review decision for every agent or hybrid phase with
   an existing scheduled confirmation pause. Default every assignable scheduled
   confirmation gate to `manager_confirmable` with proactive review `required`;
-  default mandatory gates to `required` while they remain user-owned, and let
+  default mandatory gates to `required` while they remain user-owned, except
+  the declared delivery result owner, whose proactive review defaults to
+  `not_required` because PR action review and receipt validation already cover
+  the delivery boundary. Its final acceptance remains user-owned. Let
   direct user overrides take precedence. Normalize ineligible phases internally
   to `not_required`; they require no kickoff choice;
 - the exact ordered CLI/model chain for every phase, containing one primary and
@@ -393,7 +325,8 @@ confirmation before preparation or workflow execution.
    Reject unknown steps, missing candidates, overlaps, role names, and steps
    that do not declare `on.confirm_output`.
 5. Present every mandatory HumanTask step as an informational, non-configurable
-   user stop with proactive review `required` by default. A clean review never
+   user stop with proactive review `required` by default, except the declared
+   delivery result owner defaults to `not_required`. A clean review never
    replaces its user decision. If no assignable candidates exist, explicitly
    say so without implying that mandatory stops are absent.
 6. Do not ask for proactive-review decisions on agent phases without a
@@ -464,13 +397,12 @@ approval from scope or technical advice. The Manager's standing rule remains:
 > behavior, feature scope, acceptance coverage, edge-case coverage, or required
 > integrations.
 
-The formatter adds the separately supplied `--deliver` and `--cleanup` commands
-to the version-3 product core as `closeout_plan`; do not put that field in
+The formatter adds separately supplied `--cleanup` commands
+to the version-3 product core as a version-5 cleanup-only `closeout_plan` for adopting graphs; do not put that field in
 `--delivery-contract` as well:
 
 | Field | Content |
 | --- | --- |
-| `deliver` | Ordered, user-confirmed objects shaped as `{ "argv": ["literal", "arguments"] }` |
 | `cleanup` | Ordered, user-confirmed objects shaped as `{ "argv": ["literal", "arguments"] }` |
 
 The complete confirmed plan is action-specific authority for these exact
@@ -514,7 +446,7 @@ development, drafting, research, or any other entry step.
 
 Use the bundled formatter instead of a prose-only summary. Its stdout is a
 self-contained initial confirmation request: present the complete output so the
-user sees every field being confirmed, including `deliver` and `cleanup`. Do not
+user sees every field being confirmed, including phase-owned delivery ownership and exact `cleanup`. Do not
 substitute a shorter hand-written recap.
 
 Use the rendered document as the response body, preserving its section order and
@@ -536,10 +468,9 @@ model chains and gates may stay in tables. Notification/session
 mechanics follow the selected Manager mode; do not add a separate notification
 field or another approval choice for them.
 
-Present `deliver` and `cleanup` as separate subheadings with ordered actions.
+Present phase-owned delivery as the declared workflow phase and `cleanup` as an ordered action list.
 Each action has a concise explanation in the conversation language and its
-complete, copyable command in a code block. Supply one `--deliver-description`
-or `--cleanup-description` per command, in the same order; provide none for an
+complete, copyable command in a code block. Supply one `--cleanup-description` per command, in the same order; provide none for an
 empty stage. Describe the actual action and target, including destructive
 effects, rather than a vague "clean up resources". The Manager writes these
 explanations from context; the formatter does not classify command names.

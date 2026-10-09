@@ -32,7 +32,7 @@ def ready_request(tmp_path):
         "compose: {name: Writer, role: writer, clis: [{cli: codex, model: configured-model}]}\n")
     values = _formatter_inputs("new")
     request["formatter_inputs"] = {k: values[k] for k in ("delivery_contract", "update_preflight", "catalog_preflight")}
-    request["formatter_inputs"].update(deliver=[], cleanup=[], manager_mode="unattended",
+    request["formatter_inputs"].update(cleanup=[], manager_mode="unattended",
                                        effective_locale="zh-TW", locale_source="explicit")
     path = tmp_path / "request.json"
     path.write_text(json.dumps(request))
@@ -93,7 +93,8 @@ def test_invalid_optional_template_keeps_valid_contract_renderable(ready_request
     rendered = json.loads(capsys.readouterr().out)["render"]
     assert rendered["status"] == "rendered"
     assert "cleanup.convention" in rendered["preference_offer"]["problems"]
-    assert "暫不可儲存" in rendered["output"]
+    assert "暫不可儲存" not in rendered["output"]
+    assert "cleanup.convention" not in rendered["output"]
     assert "preference_offer" not in rendered["proposal"]
 
 
@@ -123,8 +124,9 @@ def test_cached_template_missing_context_does_not_block_explicit_current_actions
     evidence = tmp_path / "evidence.json"
     evidence.write_text(json.dumps(record))
     assert cli.main(["evidence", "refresh", "--category", "delivery", "--project-root", str(root),
-                     "--cache-dir", str(tmp_path / "cache"), "--evidence-file", str(evidence)]) == 0
-    capsys.readouterr()
+                     "--cache-dir", str(tmp_path / "cache"), "--evidence-file", str(evidence)]) == 3
+    rejected = capsys.readouterr()
+    assert "obsolete_manager_delivery_template" in rejected.out
     assert cli.main(["render", "--request-file", str(request), "--config-dir", str(tmp_path / "config"),
                      "--cache-dir", str(tmp_path / "cache")]) == 0
     result = json.loads(capsys.readouterr().out)

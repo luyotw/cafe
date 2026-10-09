@@ -130,8 +130,8 @@ for arguments, options in (
             raise SystemExit(f"Installed command {arguments!r} is missing {option}")
 PYCODE
 
-echo "Verifying packaged subagent planning playbooks..."
-for playbook in subagent-flow subagent-flow-qa; do
+echo "Verifying packaged planning, bug and compact playbooks..."
+for playbook in subagent-flow subagent-flow-qa bug streamlined; do
     "$SMOKE_VENV/bin/cafe" playbook validate "$playbook" --strict >/dev/null
 done
 
@@ -155,5 +155,48 @@ PYCONSTRAINTS
 
 "$SMOKE_VENV/bin/cafe" audit >/dev/null
 "$SMOKE_VENV/bin/cafe" skill validate --strict >/dev/null
+
+echo "Verifying packaged development delivery capabilities..."
+"$SMOKE_VENV/bin/python" - <<'PYCAPABILITIES'
+from pathlib import Path
+from cafe.core.capabilities import default_capability_definition_dirs, load_capability_registry
+registry = load_capability_registry(default_capability_definition_dirs(Path.cwd()))
+for name in ("cafe.github.pr.merge", "cafe.branch.integrate", "cafe.github.issue.create"):
+    definition = registry[name]
+    assert definition.approval == "required", name
+PYCAPABILITIES
+
+echo "Verifying packaged rate-limit restart policy and settings owner..."
+"$SMOKE_VENV/bin/python" - <<'PYRESTART'
+import json
+from importlib import import_module
+from importlib.resources import files
+
+from cafe.core.restart_policy import (
+    CONTINUE_LAST_SUCCESS, RECHECK_PRIORITY, SETTING, resolve_restart_policy,
+)
+
+assert resolve_restart_policy({}) == CONTINUE_LAST_SUCCESS
+assert resolve_restart_policy({"execution": {"rate_limit_restart_policy": RECHECK_PRIORITY}}) == RECHECK_PRIORITY
+owners = json.loads(files("cafe").joinpath("data/setting_updates.json").read_text())
+module, attribute = owners[SETTING].split(":", 1)
+assert callable(getattr(import_module(module), attribute)), SETTING
+PYRESTART
+
+start_stage upgrade
+echo "Verifying v0.7.5 to current wheel upgrade with an in-flight legacy PR task..."
+BASELINE_SOURCE="$RELEASE_TEMP_DIR/baseline"
+BASELINE_DIST="$RELEASE_TEMP_DIR/baseline-dist"
+UPGRADE_VENV="$RELEASE_TEMP_DIR/upgrade-venv"
+UPGRADE_PROJECT="$RELEASE_TEMP_DIR/upgrade-project"
+mkdir -p "$BASELINE_SOURCE" "$UPGRADE_PROJECT"
+git -C "$PROJECT_ROOT" archive v0.7.5 | tar -x -C "$BASELINE_SOURCE"
+uv build "$BASELINE_SOURCE" --wheel --out-dir "$BASELINE_DIST" >/dev/null
+uv venv "$UPGRADE_VENV" >/dev/null
+uv pip install --python "$UPGRADE_VENV/bin/python" "$BASELINE_DIST"/*.whl >/dev/null
+"$UPGRADE_VENV/bin/python" "$PROJECT_ROOT/scripts/release-upgrade-smoke.py" seed --root "$UPGRADE_PROJECT"
+uv pip install --python "$UPGRADE_VENV/bin/python" "${wheels[0]}" >/dev/null
+uv pip check --python "$UPGRADE_VENV/bin/python"
+"$UPGRADE_VENV/bin/python" "$PROJECT_ROOT/scripts/release-upgrade-smoke.py" verify --root "$UPGRADE_PROJECT"
 
 echo "Release checks passed for cafe-engine $expected_version."

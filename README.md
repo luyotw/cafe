@@ -162,6 +162,7 @@ requirements and delivery rigor:
 | --- | --- | --- |
 | `direct` | develop → review → PR | The requested change is already clear and still needs independent review. |
 | `direct-qa` | spec → develop → review → QA → PR | Requirements need confirmation and acceptance needs both independent review and QA, but implementation does not need a separate plan. |
+| `streamlined` | develop + one native review → delivery readiness | Exact file scope and PR or designated-branch delivery are already clear; the provider supports read-only native review. |
 | `direct-subagent-review` | develop + two subagent reviews → PR | The implementation boundary is already confirmed and focused detail and scope reviews can run inside Develop. |
 | `subagent-flow` | spec + plan with subagent → develop + subagent reviews → PR | One owner should resolve requirements and implementation together with a planning partner before joint confirmation. |
 | `subagent-flow-qa` | spec + plan with subagent → develop + subagent reviews → QA → PR | Subagent-assisted planning and review also need independent acceptance testing. |
@@ -554,7 +555,7 @@ Versioning policy, while roadmap stages describe product direction independently
 - [Roadmap](docs/roadmap.md)
 - [Versioning policy](docs/versioning.md)
 - [Changelog](CHANGELOG.md)
-- [Latest release notes](docs/releases/v0.7.5.md)
+- [Latest release notes](docs/releases/v0.8.0.md)
 - [Strategic positioning](docs/positioning.md)
 - [Known runtime constraints](docs/known-constraints.md)
 
@@ -566,3 +567,5 @@ setup, testing, and release verification.
 ## License
 
 CAFE is available under the [MIT License](LICENSE).
+
+See [development delivery](docs/development-delivery.md) for exact action approval, receipts, recovery and cleanup ownership.

@@ -1,0 +1,189 @@
+"""U7/I4/I5/I8: one terminal independent review of the current snapshot."""
+
+from copy import deepcopy
+from pathlib import Path
+import sys
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from test_execution_checkpoints import execution_context
+from test_file_scope import repository
+
+
+@pytest.fixture
+def review(execution_context):
+    from cafe.core.execution_checkpoints import checkpoint
+
+    execution_context["review_configuration"] = {
+        "cli": "codex",
+        "model": "test",
+        "provider_version": "v1",
+        "read_only": True,
+        "model_behavior": "inherits_parent",
+        "checkpoint_interface": "parent_command",
+    }
+    receipt = checkpoint(execution_context, "before_review", round_id="round-1", parent_id="parent")
+    return {
+        "version": 1,
+        "round_id": "round-1",
+        "checkpoint": receipt,
+        "invocations": [
+            {
+                "parent_id": "parent",
+                "reviewer_id": "child",
+                "configuration": execution_context["review_configuration"],
+                "terminal": "turn.completed",
+                "exit_status": 0,
+                "findings": [],
+                "targeted_tests": ["tests passed"],
+                "result_reference": "native/tool-result-1",
+            }
+        ],
+    }
+
+
+def test_nonblocking_findings_allow_current_review(execution_context, review):
+    from cafe.core.execution_checkpoints import require_current_review
+
+    review["invocations"][0]["findings"] = [{"severity": "nonblocking", "detail": "Suggestion"}]
+    require_current_review(execution_context, review)
+    (Path(execution_context["root"]) / "allowed").write_text("fix")
+    with pytest.raises(ValueError):
+        require_current_review(execution_context, review)
+
+
+@pytest.mark.parametrize(
+    "defect", ["self", "two", "progress", "blocker", "configuration", "missing_tests"]
+)
+def test_review_cannot_substitute_ineligible_evidence(execution_context, review, defect):
+    from cafe.core.execution_checkpoints import require_current_review
+
+    invocation = review["invocations"][0]
+    if defect == "self":
+        invocation["reviewer_id"] = "parent"
+    if defect == "two":
+        review["invocations"].append(deepcopy(invocation))
+    if defect == "progress":
+        invocation["terminal"] = "progress"
+    if defect == "blocker":
+        invocation["findings"] = [{"severity": "blocking", "detail": "Bug"}]
+    if defect == "configuration":
+        invocation["configuration"] = {**invocation["configuration"], "model": "other"}
+    if defect == "missing_tests":
+        invocation["targeted_tests"] = []
+    with pytest.raises(ValueError):
+        require_current_review(execution_context, review)
+
+
+def test_streamlined_declaration_is_separate_from_existing_dual_review():
+    from cafe.playbooks.loader import PlaybookLoader
+
+    loader = PlaybookLoader()
+    model = loader.load_model("streamlined", strict=True).model
+    assert model.contract.mode == "compact"
+    assert list(model.steps) == ["develop", "deliver"]
+    assert model.steps["develop"].execution.review_policy == "single_native"
+    assert model.steps["develop"].max_attempts_per_cycle is not None
+    dual = loader.load_model("direct-subagent-review", strict=True).model
+    assert dual.contract.mode == "full"
+    assert dual.steps["develop"].execution.review_policy is None
+
+
+def test_public_agent_manager_projects_read_only_native_reviewer(monkeypatch, tmp_path):
+    from cafe.agents.manager import AgentManager
+    from cafe.agents.executor import AgentExecutor
+    from cafe.agents.cli.claude import ClaudeCLI
+    from cafe.core.types import AgentConfig, AgentCLI, AgentResponse, TokenUsage
+    import json
+
+    monkeypatch.chdir(tmp_path)
+    configuration = {
+        "cli": "claude",
+        "model": "test",
+        "provider_version": "fixture",
+        "read_only": True,
+        "model_behavior": "inherits_parent",
+        "checkpoint_interface": "parent_command",
+    }
+    seen = []
+
+    def transport(executor, *args, **kwargs):
+        command = executor.preview_cli_command_args("fixture", allowed_tools=["Agent"])
+        agent = json.loads(command[command.index("--agents") + 1])["cafe_reviewer"]
+        assert set(agent["tools"]) == {"Read", "Glob", "Grep"}
+        assert agent["model"] == "inherit"
+        seen.append(command)
+        return AgentResponse(response="complete", token_usage=TokenUsage(), cli=AgentCLI.CLAUDE)
+
+    monkeypatch.setattr(AgentExecutor, "execute", transport)
+    manager = AgentManager(issue_name="sample", stream_agent_output=False)
+    manager.register_agent(AgentConfig(name="operator", cli=AgentCLI.CLAUDE, model="test"))
+    manager.execute("operator", "fixture", native_review_configuration=configuration)
+    assert len(seen) == 1
+
+
+def test_provider_observations_bind_native_invocation_to_prior_checkpoint():
+    import json
+    from cafe.agents.cli.claude import ClaudeCLI
+    from cafe.core.types import AgentConfig, AgentCLI
+    adapter = ClaudeCLI(AgentConfig(name="parent", cli=AgentCLI.CLAUDE,
+        native_review_configuration={"read_only": True}))
+    records = [json.dumps({"type": "assistant", "message": {"content": [{
+        "type": "tool_use", "name": "Agent", "id": "tool-native-1", "input": {
+            "subagent_type": "cafe_reviewer", "prompt": "CAFE_REVIEW_CHECKPOINT:receipt-1"}}]}}),
+        json.dumps({"type": "user", "message": {"content": [{"type": "tool_result",
+            "tool_use_id": "tool-native-1", "is_error": False, "content": "terminal findings"}]}})]
+    observations = adapter.native_review_observations(records)
+    assert len(observations) == 1
+    assert observations[0]["receipt_id"] == "receipt-1"
+    assert observations[0]["reviewer_id"] == "tool-native-1"
+    assert observations[0]["terminal"] == "result"
+    assert adapter.native_review_observations(records[:1])[0]["terminal"] is None
+
+
+def test_native_findings_cannot_be_downgraded_by_parent(execution_context, review):
+    from cafe.core.execution_checkpoints import require_current_review
+    invocation = review["invocations"][0]
+    actual = {**invocation, "terminal": "result", "receipt_id": review["checkpoint"]["receipt_id"],
+              "observed_at": review["checkpoint"]["observed_at"],
+              "findings": [{"severity": "blocking", "detail": "Independent defect"}]}
+    host = {"version": 1, "parent_id": "parent", "observations": [actual]}
+    with pytest.raises(ValueError):
+        require_current_review(execution_context, review, native_observations=host)
+    invocation["findings"] = actual["findings"]
+    with pytest.raises(ValueError):
+        require_current_review(execution_context, review, native_observations=host)
+    # A fresh independent zero-blocker conclusion, rather than unilateral editing.
+    actual["findings"] = []
+    invocation["findings"] = []
+    require_current_review(execution_context, review, native_observations=host)
+
+
+@pytest.mark.parametrize("committed", [False, True])
+def test_new_git_blob_invalidates_review_even_when_working_bytes_are_restored(execution_context, review, committed):
+    from cafe.core.execution_checkpoints import require_current_review
+    from test_file_scope import git
+    root = Path(execution_context["root"])
+    allowed = root / "allowed"
+    reviewed = allowed.read_text()
+    allowed.write_text("unreviewed blob")
+    git(root, "add", "allowed")
+    if committed:
+        git(root, "commit", "-qm", "new blob")
+    allowed.write_text(reviewed)
+    with pytest.raises(ValueError):
+        require_current_review(execution_context, review)
+
+
+def test_normal_stage_and_commit_preserve_review_of_the_same_contents(execution_context, review):
+    from cafe.core.execution_checkpoints import checkpoint, require_current_review
+    from test_file_scope import git
+    root = Path(execution_context["root"])
+    (root / "allowed").write_text("reviewed contents")
+    review["checkpoint"] = checkpoint(execution_context, "before_review", round_id="round-1", parent_id="parent")
+    require_current_review(execution_context, review)
+    git(root, "add", "allowed")
+    require_current_review(execution_context, review)
+    git(root, "commit", "-qm", "reviewed implementation")
+    require_current_review(execution_context, review)

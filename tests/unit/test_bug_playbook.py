@@ -29,10 +29,12 @@ def test_every_success_and_correction_preserves_independent_review():
     """U2: no repair success can reach PR without a distinct reviewer."""
     p = PlaybookLoader().load("bug", strict=True)
     steps = p["steps"]
-    assert set(steps) == {"diagnose", "develop", "review", "pr"}
+    assert set(steps) == {"diagnose", "develop", "review", "pr", "deliver"}
     assert steps["diagnose"]["on"]["await_agent"] == "develop"
     assert steps["develop"]["on"]["await_agent"] == "review"
     assert steps["review"]["on"]["await_agent"] == "pr"
+    assert steps["deliver"]["on"]["manual_handoff"] == "develop"
+    assert steps["deliver"]["allowed_goto"] == ["develop", "pr"]
     assert steps["develop"]["role"] != steps["review"]["role"]
     assert p["roles"]["developer"]["default_agent"] != p["roles"]["reviewer"]["default_agent"]
     assert "Edit" not in steps["review"]["allowed_tools"]
@@ -146,11 +148,12 @@ def test_human_and_pr_contracts_resolve_without_extra_authority(locale):
         step_name="pr",
         trigger="confirm_output",
     )
-    assert policy.id == "local-review"
+    assert policy.id == "delivery-review"
     assert binding.outcomes == {
         "fix_now": "pr",
-        "create_follow_up": "_done",
-        "continue_without_issue": "_done",
+        "integrate_selected": "deliver",
+        "integrate_only": "deliver",
+        "review_only": "pr",
     }
     pr = p["steps"]["pr"]
     assert pr["skill"] == "cafe-pr"
@@ -163,6 +166,7 @@ def test_human_and_pr_contracts_resolve_without_extra_authority(locale):
         "GitHubPRCreator",
         "LocalReviewContextProvider",
         "PRLinkOpener",
+        "DevelopmentActionContext",
     ]
 
 

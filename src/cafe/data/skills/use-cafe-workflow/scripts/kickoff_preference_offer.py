@@ -16,7 +16,7 @@ from kickoff_preferences import PreferenceStore
 
 _KEYS = {"conversation.locale", "manager.mode", "manager.event_manager",
          "manager.poll_interval_seconds", "worktree.convention", "phase.chains",
-         "confirmation.assignments", "review.decisions", "delivery.convention", "cleanup.convention"}
+         "confirmation.assignments", "review.decisions", "cleanup.convention"}
 
 
 def default_config_dir() -> Path:
@@ -160,6 +160,9 @@ def build_offer(args, proposal, model, *, store=None, templates=None, issue_id="
     }:
         problems["templates"] = "preference_templates accepts only worktree, delivery and cleanup conventions"
         templates = {}
+    if "delivery.convention" in templates:
+        problems["delivery.convention"] = "Obsolete Manager delivery template; use phase action review"
+        templates = {key: value for key, value in templates.items() if key != "delivery.convention"}
     entries, unavailable = [], []
 
     def add(key, value, selector=None, role=None):
@@ -224,7 +227,7 @@ def build_offer(args, proposal, model, *, store=None, templates=None, issue_id="
     else:
         unavailable.append("worktree.convention")
 
-    for stage, key in (("deliver", "delivery.convention"), ("cleanup", "cleanup.convention")):
+    for stage, key in (("cleanup", "cleanup.convention"),):
         commands = [c["argv"] for c in proposal["delivery_contract"]["closeout_plan"][stage]]
         descriptions = getattr(args, stage + "_description")
         defaults = [{stage: [], stage + "_description": []}] if not commands else []
@@ -271,7 +274,7 @@ def build_offer(args, proposal, model, *, store=None, templates=None, issue_id="
 
 def render_offer(offer, *, zh, table):
     """One visible optional operation next to the formatter's only confirmation prompt."""
-    if not offer["entries"] and not offer.get("problems") and not offer["unavailable_templates"]:
+    if not offer["entries"]:
         return "", None
     labels = {
         "conversation.locale": "對話語言" if zh else "Conversation language",
@@ -321,11 +324,6 @@ def render_offer(offer, *, zh, table):
     parts = [heading, offer["project"]]
     if rows:
         parts.extend([intro, table(["項目", "已存值", "本次設定"] if zh else ["Setting", "Saved", "This kickoff"], rows)])
-    omitted = {**{key: "Needs a reusable template matching this proposal" for key in offer["unavailable_templates"]},
-               **offer.get("problems", {})}
-    if omitted:
-        parts.append(("以下項目暫不可儲存，不影響本次啟動：" if zh else "Unavailable for saving; this does not block kickoff:") +
-                     "\n" + "\n".join(f"- {key}: {reason}" for key, reason in omitted.items()))
     return "\n\n".join(parts), prompt if rows else None
 
 

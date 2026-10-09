@@ -6,7 +6,7 @@ For an initial kickoff, `format_kickoff_contract.py` supplies the complete
 confirmation request and final progress diagram. Present that document once,
 following `kickoff.md`'s translation boundary; retain the diagram's structure,
 step IDs, status meanings and symbols, counts, ownership, node order and connectors.
-All scheduled reviews, deliver and cleanup are pending. No established-workflow
+All scheduled reviews, declared phases and Manager cleanup are pending. No established-workflow
 state lookup or separate progress-renderer call is needed to present this output.
 The remaining sections apply to replies about an established workflow.
 
@@ -32,7 +32,7 @@ still ends the current turn without an additional inspection.
 Use the effective conversation locale with `--locale`. Traditional Chinese is
 selected by `zh-TW` or `zh-Hant`; other locales use English as the renderer's
 source text, which the Manager translates for the user.
-Step keys are always preserved exactly. `deliver` and `cleanup` are required
+Step keys are always preserved exactly. Only `cleanup` is required for phase-owned graphs; recorded legacy `deliver` and `cleanup` remain required
 Manager closeout items, not runtime phases, and always appear after the playbook
 phases. A playbook phase with the same name remains a separate unqualified node.
 
@@ -44,7 +44,13 @@ checkpoints immediately follow their owning phase. Keep task-authority diagnosti
 fields in task inspection output. The default diagram is a
 latest-state projection: it shows each phase's newest durable status and the
 Manager-review or user-confirmation checkpoint currently represented for that
-phase. The default projection never adds correction arrows or a historical
+phase. In phase-owned delivery graphs, the delivery result owner replaces the
+old Manager delivery node: execution and final user acceptance share one node.
+That node shows the user confirmation label while awaiting acceptance and is
+completed only after acceptance is proven. Other phase checkpoints retain their
+own nodes. New kickoff defaults do not add a Manager proactive review of this
+result owner; explicit review choices and existing confirmed contracts remain
+authoritative. The default projection never adds correction arrows or a historical
 trail; later iteration evidence supersedes earlier states. If a phase's newest
 durable state is itself returned, the phase line uses the returned symbol and
 status. A durable manual handoff back to an upstream phase is a return even
@@ -65,14 +71,13 @@ Manager-only display state is one JSON object with only these fields:
 ```json
 {
   "proactive_review": {"spec": "completed", "plan": "in_progress"},
-  "deliver": "pending",
   "cleanup": "pending"
 }
 ```
 
 Allowed states are `pending`, `in_progress`, `awaiting_input`, `completed`, `returned`,
 `awaiting_confirmation`, `skipped`, `blocked`, and `unknown`. Supply
-Both `deliver` and `cleanup` are required for every established-workflow render.
+Manager `cleanup` is required for every established-workflow render. Phase-owned graphs reject a duplicate Manager `deliver` node; recorded legacy contracts still require their original two closeout nodes.
 Supply `proactive_review` only for phases whose confirmed
 `proactive_review.phase_decisions` entry is `required`. Omitted displayed
 proactive-review state is `pending` while its phase is pending or in progress,
@@ -86,7 +91,7 @@ capability, or external-operation authority.
 ## Minimal calls
 
 Kickoff uses `format_kickoff_contract.py`; that formatter invokes this renderer
-itself with every scheduled proactive review plus `deliver` and `cleanup` set
+itself with every scheduled proactive review plus `cleanup` set
 to `pending`, then makes its output the final kickoff block. Present the
 complete formatter stdout and do not append a second diagram.
 The formatter's confirmation prompt already precedes the diagram; do not add
@@ -98,7 +103,7 @@ For an ordinary running update:
 python3 <skill-dir>/scripts/render_workflow_progress.py \
   --project-root <repo> --issue-dir <repo>/.cafe/issues/<issue> \
   --locale zh-TW --manager-state \
-  '{"proactive_review":{"develop":"in_progress"},"deliver":"pending","cleanup":"pending"}'
+  '{"proactive_review":{"develop":"in_progress"},"cleanup":"pending"}'
 ```
 
 For a waiting-confirmation question, use the same call after reading the
@@ -108,7 +113,7 @@ it from `human_tasks.json`:
 ```bash
 python3 <skill-dir>/scripts/render_workflow_progress.py \
   --project-root <repo> --issue-dir <repo>/.cafe/issues/<issue> --locale en \
-  --manager-state '{"deliver":"unknown","cleanup":"unknown"}'
+  --manager-state '{"cleanup":"unknown"}'
 ```
 
 For a formal return, again pass no return override. The completed task outcome
@@ -118,7 +123,7 @@ does not add a historical return arrow:
 ```bash
 python3 <skill-dir>/scripts/render_workflow_progress.py \
   --project-root <repo> --issue-dir <repo>/.cafe/issues/<issue> --locale zh-TW \
-  --manager-state '{"deliver":"unknown","cleanup":"unknown"}'
+  --manager-state '{"cleanup":"unknown"}'
 ```
 
 For completion and Manager closeout reporting, provide both required closeout
@@ -127,7 +132,7 @@ values:
 ```bash
 python3 <skill-dir>/scripts/render_workflow_progress.py \
   --project-root <repo> --issue-dir <repo>/.cafe/issues/<issue> --locale en \
-  --manager-state '{"deliver":"completed","cleanup":"pending"}'
+  --manager-state '{"cleanup":"pending"}'
 ```
 
 On a resumed Manager session, rebuild the ephemeral JSON from evidence available
@@ -142,7 +147,7 @@ directory reported by the lifecycle command, for example:
 python3 <skill-dir>/scripts/render_workflow_progress.py \
   --project-root <repo> \
   --issue-dir ~/.cafe/projects/<project-path>/archived/<issue> \
-  --locale zh-TW --manager-state '{"deliver":"completed","cleanup":"completed"}'
+  --locale zh-TW --manager-state '{"cleanup":"completed"}'
 ```
 
 An explicit archive path is read exactly like an active issue path. If neither

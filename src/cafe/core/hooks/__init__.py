@@ -81,6 +81,11 @@ from cafe.core.hooks.native import (
 )
 from cafe.core.hooks.alignment import AlignmentCheckpointGate
 from cafe.core.hooks.feedback import GitHubPRFeedbackSource, LocalReviewContextProvider
+from cafe.core.hooks.delivery import (
+    DevelopmentActionContext,
+    DevelopmentDeliveryExecutor,
+    DevelopmentDeliveryOutcome,
+)
 
 
 BUILTIN_HOOKS = {
@@ -99,5 +104,8 @@ BUILTIN_HOOKS = {
         PRCommentPoster,
         PRLinkOpener,
         AlignmentCheckpointGate,
+        DevelopmentActionContext,
+        DevelopmentDeliveryExecutor,
+        DevelopmentDeliveryOutcome,
     ]
 }

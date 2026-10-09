@@ -1,6 +1,46 @@
-human_task.cafe_pr.local_review.decisions.continue_without_issue.label: Approve / continue without issues
-human_task.cafe_pr.local_review.decisions.create_follow_up.label: Record issues for all proposals
+human_task.cafe_pr.local_review.decisions.continue_without_issue.label: Approve /
+  continue without issues
+human_task.cafe_pr.local_review.decisions.create_follow_up.label: Record issues for
+  all proposals
 human_task.cafe_pr.local_review.decisions.fix_now.label: Fix all proposed items now
-human_task.cafe_pr.local_review.prompt: Review the prepared local changes and the Follow-up Proposals section in the PR description. Your decision applies to every open FUP; per-proposal mixed disposition is not supported. Fix all proposals now, record that all should become separate issues, or approve and continue without issues.
+human_task.cafe_pr.local_review.prompt: Review the prepared local changes and the
+  Follow-up Proposals section in the PR description. Your decision applies to every
+  open FUP; per-proposal mixed disposition is not supported. Fix all proposals now,
+  record that all should become separate issues, or approve and continue without issues.
 notification.step_labels.pr: PR preparation and review
 notification.action_labels.local_review: Review the changes and decide to fix or continue
+human_task.cafe_pr.delivery_review.prompt: Review the displayed exact integration
+  and issue drafts. Approval authorizes only the shown actions and their displayed host capability
+  boundaries in this same decision. For selected follow-ups, enter only the displayed proposal IDs
+  separated by spaces or commas.
+human_task.cafe_pr.delivery_review.fix_now: Request implementation corrections
+human_task.cafe_pr.delivery_review.integrate_selected: Authorize integration and selected
+  follow-up IDs
+human_task.cafe_pr.delivery_review.integrate_only: Authorize integration with no follow-up
+  issues
+human_task.cafe_pr.delivery_review.review_only: Review only; do not authorize delivery
+human_task.cafe_pr.delivery_details.prompt: Provide the integration strategy, target
+  branch and local destination checkout (for local integration), and issue repository
+  when selecting follow-ups.
+human_task.cafe_pr.delivery_bundle: 'Repository: {repository}
+
+  Source: {source}
+
+  Target: {target}
+
+  Strategy: {strategy}
+
+  Destination: {destination}
+
+  Issue repository: {issues}'
+human_task.cafe_pr.delivery_draft: '{id}: {title}
+
+  {body}
+
+  Evidence: {evidence}
+
+  Evidence HEAD: {evidence_head}; impact: {impact}; confidence: {confidence}'
+
+human_task.cafe_pr.delivery_review_source: "Review source: {artifact} v{version}, {path}, producer {producer}, SHA256 {sha256}"
+
+human_task.cafe_pr.delivery_publication: "Verified PR URL: {url}"

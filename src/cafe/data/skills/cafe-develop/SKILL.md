@@ -77,11 +77,14 @@ workflow:
         - when: {feedback: true}
           mode: packet
           contract_kind: plan
-    - artifacts: [qa_feedback, review_feedback, pr_result]
+    - artifacts: [qa_feedback, review_feedback, pr_result, delivery_result]
       placeholder: feedback_file_path
       required: false
-    - artifacts: [qa_feedback, review_feedback, pr_result]
+    - artifacts: [qa_feedback, review_feedback, pr_result, delivery_result]
       placeholder: feedback_file
+      required: false
+    - artifacts: [delivery_result]
+      placeholder: delivery_feedback_file
       required: false
     - artifacts: [workflow_feedback]
       placeholder: workflow_feedback_file

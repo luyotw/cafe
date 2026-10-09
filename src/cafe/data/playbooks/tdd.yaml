@@ -107,7 +107,7 @@ steps:
     handoff_label: "Continue implementation"
     chat_role: developer
     assignee_type: agent
-    input_artifacts: [spec, plan, review_feedback, pr_result, workflow_feedback]
+    input_artifacts: [spec, plan, review_feedback, pr_result, workflow_feedback, delivery_result]
     output_artifact: code
     workspace_artifact: workspace
     human_tasks:
@@ -162,13 +162,20 @@ steps:
       need_clarification: review
 
   pr:
+    handoff_label: Revise PR action review
     type: skill
     skill: cafe-pr
     role: developer
-    handoff_label: "Refresh PR output"
+    handoff_label: Refresh PR output
     chat_role: developer
     assignee_type: agent
-    input_artifacts: [spec, plan, code, workspace, review_feedback, workflow_feedback]
+    input_artifacts:
+    - spec
+    - plan
+    - code
+    - workspace
+    - review_feedback
+    - workflow_feedback
     workspace_input_artifact: workspace
     output_artifact: pr_result
     behavior:
@@ -179,21 +186,120 @@ steps:
       feedback_source_kind: github_pr
       feedback_todo_source: pr_comment
       feedback_todo_id_prefix: PRC
-      context_providers: [git_history, local_review]
-    capability_requests: [cafe.pr.publish]
-    allowed_tools: [Read, Edit, Write, Grep, Glob]
-    allowed_goto: [develop, review]
+      context_providers:
+      - git_history
+      - local_review
+    capability_requests:
+    - cafe.pr.publish
+    allowed_tools:
+    - Read
+    - Edit
+    - Write
+    - Grep
+    - Glob
+    allowed_goto:
+    - develop
+    - review
     hooks:
-      prepare_input: [GitHubPRCreator, GitHubPRFeedbackSource, UserInputCollector]
-      publish_output: [GitHubPRCreator, LocalReviewContextProvider, PRLinkOpener]
+      prepare_input:
+      - GitHubPRCreator
+      - GitHubPRFeedbackSource
+      - UserInputCollector
+      publish_output:
+      - GitHubPRCreator
+      - LocalReviewContextProvider
+      - PRLinkOpener
+      - DevelopmentActionContext
     human_tasks:
-      - trigger: confirm_output
-        task_id: local-review
-        outcomes: {fix_now: pr, create_follow_up: _done, continue_without_issue: _done}
-        feedback_delivery: {artifact: workflow_feedback, source_kind: local_review, todo_source: workflow_feedback, todo_id_prefix: WF}
-    "on":
+    - trigger: confirm_output
+      task_id: delivery-review
+      outcomes:
+        fix_now: pr
+        integrate_selected: deliver
+        integrate_only: deliver
+        review_only: pr
+      feedback_delivery:
+        artifact: workflow_feedback
+        source_kind: local_review
+        todo_source: workflow_feedback
+        todo_id_prefix: WF
+    - trigger: need_clarification
+      task_id: delivery-details
+      outcomes:
+        submit: pr
+    'on':
       confirm_output: pr
       need_permission: pr
+      manual_handoff: develop
+      need_clarification: pr
+    delivery: &id001
+      actions_artifact: delivery_actions
+      result_artifact: delivery_result
+      approval_step: pr
+      approval_task: delivery-review
+      result_task: delivery-outcome
+      correction_step: develop
+      proposals_artifact: review_feedback
+  deliver:
+    type: skill
+    skill: cafe-deliver_development
+    handoff_label: Recover delivery actions
+    role: developer
+    assignee_type: agent
+    input_artifacts:
+    - pr_result
+    - workspace
+    - delivery_actions
+    - workflow_feedback
+    workspace_input_artifact: workspace
+    output_artifact: delivery_result
+    delivery: *id001
+    behavior:
+      completion: baton
+      feedback_target: develop
+      feedback_artifact: delivery_result
+      feedback_source_kind: delivery
+      feedback_todo_source: workflow_feedback
+      feedback_todo_id_prefix: DLV
+    capability_requests:
+    - cafe.github.pr.merge
+    - cafe.branch.integrate
+    - cafe.github.issue.create
+    allowed_tools:
+    - Read
+    - Edit
+    - Write
+    - Grep
+    - Glob
+    allowed_goto:
+    - develop
+    - pr
+    hooks:
+      prepare_input:
+      - DevelopmentDeliveryExecutor
+      publish_output:
+      - DevelopmentDeliveryOutcome
+    human_tasks:
+    - trigger: confirm_output
+      task_id: delivery-outcome
+      feedback_delivery: {artifact: workflow_feedback, source_kind: delivery, todo_source: workflow_feedback, todo_id_prefix: DLV}
+      outcomes:
+        confirm_cleanup: _done
+        confirm_archive: _done
+        confirm: _done
+        revise: deliver
+    - trigger: need_clarification
+      task_id: delivery-recovery
+      outcomes:
+        submit: deliver
+    - trigger: need_permission
+      task_id: delivery-permission
+      outcomes:
+        submit: deliver
+    'on':
+      confirm_output: deliver
+      need_clarification: deliver
+      need_permission: deliver
       manual_handoff: develop
 
 entry_point: spec

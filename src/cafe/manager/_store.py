@@ -17,7 +17,9 @@ from ._schema import validate_contract
 
 CONTRACT_FILENAME = "contract.json"
 LOCK_FILENAME = "contract.lock"
-MAX_CONTRACT_BYTES = 256 * 1024
+from cafe.core.execution_artifacts import MAX_EXECUTION_ARTIFACT_BYTES
+
+MAX_CONTRACT_BYTES = MAX_EXECUTION_ARTIFACT_BYTES
 
 
 class ManagerContractMissingError(ValueError):
@@ -276,6 +278,9 @@ def write_contract(
     if len(content) > MAX_CONTRACT_BYTES:
         raise ValueError("contract exceeds the maximum bounded size")
     atomic_write_bytes(path, content)
+    from cafe.manager.delivery import publish_delivery_closeout
+
+    publish_delivery_closeout(issue_dir, validated, sha256_bytes(content))
     try:
         os.chmod(path, 0o600)
     except OSError:
@@ -301,6 +306,9 @@ def write_updated_contract(
     if len(content) > MAX_CONTRACT_BYTES:
         raise ValueError("contract exceeds the maximum bounded size")
     atomic_write_bytes(path, content)
+    from cafe.manager.delivery import publish_delivery_closeout
+
+    publish_delivery_closeout(issue_dir, validated, sha256_bytes(content))
     try:
         os.chmod(path, 0o600)
     except OSError:
