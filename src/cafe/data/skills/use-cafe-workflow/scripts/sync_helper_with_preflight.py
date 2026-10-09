@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -52,16 +51,7 @@ def _bounded_output(value: str) -> dict[str, Any]:
     }
 
 
-def _run_command(
-    executable: str, arguments: Sequence[str], *, installed_bundle: bool = False
-) -> dict[str, Any]:
-    environment = None
-    if installed_bundle:
-        environment = os.environ.copy()
-        environment.pop("PYTHONPATH", None)
-        environment.pop("PYTHONHOME", None)
-        environment["CAFE_SKIP_ENTRYPOINT_CHECK"] = "1"
-        environment["CAFE_SKIP_GLOBAL_SKILL_SYNC"] = "1"
+def _run_command(executable: str, arguments: Sequence[str]) -> dict[str, Any]:
     try:
         result = subprocess.run(
             [executable, *arguments],
@@ -69,7 +59,6 @@ def _run_command(
             capture_output=True,
             check=False,
             timeout=COMMAND_TIMEOUT_SECONDS,
-            **({"env": environment} if installed_bundle else {}),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {
@@ -328,10 +317,9 @@ def _validate_catalog(command: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _run_checks(executable: str, *, installed_bundle: bool = False) -> dict[str, Any]:
-    options = {"installed_bundle": True} if installed_bundle else {}
-    update_command = _run_command(executable, ("update", "check", "--json"), **options)
-    catalog_command = _run_command(executable, ("catalog", "check", "--json"), **options)
+def _run_checks(executable: str) -> dict[str, Any]:
+    update_command = _run_command(executable, ("update", "check", "--json"))
+    catalog_command = _run_command(executable, ("catalog", "check", "--json"))
     errors: list[str] = []
     update_payload: dict[str, Any] | None = None
     catalog_payload: dict[str, Any] | None = None
@@ -408,13 +396,6 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("skills", nargs="+", help="Exact bundled helper skill names")
     parser.add_argument(
-        "--installed-bundle", action="store_true",
-        help="Use the installed release bundle when completing a version update",
-    )
-    parser.add_argument(
-        "--expected-version", help="Require the installed version before and after publication",
-    )
-    parser.add_argument(
         "--cli",
         action="append",
         choices=SUPPORTED_CLIS,
@@ -441,9 +422,7 @@ def _validate_scope(skills: Sequence[str], clis: Sequence[str]) -> None:
 
 
 def execute(
-    *, executable: str, skills: Sequence[str], clis: Sequence[str],
-    installed_bundle: bool = False,
-    expected_version: str | None = None,
+    *, executable: str, skills: Sequence[str], clis: Sequence[str]
 ) -> tuple[int, dict[str, Any]]:
     receipt: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
@@ -456,15 +435,8 @@ def execute(
         "comparison": None,
         "post_change_verified": False,
     }
-    options = {"installed_bundle": True} if installed_bundle else {}
-    before = _run_checks(executable, **options)
-    if expected_version is not None and before["valid"]:
-        if before["runtime_update"]["payload"]["installed_version"] != expected_version:
-            before["valid"] = False
-            before["errors"].append("Installed version does not match the requested update")
+    before = _run_checks(executable)
     receipt["preflight"] = before
-    if installed_bundle:
-        receipt["bundle_source"] = "installed_release"
     if not before["valid"]:
         receipt["stage"] = "preflight_failed"
         receipt["completed_at"] = _timestamp()
@@ -474,17 +446,13 @@ def execute(
     for cli in clis:
         sync_arguments.extend(("--cli", cli))
     sync_arguments.extend(skills)
-    publication = _run_command(executable, sync_arguments, **options)
+    publication = _run_command(executable, sync_arguments)
     publication.pop("_stdout_raw", None)
     publication.pop("_stderr_raw", None)
     receipt["publication"] = publication
     receipt["stage"] = "postflight"
 
-    after = _run_checks(executable, **options)
-    if expected_version is not None and after["valid"]:
-        if after["runtime_update"]["payload"]["installed_version"] != expected_version:
-            after["valid"] = False
-            after["errors"].append("Installed version changed during helper synchronization")
+    after = _run_checks(executable)
     receipt["postflight"] = after
     if after["valid"]:
         receipt["comparison"] = _comparison(before, after)
@@ -506,8 +474,6 @@ def main() -> int:
             executable=executable,
             skills=args.skills,
             clis=args.cli,
-            installed_bundle=args.installed_bundle,
-            expected_version=args.expected_version,
         )
     except ValueError as exc:
         print(json.dumps({"schema_version": SCHEMA_VERSION, "error": str(exc)}, sort_keys=True))
