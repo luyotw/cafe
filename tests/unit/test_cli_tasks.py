@@ -152,11 +152,16 @@ def test_inspect_human_and_json_share_task_identity(tmp_path: Path, monkeypatch)
     assert json.loads(machine.stdout)["data"]["task"]["id"] == task.id
 
 
+@pytest.mark.parametrize("restart_policy", [None, "recheck_priority"])
 def test_inspect_upgrades_legacy_interrupted_task_with_fresh_session_choice(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, restart_policy
 ) -> None:
     """A pending task created by an older runtime gains the additive recovery outcome."""
     issue_dir, _iteration_dir, task = _legacy_interrupted_task_repo(tmp_path, monkeypatch)
+    if restart_policy:
+        (issue_dir / "issue.yaml").write_text(
+            f"playbook: standard\nexecution:\n  rate_limit_restart_policy: {restart_policy}\n"
+        )
 
     first = runner.invoke(app, ["task", "inspect", task.id, "--json"])
     second = runner.invoke(app, ["task", "inspect", task.id, "--json"])
@@ -177,6 +182,20 @@ def test_inspect_upgrades_legacy_interrupted_task_with_fresh_session_choice(
         if event.event_type == "contract_refreshed"
     ]
     assert len(refreshed) == 1
+
+
+def test_read_only_inspection_preserves_legacy_interrupted_contract(tmp_path, monkeypatch):
+    """Progress inspection must not add recovery choices or write lifecycle records."""
+    from cafe.core.task_inbox import TaskInboxService
+
+    issue_dir, _iteration_dir, task = _legacy_interrupted_task_repo(tmp_path, monkeypatch)
+    records = HumanTaskRecordStore(issue_dir)
+    before = records.lifecycle_events()
+    detail = TaskInboxService(tmp_path / ".cafe").inspect_read_only(task.id)
+    assert detail.expected_result == task.expected_result
+    assert detail.continuations == task.continuations
+    assert records.get_task(task.id) == task
+    assert records.lifecycle_events() == before
 
 
 def test_fresh_session_completion_preserves_prior_session_and_user_input(

@@ -36,6 +36,8 @@ All notable changes to this project will be documented in this file.
   choice, bound to the displayed receipts and exact cleanup plan.
 - Preserve settled feedback across approved delivery continuations and resume
   verified empty-feedback handoffs without restarting the PR phase (#455).
+- Retain the legacy retry-only task upgrade that offers an explicit fresh-session
+  recovery choice without enabling configured-priority recovery.
 - Hide unavailable preference diagnostics from user-facing kickoff contracts.
 
 See [the v0.8.0 release notes](docs/releases/v0.8.0.md) for capabilities,
