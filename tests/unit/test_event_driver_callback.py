@@ -2601,15 +2601,18 @@ def test_launch_preflight_restores_existing_daemon_before_work(monkeypatch, host
     monkeypatch.setattr(callback, "read_status", lambda path: {
         "active_index": 0,
         "entries": [{"cli": "codex", "acquisition": {"session": {
-            "id": "same-thread", "source": "host_session",
+            "id": "visible-thread", "source": "host_session",
         }}}],
     })
     with patch.object(
         callback.subprocess, "run",
         side_effect=lambda *a, **k: _restore_socket(endpoint, host_listeners),
     ) as start:
-        callback.validate_bound_host_transport(Path("unused-issue"))
-        callback.validate_bound_host_transport(Path("unused-issue"))
+        with patch.object(
+            callback.subprocess, "Popen", side_effect=lambda *a, **k: _HostProxy(_HostDaemon()),
+        ):
+            callback.validate_bound_host_transport(Path("unused-issue"))
+            callback.validate_bound_host_transport(Path("unused-issue"))
     assert start.call_count == 1
     assert start.call_args.args[0] == ["codex", "app-server", "daemon", "start"]
     assert start.call_args.kwargs["check"] is True
@@ -2655,7 +2658,7 @@ def test_daemon_recovery_failure_sends_no_input_and_exposes_no_provider_output(f
     _stopped_managed_daemon()
     with patch.object(callback.subprocess, "run", side_effect=failure) as start:
         with patch.object(callback.subprocess, "Popen", side_effect=AssertionError("no proxy")):
-            with pytest.raises(callback._HostTransportUnavailable) as raised:
+            with pytest.raises(callback._HostPreEnqueueError) as raised:
                 callback._queue_host_callback("event", thread_id="original", model=None,
                                               repository_root=Path("unused"))
     assert start.call_count == 1
@@ -3366,7 +3369,7 @@ class _HostProxy:
                     else:
                         envelope = {"id": message["id"]}
                         envelope["error" if isinstance(result, _RPCRejection) else "result"] = (
-                            {"code": -32600, "message": "rejected"}
+                            {"code": result.code, "message": result.message}
                             if isinstance(result, _RPCRejection)
                             else result
                         )
@@ -3396,7 +3399,9 @@ class _HostProxy:
 
 
 class _RPCRejection:
-    pass
+    def __init__(self, message="rejected", code=-32600):
+        self.message = message
+        self.code = code
 
 
 class _HostDaemon:
@@ -3439,8 +3444,14 @@ class _HostDaemon:
                 "itemsView": "notLoaded",
             }
             return {"data": [{"id": "previous-turn", "status": self.latest}]}
+        if method == "thread/queue/list":
+            if self.behavior == "queue_unavailable":
+                return _RPCRejection()
+            return {"data": self.pending, "nextCursor": None}
         if method == "thread/resume":
             self.resume_params = params
+            if self.behavior == "external_writer":
+                return _RPCRejection("thread visible-thread already has an active writer")
             if self.behavior == "resume_rejected":
                 return _RPCRejection()
             self.status = "idle"
@@ -3578,7 +3589,7 @@ def test_host_callback_rejects_invalid_websocket_handshake(tmp_path):
     callback = _callback_module()
     proxy = _HostProxy(_HostDaemon(), bad_handshake=True)
     with patch.object(callback.subprocess, "Popen", return_value=proxy):
-        with pytest.raises(ConnectionError, match="handshake"):
+        with pytest.raises(callback._HostPreEnqueueError):
             callback._queue_host_callback(
                 "wake", thread_id="visible-thread", model=None, repository_root=tmp_path
             )
@@ -3599,7 +3610,7 @@ def test_host_transport_enforces_response_timeout_and_closes_proxy(tmp_path):
         "_HostConnection",
         side_effect=lambda process: original_connection(process, timeout=0.05),
     ):
-        with pytest.raises(TimeoutError):
+        with pytest.raises(callback._HostPreEnqueueError):
             callback._queue_host_callback(
                 "wake", thread_id="visible-thread", model=None, repository_root=tmp_path
             )
@@ -3611,7 +3622,7 @@ def test_host_transport_bounds_incoming_output_and_closes_proxy(tmp_path):
     callback = _callback_module()
     proxy = _HostProxy(lambda _message: {"oversized": "x" * (2 * 1024 * 1024)})
     with patch.object(callback.subprocess, "Popen", return_value=proxy):
-        with pytest.raises(ValueError, match="limit exceeded"):
+        with pytest.raises(callback._HostPreEnqueueError):
             callback._queue_host_callback(
                 "wake", thread_id="visible-thread", model=None, repository_root=tmp_path
             )
@@ -3641,3 +3652,116 @@ def test_host_callback_rejects_identity_or_model_changes_before_enqueue(tmp_path
             )
     assert daemon.resume_params is None
     assert daemon.input is None
+
+
+@pytest.mark.parametrize("latest", ["completed", "interrupted"])
+def test_host_callback_queues_to_existing_external_writer_without_loading(tmp_path, latest):
+    callback = _callback_module()
+    daemon = _HostDaemon(status="notLoaded", latest=latest, behavior="external_writer")
+    proxy = _HostProxy(daemon)
+    with patch.object(callback.subprocess, "Popen", return_value=proxy):
+        callback._queue_host_callback(
+            "wake", thread_id="visible-thread", model=None, repository_root=tmp_path,
+        )
+    assert daemon.status == "notLoaded"
+    assert daemon.input == [{"type": "text", "text": "wake"}]
+    methods = [r["method"] for r in proxy.requests]
+    assert methods.count("thread/queue/add") == 1
+    assert not set(methods) & {"thread/start", "turn/start", "thread/queue/start", "turn/interrupt"}
+
+
+@pytest.mark.parametrize("behavior", ["external_writer", "resume_rejected", "queue_unavailable"])
+def test_bound_host_preflight_checks_session_and_queue_without_input(monkeypatch, behavior):
+    callback = _callback_module()
+    monkeypatch.setattr(callback, "read_status", lambda path: {
+        "active_index": 0,
+        "entries": [{"cli": "codex", "acquisition": {"session": {
+            "id": "visible-thread", "source": "host_session",
+        }}}],
+    })
+    daemon = _HostDaemon(
+        status="notLoaded",
+        latest="interrupted" if behavior == "external_writer" else "completed",
+        behavior=behavior,
+    )
+    proxy = _HostProxy(daemon)
+    with patch.object(callback.subprocess, "Popen", return_value=proxy):
+        if behavior == "external_writer":
+            callback.validate_bound_host_transport(Path("unused"))
+        else:
+            with pytest.raises(callback._HostPreEnqueueError) as error:
+                callback.validate_bound_host_transport(Path("unused"))
+            assert callback._classify_provider_failure(error.value) == "conclusive_nonacceptance"
+            assert error.value.error_type == (
+                "host_rpc_rejected_thread_resume" if behavior == "resume_rejected"
+                else "host_rpc_rejected_thread_queue_list"
+            )
+    assert daemon.input is None
+    assert not any(r["method"] == "thread/queue/add" for r in proxy.requests)
+
+
+def test_resume_rejection_before_queue_is_conclusive_with_sanitized_operation(
+    tmp_path, monkeypatch,
+):
+    callback = _callback_module()
+    monkeypatch.setenv("CODEX_THREAD_ID", "visible-thread")
+    manager, _, event = _contract_event_context(
+        callback, tmp_path, [("codex", "exact")], bind_host=True,
+    )
+    daemon = _HostDaemon(status="notLoaded", behavior="resume_rejected")
+    proxy = _HostProxy(daemon)
+    with patch.object(callback.subprocess, "Popen", return_value=proxy):
+        callback.run_callback(event, repository_root=tmp_path)
+    state = json.loads((manager / "dispatch_state.json").read_text())
+    delivery = state["events"][event["event_id"]]
+    assert delivery["attempts"][0]["outcome"] == "conclusive_nonacceptance"
+    assert delivery["attempts"][0]["reason"] == "host_rpc_rejected_thread_resume"
+    assert daemon.input is None
+
+
+@pytest.mark.parametrize("message,code", [
+    ("thread different-thread already has an active writer", -32600),
+    ("thread visible-thread already has an active writer; private-token", -32600),
+    ("thread visible-thread already has an active writer", -32603),
+])
+def test_external_writer_requires_exact_native_error_for_bound_thread(tmp_path, message, code):
+    callback = _callback_module()
+    daemon = _HostDaemon(status="notLoaded")
+
+    def reject_resume(request):
+        if request["method"] == "thread/resume":
+            return _RPCRejection(message, code)
+        return daemon(request)
+
+    proxy = _HostProxy(reject_resume)
+    with patch.object(callback.subprocess, "Popen", return_value=proxy):
+        with pytest.raises(callback._HostPreEnqueueError) as error:
+            callback._queue_host_callback(
+                "wake", thread_id="visible-thread", model=None, repository_root=tmp_path,
+            )
+    assert "private-token" not in str(error.value)
+    assert daemon.input is None
+
+
+def test_external_writer_lost_ack_stays_ambiguous_without_replay(tmp_path, monkeypatch):
+    callback = _callback_module()
+    monkeypatch.setenv("CODEX_THREAD_ID", "visible-thread")
+    manager, _, event = _contract_event_context(
+        callback, tmp_path, [("codex", "exact"), ("gemini", "backup")], bind_host=True,
+    )
+    daemon = _HostDaemon(status="notLoaded", latest="interrupted", behavior="external_writer")
+
+    def lose_admission_reply(request):
+        response = daemon(request)
+        return None if request["method"] == "thread/queue/add" else response
+
+    proxy = _HostProxy(lose_admission_reply)
+    with patch.object(callback.subprocess, "Popen", return_value=proxy) as launch:
+        callback.run_callback(event, repository_root=tmp_path)
+        callback.run_callback(event, repository_root=tmp_path)
+    state = json.loads((manager / "dispatch_state.json").read_text())
+    delivery = state["events"][event["event_id"]]
+    assert delivery["status"] == "recovery_pending"
+    assert delivery["attempts"][0]["outcome"] == "ambiguous"
+    assert launch.call_count == 1
+    assert state["entries"][1]["session"] is None
