@@ -23,8 +23,10 @@ def change_then_commit(repo, iteration, call):
 
 
 @pytest.mark.parametrize("mode", ["baton", "legacy"])
-def test_i1_custom_step_corrects_before_effects_in_exact_context(journey, mode):
-    j = journey([CORRECTED], mode=mode, workspace=True, workspace_action=change_then_commit)
+@pytest.mark.parametrize("base_branch", [None, "main"])
+def test_i1_custom_step_corrects_before_effects_in_exact_context(journey, mode, base_branch):
+    j = journey([CORRECTED], mode=mode, workspace=True, workspace_action=change_then_commit,
+                base_branch=base_branch)
     j.runtime.run(start_step="inspect_custom")
     assert len(j.manager.calls) == 2
     first, correction = j.manager.calls
