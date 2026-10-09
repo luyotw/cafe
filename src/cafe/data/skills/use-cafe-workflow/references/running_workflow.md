@@ -175,7 +175,8 @@ alone does not prove that session delivery is supported.
 When the daemon reports the thread as unloaded, it tries to load that exact
 thread without model, cwd, sandbox, approval or configuration overrides. If the
 native store reports that this exact thread already has an active writer, leave
-ownership with that App/server and enqueue through the shared native queue. Its
+ownership with that App/server and enqueue through the shared native queue,
+also used by `codex queue`. Its
 built-in queue watcher dispatches the message in the owning host. An unloaded
 server's persisted history can label an App-owned running turn as interrupted;
 that snapshot cannot override a confirmed live writer. Native queue dispatch
