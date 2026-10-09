@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Fixed
+
+- Synchronize and verify bundled CLI-native helper skills as part of an approved
+  CAFE version update, using the newly installed package instead of a checkout.
+  Report partial completion if helper synchronization fails.
+
 ## [0.8.0] - 2026-10-09
 
 ### Added
