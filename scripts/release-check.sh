@@ -166,6 +166,23 @@ for name in ("cafe.github.pr.merge", "cafe.branch.integrate", "cafe.github.issue
     assert definition.approval == "required", name
 PYCAPABILITIES
 
+echo "Verifying packaged rate-limit restart policy and settings owner..."
+"$SMOKE_VENV/bin/python" - <<'PYRESTART'
+import json
+from importlib import import_module
+from importlib.resources import files
+
+from cafe.core.restart_policy import (
+    CONTINUE_LAST_SUCCESS, RECHECK_PRIORITY, SETTING, resolve_restart_policy,
+)
+
+assert resolve_restart_policy({}) == CONTINUE_LAST_SUCCESS
+assert resolve_restart_policy({"execution": {"rate_limit_restart_policy": RECHECK_PRIORITY}}) == RECHECK_PRIORITY
+owners = json.loads(files("cafe").joinpath("data/setting_updates.json").read_text())
+module, attribute = owners[SETTING].split(":", 1)
+assert callable(getattr(import_module(module), attribute)), SETTING
+PYRESTART
+
 start_stage upgrade
 echo "Verifying v0.7.5 to current wheel upgrade with an in-flight legacy PR task..."
 BASELINE_SOURCE="$RELEASE_TEMP_DIR/baseline"

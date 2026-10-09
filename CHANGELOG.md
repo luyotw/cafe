@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
-## [0.8.0] - 2026-10-08
+## [0.8.0] - 2026-10-09
 
 ### Added
 
@@ -12,8 +12,13 @@ All notable changes to this project will be documented in this file.
   regression proof, minimal repair and independent review (#434).
 - Add compact kickoff and the `streamlined` playbook with cumulative approved
   file scope, provider-observed native review and exact delivery readiness (#598).
-- Separate development action review, approved integration/selected follow-up
-  issue execution, host capability approval and final result acceptance (#602).
+- Add development action review, approved integration/selected follow-up issue
+  execution and final result acceptance (#602). PR confirmation approves the
+  displayed actions and host capability boundaries together, with separate
+  durable approval records.
+- Add an issue-scoped rate-limit restart policy with the compatible sticky
+  default and a user-authorized configured-priority recovery choice, including
+  inspectable invocation order and stale-preference handling (#455).
 - Bound Manager same-session interruption recovery to three retries, 30 seconds
   apart, with read-only accounting from existing durable tasks and results.
 
@@ -27,6 +32,11 @@ All notable changes to this project will be documented in this file.
   workflow requests clarification instead of reporting malformed output.
 - Preserve supervisor ownership, selected targets and correction recovery
   across compact and full workflow handoffs.
+- Accept delivery results with an explicit cleanup, archive-only or leave-as-is
+  choice, bound to the displayed receipts and exact cleanup plan.
+- Preserve settled feedback across approved delivery continuations and resume
+  verified empty-feedback handoffs without restarting the PR phase (#455).
+- Hide unavailable preference diagnostics from user-facing kickoff contracts.
 
 See [the v0.8.0 release notes](docs/releases/v0.8.0.md) for capabilities,
 recovery limits and upgrade guidance.
