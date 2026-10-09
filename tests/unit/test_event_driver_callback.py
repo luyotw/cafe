@@ -2582,6 +2582,19 @@ def test_healthy_host_needs_no_daemon_start():
         assert callback._ensure_host_control_socket() == callback._require_host_control_socket()
 
 
+def test_healthy_host_with_long_managed_alias_needs_no_daemon_start(monkeypatch):
+    callback = _callback_module()
+    home = Path(os.environ["CODEX_HOME"])
+    target = home / "app-server-control/app-server-control.sock"
+    long_home = home / ("long-codex-home-" * 8)
+    endpoint = long_home / "app-server-control/app-server-control.sock"
+    endpoint.parent.mkdir(parents=True)
+    endpoint.symlink_to(target)
+    monkeypatch.setenv("CODEX_HOME", str(long_home))
+    with patch.object(callback.subprocess, "run", side_effect=AssertionError("no start")):
+        assert callback._ensure_host_control_socket() == endpoint
+
+
 def test_launch_preflight_restores_existing_daemon_before_work(monkeypatch, host_listeners):
     callback = _callback_module()
     _home, endpoint = _stopped_managed_daemon()

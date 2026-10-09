@@ -1889,7 +1889,9 @@ def _probe_host_control_socket() -> Path:
                 "callback.attempt-budget", "duration",
                 execution_context(consumers=["callback"]), expected_unit="seconds",
             ))
-            probe.connect(str(endpoint))
+            # Managed aliases can exceed AF_UNIX's address length limit.
+            # Ownership was checked on both the alias and its resolved socket.
+            probe.connect(str(endpoint.resolve(strict=True)))
     except OSError:
         raise _HostTransportUnavailable(
             "The existing Codex daemon control socket is not accepting connections. "
