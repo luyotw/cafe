@@ -55,11 +55,17 @@ synchronization of its bundled CLI-native helper skills for detected CLIs and
 CLIs with an existing CAFE helper installation. Do not ask for a second skill
 or CLI approval. The update uses the newly installed release bundle and verifies
 the destination contents; require its successful `helper_sync` receipt before
-reporting the combined update complete. Then re-run `cafe update check --json`
+reporting the combined update complete. A successful legacy updater may return
+only the runtime post-check, without `helper_sync`: verify that it installed the
+approved version, then complete helper synchronization through the installed-bundle
+procedure below without another approval. A present but failed or unverified
+receipt is a partial update; retry only helper synchronization. Then re-run
+`cafe update check --json`
 before `cafe prepare` and record the post-change evidence.
 
-When the Manager performs an explicitly requested version update through another
-installer, such as pip or uv, automatically synchronize the same bundled helpers
+When completing a legacy update without `helper_sync`, or when the Manager
+performs an explicitly requested version update through another installer such
+as pip or uv, automatically synchronize the same bundled helpers
 from that installed version as part of the requested update. Discover the
 supported detected and already installed CLI destinations, then run the
 receipt-producing helper below with `--installed-bundle`,
