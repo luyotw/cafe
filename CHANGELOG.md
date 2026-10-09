@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.8.1] - 2026-10-09
+
+### Fixed
+
+- Synchronize and verify bundled CLI-native helper skills as part of an approved
+  CAFE version update, using the newly installed package instead of a checkout.
+  Report partial completion if helper synchronization fails (#610).
+- Restore previously configured Codex daemons before workflow launch and
+  callbacks, including stopped daemons and stale control sockets (#611).
+- Let delivery corrections return through development without requiring
+  receipts for unselected actions; selected actions retain their approval and
+  receipt checks (#613).
+
+See [the v0.8.1 release notes](docs/releases/v0.8.1.md) for update behavior,
+recovery boundaries and delivery compatibility.
+
 ## [0.8.0] - 2026-10-09
 
 ### Added
