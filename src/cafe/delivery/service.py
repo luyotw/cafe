@@ -58,7 +58,7 @@ def execute_snapshot(
 
     if snapshot.proposal.verification is None:
         from cafe.delivery.verification import VerificationReviewRequired
-        raise VerificationReviewRequired("verification scope is missing; fresh PR action review is required")
+        raise VerificationReviewRequired("verification scope is missing; fresh delivery action review is required")
     validate_snapshot_authority(issue_dir, snapshot)
     deadline = time.monotonic() + min(timeout, 180)
     actions = ["integration", *[p.id for p in snapshot.selected]]

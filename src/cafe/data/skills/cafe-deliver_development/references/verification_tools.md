@@ -48,7 +48,7 @@ and network needs. Repository manifests cannot grant host permissions. If no
 suitable registered capability exists, delivery cannot automatically run that
 tool; identify the missing execution capability as implementation work. This
 extends tool execution, not CI platform adapters.
-Keep credentials out of options and output. The PR review displays the tool,
+Keep credentials out of options and output. The delivery action review displays the tool,
 hash, options, capability manifest and repeated host-execution authority.
 Host Python is not an enforced read-only sandbox; inspect the code and its
 dependencies before approving it. A changed tool or boundary needs fresh review.
@@ -87,4 +87,4 @@ optional proposal for independent work, not a mandatory step.
 
 Test success, pending, actual failure, unavailable tools, transient network
 errors, wrong commit/version and missing evidence. The completed tool joins
-the reviewed source and is frozen in a fresh PR action decision.
+the reviewed source and is frozen in a fresh delivery action decision.

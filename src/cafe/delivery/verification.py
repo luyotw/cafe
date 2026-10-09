@@ -36,18 +36,18 @@ def tool_bytes(root, tool):
             owner = SkillLoader(project_root=root).get_skill_dir(tool.owner).resolve()
         except SkillDiscoveryError as exc:
             raise VerificationReviewRequired(
-                "verification tool owner is missing; restore or replace it before fresh PR action review"
+                "verification tool owner is missing; restore or replace it before fresh delivery action review"
             ) from exc
     path = owner / tool.path
     if path.is_symlink() or not path.resolve().is_relative_to(owner):
         raise VerificationReviewRequired("verification tool must stay within its approved owner")
     if not path.is_file():
-        raise VerificationReviewRequired("verification tool is missing; implement it before fresh PR action review")
+        raise VerificationReviewRequired("verification tool is missing; implement it before fresh delivery action review")
     if path.stat().st_size > 128 * 1024:
         raise ValueError("verification tool exceeds the bounded code size")
     code = path.read_bytes()
     if hashlib.sha256(code).hexdigest() != tool.sha256:
-        raise VerificationReviewRequired("verification tool changed; fresh PR action review is required")
+        raise VerificationReviewRequired("verification tool changed; fresh delivery action review is required")
     return code
 
 
@@ -128,7 +128,7 @@ def observe_delivery(snapshot, commit, *, root, issue_dir, registry=None, timeou
     )
     validate_tool_capability(evaluation.manifest)
     if snapshot.proposal.capability_review is None or "verification" not in snapshot.proposal.capability_review:
-        raise ValueError("repeated host verification needs the displayed PR capability review")
+        raise ValueError("repeated host verification needs the displayed delivery capability review")
     validate_reviewed_request(
         issue_dir=issue_dir, snapshot=snapshot, action="verification", evaluation=evaluation
     )

@@ -13,3 +13,33 @@ human_task.delivery.confirm: 驗收結果，保留外部狀態
 human_task.delivery.confirm_cleanup: 驗收結果，執行顯示的收尾計畫
 human_task.delivery.confirm_archive: 驗收結果，僅封存並保留 worktree 與分支
 human_task.delivery.revise: 恢復或修訂交付
+
+human_task.delivery.delivery_review.prompt: 請審查下方精確的整合動作與議題草稿。批准會在同一次決策中授權顯示的動作與 host
+  權限範圍。選取後續議題時，僅輸入顯示的 proposal ID，以空白或逗號分隔。
+human_task.delivery.delivery_review.fix_now: 要求修正實作
+human_task.delivery.delivery_review.integrate_selected: 授權整合及選取的後續議題 ID
+human_task.delivery.delivery_review.integrate_only: 授權整合，不建立後續議題
+human_task.delivery.delivery_review.review_only: 僅審查，暫不授權交付
+human_task.delivery.delivery_details.prompt: 請提供整合策略、目標分支、本機目的 checkout（本機整合時），以及選取後續議題時的
+  GitHub repository。
+human_task.delivery.delivery_bundle: '儲存庫：{repository}
+
+  來源：{source}
+
+  目標：{target}
+
+  策略：{strategy}
+
+  目的 checkout／PR：{destination}
+
+  後續議題儲存庫：{issues}'
+human_task.delivery.delivery_draft: '{id}：{title}
+
+  {body}
+
+  依據：{evidence}
+
+  證據 HEAD：{evidence_head}；影響：{impact}；信心：{confidence}'
+human_task.delivery.delivery_review_source: Review 來源：{artifact} v{version}，{path}，產生者
+  {producer}，SHA256 {sha256}
+human_task.delivery.delivery_publication: 已驗證 PR 連結：{url}

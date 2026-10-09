@@ -221,9 +221,15 @@ def test_conflict_abort_develop_fix_fresh_review_and_authorization_deliver(
         ),
     )
     phase.iteration = 2
-    phase.phase_name = "pr"
-    output = issue / "pr" / "iteration_002" / "output.md"
-    output.parent.mkdir(parents=True)
+    phase.phase_name = "deliver"
+    output = issue / "deliver" / "iteration_002" / "output.md"
+    published = issue / "pr" / "iteration_002" / "output.md"
+    published.parent.mkdir(parents=True)
+    published.write_text("Reviewed corrected PR " + new_source)
+    BlackboardStore(issue).put_artifact(state, ArtifactEntry(
+        name="pr_result", kind=ArtifactKind.DOCUMENT, version=2, updated_by="pr", path=str(published),
+    ))
+    output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text("Reviewed corrected package " + new_source)
     (output.parent / "delivery_request.json").write_text(
         json.dumps(
@@ -237,7 +243,11 @@ def test_conflict_abort_develop_fix_fresh_review_and_authorization_deliver(
             }
         )
     )
-    kwargs.update(step_name="pr", step_def=data["steps"]["pr"], output_file=output, context={})
+    kwargs.update(step_name="deliver", step_def=data["steps"]["deliver"], output_file=output, context={})
+    prepared = hook(engine, "prepare_input", "DevelopmentDeliveryExecutor", kwargs)
+    assert prepared.continue_pipeline
+    assert prepared.context_updates["delivery_stage"] == "prepare_action"
+    assert git(dest, "rev-parse", "HEAD") == original_target
     (issue / "next_step.txt").write_text(json.dumps({
         "version": 1, "to_owner": "user", "to_step": "user", "intent": "confirm_output",
     }))

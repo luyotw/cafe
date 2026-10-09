@@ -30,6 +30,7 @@ class DeliveryBinding(FrozenModel):
     result_task: str = "delivery-outcome"
     correction_step: str
     proposals_artifact: str | None = None
+    publication_artifact: str | None = None
 
 
 class ReviewSource(FrozenModel):

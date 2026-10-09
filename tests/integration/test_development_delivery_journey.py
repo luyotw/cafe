@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.capability_approvals import CapabilityApprovalService
 from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.status_codes import PhaseStatusCode
@@ -65,6 +65,10 @@ def graph(tmp_path, *, renamed=False, playbook="direct"):
 
 
 def hook(engine, stage, name, kwargs):
+    if name == "DevelopmentActionContext" and kwargs["step_def"]["delivery"].get("publication_artifact"):
+        (kwargs["phase"].issue_dir / "next_step.txt").write_text(json.dumps({
+            "version": 1, "to_owner": "user", "to_step": "user", "intent": "need_permission",
+        }))
     if name == "DevelopmentDeliveryOutcome":
         (kwargs["phase"].issue_dir / "next_step.txt").write_text(
             json.dumps(
@@ -100,10 +104,12 @@ def setup_action(
     strategy=None,
     bundled=True,
     verification=None,
+    prepare_review=True,
 ):
     root, dest, _, local = local_action
     data = graph(root, renamed=renamed, playbook=playbook)
-    approval, delivery = ("package", "ship") if renamed else ("pr", "deliver")
+    publication, delivery = ("package", "ship") if renamed else ("pr", "deliver")
+    approval = delivery
     issue = root / ".cafe" / "issues" / "journey"
     issue.mkdir(parents=True)
     output = issue / approval / "iteration_001" / "output.md"
@@ -125,9 +131,14 @@ def setup_action(
     (output.parent / "delivery_request.json").write_text(json.dumps(request))
     store = BlackboardStore(issue)
     state = store.load_or_create(approval, playbook_id=data["playbook"]["id"])
+    published = issue / publication / "iteration_001/output.md"
+    published.parent.mkdir(parents=True)
+    published.write_text("# Published PR content\n")
+    store.put_artifact(state, ArtifactEntry(
+        name=data["steps"][approval]["delivery"]["publication_artifact"],
+        kind=ArtifactKind.DOCUMENT, version=1, updated_by=publication, path=str(published),
+    ))
     if data["steps"][approval]["delivery"].get("proposals_artifact") or proposals:
-        from cafe.core.blackboard import ArtifactEntry, ArtifactKind
-
         review = issue / "review.md"
         proposals = [
             {
@@ -173,6 +184,8 @@ def setup_action(
     from cafe.skills.loader import SkillLoader
 
     engine = GenericPhase(SkillLoader(project_root=root, global_root=tmp_path))
+    if not prepare_review:
+        return root, dest, issue, state, phase, data, engine, kwargs, None, delivery
     from unittest.mock import patch
     from contextlib import nullcontext
 
@@ -188,13 +201,13 @@ def setup_action(
 
 def approve_action(context, *, selected=""):
     root, dest, issue, state, phase, data, engine, kwargs, task, delivery = context
-    pause(issue, state, kwargs["step_name"])
+    pause(issue, state, kwargs["step_name"], HandoffIntent.NEED_PERMISSION)
     result = apply_human_task_payload(
         issue_dir=issue,
         playbook_data=data,
         blackboard=state,
         from_step=kwargs["step_name"],
-        trigger="confirm_output",
+        trigger="need_permission",
         raw_payload={
             "task": task.policy_id,
             "human_task_id": task.id,
@@ -333,6 +346,8 @@ if '/actions/workflows/' in endpoint:
     print(json.dumps(state['workflow_runs']))
 elif '/actions/runs/' in endpoint:
     print(json.dumps(state['jobs']))
+elif '/pulls?' in endpoint:
+    print(json.dumps(state.get('lookup_prs', [state['pr']])))
 elif '/pulls/' in endpoint:
     print(json.dumps(state['pr']))
 elif '--method' in argv:
@@ -468,14 +483,14 @@ def test_stale_result_bytes_cannot_complete_workflow(local_action, tmp_path):
 def test_changed_reviewed_artifact_requires_fresh_action_authority(local_action, tmp_path):
     context = setup_action(local_action, tmp_path)
     root, dest, issue, state, phase, data, engine, kwargs, task, delivery = context
-    kwargs["output_file"].write_text("Changed package\n")
-    pause(issue, state, kwargs["step_name"])
+    Path(state.artifacts[data["steps"][delivery]["delivery"]["publication_artifact"]].path).write_text("Changed package\n")
+    pause(issue, state, kwargs["step_name"], HandoffIntent.NEED_PERMISSION)
     result = apply_human_task_payload(
         issue_dir=issue,
         playbook_data=data,
         blackboard=state,
         from_step=kwargs["step_name"],
-        trigger="confirm_output",
+        trigger="need_permission",
         raw_payload={
             "task": "delivery-review",
             "human_task_id": task.id,
@@ -495,7 +510,9 @@ def test_changed_source_blocks_dispatch_after_host_approval(local_action, tmp_pa
     git(root, "add", "new.txt")
     git(root, "commit", "-qm", "Changed source")
     result = run_and_approve_host(context)
-    assert result.override_status_code == PhaseStatusCode.NEED_CLARIFICATION
+    assert result.continue_pipeline
+    assert result.context_updates["delivery_stage"] == "prepare_action"
+    assert "fresh action review" in result.context_updates["continuation_prompt"]
     assert git(local_action[1], "rev-parse", "HEAD") == local_action[3].proposal.target_oid
 
 
@@ -548,11 +565,11 @@ def test_revised_selection_reconciles_earlier_unknown_before_new_effects(
         review = issue / "review.md"
         review.write_text(review.read_text().replace("Original", "Revised"))
     phase.iteration = 2
-    phase.phase_name = "pr"
+    phase.phase_name = delivery
     kwargs.update(
-        step_name="pr",
-        step_def=data["steps"]["pr"],
-        output_file=issue / "pr" / "iteration_001" / "output.md",
+        step_name=delivery,
+        step_def=data["steps"][delivery],
+        output_file=issue / delivery / "iteration_001" / "output.md",
         context={},
     )
     (issue / "next_step.txt").write_text(

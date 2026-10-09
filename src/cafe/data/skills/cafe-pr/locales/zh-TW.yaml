@@ -35,3 +35,8 @@ human_task.cafe_pr.delivery_draft: '{id}：{title}
 human_task.cafe_pr.delivery_review_source: "Review 來源：{artifact} v{version}，{path}，產生者 {producer}，SHA256 {sha256}"
 
 human_task.cafe_pr.delivery_publication: "已驗證 PR 連結：{url}"
+
+human_task.cafe_pr.pr_review: 請審查已發布的 PR 內容。確認後進入交付階段；此回答不授權合併或建立議題。
+human_task.cafe_pr.pr_fix: 修訂 PR 內容
+human_task.cafe_pr.pr_confirm: 確認 PR 內容並進入交付
+human_task.cafe_pr.pr_details: 請釐清缺少的 PR 內容或發布資訊。

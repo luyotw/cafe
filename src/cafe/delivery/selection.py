@@ -11,6 +11,10 @@ from cafe.core.packet_io import atomic_write_bytes, canonical_json
 from cafe.delivery.contracts import ActionProposal, ActionSnapshot, approve_selection, digest
 
 
+class ActionReviewRequired(ValueError):
+    """Confirmed source evidence changed; propose a new action without old authority."""
+
+
 def proposal_path(issue_dir, task_id):
     return issue_dir / "delivery" / "proposals" / f"{digest({'task_id': task_id})}.json"
 
@@ -31,7 +35,7 @@ def validate_reviewed_artifact(issue_dir, proposal):
         not path.is_relative_to(issue_dir.resolve())
         or hashlib.sha256(path.read_bytes()).hexdigest() != proposal.reviewed_artifact_sha256
     ):
-        raise ValueError("reviewed artifact changed; fresh action review is required")
+        raise ActionReviewRequired("reviewed artifact changed; fresh action review is required")
 
 
 def approved_snapshot(issue_dir: Path, *, workflow_id: str, binding) -> ActionSnapshot:
@@ -86,7 +90,7 @@ def validate_source_identity(issue_dir, proposal):
         commands.git(root, "rev-parse", "HEAD") != proposal.source_oid
         or commands.git(root, "symbolic-ref", "--short", "HEAD") != proposal.source_branch
     ):
-        raise ValueError("reviewed source changed; fresh action review is required")
+        raise ActionReviewRequired("reviewed source changed; fresh action review is required")
 
 
 def validate_snapshot_authority(issue_dir: Path, snapshot: ActionSnapshot):

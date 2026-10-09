@@ -171,7 +171,7 @@ def test_completed_legacy_acceptance_survives_upgrade_but_pending_does_not(tmp_p
     assert accepted_choice(tmp_path, **kwargs) is None
     with pytest.raises(ValueError, match="verification"):
         validate_complete_report(tmp_path, old, report)
-    with pytest.raises(ValueError, match="fresh PR"):
+    with pytest.raises(ValueError, match="fresh delivery action"):
         execute_snapshot(
             root=tmp_path,
             issue_dir=tmp_path,
