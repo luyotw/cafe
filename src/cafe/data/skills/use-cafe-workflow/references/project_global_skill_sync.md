@@ -50,8 +50,28 @@ update check --json`. The non-interactive prepare command must never prompt.
 When status is `update_available`, show the installed and latest versions and
 explicitly ask the user whether to update. Only explicit acceptance may apply
 the exact comparison token from that check with `cafe update apply --token
-<token-from-update-check> --json`; then re-run `cafe update check --json`
+<token-from-update-check> --json`. Approval to update CAFE includes automatic
+synchronization of its bundled CLI-native helper skills for detected CLIs and
+CLIs with an existing CAFE helper installation. Do not ask for a second skill
+or CLI approval. The update uses the newly installed release bundle and verifies
+the destination contents; require its successful `helper_sync` receipt before
+reporting the combined update complete. Then re-run `cafe update check --json`
 before `cafe prepare` and record the post-change evidence.
+
+When the Manager performs an explicitly requested version update through another
+installer, such as pip or uv, automatically synchronize the same bundled helpers
+from that installed version as part of the requested update. Discover the
+supported detected and already installed CLI destinations, then run the
+receipt-producing helper below with `--installed-bundle`,
+`--expected-version <version-just-installed>`, those CLI names and
+the bundled default skill names. This pins synchronization to the updated
+installed executable, excluding checkout reexecution and Python path overrides.
+The helper requires that version in both preflight and postflight. This scope is
+covered by the version-update request; do not require
+the user to restate skill names or CLI targets. Re-run both read-only checks and
+retain the synchronization receipt. If the CLI update succeeds but helper sync
+fails, report the partial update and retry synchronization without reinstalling
+the runtime or claiming all components are current.
 
 A decline records `declined` and continues `cafe prepare` without installation.
 `current` may be silent or briefly reported. `unavailable` warns clearly and
@@ -99,8 +119,9 @@ cafe catalog sync-global --token <token-from-catalog-check> \
 Do not run either apply command without that explicit request. Catalog
 publication flows only from the effective project view to matching Global
 paths; it does not modify project content or CLI-native helper-skill installs.
-CLI-native helper publication remains a separate approval scope and uses the
-receipt-producing command below.
+Publishing project catalog content remains separate from a version update.
+Bundled release helpers are included in the approved CAFE update; independent
+helper publication uses the receipt-producing command below.
 
 ## Helper installation and publication
 
@@ -111,17 +132,27 @@ use their packaged bundle, while linked Git worktrees resolve the canonical main
 checkout bundle; an existing directory or symlink is never repaired or replaced
 by startup.
 
-Updating existing CLI-native helpers requires an explicit, exact skill and CLI
-scope. After that approval, use the bundled orchestration helper instead of
-calling `cafe skill sync-global` directly:
+Updating the CAFE version also updates its bundled CLI-native helpers. The
+default scope is `use-cafe-workflow`, `write-cafe-agent`, `write-cafe-playbook`,
+and `write-cafe-phase` for detected CLIs and CLI destinations where these helpers
+are already installed. Other user skills and project catalogs are outside that
+scope. `cafe update apply` performs and verifies this synchronization using the
+newly installed package, even when the updater was launched inside a checkout.
+
+For helper publication independent of a version update, including deliberate
+feature-worktree publication, use the user's explicit, exact skill and CLI
+scope. Use the bundled orchestration helper instead of calling
+`cafe skill sync-global` directly:
 
 ```bash
 python3 <skill-dir>/scripts/sync_helper_with_preflight.py \
   --cli codex use-cafe-workflow
 ```
 
-Repeat `--cli` and list additional skill names only when the user approved each
-exact destination. The helper runs runtime and catalog checks before mutation,
+For an approved version update, repeat `--cli` for every discovered destination
+and list all bundled default helper names without another approval prompt. For
+independent publication, repeat `--cli` and list additional skill names only
+within the user's approved scope. The helper runs runtime and catalog checks before mutation,
 invokes `cafe skill sync-global` with an argv list, then runs both checks again
 even when publication reports a failure. It emits one bounded JSON receipt with
 the exact scope, command outcomes, timestamps, before/after tokens and effective

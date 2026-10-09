@@ -520,10 +520,18 @@ whole-process confinement or denial of every mutation path.
 
 ### Global helper skills
 
-CAFE synchronizes its bundled helper skills only for detected coding agents. An
+Ordinary startup installs missing bundled helper skills for detected coding agents. An
 agent is detected through its executable on `PATH` or existing vendor state;
 directories containing only old CAFE-managed copies do not count as an
 installation.
+
+Updating CAFE also updates and verifies its bundled helper skills for detected
+agents and agents with an existing CAFE helper installation. Approval to update
+the version covers both operations; no separate skill or CLI confirmation is
+needed. `cafe update apply` reads helpers from the newly installed release, even
+when run inside a source checkout. An agent performing a pip or uv update follows
+the same combined-update policy. If helper synchronization fails, the update
+reports partial completion and identifies the synchronization retry command.
 
 Ask your agent to repair a managed copy or preinstall for a specific agent:
 
