@@ -586,11 +586,27 @@ def _chat_usage_sink(issue_dir: Path, step_name: str, *, cli, requested_model, m
         except (OSError, ValueError):
             print("\n⚠️  Chat accounting incomplete: usage publication failed.\n")
             raise
-        if mode == "interactive" or not results or any(
-            result.usage is None
-            or not {"input_tokens", "output_tokens"}.issubset(result.usage.model_fields_set)
-            or result.failure_code
+        from cafe.core.cost import format_cost, summarize_cost
+
+        cost_records = [
+            cost
             for result in results
+            if result.usage is not None
+            for cost in result.usage.cost_records
+        ]
+        if cost_records:
+            print("\nCost (USD): " + format_cost(summarize_cost(cost_records)))
+            if any(cost.get("provenance") == "estimated" for cost in cost_records):
+                print("API-equivalent estimate; subscription billing is separate.\n")
+        if (
+            mode == "interactive"
+            or not results
+            or any(
+                result.usage is None
+                or not {"input_tokens", "output_tokens"}.issubset(result.usage.model_fields_set)
+                or result.failure_code
+                for result in results
+            )
         ):
             print("\n⚠️  Chat accounting incomplete; see chat usage coverage in cafe status.\n")
         elif any(

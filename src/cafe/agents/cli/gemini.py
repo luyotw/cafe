@@ -131,6 +131,11 @@ class GeminiCLI(AbstractCLI):
                                 setattr(token_usage, target, stats[source])
                         if stats.get("duration_ms") is not None:
                             token_usage.duration_api_ms = stats["duration_ms"]
+                        from cafe.agents.cli.provider_usage import gemini_model_usages
+
+                        turns = gemini_model_usages(stats)
+                        if turns or "models" in stats:
+                            token_usage.turn_usages = turns
 
                 # Track tool_use for use on tool_result error
                 if data.get("type") == "tool_use":

@@ -119,6 +119,11 @@ class CursorCLI(AbstractCLI):
                 
                 # Extract token usage and duration from result
                 if data.get("type") == "result":
+                    from cafe.agents.cli.provider_usage import token_counters
+
+                    counters = token_counters(data.get("usage", {}))
+                    for name, value in counters.items():
+                        setattr(token_usage, name, value)
                     duration_ms = data.get("duration_ms")
                     duration_api_ms = data.get("duration_api_ms")
                     
