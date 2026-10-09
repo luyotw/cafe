@@ -1,5 +1,6 @@
 """Localized public consumers obtain authored copy from packaged resources."""
 
+import ast
 from pathlib import Path
 
 import pytest
@@ -107,6 +108,18 @@ def test_manager_kickoff_reads_catalog_through_public_render(authored_copy, loca
 
 def test_every_builtin_localized_declaration_uses_keys_and_materializes_plain_copy(tmp_path):
     loader = SkillLoader(project_root=tmp_path, global_root=tmp_path / "global")
+    # Delivery hooks consume additional authored messages outside frontmatter.
+    hook_messages = set()
+    hook_tree = ast.parse((BUILTINS.parents[1] / "delivery/phase_hooks.py").read_text())
+    for node in ast.walk(hook_tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "render_text"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+        ):
+            hook_messages.add(node.args[0].value)
     found = 0
     for path in sorted(BUILTINS.glob("cafe-*/SKILL.md")):
         metadata = yaml.safe_load(path.read_text().split("---", 2)[1])
@@ -128,7 +141,9 @@ def test_every_builtin_localized_declaration_uses_keys_and_materializes_plain_co
                     collect_references(child)
 
         collect_references(metadata["workflow"])
-        assert set(catalogs["en-US"]) == set(catalogs["zh-TW"]) == references
+        assert set(catalogs["en-US"]) == set(catalogs["zh-TW"])
+        assert references <= set(catalogs["en-US"])
+        assert set(catalogs["en-US"]) - references <= hook_messages
         declared = loader.get_workflow_declaration(path.parent.name)
         for raw, policy in zip(tasks, declared.human_tasks, strict=True):
             assert isinstance(raw["prompt"], dict)

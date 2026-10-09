@@ -64,6 +64,17 @@ def _task(kwargs, prompt, *, trigger="confirm_output"):
     )
 
 
+def _request_clarification(kwargs):
+    """Replace the agent's stale success intent when host delivery validation fails."""
+    atomic_write_bytes(
+        kwargs["phase"].issue_dir / "next_step.txt",
+        canonical_json({
+            "version": 1, "to_owner": "user", "to_step": "user",
+            "intent": "need_clarification",
+        }),
+    )
+
+
 def _proposals(state, binding, issue_dir):
     entry = state.artifacts.get(binding.proposals_artifact) if binding.proposals_artifact else None
     if entry is None:
@@ -244,8 +255,9 @@ class DevelopmentActionContext(NoOpHook):
             return HookResult(context_updates={"delivery_action_review_task": task.id})
         except (OSError, ValueError, KeyError, TypeError) as exc:
             output.write_text(
-                output.read_text() + f"\n\nDelivery action details required: {str(exc)[:1024]}\n"
+                output.read_text() + f"\n\n## Delivery action details required\n\n{str(exc)[:1024]}\n"
             )
+            _request_clarification(kwargs)
             return HookResult(
                 continue_pipeline=False,
                 override_status_code=PhaseStatusCode.NEED_CLARIFICATION,
@@ -373,6 +385,7 @@ class DevelopmentDeliveryOutcome(NoOpHook):
             return HookResult(context_updates={"delivery_receipts_file": str(path)})
         except (OSError, ValueError, KeyError) as exc:
             kwargs["output_file"].write_text(f"# Delivery recovery required\n\n{str(exc)[:1024]}\n")
+            _request_clarification(kwargs)
             return HookResult(
                 continue_pipeline=False, override_status_code=PhaseStatusCode.NEED_CLARIFICATION
             )

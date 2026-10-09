@@ -63,6 +63,14 @@ from cafe.core.playbook import (
     resolve_step_behavior,
 )
 from cafe.core.questions_schema import validate_questions_xml
+from cafe.core.restart_policy import (
+    RECHECK_PRIORITY,
+    RETRY_CONFIGURED_ORDER,
+    load_restart_context,
+    resolve_restart_policy,
+    restart_eligible,
+    selected_configured_order_recovery,
+)
 from cafe.core.route_catalog import authorize_route_target, route_choices
 from cafe.core.status_codes import (
     PhaseStatusCode,
@@ -92,6 +100,7 @@ from cafe.core.workflow_models import (
 )
 from cafe.core.workspace_artifact import WorkspaceArtifact, WorkspaceArtifactError
 from cafe.utils.checklist_validator import completion_requires_checklist, validate_checklist
+from cafe.utils.issue_config import read_issue_config_strict
 
 STATUS_TOKEN_PATTERN = re.compile(r"\bCAFE_[A-Z0-9_]+\b")
 GOTO_PATTERN = re.compile(r"GOTO\s*:\s*([a-zA-Z0-9_-]+)")
@@ -1218,11 +1227,18 @@ class BlackboardWorkflowRuntime:
         current_step: str,
         reason: str,
         runtime: str,
+        replacement: bool = False,
     ) -> PlaybookRunResult:
         """Create one notified HumanTask instead of inferring completion from partial output."""
         records = HumanTaskRecordStore(self.issue_dir)
         iteration = self._human_task_iteration(current_step)
-        policy, binding = agent_execution_interrupted_human_task(step_name=current_step)
+        saved_policy = self._saved_restart_policy()
+        policy, binding = agent_execution_interrupted_human_task(
+            step_name=current_step, restart_policy=saved_policy, interruption_reason=reason,
+        )
+        replaced_handoff = self._replaced_user_handoff
+        if self.blackboard.current_step == "user":
+            replaced_handoff = self.blackboard.handoff_contract
         policy = self._policy_for_workflow_locale(policy)
         status_code = (
             "CHECKLIST_VALIDATION_FAILED"
@@ -1244,6 +1260,29 @@ class BlackboardWorkflowRuntime:
         contract = self.blackboard.handoff_contract
         if contract is None:
             raise RuntimeError("agent interruption did not create a handoff contract")
+        iteration_dir = self.issue_dir / current_step / f"iteration_{iteration:03d}"
+        context_path = iteration_dir / "iteration.json"
+        context = load_restart_context(context_path)
+        if not replacement:
+            unconsumed = selected_configured_order_recovery(
+                issue_dir=self.issue_dir,
+                workflow_id=self.blackboard.workflow_id,
+                step_name=current_step,
+                iteration=iteration,
+                current_data=context,
+            )
+            # A preparation failure did not reach the provider boundary. Keep
+            # its original human receipt retryable through existing recovery.
+            evidence_key = "restart_preparation_failure" if unconsumed else "agent_interruption"
+            context[evidence_key] = {
+                "id": contract.created_at,
+                "reason": reason,
+                "workflow_id": self.blackboard.workflow_id,
+                "step": current_step,
+                "iteration": iteration,
+            }
+            iteration_dir.mkdir(parents=True, exist_ok=True)
+            atomic_write_bytes(context_path, json.dumps(context, ensure_ascii=False, indent=2).encode())
         prompt = policy.prompt
         if reason == "agent_artifact_format_exhausted":
             rejection = next((
@@ -1264,7 +1303,13 @@ class BlackboardWorkflowRuntime:
             continuations=binding.outcomes,
             assignee_type="user",
             handoff_key=self._human_task_handoff_key(contract),
+            superseded_task_ids=self._superseded_human_task_ids(
+                records, step=current_step, iteration=iteration,
+                trigger=AGENT_EXECUTION_INTERRUPTED_TRIGGER, policy_id=policy.id,
+                replaced_handoff=replaced_handoff,
+            ),
         )
+        self._replaced_user_handoff = None
         task = materialization.task
         self._mark_latest_iteration_completion_untrusted(current_step)
         self._notify_new_human_task(task)
@@ -1305,6 +1350,62 @@ class BlackboardWorkflowRuntime:
             final_status_code=result_status,
             completed=False,
             detail=task.id,
+        )
+
+    def _saved_restart_policy(self) -> str:
+        path = self.issue_dir / "issue.yaml"
+        return resolve_restart_policy(read_issue_config_strict(path) if path.exists() else {})
+
+    def _upgrade_pending_restart_task(self) -> Optional[PlaybookRunResult]:
+        """Offer an opt-in decision by replacing exactly the current pending handoff."""
+        if self.blackboard.current_step != "user" or self._saved_restart_policy() != RECHECK_PRIORITY:
+            return None
+        contract = self.blackboard.handoff_contract
+        if contract is None or contract.source != "workflow.agent_execution_interrupted":
+            return None
+        records = HumanTaskRecordStore(self.issue_dir)
+        predecessor_ids = self._replaced_human_task_ids(records, contract)
+        matching = [t for t in records.tasks() if t.id in predecessor_ids
+                    and t.trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER
+                    and t.step == contract.from_step
+                    and t.iteration == self._human_task_iteration(contract.from_step)]
+        if len(matching) != 1 or RETRY_CONFIGURED_ORDER in matching[0].continuations:
+            return None
+        path = self.issue_dir / contract.from_step / f"iteration_{matching[0].iteration:03d}" / "iteration.json"
+        context = load_restart_context(path)
+        interruption = context.get("agent_interruption", {})
+        if not interruption:
+            # Older tasks retain typed evidence in their exact materialization event.
+            event = next(
+                (
+                    e
+                    for e in reversed(self.blackboard.events)
+                    if e.event_type == "agent_execution_task_materialized"
+                    and e.data.get("task_id") == matching[0].id
+                    and e.data.get("step") == matching[0].step
+                ),
+                None,
+            )
+            if event is not None and restart_eligible(event.data.get("reason")):
+                interruption = {
+                    "id": contract.created_at,
+                    "reason": event.data["reason"],
+                    "workflow_id": self.blackboard.workflow_id,
+                    "step": matching[0].step,
+                    "iteration": matching[0].iteration,
+                }
+        if not (isinstance(interruption, dict)
+                and interruption.get("workflow_id") == self.blackboard.workflow_id
+                and interruption.get("step") == matching[0].step
+                and interruption.get("iteration") == matching[0].iteration
+                and restart_eligible(interruption.get("reason"))):
+            return None
+        if context.get("agent_interruption") != interruption:
+            context["agent_interruption"] = interruption
+            atomic_write_bytes(path, json.dumps(context, ensure_ascii=False, indent=2).encode())
+        return self._pause_for_agent_execution_interruption(
+            current_step=contract.from_step, reason="agent_rate_limit",
+            runtime="restart_policy", replacement=True,
         )
 
     def _has_agent_execution_interruption_task(self, *, current_step: str) -> bool:
@@ -3824,7 +3925,11 @@ class BlackboardWorkflowRuntime:
         advancing = (post_contract.to_owner == HandoffOwner.DONE or
                      post_contract.to_owner == HandoffOwner.AGENT and post_contract.to_step != current_step)
         if advancing and "before_delivery" in execution.get("checkpoints", []):
-            from cafe.core.execution_checkpoints import load_review_evidence, require_verified_review, require_checkpoint
+            from cafe.core.execution_checkpoints import (
+                load_review_evidence,
+                require_checkpoint,
+                require_verified_review,
+            )
             try:
                 iteration = self._latest_iteration_dir(current_step)
                 if self.execution_context is None or iteration is None:
@@ -3836,8 +3941,8 @@ class BlackboardWorkflowRuntime:
                 if (readiness.get("authority_digest") != self.execution_context["authority_digest"] or
                         readiness.get("endpoint") != self.execution_context["delivery_endpoint"]):
                     raise ValueError("delivery readiness differs from the confirmed endpoint")
-                from cafe.core.packet_io import atomic_write_bytes
                 from cafe.core.execution_artifacts import bounded_execution_json
+                from cafe.core.packet_io import atomic_write_bytes
                 atomic_write_bytes(self.issue_dir / "execution_delivery.json", bounded_execution_json(readiness))
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 result = self._emit_pause(current_step=current_step, status_code="DELIVERY_READINESS_BLOCKED",
@@ -3853,8 +3958,8 @@ class BlackboardWorkflowRuntime:
                 observations = load_review_evidence(iteration / "native_invocations.json")
                 require_current_review(self.execution_context, evidence, native_observations=observations)
                 evidence["native_observations"] = observations
-                from cafe.core.packet_io import atomic_write_bytes
                 from cafe.core.execution_artifacts import bounded_execution_json
+                from cafe.core.packet_io import atomic_write_bytes
                 atomic_write_bytes(self.issue_dir / "execution_review.json", bounded_execution_json(evidence))
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 result = self._emit_pause(current_step=current_step, status_code="NATIVE_REVIEW_BLOCKED",
@@ -3977,6 +4082,8 @@ class BlackboardWorkflowRuntime:
     ) -> tuple[dict[str, Any] | None, list[str]]:
         """Validate the durable batch/artifact/operation binding for restart."""
         if not self._feedback_delivery_required(current_step=current_step):
+            return None, []
+        if delivery_id is None and self._has_empty_feedback_batch(current_step=current_step):
             return None, []
         prepared = [
             event.data
@@ -4109,8 +4216,122 @@ class BlackboardWorkflowRuntime:
             or target.get("to_step") != contract.to_step
             or target.get("intent") != contract.intent.value
         ):
-            missing.append("feedback_delivery_target")
+            if not self._has_confirmed_feedback_continuation(
+                current_step=current_step, contract=contract, delivery=delivery
+            ):
+                missing.append("feedback_delivery_target")
         return (delivery if not missing else None), missing
+
+    def _has_confirmed_feedback_continuation(
+        self, *, current_step: str, contract: HandoffContract | None, delivery: Mapping[str, Any]
+    ) -> bool:
+        """Bind a settled confirmation handoff to its subsequent human result.
+
+        Confirmation changes the outbound target without changing the reviewed
+        artifact or settled batch. Only the exact non-corrective durable result
+        after that settlement may authorize this target difference.
+        """
+        target = delivery.get("target")
+        iteration = delivery.get("iteration")
+        if (
+            contract is None
+            or contract.from_step != current_step
+            or contract.to_owner is not HandoffOwner.AGENT
+            or contract.intent is not HandoffIntent.AWAIT_AGENT
+            or not isinstance(target, Mapping)
+            or target != {"to_owner": "user", "to_step": "user", "intent": "confirm_output"}
+            or not isinstance(iteration, Mapping)
+            or type(iteration.get("number")) is not int
+            or iteration["number"] < 1
+        ):
+            return False
+        indexed = list(enumerate(self.blackboard.events))
+        preparations = [
+            i
+            for i, event in indexed
+            if event.event_type == "workflow_feedback_delivery_prepared"
+            and event.data.get("delivery_id") == delivery.get("delivery_id")
+        ]
+        settlements = [
+            i
+            for i, event in indexed
+            if event.event_type == "workflow_feedback_delivered"
+            and event.data.get("delivery_id") == delivery.get("delivery_id")
+        ]
+        completions = [
+            (i, event)
+            for i, event in indexed
+            if event.event_type == "human_task_completed" and event.step == current_step
+        ]
+        if len(preparations) != 1 or len(settlements) != 1 or not completions:
+            return False
+        completion_index, completion = completions[-1]
+        if not preparations[0] < settlements[0] < completion_index:
+            return False
+        try:
+            records = HumanTaskRecordStore(self.issue_dir)
+            matching = [
+                task
+                for task in records.tasks()
+                if task.workflow_id == self.blackboard.workflow_id
+                and task.step == current_step
+                and task.iteration == iteration.get("number")
+                and task.policy_id == completion.data.get("task_id")
+                and task.trigger == completion.data.get("trigger")
+                and task.status is HumanTaskStatus.COMPLETED
+                and task.superseded_by_task_id is None
+            ]
+            if len(matching) != 1:
+                return False
+            task = matching[0]
+            result = records.get_result(task.id)
+        except (HumanTaskRecordError, OSError, ValueError, TypeError, KeyError):
+            return False
+        if (
+            task.workflow_id != self.blackboard.workflow_id
+            or task.step != current_step
+            or task.iteration != iteration.get("number")
+            or task.trigger != HandoffIntent.CONFIRM_OUTPUT.value
+            or task.status is not HumanTaskStatus.COMPLETED
+            or task.superseded_by_task_id is not None
+            or result is None
+            or result.workflow_id != self.blackboard.workflow_id
+            or not isinstance(result.payload.get("decision"), str)
+            or not result.payload["decision"]
+            or ("human_task_id" in completion.data and task.id != completion.data["human_task_id"])
+            or ("result_id" in completion.data and result.id != completion.data["result_id"])
+            or completion.data.get("task_id") != task.policy_id
+            or completion.data.get("trigger") != task.trigger
+            or completion.data.get("to_step") != contract.to_step
+            or contract.source != f"human_task.{completion.data.get('source')}"
+            or result.source != completion.data.get("source")
+            or result.payload.get("task") != task.policy_id
+            or result.payload.get("continuation") != contract.to_step
+            or task.continuations.get(result.payload.get("decision")) != contract.to_step
+        ):
+            return False
+        bindings = [
+            binding
+            for binding in self.steps[current_step].get("human_tasks", ())
+            if isinstance(binding, Mapping)
+            and binding.get("trigger") == task.trigger
+            and binding.get("task_id") == task.policy_id
+        ]
+        if (
+            len(bindings) != 1
+            or bindings[0].get("outcomes", {}).get(result.payload.get("decision"))
+            != contract.to_step
+        ):
+            return False
+        decisions = task.expected_result.get("decisions")
+        if not isinstance(decisions, list):
+            return False
+        selected = [
+            entry
+            for entry in decisions
+            if isinstance(entry, Mapping) and entry.get("id") == result.payload["decision"]
+        ]
+        return len(selected) == 1 and selected[0].get("correction", False) is False
 
     def _reconcile_feedback_delivery(
         self,
@@ -4722,6 +4943,8 @@ class BlackboardWorkflowRuntime:
         )
         if artifact is None or artifact.updated_by != current_step:
             return None
+        if self._has_empty_feedback_batch(current_step=current_step):
+            return None
         # The durable artifact and outbound baton remain a recovery boundary even
         # after their source rows become resolved or stale.  Rechecking only the
         # live ledger here would let that lifecycle change bypass validation and
@@ -4738,7 +4961,8 @@ class BlackboardWorkflowRuntime:
             if (
                 self._feedback_delivery_event_exists(delivery_id)
                 and isinstance(prepared_artifact, Mapping)
-                and isinstance(prepared_artifact.get("version"), int)
+                and type(prepared_artifact.get("version")) is int
+                and prepared_artifact["version"] >= 1
                 and artifact.version > prepared_artifact["version"]
                 and self.blackboard.current_step == contract.to_step
                 and any(
@@ -4777,6 +5001,65 @@ class BlackboardWorkflowRuntime:
             if validated is not None:
                 return None
         return current_step, delivery_id if isinstance(delivery_id, str) else None
+
+    def _has_empty_feedback_batch(self, *, current_step: str) -> bool:
+        """Prove this artifact belongs to an invoked, feedback-free iteration.
+
+        A declaration does not mean feedback was present. Use the exact batch
+        exposed to this producer, never the ledger's later pending state. An
+        existing preparation for this iteration still owns its delivery fence.
+        """
+        iteration_dir = self._latest_iteration_dir(current_step)
+        artifact_name = self.steps.get(current_step, {}).get("output_artifact")
+        artifact = self.blackboard.artifacts.get(artifact_name)
+        if iteration_dir is None or artifact is None or artifact.updated_by != current_step:
+            return False
+        try:
+            iteration = int(iteration_dir.name.removeprefix("iteration_"))
+            if Path(artifact.path).resolve() != (iteration_dir / "output.md").resolve():
+                return False
+            metadata = json.loads((iteration_dir / "iteration.json").read_text(encoding="utf-8"))
+            batch = json.loads(
+                (iteration_dir / "workflow_feedback_batch.json").read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError, TypeError):
+            return False
+        if (
+            not isinstance(metadata, dict)
+            or metadata.get("agent_invoked") is not True
+            or metadata.get("step_name") != current_step
+            or type(metadata.get("iteration")) is not int
+            or metadata["iteration"] != iteration
+            or not isinstance(batch, dict)
+            or set(batch) != {"version", "entries"}
+            or type(batch.get("version")) is not int
+            or batch["version"] != 1
+            or batch["entries"] != []
+        ):
+            return False
+        prepared = self._latest_feedback_delivery_preparation(current_step=current_step)
+        if prepared is not None:
+            prepared_iteration = prepared.get("iteration")
+            prepared_artifact = prepared.get("artifact")
+            if (
+                not isinstance(prepared_iteration, Mapping)
+                or type(prepared_iteration.get("number")) is not int
+                or prepared_iteration["number"] < 1
+                or prepared_iteration["number"] >= iteration
+                or prepared_iteration.get("directory")
+                != str(Path(current_step) / f"iteration_{prepared_iteration['number']:03d}")
+                or not isinstance(prepared_artifact, Mapping)
+                or type(prepared_artifact.get("version")) is not int
+                or prepared_artifact["version"] < 1
+                or prepared_artifact["version"] >= artifact.version
+            ):
+                return False
+            try:
+                if Path(prepared_artifact["path"]).resolve() == Path(artifact.path).resolve():
+                    return False
+            except (OSError, ValueError, TypeError, KeyError):
+                return False
+        return True
 
     def _try_reconcile_pending_feedback_delivery(self) -> Optional[PlaybookRunResult]:
         delivery = self._latest_unreconciled_feedback_delivery()
@@ -5756,6 +6039,12 @@ class BlackboardWorkflowRuntime:
         start_step: Optional[str] = None,
         single_step: bool = False,
     ) -> PlaybookRunResult:
+        # Validate explicit settings before provider execution, even on legacy resumes.
+        self._saved_restart_policy()
+        if start_step is None:
+            upgraded = self._upgrade_pending_restart_task()
+            if upgraded is not None:
+                return self._finalize_observed_result(upgraded)
         declared = any(step.get("execution", {}).get("checkpoints") for step in self.steps.values())
         if self.execution_context is not None or declared:
             from cafe.core.execution_checkpoints import checkpoint

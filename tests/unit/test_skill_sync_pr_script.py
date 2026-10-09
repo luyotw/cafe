@@ -198,10 +198,11 @@ def test_builtin_playbooks_publish_pr_through_sync_hook() -> None:
         "src/cafe/data/playbooks/hotfix.yaml",
     ]:
         content = (project_root / rel_path).read_text(encoding="utf-8")
-        assert (
-            "publish_output: [GitHubPRCreator, LocalReviewContextProvider, PRLinkOpener]"
-            in content
-        )
+        import yaml
+
+        hooks = yaml.safe_load(content)["steps"]["pr"]["hooks"]["publish_output"]
+        assert hooks[:3] == ["GitHubPRCreator", "LocalReviewContextProvider", "PRLinkOpener"]
+        assert "DevelopmentActionContext" in hooks
 
 
 def test_sync_pr_rejects_uncommitted_changes(tmp_path: Path) -> None:
