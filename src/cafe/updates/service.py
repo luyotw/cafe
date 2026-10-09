@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import importlib.metadata
 import json
+import site
 import subprocess
 import sys
 import urllib.request
@@ -105,8 +106,15 @@ SYNC_INSTALLED_HELPERS = """
 import importlib.metadata
 import json
 import sys
+import site
 from dataclasses import asdict
 from pathlib import Path
+
+# Isolation excludes cwd/PYTHONPATH. Restore only the updater's enabled user
+# installation directory, including an explicitly configured PYTHONUSERBASE.
+if len(sys.argv) > 2 and sys.argv[2]:
+    sys.path.insert(0, sys.argv[2])
+    site.addsitedir(sys.argv[2])
 import cafe
 from cafe.skills.global_installer import (
     DEFAULT_GLOBAL_SKILLS, GLOBAL_CLI_SKILL_DIRS, detect_global_skill_clis,
@@ -250,6 +258,8 @@ class UpdateService:
         helper_command = [
             self._python_executable, "-I", "-c", SYNC_INSTALLED_HELPERS, approved_version,
         ]
+        if site.ENABLE_USER_SITE:
+            helper_command.append(site.getusersitepackages())
         try:
             helper_result = self._runner(helper_command)
             if getattr(helper_result, "returncode", 0) != 0:
@@ -266,7 +276,10 @@ class UpdateService:
         except Exception as exc:
             raise UpdateApplyError(
                 f"CAFE {approved_version} was installed, but bundled helper synchronization "
-                f"did not complete: {exc}. Run `cafe skill sync-global` to retry.",
+                f"did not complete: {exc}. Retry synchronization from the installed "
+                f"release bundle with --installed-bundle --expected-version {approved_version} "
+                "using sync_helper_with_preflight.py for detected CLIs and existing CAFE "
+                "helper destinations; do not reinstall the runtime.",
                 runtime_installed=True,
             ) from exc
         final_check = self.check()

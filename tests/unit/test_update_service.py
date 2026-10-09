@@ -153,7 +153,12 @@ class _RunResult:
     stderr: str = ""
 
 
-def test_apply_targets_exact_approved_release_and_mandatorily_rechecks() -> None:
+@pytest.mark.parametrize("user_site", [None, "/custom/user-base/site-packages"])
+def test_apply_targets_exact_approved_release_and_mandatorily_rechecks(
+    monkeypatch, user_site,
+) -> None:
+    monkeypatch.setattr("cafe.updates.service.site.ENABLE_USER_SITE", user_site is not None)
+    monkeypatch.setattr("cafe.updates.service.site.getusersitepackages", lambda: user_site)
     state = {"installed": "1.0.0", "checks": 0}
     commands: list[list[str]] = []
 
@@ -193,7 +198,7 @@ def test_apply_targets_exact_approved_release_and_mandatorily_rechecks() -> None
     )
     assert commands[1] == [
         "/approved/python", "-I", "-c", SYNC_INSTALLED_HELPERS, "1.1.0",
-    ]
+    ] + ([user_site] if user_site is not None else [])
     assert result.installed_version == "1.1.0"
     assert result.status == "current"
     assert state["checks"] >= 3
@@ -259,6 +264,9 @@ def test_helper_sync_failure_reports_the_installed_runtime_as_partial(failure):
     with pytest.raises(UpdateApplyError, match="was installed, but bundled helper") as error:
         service.apply(service.check().token)
     assert error.value.runtime_installed is True
+    assert "--installed-bundle --expected-version 1.1.0" in str(error.value)
+    assert "existing CAFE helper destinations" in str(error.value)
+    assert "cafe skill sync-global" not in str(error.value)
     assert state["installed"] == "1.1.0"
     assert len(commands) == 2
 
@@ -276,6 +284,52 @@ def test_failed_install_never_synchronizes_helpers():
     with pytest.raises(UpdateApplyError, match="installer failed"):
         service.apply(service.check().token)
     assert len(commands) == 1 and "pip" in commands[0]
+
+
+def test_isolated_helper_loads_custom_user_install_and_excludes_checkout(tmp_path):
+    import os
+    import subprocess
+    import sys
+
+    environment = os.environ.copy()
+    environment["PYTHONUSERBASE"] = str(tmp_path / "custom-user-base")
+    checkout = tmp_path / "checkout"
+    decoy = checkout / "cafe"
+    decoy.mkdir(parents=True)
+    (decoy / "__init__.py").write_text("raise RuntimeError('stale checkout loaded')\n")
+    environment["PYTHONPATH"] = str(checkout)
+    discovery = subprocess.run(
+        [sys.executable, "-c", "import site; print(site.getusersitepackages())"],
+        env=environment, text=True, capture_output=True, check=True,
+    )
+    from pathlib import Path
+
+    user_site = Path(discovery.stdout.strip())
+    package = user_site / "cafe"
+    skills = package / "skills"
+    skills.mkdir(parents=True)
+    (package / "__init__.py").write_text("")
+    (skills / "__init__.py").write_text("")
+    # No destinations are selected: this smoke test verifies interpreter/source
+    # selection without writing global helpers. Publication has separate tests.
+    (skills / "global_installer.py").write_text(
+        "DEFAULT_GLOBAL_SKILLS = ()\nGLOBAL_CLI_SKILL_DIRS = {}\n"
+        "def detect_global_skill_clis(**kwargs): return []\n"
+        "def sync_global_skills(**kwargs): raise AssertionError('unexpected publication')\n"
+        "def _trees_equal(source, destination): return True\n"
+    )
+    metadata = user_site / "cafe_engine-1.1.0.dist-info"
+    metadata.mkdir()
+    (metadata / "METADATA").write_text("Name: cafe-engine\nVersion: 1.1.0\n")
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", SYNC_INSTALLED_HELPERS, "1.1.0", str(user_site)],
+        env=environment, cwd=checkout, text=True, capture_output=True,
+    )
+    assert result.returncode == 0, result.stderr
+    receipt = json.loads(result.stdout)
+    assert receipt["installed_version"] == "1.1.0"
+    assert receipt["source_root"] == str(package / "data" / "skills")
+    assert receipt["post_change_verified"] is True
 
 
 @pytest.fixture
