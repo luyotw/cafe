@@ -10,7 +10,7 @@ from rich.console import Console
 from cafe.updates.service import UpdateApplyError, UpdateCheckResult, UpdateService
 
 
-update_app = typer.Typer(help="Check or apply a CAFE update with bundled CLI helper skills")
+update_app = typer.Typer(help="Check or apply an explicitly approved CAFE update")
 console = Console()
 
 
@@ -32,8 +32,6 @@ def _emit_result(result: UpdateCheckResult, *, json_output: bool) -> None:
         f"installed={result.installed_version} latest={result.latest_version} "
         f"status={result.status}"
     )
-    if result.helper_sync is not None:
-        console.print("Bundled CLI helper skills synchronized and verified.")
     if result.status == "update_available":
         console.print(f"release={result.release_url} token={result.token}")
 

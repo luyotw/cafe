@@ -304,27 +304,8 @@ class TestPrepareCommand:
         result = runner.invoke(app, ["prepare", "test-issue", "--no-auto-create-pr"])
 
         assert result.exit_code == 0
-        assert "CAFE update did not complete" in result.stdout
+        assert "CAFE CLI update was not installed" in result.stdout
         update_service.apply.assert_called_once_with("approved-update")
-
-    def test_prepare_stops_after_partial_helper_update(
-        self, monkeypatch, temp_repo_dir, mock_git_ops
-    ):
-        service = MagicMock()
-        service.check.return_value = UpdateCheckResult(
-            status="update_available", installed_version="1.0.0", latest_version="1.1.0",
-            release_url="https://example.test/releases/v1.1.0", token="approved-update",
-        )
-        service.apply.side_effect = UpdateApplyError(
-            "CAFE 1.1.0 installed; bundled helper sync failed", runtime_installed=True,
-        )
-        monkeypatch.setattr("cafe.ui.commands.lifecycle._build_update_service", lambda: service)
-        monkeypatch.setattr("cafe.ui.cli.prompt_confirm", lambda *_args, **_kwargs: True)
-        result = runner.invoke(app, ["prepare", "test-issue", "--no-auto-create-pr"])
-        assert result.exit_code == 1
-        assert "bundled helper sync failed" in result.stdout
-        assert not (temp_repo_dir / ".cafe/issues/test-issue").exists()
-        mock_git_ops.create_branch.assert_not_called()
 
     def test_prepare_checks_for_update_before_initialization_guard(
         self, monkeypatch, temp_repo_dir
