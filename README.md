@@ -171,11 +171,37 @@ requirements and delivery rigor:
 | `standard-qa` | spec → plan → develop → review → QA → PR | Standard development needs independent product acceptance. |
 | `tdd` | spec → plan → TDD develop → review → PR | The implementation should follow test-driven development. |
 | `tdd-qa` | spec → plan → TDD develop → review → QA → PR | TDD also needs independent product acceptance. |
+| `bug` | diagnosis + RED → minimal repair + GREEN → review → PR | A confirmed, bounded defect needs verified reproduction and regression proof. |
+| `hotfix` | develop → review → PR | An urgent production correction already has an understood repair and regression boundary. |
 
 `standard` replaces the former built-in `default` ID. There is no alias or
 automatic migration. `hotfix` remains available for urgent production fixes,
 and the research, editorial, and incident playbooks retain their domain-specific
 flows.
+
+For a bounded defect, explicitly select `bug`, for example: “Use CAFE with the
+bug playbook for issue #123: twice(3) returns 5; the confirmed result is 6.” Both
+GitHub issue and manual input are supported. This choice does not change the
+built-in default or other confirmed workflow choices. Use `standard` when scope
+and implementation sequencing need specification and planning, or `tdd` for
+planned test-driven delivery beyond a focused defect.
+
+`bug` verifies the report and retains an unfixed revision, replayable regression,
+actual defect-specific RED, then unchanged-test GREEN and focused checks. A new
+regression can be demonstrated in isolation so diagnosis hands off a clean
+workspace; repair commits the same test with the minimal fix through normal
+hooks. Independent review precedes PR, including every PR-requested code
+correction. Routine verified diagnosis adds no approval cycle; normal local PR
+review, publication confirmation and capability checks remain required.
+
+Missing reproduction, unrelated test failures, disputed expected behavior or
+investigation beyond the defect boundary go to human clarification. Diagnosis,
+repair and review each allow three unfinished attempts per correction cycle;
+exhaustion requires the existing HumanTask and an authorized supported limit
+adjustment to resume. The shared three-round disagreement rule also applies.
+Interrupted work resumes from durable evidence after revision/test identity
+checks. Broad redesign, speculative cleanup, incident response and work needing
+a separate QA owner require another suitable workflow or a human scope decision.
 
 `subagent-flow` and `subagent-flow-qa` use one `spec_plan` phase and one combined `plan`
 artifact containing the complete requirements, implementation approach, Test
@@ -537,7 +563,7 @@ Versioning policy, while roadmap stages describe product direction independently
 - [Roadmap](docs/roadmap.md)
 - [Versioning policy](docs/versioning.md)
 - [Changelog](CHANGELOG.md)
-- [Latest release notes](docs/releases/v0.7.5.md)
+- [Latest release notes](docs/releases/v0.8.1.md)
 - [Strategic positioning](docs/positioning.md)
 - [Known runtime constraints](docs/known-constraints.md)
 - [Cost accounting and automatic OpenAI rate updates](docs/cost-accounting.md)

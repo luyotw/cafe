@@ -79,8 +79,10 @@ contract; new preferences never rewrite it.
   phase work, manually resume/select a step, or mutate workflow state merely to
   supervise.
 - Route every HumanTask through its declared owner and schema. The Manager never
-  infers or supplies a user-owned answer; Manager-owned exceptions exist only
-  where the confirmed task contract explicitly grants them.
+  infers or supplies a user-owned answer. Exceptions are explicit confirmed task
+  authority and the bounded same-session interruption recovery in
+  `references/supervision_and_recovery.md` (three retries, 30 seconds apart);
+  neither permits fresh-session selection or new action authority.
 - Default new kickoff proposals to overall `need_clarification: manager_confirmable`.
   Offer phase/task overrides only when the user requests finer control. Explicit
   task ownership takes precedence; answers still require evidence within the

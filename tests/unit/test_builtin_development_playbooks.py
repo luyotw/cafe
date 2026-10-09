@@ -32,6 +32,7 @@ DEVELOPMENT_PLAYBOOKS = {
     "tdd",
     "tdd-qa",
     "hotfix",
+    "bug",
 }
 BUNDLED_PLAYBOOKS = DEVELOPMENT_PLAYBOOKS | {"editorial", "incident", "research", "streamlined"}
 

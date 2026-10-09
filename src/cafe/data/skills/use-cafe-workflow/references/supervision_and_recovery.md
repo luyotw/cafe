@@ -83,27 +83,80 @@ option or backend failure is an error, never a reason to retry writable chat.
 | 3. A mandatory, `user_required`, permission, capability, strategy, scope, external-effect, model-chain, or other user-owned decision is pending, except a phase-agent recovery choice handled by priorities 6 and 8 | Present it to the user through its declared boundary. Do not ask the phase agent to infer or approve it. |
 | 4. A scheduled proactive-review or confirmation boundary is due | Follow the confirmed review and handoff contracts. |
 | 5. Visible behavior identifies a playbook, phase contract, Manager, or CAFE-core defect | Stop normal execution and follow `diagnosis_and_repair.md` for that layer. |
-| 6. The same phase-agent failure keeps returning and no new observation gives a concrete reason another retry will differ | Keep the recovery task user-owned. Consult the responsible phase agent once with the read-only diagnostic command above, then inspect again before recommending another recovery action. |
+| 6. The same phase-agent failure keeps returning after its automatic retry budget, or retry safety cannot be established | Retain the pause. Consult the responsible phase agent once with the read-only diagnostic command above, then present every declared recovery option and practical consequence to the user. |
 | 7. Visible phase progress exists but there is no valid handoff, or reported success conflicts with current state | Consult the responsible phase agent with the read-only diagnostic command above to identify completed work, the missing boundary, and one bounded next action. Do not reconstruct the handoff yourself. |
-| 8. A phase-agent failure has a safe idempotent retry and a concrete reason another attempt may differ | Present every declared recovery option and practical consequence, and recommend a retry under the unchanged contract. Do not submit the choice for the user. |
+| 8. An eligible phase-agent interruption has a safe same-session retry and remaining budget | Apply the bounded automatic recovery procedure below without another user confirmation. |
 
-A materially different visible failure is a new incident. If the Manager cannot
-tell whether it is materially different, classify it as ambiguous. Do not use a
-string-similarity threshold, invent a count, or persist a new comparison record.
-There is no fixed retry count for phase-agent execution recovery: recommend
-another retry only while it remains safe and there is a concrete reason to
-expect a different result. Stop repeating an unchanged failure without such a
-reason.
+## Bounded automatic recovery
+
+For a stopped phase agent that exits unsuccessfully without a terminal completion
+signal (including an unclassified Codex exit 1 with empty stderr), automatically
+retry the same session at most three times, waiting 30 seconds before each retry.
+The original execution is not a retry: the bound is one original execution plus
+three retries. The delay reuses the first existing same-CLI retry delay in
+`AgentManager.TRANSIENT_RETRY_DELAYS_SECONDS` (30 seconds); its separate
+30/120-second transient-error backoff is not changed by this Manager policy.
+An unknown provider root cause alone does not require a user decision when the
+stopped execution, durable task and safe continuation are clear.
+
+This is a narrow Manager recovery exception for the declared `retry` outcome of
+`agent-execution-interrupted`, not a change to generic HumanTask ownership.
+It applies in attached, unattended and event-driven Manager operation. Explicit
+user instructions to stop or require manual recovery override the default.
+
+1. Inspect current status, the active interruption task, sanitized error evidence,
+   continuation/session and worker ownership. Require a terminated failed agent,
+   no duplicate live execution, a resumable existing session and a declared
+   `retry` continuation to the same step. Do not retry cancellation, a known
+   configuration/authentication/permission error, invalid completion artifacts,
+   an exhausted lower-level transient retry sequence, a confirmed runtime defect,
+   or an external mutation whose outcome is unknown. Resolve those through the
+   existing owner-specific path. Do not replay arbitrary unfinished commands.
+2. Reconstruct the retry count from existing completed recovery tasks and failure
+   history for the same workflow, step and iteration. Count prior same-session
+   recovery retries, including user-selected retries and fresh-session recoveries;
+   do not reset the count on
+   another callback, Manager session, or differently worded error. Callback
+   `attempt` and `hop` are transport metadata, not phase retry counts. Duplicate
+   callbacks for a completed task do not consume another retry or launch work.
+   Missing or conflicting history retains the pause for diagnosis. A successful
+   phase boundary ends this budget; a later iteration starts a new budget.
+   Do not use a string-similarity threshold or persist a new counter/store.
+   Use the read-only bundled helper to reconstruct the budget from one stable
+   view of existing task/results (no new counter or store):
+   `python scripts/inspect_recovery_budget.py --issue-dir <issue-dir> --task-id <task-id>`.
+   Inputs are the inspected issue directory and active interruption task ID;
+   output is JSON with used/remaining retries, the 30-second delay and an advisory
+   action. Pass `--stop-requested` after an explicit user stop. A nonzero exit or
+   `retain_pause` requires diagnosis; `ignore_callback` launches nothing;
+   `user_handoff` is exhausted. `inspect_retry_safety` supplies budget evidence
+   only: worker/session/error/authority checks in step 1 remain mandatory. Re-run
+   the helper after the delay; it neither sleeps nor completes/resumes any task.
+3. When fewer than three retries have been used, report the next retry number and
+   wait 30 seconds. If new input interrupts the wait, handle it first; it is not
+   permission to skip the remaining delay. Reinspect the same pending task,
+   stopped worker, session and authority after waiting. A changed task or user
+   stop invalidates the pending automatic action.
+4. Submit only the active task's `retry` result with `cafe task complete
+   --no-resume --json`. Record the attempt number, 30-second delay and inspected
+   error/task references in the existing result's `work_report`; this is recovery
+   provenance, never a fabricated user answer. Verify durable completion, then
+   rebuild fresh facts and resume through `run_workflow.py` in the confirmed mode.
+   Preserve phase, iteration scope, CLI/model, session, permissions, capabilities
+   and Delivery Contract. A wrapper `action: yield` still ends the Manager turn;
+   subsequent failure callbacks continue from durable history.
+5. After the third retry also fails, retain the pause, perform the bounded
+   read-only diagnostic consultation once, and present the existing recovery
+   choices to the user. Do not begin a fourth automatic retry, switch sessions,
+   append a fallback, or expand authority. A user-selected retry after exhaustion
+   authorizes that retry only; it does not silently reset the automatic budget.
 
 ## Recovery boundaries
 
-- `agent-execution-interrupted` remains a user-owned recovery-choice HumanTask.
-  The Manager may recommend an option but must present every declared option and
-  relay only the user's explicit answer through the task flow in
-  `running_workflow.md`.
-- A user-authorized retry preserves phase, iteration scope, model chain,
-  permissions, capabilities, and Delivery Contract. Recheck current visible
-  state immediately before relaying the answer or resuming.
+- `agent-execution-interrupted` keeps its generic user-owned schema. The bounded
+  automatic recovery exception above permits only the unchanged same-session
+  `retry`; ineligible or exhausted recovery remains user-owned. Follow the
+  durable completion and mode-specific resume sequence in `running_workflow.md`.
 - Existing fresh-session recovery remains user-selected. Its availability does
   not authorize the Manager to choose it.
 - Legacy terminal-operation `FAILED` or `LOST` state remains immutable. This

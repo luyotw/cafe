@@ -227,6 +227,9 @@ def test_script_launcher_inventory_covers_workflow_process_calls() -> None:
         classifications[identity] = classification.strip()
 
     required_classifications = {
+        "src/cafe/data/skills/use-cafe-workflow/scripts/workflow_event_callback.py::_ensure_host_control_socket": (
+            "Internal fixed configured Codex daemon recovery"
+        ),
         "src/cafe/delivery/operations.py::run": "Registered fixed Git/GitHub delivery capability adapter",
         "src/cafe/core/capabilities.py::run_pr_publish_capability": (
             "Registered host capability adapter"

@@ -231,6 +231,12 @@ continuity. The callback remains an ordinary manager and uses only existing
 kickoff authority: confirmation contract, mandatory HumanTask stops, reactive
 user handoffs, and mandate. It cannot change confirmed models.
 
+The bounded same-session interruption recovery exception in
+`supervision_and_recovery.md` also applies to callbacks. It permits only the
+existing interruption task's `retry` outcome, up to three retries 30 seconds
+apart, with count reconstructed from durable history. It does not authorize
+other user-owned answers, fresh sessions, or an extra retry after exhaustion.
+
 ## Project confirmed user context into agent input
 
 Before any agent step, derive its inputs from the effective graph and project

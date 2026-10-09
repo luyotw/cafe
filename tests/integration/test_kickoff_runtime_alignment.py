@@ -69,7 +69,8 @@ def test_discovery_uses_requested_checkout_before_importing_stale_runtime(
     candidates = {item["id"]: item for item in catalog["candidates"]}
     for name in ("subagent-flow", "subagent-flow-qa"):
         assert candidates[name]["eligible"]
-        assert candidates[name]["native_subagent_steps"] == ["spec_plan", "develop"]
+        assert candidates[name]["applicability"]["summary"]
+        assert "profiles" not in candidates[name]  # Discovery defers detailed skill loading.
         assert Path(candidates[name]["path"]).is_relative_to(PROJECT_ROOT)
 
 

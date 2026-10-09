@@ -140,7 +140,9 @@ def test_bad_saved_preference_is_reported_not_offered_as_missing(case, value):
     assert "phase.chains" in result["problems"]
     assert all(e["key"] != "phase.chains" for e in result["entries"])
     section, prompt = module.render_offer(result, zh=False, table=lambda *_: "rows")
-    assert "does not block kickoff" in section and prompt
+    assert "phase.chains" not in section
+    assert "Unavailable for saving" not in section
+    assert prompt
 
 
 def test_corrupt_store_is_not_overwritten(case):
@@ -151,6 +153,7 @@ def test_corrupt_store_is_not_overwritten(case):
     path.write_text("broken JSON")
     result = build(case)
     assert result["entries"] == [] and "store" in result["problems"]
+    assert module.render_offer(result, zh=True, table=lambda *_: "unused") == ("", None)
     with pytest.raises(ValueError):
         module.remember_offer(store, snapshot, selections=["*"], reuse=True)
     assert path.read_text() == "broken JSON"
@@ -177,9 +180,14 @@ def test_literal_issue_templates_are_not_offered_but_valid_templates_are(case):
 
 
 def test_default_cleanup_does_not_save_literal_issue_description(case):
-    _, _, args, proposal, _ = case
+    module, _, args, proposal, _ = case
     proposal["delivery_contract"]["closeout_plan"]["cleanup"] = [{"argv": ["cafe", "close"]}]
     args.cleanup_description = [f"Archive {args.issue_name}"]
     result = build(case)
     assert "cleanup.convention" in result["unavailable_templates"]
     assert all(e["key"] != "cleanup.convention" for e in result["entries"])
+    section, _ = module.render_offer(result, zh=True, table=lambda *_: "rows")
+    assert "cleanup.convention" not in section
+    assert "暫不可儲存" not in section
+    result["entries"] = []
+    assert module.render_offer(result, zh=True, table=lambda *_: "unused") == ("", None)

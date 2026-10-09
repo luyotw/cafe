@@ -3142,24 +3142,35 @@ def test_inside_non_intervention_envelope_requires_passive_supervision() -> None
         assert forbidden in normalized
 
 
-def test_phase_agent_retry_stays_user_owned_and_bounded() -> None:
+def test_phase_agent_retry_is_bounded_before_user_handoff() -> None:
     supervision = _read_skill_resource("references/supervision_and_recovery.md")
     normalized = " ".join(supervision.split())
+    skill = " ".join(_read_skill_resource("SKILL.md").split())
+    running = " ".join(_read_skill_resource("references/running_workflow.md").split())
+    diagnosis = " ".join(_read_skill_resource("references/diagnosis_and_repair.md").split())
 
-    assert (
-        "`agent-execution-interrupted` remains a user-owned recovery-choice HumanTask" in normalized
-    )
-    assert "Present every declared recovery option and practical consequence" in normalized
-    assert "recommend a retry under the unchanged contract" in normalized
-    assert "Do not submit the choice for the user" in normalized
-    assert "There is no fixed retry count" in normalized
-    assert "a concrete reason to expect a different result" in normalized
-    assert "except a phase-agent recovery choice handled by priorities 6 and 8" in normalized
-    assert "The same phase-agent failure keeps returning" in normalized
-    assert "Read-only diagnosis: explain the current failure" in normalized
-    assert "Do not edit files, artifacts, tasks, baton, blackboard, or workflow state" in normalized
-    assert "do not run commands that change state" in normalized
-    assert "A materially different visible failure is a new incident" in normalized
+    for required in (
+        "at most three times, waiting 30 seconds before each retry",
+        "one original execution plus three retries",
+        "including an unclassified Codex exit 1 with empty stderr",
+        "including user-selected retries",
+        "Callback `attempt` and `hop` are transport metadata",
+        "Duplicate callbacks for a completed task",
+        "Reinspect the same pending task",
+        "cafe task complete --no-resume --json",
+        "existing result's `work_report`",
+        "After the third retry also fails",
+        "Do not begin a fourth automatic retry",
+        "Existing fresh-session recovery remains user-selected",
+        "an external mutation whose outcome is unknown",
+        "Explicit user instructions to stop",
+        "Read-only diagnosis: explain the current failure",
+    ):
+        assert required in normalized
+    assert "three retries, 30 seconds apart" in skill
+    assert "exception in `supervision_and_recovery.md` also applies to callbacks" in running
+    assert "Ineligible or exhausted interruption tasks remain user-owned" in diagnosis
+    assert "There is no fixed retry count" not in normalized
 
 
 def test_recovery_inspection_and_callback_policy_are_mode_neutral() -> None:

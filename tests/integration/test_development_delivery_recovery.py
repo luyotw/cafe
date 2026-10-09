@@ -162,6 +162,7 @@ def test_conflict_abort_develop_fix_fresh_review_and_authorization_deliver(
         hook(engine, "publish_output", "DevelopmentDeliveryOutcome", kwargs).override_status_code
         == PhaseStatusCode.NEED_CLARIFICATION
     )
+    assert json.loads((issue / "next_step.txt").read_text())["intent"] == "need_clarification"
     if legacy_receipt:
         receipt_path = issue / "delivery" / old_snapshot.digest / "integration.json"
         receipt = json.loads(receipt_path.read_text())
@@ -236,6 +237,9 @@ def test_conflict_abort_develop_fix_fresh_review_and_authorization_deliver(
         )
     )
     kwargs.update(step_name="pr", step_def=data["steps"]["pr"], output_file=output, context={})
+    (issue / "next_step.txt").write_text(json.dumps({
+        "version": 1, "to_owner": "user", "to_step": "user", "intent": "confirm_output",
+    }))
     assert hook(engine, "publish_output", "DevelopmentActionContext", kwargs).continue_pipeline
     task = HumanTaskRecordStore(issue).tasks()[-1]
     revised = (*context[:8], task, "deliver")

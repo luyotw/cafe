@@ -1,7 +1,7 @@
 ---
 name: cafe-pr
 description: Prepare the local pull request title and description for publication
-version: 1.8.0
+version: 1.9.0
 workflow:
   notification:
     step_label:

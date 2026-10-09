@@ -1,0 +1,369 @@
+playbook:
+  id: bug
+  name: Focused Bug Repair
+  conversation_locale: en-US
+  applicability:
+    summary: Confirmed bounded defect with diagnosis, failing regression proof, minimal
+      repair and independent review.
+    use_when:
+    - A reported defect has confirmed expected behavior and a bounded repair surface.
+    - Reproduction and before/after regression evidence are required before PR readiness.
+    avoid_when:
+    - Behavior is speculative, or the request is broad redesign, cleanup or incident
+      management.
+    - Acceptance needs a separate QA owner or investigation exceeds the confirmed
+      defect boundary.
+behavior:
+  completion: baton
+  allow_issue_decomposition: true
+skills:
+  workflow:
+    shared:
+    - cafe-workflow-common
+    - cafe-github_sync
+  chat:
+    shared:
+    - cafe-common-chat-handoff
+    - cafe-chat-develop-change
+    - cafe-chat-spec-revision
+    - cafe-chat-plan-revision
+    - cafe-chat-alignment-decision
+roles:
+  developer:
+    description: Developer
+    default_agent: David
+    default_cli: claude
+  reviewer:
+    description: Code Reviewer
+    default_agent: Richard
+    default_cli: gemini
+commands:
+  prepare:
+    fields:
+    - id: input_method
+      type: enum
+      label: Input method
+      help: Choose the source of the bounded defect report.
+      write: diagnose.input_method
+      default: manual
+      required: true
+      show_when:
+        github_repo: true
+      choices:
+      - value: manual
+        label: Manual input
+      - value: github
+        label: GitHub issue
+    - id: github_issue_id
+      type: text
+      label: GitHub issue ID or URL
+      write: diagnose.issue_id
+      normalize: github_issue
+      show_when:
+        issue_id_present: true
+steps:
+  diagnose:
+    type: skill
+    skill: cafe-bug-diagnose
+    handoff_label: Revalidate defect diagnosis
+    role: developer
+    assignee_type: agent
+    input_artifacts:
+    - bug_diagnosis
+    - code
+    - review_feedback
+    - workspace
+    - workflow_feedback
+    output_artifact: bug_diagnosis
+    max_attempts_per_cycle: 3
+    human_tasks:
+    - trigger: need_clarification
+      task_id: clarification-feedback
+      outcomes:
+        submit: diagnose
+    - trigger: need_permission
+      task_id: permission-answers
+      outcomes:
+        submit: diagnose
+    - trigger: manual_handoff
+      task_id: iteration-limit
+      outcomes:
+        resume: diagnose
+    allowed_tools:
+    - Read
+    - Edit
+    - Write
+    - Grep
+    - Glob
+    - Bash
+    - WebFetch
+    - WebSearch
+    hooks:
+      prepare_input:
+      - InitialInputProviderResolver
+      - UserInputCollector
+      after_execute:
+      - PermissionRetryHandler
+    'on':
+      await_agent: develop
+      manual_handoff: diagnose
+      need_clarification: diagnose
+      need_permission: diagnose
+    workspace_artifact: workspace
+    initial_input:
+      providers:
+      - manual_text
+      - github_issue
+      bind:
+        prompt_context: user_input
+  develop:
+    type: skill
+    skill: cafe-bug-repair
+    handoff_label: Repair the confirmed defect
+    role: developer
+    assignee_type: agent
+    input_artifacts:
+    - bug_diagnosis
+    - workspace
+    - code
+    - review_feedback
+    - pr_result
+    - workflow_feedback
+    - delivery_result
+    output_artifact: code
+    max_attempts_per_cycle: 3
+    human_tasks:
+    - trigger: need_clarification
+      task_id: clarification-feedback
+      outcomes:
+        submit: develop
+    - trigger: need_permission
+      task_id: permission-answers
+      outcomes:
+        submit: develop
+    - trigger: manual_handoff
+      task_id: iteration-limit
+      outcomes:
+        resume: develop
+    allowed_tools:
+    - Read
+    - Edit
+    - Write
+    - Grep
+    - Glob
+    - Bash
+    - WebFetch
+    - WebSearch
+    hooks:
+      prepare_input:
+      - UserInputCollector
+      after_execute:
+      - PermissionRetryHandler
+    'on':
+      await_agent: review
+      manual_handoff: diagnose
+      need_clarification: develop
+      need_permission: develop
+    workspace_artifact: workspace
+    workspace_input_artifact: workspace
+    behavior:
+      feedback_target: diagnose
+      feedback_artifact: code
+      feedback_source_kind: bug_repair
+      feedback_todo_source: bug_repair
+      feedback_todo_id_prefix: BUGD
+    allowed_goto:
+    - diagnose
+  review:
+    type: skill
+    skill: cafe-bug-review
+    handoff_label: Independently review the repair
+    role: reviewer
+    assignee_type: agent
+    input_artifacts:
+    - bug_diagnosis
+    - code
+    - workspace
+    - review_feedback
+    - workflow_feedback
+    output_artifact: review_feedback
+    max_attempts_per_cycle: 3
+    human_tasks:
+    - trigger: need_clarification
+      task_id: clarification-feedback
+      outcomes:
+        submit: review
+    - trigger: need_permission
+      task_id: permission-answers
+      outcomes:
+        submit: review
+    - trigger: manual_handoff
+      task_id: iteration-limit
+      outcomes:
+        resume: review
+    allowed_tools:
+    - Read
+    - Grep
+    - Glob
+    - Bash(git:*)
+    hooks:
+      prepare_input:
+      - UserInputCollector
+    'on':
+      await_agent: pr
+      manual_handoff: develop
+      need_clarification: review
+      need_permission: review
+    workspace_input_artifact: workspace
+    allowed_goto:
+    - diagnose
+    - develop
+    behavior:
+      runtime_tool_grants:
+      - web_research
+      - git_inspection
+      feedback_target: develop
+      feedback_artifact: review_feedback
+      feedback_source_kind: bug_review
+      feedback_todo_source: bug_review
+      feedback_todo_id_prefix: BUGR
+  pr:
+    handoff_label: Refresh reviewed bug delivery actions
+    type: skill
+    skill: cafe-pr
+    role: developer
+    assignee_type: agent
+    input_artifacts:
+    - code
+    - workspace
+    - review_feedback
+    - workflow_feedback
+    workspace_input_artifact: workspace
+    output_artifact: pr_result
+    behavior:
+      completion: baton
+      publish_confirmation: true
+      feedback_target: pr
+      feedback_artifact: workflow_feedback
+      feedback_source_kind: github_pr
+      feedback_todo_source: pr_comment
+      feedback_todo_id_prefix: PRC
+      context_providers:
+      - git_history
+      - local_review
+    allowed_tools:
+    - Read
+    - Edit
+    - Write
+    - Grep
+    - Glob
+    capability_requests:
+    - cafe.pr.publish
+    allowed_goto:
+    - develop
+    hooks:
+      prepare_input:
+      - GitHubPRCreator
+      - GitHubPRFeedbackSource
+      - UserInputCollector
+      publish_output:
+      - GitHubPRCreator
+      - LocalReviewContextProvider
+      - PRLinkOpener
+      - DevelopmentActionContext
+    human_tasks:
+    - trigger: confirm_output
+      task_id: delivery-review
+      outcomes:
+        fix_now: pr
+        integrate_selected: deliver
+        integrate_only: deliver
+        review_only: pr
+      feedback_delivery:
+        artifact: workflow_feedback
+        source_kind: local_review
+        todo_source: workflow_feedback
+        todo_id_prefix: WF
+    - trigger: need_clarification
+      task_id: delivery-details
+      outcomes:
+        submit: pr
+    'on':
+      confirm_output: pr
+      need_permission: pr
+      manual_handoff: develop
+      need_clarification: pr
+    delivery: &id001
+      actions_artifact: delivery_actions
+      result_artifact: delivery_result
+      approval_step: pr
+      approval_task: delivery-review
+      result_task: delivery-outcome
+      correction_step: develop
+      proposals_artifact: review_feedback
+  deliver:
+    type: skill
+    skill: cafe-deliver_development
+    handoff_label: Recover delivery actions
+    role: developer
+    assignee_type: agent
+    input_artifacts:
+    - pr_result
+    - workspace
+    - delivery_actions
+    - workflow_feedback
+    workspace_input_artifact: workspace
+    output_artifact: delivery_result
+    delivery: *id001
+    behavior:
+      completion: baton
+      feedback_target: develop
+      feedback_artifact: delivery_result
+      feedback_source_kind: delivery
+      feedback_todo_source: workflow_feedback
+      feedback_todo_id_prefix: DLV
+    capability_requests:
+    - cafe.github.pr.merge
+    - cafe.branch.integrate
+    - cafe.github.issue.create
+    allowed_tools:
+    - Read
+    - Edit
+    - Write
+    - Grep
+    - Glob
+    allowed_goto:
+    - develop
+    - pr
+    hooks:
+      prepare_input:
+      - DevelopmentDeliveryExecutor
+      publish_output:
+      - DevelopmentDeliveryOutcome
+    human_tasks:
+    - trigger: confirm_output
+      task_id: delivery-outcome
+      feedback_delivery:
+        artifact: workflow_feedback
+        source_kind: delivery
+        todo_source: workflow_feedback
+        todo_id_prefix: DLV
+      outcomes:
+        confirm_cleanup: _done
+        confirm_archive: _done
+        confirm: _done
+        revise: deliver
+    - trigger: need_clarification
+      task_id: delivery-recovery
+      outcomes:
+        submit: deliver
+    - trigger: need_permission
+      task_id: delivery-permission
+      outcomes:
+        submit: deliver
+    'on':
+      confirm_output: deliver
+      need_clarification: deliver
+      need_permission: deliver
+      manual_handoff: develop
+entry_point: diagnose
