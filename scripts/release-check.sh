@@ -199,4 +199,20 @@ uv pip install --python "$UPGRADE_VENV/bin/python" "${wheels[0]}" >/dev/null
 uv pip check --python "$UPGRADE_VENV/bin/python"
 "$UPGRADE_VENV/bin/python" "$PROJECT_ROOT/scripts/release-upgrade-smoke.py" verify --root "$UPGRADE_PROJECT"
 
+start_stage upgrade_current
+echo "Verifying v0.8.0 pending delivery review after upgrade to the current wheel..."
+CURRENT_SOURCE="$RELEASE_TEMP_DIR/current-baseline"
+CURRENT_DIST="$RELEASE_TEMP_DIR/current-baseline-dist"
+CURRENT_VENV="$RELEASE_TEMP_DIR/current-upgrade-venv"
+CURRENT_PROJECT="$RELEASE_TEMP_DIR/current-upgrade-project"
+mkdir -p "$CURRENT_SOURCE" "$CURRENT_PROJECT"
+git -C "$PROJECT_ROOT" archive v0.8.0 | tar -x -C "$CURRENT_SOURCE"
+uv build "$CURRENT_SOURCE" --wheel --out-dir "$CURRENT_DIST" >/dev/null
+uv venv "$CURRENT_VENV" >/dev/null
+uv pip install --python "$CURRENT_VENV/bin/python" "$CURRENT_DIST"/*.whl >/dev/null
+"$CURRENT_VENV/bin/python" "$PROJECT_ROOT/scripts/release-upgrade-smoke.py" seed-current --root "$CURRENT_PROJECT"
+uv pip install --python "$CURRENT_VENV/bin/python" "${wheels[0]}" >/dev/null
+uv pip check --python "$CURRENT_VENV/bin/python"
+"$CURRENT_VENV/bin/python" "$PROJECT_ROOT/scripts/release-upgrade-smoke.py" verify-current --root "$CURRENT_PROJECT"
+
 echo "Release checks passed for cafe-engine $expected_version."

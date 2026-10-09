@@ -596,6 +596,26 @@ class BlackboardWorkflowRuntime:
             # validates its declared handoff, not a phase-specific remote
             # receipt before allowing that handoff to proceed.
             return []
+        if (
+            step_def.get("delivery") is not None
+            and "DevelopmentDeliveryExecutor"
+            in (step_def.get("hooks", {}).get("prepare_input") or [])
+            and "DevelopmentDeliveryOutcome"
+            in (step_def.get("hooks", {}).get("publish_output") or [])
+        ):
+            # The delivery hooks validate the selected actions' exact receipts.
+            # Its alternatives are not all required effects. Other capabilities
+            # still need the ordinary core receipt gate.
+            declared = [
+                capability
+                for capability in declared
+                if capability
+                not in {
+                    "cafe.github.pr.merge",
+                    "cafe.branch.integrate",
+                    "cafe.github.issue.create",
+                }
+            ]
         return declared
 
     def _is_baton_driven_step(self, current_step: str) -> bool:

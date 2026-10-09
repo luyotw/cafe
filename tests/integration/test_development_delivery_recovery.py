@@ -9,6 +9,8 @@ import pytest
 from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardStore
 from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.status_codes import PhaseStatusCode
+from cafe.core.workflow_models import StepExecutionResult
+from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.delivery.contracts import DeliveryBinding
 from cafe.delivery.selection import approved_snapshot
 from cafe.ui.human_tasks import apply_human_task_payload
@@ -69,6 +71,71 @@ def finish_issue(context, *, cycles=5):
         if report(result)["complete"]:
             return result
     return result
+
+
+@pytest.mark.parametrize("renamed", [False, True])
+def test_successful_delivery_can_return_for_correction_without_replaying_actions(
+    local_action, fake_github, tmp_path, renamed
+):
+    context = setup_action(local_action, tmp_path, github=True, renamed=renamed)
+    approve_action(context)
+    result = run_and_approve_host(context)
+    assert report(result)["complete"]
+    root, _, issue, state, phase, data, engine, kwargs, _, delivery = context
+    github_before = json.loads(fake_github.read_text())
+    assert github_before["effects"] == ["merge"]
+    receipt_path = Path(result.context_updates["delivery_receipts_file"])
+    receipt_before = receipt_path.read_bytes()
+
+    hook(engine, "publish_output", "DevelopmentDeliveryOutcome", kwargs)
+    task = next(
+        task for task in HumanTaskRecordStore(issue).tasks()
+        if task.policy_id == "delivery-outcome"
+    )
+    pause(issue, state, delivery)
+    revised = apply_human_task_payload(
+        issue_dir=issue, playbook_data=data, blackboard=state,
+        from_step=delivery, trigger="confirm_output",
+        raw_payload={
+            "task": task.policy_id, "human_task_id": task.id,
+            "decision": "revise", "feedback": "Fix the build before final acceptance.",
+        },
+        source="test",
+    )
+    assert revised.target == delivery, revised.rejection
+    phase.iteration = 2
+    kwargs["output_file"] = issue / delivery / "iteration_002" / "output.md"
+    kwargs["output_file"].parent.mkdir()
+    kwargs["output_file"].write_text("# Return the build correction to its owner\n")
+    recovered = hook(engine, "prepare_input", "DevelopmentDeliveryExecutor", kwargs)
+    assert recovered.context_updates["delivery_complete"] == "true"
+    correction = data["steps"][delivery]["delivery"]["correction_step"]
+
+    def agent_boundary(step_name, step_def, blackboard, **_kwargs):
+        assert step_name == delivery
+        (issue / "next_step.txt").write_text(json.dumps({
+            "version": 1, "to_owner": "agent", "to_step": correction,
+            "intent": "manual_handoff",
+        }))
+        return StepExecutionResult(response="Return for the requested build correction.", artifacts={})
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue, playbook=data, executor=agent_boundary,
+    )
+    runtime.run(start_step=delivery, single_step=True)
+    current = BlackboardStore(issue).load_or_create(delivery)
+    handoff = BlackboardStore(issue).load_handoff_contract(current, allowed_steps=list(data["steps"]))
+    assert handoff.to_step == correction
+    assert not any(
+        event.event_type == "workflow_blocked"
+        and event.data.get("reason") == "missing_capability_receipt"
+        for event in current.events
+    )
+    github_after = json.loads(fake_github.read_text())
+    assert github_after["effects"] == github_before["effects"]
+    assert github_after["pr"] == github_before["pr"]
+    assert github_after["issues"] == github_before["issues"]
+    assert receipt_path.read_bytes() == receipt_before
 
 
 @pytest.mark.parametrize("legacy_receipt", [False, True])

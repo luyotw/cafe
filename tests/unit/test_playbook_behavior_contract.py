@@ -308,6 +308,60 @@ def test_custom_named_publish_step_uses_declared_baton_without_core_receipt_gate
     assert runtime._is_baton_driven_step("verify") is False
 
 
+@pytest.mark.parametrize("delivery_name", ["deliver", "ship"])
+def test_declared_delivery_uses_host_action_receipts_not_all_capability_alternatives(
+    tmp_path, delivery_name
+):
+    import json
+
+    playbook = PlaybookLoader(project_root=tmp_path, global_root=tmp_path).load("direct")
+    if delivery_name != "deliver":
+        playbook = json.loads(json.dumps(playbook).replace('"deliver"', '"ship"'))
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=tmp_path / "issue",
+        playbook=playbook,
+        executor=lambda *_args, **_kwargs: None,
+    )
+
+    assert playbook["steps"][delivery_name]["capability_requests"] == [
+        "cafe.github.pr.merge", "cafe.branch.integrate", "cafe.github.issue.create"
+    ]
+    assert runtime._required_capability_ids(delivery_name) == []
+    assert runtime._is_baton_driven_step(delivery_name)
+
+
+def test_generic_capability_step_keeps_its_required_receipt_gate(tmp_path):
+    playbook = _playbook(build_behavior={"completion": "baton"})
+    playbook["steps"]["build"]["capability_requests"] = ["cafe.github.issue.create"]
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=tmp_path / "issue",
+        playbook=playbook,
+        executor=lambda *_args, **_kwargs: None,
+    )
+
+    assert runtime._required_capability_ids("build") == ["cafe.github.issue.create"]
+
+
+@pytest.mark.parametrize("missing_hook", [None, "prepare_input", "publish_output"])
+def test_delivery_exemption_requires_host_hooks_and_preserves_unrelated_capabilities(
+    tmp_path, missing_hook
+):
+    playbook = PlaybookLoader(project_root=tmp_path, global_root=tmp_path).load("direct")
+    step = playbook["steps"]["deliver"]
+    step["capability_requests"].append("custom.release.verify")
+    if missing_hook:
+        step["hooks"][missing_hook] = []
+    PlaybookDefinition.model_validate(playbook)
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=tmp_path / "issue", playbook=playbook,
+        executor=lambda *_args, **_kwargs: None,
+    )
+
+    assert runtime._required_capability_ids("deliver") == (
+        ["custom.release.verify"] if missing_hook is None else step["capability_requests"]
+    )
+
+
 def test_custom_named_publish_hook_accepts_declared_terminal_baton(tmp_path):
     """UT-004: native publish hooks consume the declaration, not ``pr``."""
     baton_file = tmp_path / "next_step.txt"

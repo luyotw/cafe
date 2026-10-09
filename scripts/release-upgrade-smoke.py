@@ -111,12 +111,83 @@ def verify(root: Path) -> None:
     print("Legacy PR task resumed after upgrade; duplicate completion preserved one result.")
 
 
+def seed_current(root: Path) -> None:
+    """Persist a v0.8 delivery review with that actual wheel."""
+    graph = PlaybookLoader(project_root=root, global_root=root / "global").load("standard")
+    assert "deliver" in graph["steps"]
+    issue = root / ".cafe" / "issues" / "upgrade"
+    issue.mkdir(parents=True)
+    (issue / "issue.yaml").write_text(
+        "playbook_id: standard\nexecution:\n  rate_limit_restart_policy: recheck_priority\n"
+    )
+    store = BlackboardStore(issue)
+    board = store.load_or_create("pr", playbook_id="standard")
+    store.set_current_step(board, "user")
+    store.update_handoff_contract(
+        board,
+        from_step="pr",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.CONFIRM_OUTPUT,
+        source="upgrade-smoke",
+    )
+    policy, binding = resolve_step_human_task(
+        playbook_data=graph, step_name="pr", trigger="confirm_output"
+    )
+    assert policy.id == "delivery-review"
+    task = HumanTaskRecordStore(issue).materialize(
+        workflow_id=board.workflow_id,
+        step="pr",
+        iteration=1,
+        trigger="confirm_output",
+        policy_id=policy.id,
+        prompt=policy.prompt,
+        expected_result=policy.model_dump(mode="json"),
+        continuations=binding.outcomes,
+        assignee_type="user",
+    )
+    (root / "upgrade-current.json").write_text(
+        json.dumps(
+            {
+                "task": task.to_dict(),
+                "workflow_id": board.workflow_id,
+            }
+        )
+    )
+
+
+def verify_current(root: Path) -> None:
+    """Read pending authority unchanged after a v0.8 upgrade."""
+    from cafe.core.restart_policy import RECHECK_PRIORITY, resolve_restart_policy
+
+    original = json.loads((root / "upgrade-current.json").read_text())
+    issue = root / ".cafe" / "issues" / "upgrade"
+    board = BlackboardStore(issue).load_or_create("pr", playbook_id="standard")
+    assert board.workflow_id == original["workflow_id"] and board.current_step == "user"
+    tasks = HumanTaskRecordStore(issue)
+    assert tasks.get_task(original["task"]["id"]).to_dict() == original["task"]
+    assert tasks.get_result(original["task"]["id"]) is None
+    assert tasks.active_wait_state(board.workflow_id, step="pr") is not None
+    assert (
+        resolve_restart_policy(yaml.safe_load((issue / "issue.yaml").read_text()))
+        == RECHECK_PRIORITY
+    )
+    assert not (issue / "delivery").exists(), "Reading an old review cannot grant effects"
+    print("v0.8 pending delivery review and restart policy remain readable.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("seed", "verify"))
+    operations = {
+        "seed": seed,
+        "verify": verify,
+        "seed-current": seed_current,
+        "verify-current": verify_current,
+    }
+    parser.add_argument("operation", choices=tuple(operations))
     parser.add_argument("--root", type=Path, required=True)
     args = parser.parse_args()
-    (seed if args.operation == "seed" else verify)(args.root.resolve())
+    operations[args.operation](args.root.resolve())
 
 
 if __name__ == "__main__":

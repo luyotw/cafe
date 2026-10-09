@@ -6,10 +6,11 @@ import hashlib
 import hmac
 import importlib.metadata
 import json
+import site
 import subprocess
 import sys
 import urllib.request
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Callable, Optional, Sequence
 
 from packaging.version import InvalidVersion, Version
@@ -17,6 +18,10 @@ from packaging.version import InvalidVersion, Version
 
 class UpdateApplyError(RuntimeError):
     """Raised when an update approval is absent, stale, or cannot be applied."""
+
+    def __init__(self, message: str, *, runtime_installed: bool = False) -> None:
+        super().__init__(message)
+        self.runtime_installed = runtime_installed
 
 
 @dataclass(frozen=True)
@@ -39,9 +44,13 @@ class UpdateCheckResult:
     release_url: Optional[str]
     token: Optional[str]
     error: Optional[str] = None
+    helper_sync: Optional[dict[str, object]] = None
 
-    def to_dict(self) -> dict[str, Optional[str]]:
-        return asdict(self)
+    def to_dict(self) -> dict[str, object]:
+        result = asdict(self)
+        if self.helper_sync is None:
+            result.pop("helper_sync")
+        return result
 
 
 def _installed_cafe_version() -> str:
@@ -91,10 +100,54 @@ def _run_pip(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
     )
 
 
+# A fresh isolated interpreter loads the newly installed bundle, not modules
+# retained by this updater or a checkout selected through PYTHONPATH/cwd.
+SYNC_INSTALLED_HELPERS = """
+import importlib.metadata
+import json
+import sys
+import site
+from dataclasses import asdict
+from pathlib import Path
+
+# Isolation excludes cwd/PYTHONPATH. Restore only the updater's enabled user
+# installation directory, including an explicitly configured PYTHONUSERBASE.
+if len(sys.argv) > 2 and sys.argv[2]:
+    sys.path.insert(0, sys.argv[2])
+    site.addsitedir(sys.argv[2])
+import cafe
+from cafe.skills.global_installer import (
+    DEFAULT_GLOBAL_SKILLS, GLOBAL_CLI_SKILL_DIRS, detect_global_skill_clis,
+    sync_global_skills, _trees_equal,
+)
+
+version = importlib.metadata.version("cafe-engine")
+if version != sys.argv[1]:
+    raise SystemExit("Installed helper runtime does not match the approved version")
+source = Path(cafe.__file__).resolve().parent / "data" / "skills"
+home = Path.home()
+detected = set(detect_global_skill_clis(home_dir=home))
+clis = [cli for cli, relative in GLOBAL_CLI_SKILL_DIRS.items()
+        if cli in detected or any((home / relative / name).exists()
+                                  or (home / relative / name).is_symlink()
+                                  for name in DEFAULT_GLOBAL_SKILLS)]
+summary = sync_global_skills(source_root=source, home_dir=home, cli_names=clis) if clis else None
+results = summary.results if summary else []
+verified = len(results) == len(clis) * len(DEFAULT_GLOBAL_SKILLS) and all(
+    result.status != "failed" and _trees_equal(result.source, result.destination)
+    for result in results)
+print(json.dumps({"schema_version": 1, "installed_version": version,
+                  "source_root": str(source), "skills": list(DEFAULT_GLOBAL_SKILLS),
+                  "clis": clis, "results": [asdict(result) for result in results],
+                  "post_change_verified": verified}, default=str, sort_keys=True))
+raise SystemExit(0 if verified else 1)
+"""
+
+
 class UpdateService:
     """Compare and apply one exact GitHub release after explicit approval."""
 
-    TOKEN_SCHEMA = 2
+    TOKEN_SCHEMA = 3
 
     def __init__(
         self,
@@ -120,6 +173,7 @@ class UpdateService:
                 "tag": release.tag,
                 "release_url": release.release_url,
                 "install_url": release.install_url,
+                "helper_sync": "approved_release_defaults_for_detected_or_installed_clis",
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -164,7 +218,7 @@ class UpdateService:
         return result
 
     def apply(self, approval_token: str) -> UpdateCheckResult:
-        """Install the exact freshly compared release and return a post-check."""
+        """Install the approved release and its CLI-native helpers as one update."""
         if not approval_token:
             raise UpdateApplyError("An update approval token is required")
 
@@ -200,4 +254,38 @@ class UpdateService:
             raise UpdateApplyError(
                 "Required post-update check did not observe the approved version"
             )
-        return post_check
+
+        helper_command = [
+            self._python_executable, "-I", "-c", SYNC_INSTALLED_HELPERS, approved_version,
+        ]
+        if site.ENABLE_USER_SITE:
+            helper_command.append(site.getusersitepackages())
+        try:
+            helper_result = self._runner(helper_command)
+            if getattr(helper_result, "returncode", 0) != 0:
+                detail = getattr(helper_result, "stderr", "") or getattr(helper_result, "stdout", "")
+                raise ValueError(detail or "helper synchronization returned a failure")
+            receipt = json.loads(getattr(helper_result, "stdout", ""))
+            if (
+                not isinstance(receipt, dict)
+                or receipt.get("schema_version") != 1
+                or receipt.get("installed_version") != approved_version
+                or receipt.get("post_change_verified") is not True
+            ):
+                raise ValueError("helper synchronization did not return verified update evidence")
+        except Exception as exc:
+            raise UpdateApplyError(
+                f"CAFE {approved_version} was installed, but bundled helper synchronization "
+                f"did not complete: {exc}. Retry synchronization from the installed "
+                f"release bundle with --installed-bundle --expected-version {approved_version} "
+                "using sync_helper_with_preflight.py for detected CLIs and existing CAFE "
+                "helper destinations; do not reinstall the runtime.",
+                runtime_installed=True,
+            ) from exc
+        final_check = self.check()
+        if final_check.installed_version != approved_version:
+            raise UpdateApplyError(
+                "Required post-helper check did not observe the approved version",
+                runtime_installed=True,
+            )
+        return replace(final_check, helper_sync=receipt)
