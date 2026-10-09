@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import select
+import socket
 import stat
 import struct
 import subprocess
@@ -1873,15 +1874,86 @@ def _require_host_control_socket() -> Path:
     if not available:
         raise _HostTransportUnavailable(
             "The bound Codex App has no usable daemon control socket. "
-            "Local App stdio sessions cannot receive this callback. "
-            "Use an explicitly confirmed attached Manager mode, or connect the App "
-            "to a supported existing daemon before restoring event-driven mode."
+            "Automatic recovery requires an existing user-owned managed Codex daemon. "
+            "Restore that daemon, or use an explicitly confirmed attached Manager mode."
         )
     return endpoint
 
 
+def _probe_host_control_socket() -> Path:
+    """Check that a safe endpoint accepts connections, without sending input."""
+    endpoint = _require_host_control_socket()
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+            probe.settimeout(numeric_limit(
+                "callback.attempt-budget", "duration",
+                execution_context(consumers=["callback"]), expected_unit="seconds",
+            ))
+            # Managed aliases can exceed AF_UNIX's address length limit.
+            # Ownership was checked on both the alias and its resolved socket.
+            probe.connect(str(endpoint.resolve(strict=True)))
+    except OSError:
+        raise _HostTransportUnavailable(
+            "The existing Codex daemon control socket is not accepting connections. "
+            "No workflow event was sent."
+        ) from None
+    return endpoint
+
+
+def _ensure_host_control_socket() -> Path:
+    """Restore a previously configured daemon once, before any event is sent."""
+    try:
+        return _probe_host_control_socket()
+    except _HostTransportUnavailable:
+        home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+        endpoint = home / "app-server-control" / "app-server-control.sock"
+        try:
+            # An unsafe endpoint is not a stopped daemon. Never replace it.
+            if endpoint.exists() or endpoint.is_symlink():
+                link = endpoint.lstat()
+                if link.st_uid != os.getuid():
+                    raise ValueError("unsafe endpoint")
+                if endpoint.exists():
+                    target = endpoint.stat()
+                    if target.st_uid != os.getuid() or not stat.S_ISSOCK(target.st_mode):
+                        raise ValueError("unsafe endpoint target")
+                elif not stat.S_ISLNK(link.st_mode):
+                    raise ValueError("unsafe endpoint")
+            directory = home / "app-server-daemon"
+            binary = home / "packages" / "app-server-daemon" / "current" / "bin" / "codex"
+            metadata = directory.lstat()
+            if metadata.st_uid != os.getuid() or not stat.S_ISDIR(metadata.st_mode):
+                raise ValueError("unowned daemon installation")
+            metadata = binary.stat()
+            if metadata.st_uid != os.getuid() or not stat.S_ISREG(metadata.st_mode):
+                raise ValueError("unowned daemon binary")
+            # daemon.pid is transient: native stop removes it. The owned
+            # installation persists, and native start validates process identity.
+        except (OSError, ValueError, AttributeError):
+            # No bootstrap, replacement session, or machine-specific service.
+            return _probe_host_control_socket()
+        try:
+            subprocess.run(
+                ["codex", "app-server", "daemon", "start"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True,
+                timeout=numeric_limit(
+                    "callback.attempt-budget", "duration",
+                    execution_context(consumers=["callback"]), expected_unit="seconds",
+                ),
+            )
+        except (OSError, subprocess.SubprocessError):
+            raise _HostTransportUnavailable(
+                "The existing managed Codex daemon could not be restored. "
+                "No workflow event was sent; inspect the daemon before retrying."
+            ) from None
+        return _probe_host_control_socket()
+
+
 def validate_bound_host_transport(issue_dir: Path) -> None:
-    """Check a bound host's endpoint without creating a session or sending input."""
+    """Restore its configured daemon if needed, without creating a session or input."""
     status = read_status(issue_dir)
     entries = status.get("entries", [])
     # Later confirmed providers remain usable without the primary host socket.
@@ -1892,7 +1964,7 @@ def validate_bound_host_transport(issue_dir: Path) -> None:
     session = first.get("acquisition", {}).get("session")
     if first.get("cli") == "codex" and isinstance(session, dict):
         if session.get("source") == "host_session":
-            _require_host_control_socket()
+            _ensure_host_control_socket()
 
 
 class _HostConnection:
@@ -2072,7 +2144,7 @@ def _queue_host_callback(
     repository_root: Path,
 ) -> None:
     """Load and wake the bound thread through the already running host daemon."""
-    _require_host_control_socket()
+    _ensure_host_control_socket()
     # No new daemon, session, config, cwd, model or permission override. The
     # repository root is already in the event prompt; the host owns its cwd.
     process = subprocess.Popen(
