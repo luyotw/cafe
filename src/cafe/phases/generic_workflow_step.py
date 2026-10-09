@@ -1316,6 +1316,7 @@ class GenericWorkflowStepExecutor(Phase):
             execution_guard=lambda: self._refresh_and_validate_workspace_inputs(
                 step_def=step_def,
                 blackboard_state=blackboard_state,
+                reuse_verified_workspace=True,
             ),
             execution_lease=lambda: workspace_execution_lock(
                 Path(getattr(self.git_ops, "repo_path", Path.cwd()))
@@ -3277,7 +3278,8 @@ class GenericWorkflowStepExecutor(Phase):
         return context
 
     def _validate_workspace_inputs(
-        self, artifacts: Mapping[str, Any], *, step_def: Optional[Mapping[str, Any]] = None
+        self, artifacts: Mapping[str, Any], *, step_def: Optional[Mapping[str, Any]] = None,
+        verified_workspace: WorkspaceArtifact | None = None,
     ) -> None:
         """Reject stale current-contract workspace companions before agent launch."""
         required_name = (
@@ -3334,6 +3336,11 @@ class GenericWorkflowStepExecutor(Phase):
                 raise ValueError(f"workspace artifact {name!r} base SHA is contradictory")
             if getattr(entry, "head_sha", workspace.head_sha) != workspace.head_sha:
                 raise ValueError(f"workspace artifact {name!r} head SHA is contradictory")
+            if workspace == verified_workspace and workspace.repository == str(active_repo):
+                # Reuse only the exact snapshot just checked by refresh in this
+                # same leased guard invocation. Every subsequent guard checks
+                # Git again, including the immediate second stability check.
+                continue
             checked = verify_workspace_artifact(
                 workspace,
                 repo=active_repo,
@@ -3351,7 +3358,7 @@ class GenericWorkflowStepExecutor(Phase):
         step_def: Mapping[str, Any],
         blackboard_state: BlackboardState,
         workspace_locked: bool = False,
-    ) -> None:
+    ) -> WorkspaceArtifact | None:
         """Refresh one stale declared workspace snapshot from clean Git facts.
 
         A workspace companion is a convenience snapshot for consumers, not a
@@ -3365,7 +3372,7 @@ class GenericWorkflowStepExecutor(Phase):
             return
         repo = Path(getattr(self.git_ops, "repo_path", Path.cwd())).resolve()
 
-        def refresh_under_lock() -> None:
+        def refresh_under_lock() -> WorkspaceArtifact | None:
             previous = blackboard_state.artifacts.get(required_name)
             previous_workspace: WorkspaceArtifact | None = None
             if previous is not None:
@@ -3410,7 +3417,7 @@ class GenericWorkflowStepExecutor(Phase):
                     )
                 checked = verify_workspace_artifact(previous_workspace, repo=repo)
                 if checked.valid:
-                    return
+                    return previous_workspace
                 if checked.reasons != ("workspace head is stale",):
                     detail = "; ".join(checked.reasons)
                     raise ValueError(
@@ -3492,10 +3499,10 @@ class GenericWorkflowStepExecutor(Phase):
             BlackboardStore(self.issue_dir).save(blackboard_state)
 
         if workspace_locked:
-            refresh_under_lock()
+            return refresh_under_lock()
         else:
             with workspace_execution_lock(repo):
-                refresh_under_lock()
+                return refresh_under_lock()
 
     def _recover_declared_workspace_input(
         self,
@@ -3514,9 +3521,14 @@ class GenericWorkflowStepExecutor(Phase):
         *,
         step_def: Mapping[str, Any],
         blackboard_state: BlackboardState,
+        reuse_verified_workspace: bool = False,
     ) -> None:
-        """Refresh a stale consumer snapshot while GenericPhase holds its lease."""
-        self._refresh_declared_workspace_input(
+        """Refresh and verify under the workspace lease.
+
+        Only GenericPhase's two-pass stable boundary reuses the first check.
+        Direct correction dispatches retain both fresh Git observations.
+        """
+        verified = self._refresh_declared_workspace_input(
             step_def=step_def,
             blackboard_state=blackboard_state,
             workspace_locked=True,
@@ -3524,6 +3536,7 @@ class GenericWorkflowStepExecutor(Phase):
         self._validate_workspace_inputs(
             self._step_input_artifacts(step_def, blackboard_state),
             step_def=step_def,
+            verified_workspace=verified if reuse_verified_workspace else None,
         )
 
     def _declared_feedback_route_artifact(self, destination: str) -> Optional[str]:

@@ -37,6 +37,12 @@ You can contribute to this project in several ways:
     ```bash
     ./setup-hooks.sh
     ```
+    Hooks run their existing test selections with four work-stealing workers and
+    report the ten slowest tests. Set `CAFE_TEST_WORKERS` to a non-negative integer
+    to adjust concurrency (`0` runs serially). Workspace checks still observe
+    fresh Git facts at every execution boundary. Packaged playbooks in cached
+    workflow tests are strictly validated when first requested, while project
+    and global overrides continue through the normal loader.
     The configured hooks run repository quality checks only. Commits and merges
     never publish bundled workflow helpers into user-level agent CLI directories.
     Ordinary observational CLI commands also leave those directories untouched.

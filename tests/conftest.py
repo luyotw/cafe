@@ -108,29 +108,29 @@ def cached_builtin_playbook_models(
     package_data_root = (
         Path(__file__).resolve().parents[1] / "src" / "cafe" / "data"
     ).resolve()
-    if not _BUILTIN_PLAYBOOK_CACHE:
-        playbook_root = package_data_root / "playbooks"
-        loader = PlaybookLoader(
-            project_root=tmp_path / "cache-project",
-            global_root=tmp_path / "cache-global",
-            builtin_root=package_data_root,
-        )
-        for playbook_file in sorted(playbook_root.glob("*.yaml")):
-            _BUILTIN_PLAYBOOK_CACHE[playbook_file.stem] = loader.load_model(
-                playbook_file.stem,
-                strict=True,
-            )
-
     real_load_model = PlaybookLoader.load_model
+    validation_loader = None
 
     def load_model(loader: PlaybookLoader, name: str, *, strict: bool = False):
+        nonlocal validation_loader
         if (
             loader.resolve_presentation
             and loader.builtin_root == package_data_root
-            and name in _BUILTIN_PLAYBOOK_CACHE
         ):
             resolved = loader.resolver.resolve(CatalogKind.PLAYBOOK, name)
             if resolved.source == "builtin":
+                if name not in _BUILTIN_PLAYBOOK_CACHE:
+                    # Validate each requested builtin strictly once; an isolated
+                    # journey need not load all unrelated playbooks up front.
+                    if validation_loader is None:
+                        validation_loader = PlaybookLoader(
+                            project_root=tmp_path / "cache-project",
+                            global_root=tmp_path / "cache-global",
+                            builtin_root=package_data_root,
+                        )
+                    _BUILTIN_PLAYBOOK_CACHE[name] = real_load_model(
+                        validation_loader, name, strict=True
+                    )
                 return deepcopy(_BUILTIN_PLAYBOOK_CACHE[name])
         return real_load_model(loader, name, strict=strict)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -129,6 +130,88 @@ def test_workspace_snapshot_rejects_reversed_or_unsupported_records(tmp_path: Pa
 
     with pytest.raises(WorkspaceArtifactError, match="schema"):
         WorkspaceArtifact.from_dict({"schema_version": 99})
+
+
+@pytest.mark.parametrize("field", ["base_sha", "head_sha"])
+@pytest.mark.parametrize("invalid", ["missing", "blob", "options", "newline"])
+def test_batched_commit_lookup_rejects_invalid_objects(tmp_path, field, invalid):
+    repo, base, head = _repo(tmp_path)
+    value = {
+        "missing": "f" * 40,
+        "blob": _git(repo, "rev-parse", "HEAD:tracked.txt"),
+        "options": "--all",
+        "newline": f"{head}\n{base}",
+    }[invalid]
+    arguments = dict(repo=repo, name="snapshot", version=1, base_sha=base, head_sha=head)
+    arguments[field] = value
+    with pytest.raises(WorkspaceArtifactError, match="not resolvable|failed"):
+        build_workspace_artifact(**arguments)
+    artifact = build_workspace_artifact(
+        repo=repo, name="snapshot", version=1, base_sha=base, head_sha=head
+    )
+    assert not verify_workspace_artifact(replace(artifact, **{field: value}), repo=repo).valid
+
+
+def test_batched_commit_lookup_preserves_refs_tags_and_root_binding(tmp_path):
+    repo, base, head = _repo(tmp_path)
+    _git(repo, "tag", "-a", "baseline", base, "-m", "baseline")
+    artifact = build_workspace_artifact(
+        repo=repo, name="snapshot", version=1, base_sha="baseline", head_sha="HEAD"
+    )
+    assert (artifact.base_sha, artifact.head_sha) == (base, head)
+    child = repo / "subdirectory"
+    child.mkdir()
+    with pytest.raises(WorkspaceArtifactError, match="active worktree root"):
+        build_workspace_artifact(
+            repo=child, name="snapshot", version=1, base_sha=base, head_sha=head
+        )
+    worktree = tmp_path / "other-worktree"
+    _git(repo, "worktree", "add", "--detach", str(worktree), head)
+    assert not verify_workspace_artifact(artifact, repo=worktree).valid
+
+
+def test_verification_keeps_late_head_check_and_observes_every_boundary(tmp_path, monkeypatch):
+    from cafe.core import workspace_artifact as module
+
+    repo, base, head = _repo(tmp_path)
+    artifact = build_workspace_artifact(
+        repo=repo, name="snapshot", version=1, base_sha=base, head_sha=head
+    )
+    original_run = module.subprocess.run
+    calls = []
+    move_head = False
+
+    def run(command, **kwargs):
+        nonlocal move_head
+        calls.append(command)
+        result = original_run(command, **kwargs)
+        if move_head and command[1:3] == ["merge-base", "--is-ancestor"]:
+            move_head = False
+            original_run(["git", "reset", "--hard", base], cwd=repo, check=True, capture_output=True)
+        return result
+
+    monkeypatch.setattr(module.subprocess, "run", run)
+    assert verify_workspace_artifact(artifact, repo=repo).valid
+    assert len(calls) == 5  # root/commits, ancestry, HEAD, status, diff
+    calls.clear()
+    move_head = True
+    assert "workspace head is stale" in verify_workspace_artifact(artifact, repo=repo).reasons
+    assert len(calls) == 5
+    assert "workspace head is stale" in verify_workspace_artifact(artifact, repo=repo).reasons
+
+
+def test_verification_observes_changed_replace_refs_without_a_cache(tmp_path):
+    repo, base, head = _repo(tmp_path)
+    artifact = build_workspace_artifact(
+        repo=repo, name="snapshot", version=1, base_sha=base, head_sha=head
+    )
+    assert verify_workspace_artifact(artifact, repo=repo).valid
+    _git(repo, "replace", head, base)
+    checked = verify_workspace_artifact(artifact, repo=repo)
+    assert not checked.valid
+    assert "workspace base is not an ancestor of head" in checked.reasons
+    _git(repo, "replace", "-d", head)
+    assert verify_workspace_artifact(artifact, repo=repo).valid
 
 
 @pytest.mark.parametrize("state", ["staged", "unstaged", "untracked", "ignored", "tracked-ignored", "deleted", "renamed", "mixed"])
