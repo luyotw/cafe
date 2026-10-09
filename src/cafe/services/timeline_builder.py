@@ -36,6 +36,7 @@ class TimelineEntry:
     cache_read_tokens: Optional[int] = None
     reasoning_output_tokens: Optional[int] = None
     cost_usd: Optional[float] = None
+    cost_records: List[Dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self):
         """Validate and normalize the entry."""
@@ -238,6 +239,7 @@ class TimelineBuilder:
             cache_read_tokens=cache_read_tokens,
             reasoning_output_tokens=reasoning_output_tokens,
             cost_usd=cost_usd,
+            cost_records=stats.get("cost_records", []) if stats else [],
         )
 
     def _parse_timestamp(self, timestamp_str: str) -> Optional[datetime]:

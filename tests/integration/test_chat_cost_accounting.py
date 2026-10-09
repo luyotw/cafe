@@ -3,7 +3,9 @@
 import json
 import re
 import subprocess
+from http.client import BadStatusLine, IncompleteRead
 from pathlib import Path
+from threading import Event
 
 import pytest
 import yaml
@@ -44,6 +46,193 @@ def append_codex_totals(journal, usage):
                 "type": "token_count", "info": {"total_token_usage": usage},
             },
         }) + "\n")
+
+
+@pytest.mark.parametrize("repeat_terminal", [False, True])
+def test_codex_chat_persists_official_rate_estimate_once(phase_chat, provider_process, repeat_terminal):
+    from decimal import Decimal
+    _issue, target = phase_chat
+    config = Path.cwd() / ".cafe/phases.yaml"
+    data = yaml.safe_load(config.read_text())
+    data["implementation"]["clis"] = [{"cli": "codex", "model": "gpt-5.3-codex"}]
+    config.write_text(yaml.safe_dump(data))
+    terminal = {"type": "turn.completed", "usage": {
+        "input_tokens": 100, "output_tokens": 20, "cached_input_tokens": 30,
+    }}
+    provider_process([
+        {"type": "thread.started", "thread_id": "new", "model": "gpt-5.3-codex"},
+        terminal, *([terminal] if repeat_terminal else []),
+    ])
+    assert chat.launch_chat_session("developer", "x", phase_name="implementation", prompt="hello") == 0
+    group, = groups(target)
+    record, = group["cost_records"]
+    assert record["provenance"] == "estimated"
+    assert Decimal(record["amount_usd"]) == Decimal("0.00040775")
+    assert group["stats"]["total_cost_usd"] == float(record["amount_usd"])
+    assert record["session_id"] == "new"
+    assert record["pricing"]["source_url"].endswith("pricing.md")
+    assert record["rates_usd_per_million_tokens"] == {"input": "1.75", "cached_input": "0.175", "output": "14"}
+
+
+@pytest.mark.parametrize("failure", [IncompleteRead(b"partial"), BadStatusLine("bad"), RuntimeError("bug")])
+def test_pricing_refresh_failure_does_not_stop_workflow_call(
+    phase_chat, provider_process, monkeypatch, failure
+):
+    _issue, target = phase_chat
+    config = Path.cwd() / ".cafe/phases.yaml"
+    data = yaml.safe_load(config.read_text())
+    data["implementation"]["clis"] = [{"cli": "codex", "model": "gpt-5.3-codex"}]
+    config.write_text(yaml.safe_dump(data))
+    monkeypatch.setenv("CAFE_PRICING_AUTO_UPDATE", "1")
+
+    def broken_refresh(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr("cafe.core.pricing.urlopen", broken_refresh)
+    from threading import Thread
+
+    workers = []
+
+    def track_worker(*args, **kwargs):
+        worker = Thread(*args, **kwargs)
+        workers.append(worker)
+        return worker
+
+    monkeypatch.setattr("cafe.core.pricing.Thread", track_worker)
+    launch = provider_process([
+        {"type": "thread.started", "thread_id": "new", "model": "gpt-5.3-codex"},
+        {"type": "turn.completed", "usage": {
+            "input_tokens": 100, "output_tokens": 20, "cached_input_tokens": 30,
+        }},
+    ])
+    try:
+        assert chat.launch_chat_session("developer", "x", phase_name="implementation", prompt="hello") == 0
+    finally:
+        for worker in workers:
+            worker.join(3)
+    assert workers and not any(worker.is_alive() for worker in workers)
+    assert launch.call_count == 1
+    group, = groups(target)
+    record, = group["cost_records"]
+    assert record["provenance"] == "estimated" and record["pricing_stale"]
+    assert group["stats"]["input_tokens"] == 100
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_workflow_finishes_while_pricing_response_is_stalled(
+    phase_chat, provider_process, monkeypatch, tmp_path, fail
+):
+    from cafe.core.pricing import OpenAIPricingStore
+    from tests.unit.test_pricing import Response
+
+    _issue, target = phase_chat
+    config = Path.cwd() / ".cafe/phases.yaml"
+    data = yaml.safe_load(config.read_text())
+    data["implementation"]["clis"] = [{"cli": "codex", "model": "gpt-5.3-codex"}]
+    config.write_text(yaml.safe_dump(data))
+    entered, release = Event(), Event()
+
+    def stalled(*args, **kwargs):
+        entered.set()
+        assert release.wait(3)
+        if fail:
+            raise IncompleteRead(b"partial")
+        return Response()
+
+    store = OpenAIPricingStore(tmp_path / "rates", opener=stalled)
+    pinned = store.status()["snapshot"]["version"]
+    monkeypatch.setattr("cafe.core.cost.pricing_store", lambda *args: store)
+    monkeypatch.setenv("CAFE_PRICING_AUTO_UPDATE", "1")
+    workers = []
+    schedule = store.refresh_in_background
+
+    def track():
+        worker = schedule()
+        if worker is not None:
+            workers.append(worker)
+
+    monkeypatch.setattr(store, "refresh_in_background", track)
+    launch = provider_process([
+        {"type": "thread.started", "thread_id": "new", "model": "gpt-5.3-codex"},
+        {"type": "turn.completed", "usage": {
+            "input_tokens": 100, "output_tokens": 20, "cached_input_tokens": 30,
+        }},
+    ])
+    try:
+        assert chat.launch_chat_session("developer", "x", phase_name="implementation", prompt="hello") == 0
+        assert entered.wait(3)
+        assert launch.call_count == 1 and workers[0].is_alive()
+        record, = groups(target)[0]["cost_records"]
+        assert record["provenance"] == "estimated"
+        assert record["pricing"]["version"] == pinned
+    finally:
+        release.set()
+        for worker in workers:
+            worker.join(3)
+    assert not any(worker.is_alive() for worker in workers)
+    assert store.status()["error"] == ("IncompleteRead" if fail else None)
+
+
+@pytest.mark.parametrize("failure_point", ["construction", "snapshot"])
+def test_unusable_pricing_store_keeps_workflow_and_tokens(
+    phase_chat, provider_process, monkeypatch, failure_point
+):
+    _issue, target = phase_chat
+    config = Path.cwd() / ".cafe/phases.yaml"
+    data = yaml.safe_load(config.read_text())
+    data["implementation"]["clis"] = [{"cli": "codex", "model": "gpt-5.3-codex"}]
+    config.write_text(yaml.safe_dump(data))
+    failures = []
+
+    def broken_store(*args, **kwargs):
+        failures.append(1)
+        raise RuntimeError("pricing unavailable")
+
+    if failure_point == "construction":
+        monkeypatch.setattr("cafe.core.cost.pricing_store", broken_store)
+    else:
+        monkeypatch.setattr("cafe.core.pricing.OpenAIPricingStore.status", broken_store)
+    launch = provider_process([
+        {"type": "thread.started", "thread_id": "new", "model": "gpt-5.3-codex"},
+        {"type": "turn.completed", "usage": {
+            "input_tokens": 100, "output_tokens": 20, "cached_input_tokens": 30,
+        }},
+    ])
+    assert chat.launch_chat_session("developer", "x", phase_name="implementation", prompt="hello") == 0
+    assert launch.call_count == 1 and failures
+    group, = groups(target)
+    record, = group["cost_records"]
+    assert record["provenance"] == "unavailable" and record["reason"] == "pricing_unavailable"
+    assert group["stats"]["input_tokens"] == 100
+
+
+def test_resumed_codex_estimates_native_model_and_only_new_tokens(phase_chat, monkeypatch, provider_process):
+    from datetime import datetime, timezone
+    from decimal import Decimal
+    _issue, target, session, journal = codex_chat(phase_chat, monkeypatch)
+    append_codex_totals(journal, dict(input_tokens=100, output_tokens=10, cached_input_tokens=50))
+    totals = dict(input_tokens=128, output_tokens=17, cached_input_tokens=60)
+    launch = provider_process([
+        {"type": "thread.started", "thread_id": session},
+        {"type": "turn.completed", "usage": totals},
+    ])
+    process = launch.return_value
+
+    def run(command, **kwargs):
+        with journal.open("a") as handle:
+            handle.write(json.dumps({"type": "turn_context", "timestamp": datetime.now(timezone.utc).isoformat(),
+                                     "payload": {"model": "gpt-5.3-codex"}}) + "\n")
+        append_codex_totals(journal, totals)
+        return process
+
+    launch.side_effect = run
+    assert chat.launch_chat_session("developer", "x", phase_name="implementation", prompt="hello") == 0
+    group, = groups(target)
+    record, = group["cost_records"]
+    assert record["model"] == "gpt-5.3-codex"
+    assert record["model_source"] == "native_journal"
+    assert Decimal(record["amount_usd"]) == Decimal("0.00013125")
+    assert record["billed_tokens"] == dict(input=18, cached_input=10, cache_write=0, output=7)
 
 
 @pytest.mark.parametrize("input_tokens,output_tokens", [(3, 2), (0, 0)])
@@ -365,6 +554,31 @@ def test_status_keeps_chat_model_and_missing_cost_visible(phase_chat, provider_p
     # Chat must not also be billed as the phase's requested model.
     iterations = service.load_iteration_statuses("x", "implementation")
     assert iterations[0]["stats"]["input_tokens"] == 0
+
+
+def test_status_succeeds_after_grouped_chat_float_subtraction(phase_chat, monkeypatch, capsys):
+    from datetime import datetime, timezone
+    from cafe.agents.transport_types import TransportResult
+    from cafe.core.usage import chat_usage_sink, iteration_usage_sink
+    from cafe.ui.commands import workflow
+    from tests.unit.test_cost_accounting import reported_usage
+
+    _issue, target = phase_chat
+    metadata = json.loads(target.read_text())
+    metadata.update(timestamp=datetime.now(timezone.utc).isoformat(), cli="codex", model="selected")
+    target.write_text(json.dumps(metadata))
+    iteration_usage_sink(Path.cwd(), target)(reported_usage("0", "phase"))
+    writer = chat_usage_sink(Path.cwd(), target, cli="codex", requested_model="alias",
+                             mode="one_shot", phase="implementation")
+    for index, (model, amount) in enumerate((("a", "0.1"), ("b", "0.1"), ("a", "0.2"))):
+        writer((TransportResult(reported_model=model, usage=reported_usage(amount, str(index))),))
+    monkeypatch.setattr(StatusService, "get_current_issue", lambda self: "x")
+    monkeypatch.setattr(workflow, "_load_issue_step_names", lambda issue: ["implementation"])
+    monkeypatch.setattr("cafe.services.status_display.RICH_AVAILABLE", False)
+    workflow.status()
+    output = capsys.readouterr().out
+    assert "Workflow: $0.4000 reported" in output
+    assert "Failed to display status" not in output
 
 
 @pytest.mark.parametrize("failure", [False, True])

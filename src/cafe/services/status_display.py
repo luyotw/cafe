@@ -8,6 +8,7 @@ from cafe.core.context_packet import (
 )
 from cafe.core.types import PhaseStatus
 from cafe.core.usage import CHAT_USAGE_FIELDS
+from cafe.core.cost import combine_cost_summaries, format_cost, summarize_cost
 from cafe.services.time_formatter import (
     calculate_elapsed_time,
     format_duration,
@@ -77,7 +78,17 @@ class StatusDisplay:
                     if field in unknown:
                         text += " (partial)"
                 values.append(text)
+            cost_summary = summarize_cost(
+                group.get("cost_records", []), legacy_cost=stats.get("total_cost_usd")
+            )
+            if "total_cost_usd" in unknown:
+                cost_summary["incomplete"] = True
+            values[-1] = format_cost(cost_summary)
+            if "total_cost_usd" in unknown and "(partial)" not in values[-1]:
+                values[-1] += " (partial)"
             coverage = "incomplete" if group.get("incomplete_calls") else "complete"
+            if group.get("cost_records") and cost_summary["incomplete"]:
+                coverage = "incomplete"
             if group.get("mode") == "interactive":
                 coverage = (
                     "incomplete (native subset)" if stats else "incomplete (no native evidence)"
@@ -95,12 +106,12 @@ class StatusDisplay:
                 ]
             )
         if not RICH_AVAILABLE:
-            print("\nChat usage (provider-reported subtotals)")
+            print("\nChat usage (known subtotals)")
             print(" | ".join(headings))
             for row in rows:
                 print(" | ".join(row))
             return
-        table = Table(title="Chat usage (provider-reported subtotals)")
+        table = Table(title="Chat usage (known subtotals)")
         for heading in headings:
             table.add_column(heading)
         for row in rows:
@@ -203,7 +214,10 @@ class StatusDisplay:
             Formatted string for the iteration
         """
         prefix = f"{entry.phase.capitalize()} {entry.name}"
-        return self._format_entry(entry, prefix)
+        text = self._format_entry(entry, prefix)
+        if entry.cost_records or entry.cost_usd is not None:
+            text += " | Cost: " + format_cost(self._entry_cost_summary(entry))
+        return text
 
     def apply_status_styling(self, text: str, status: PhaseStatus) -> str:
         """Apply styling based on status.
@@ -296,6 +310,7 @@ class StatusDisplay:
         table.add_column("Cache Write", style="cyan", justify="right")
         table.add_column("Cache Read", style="cyan", justify="right")
         table.add_column("Reasoning", style="cyan", justify="right")
+        table.add_column("Cost (USD)", style="magenta")
 
         # Add data rows
         for entry in entries:
@@ -334,6 +349,7 @@ class StatusDisplay:
                 cache_write_str,
                 cache_read_str,
                 reasoning_str,
+                format_cost(self._entry_cost_summary(entry)),
             )
 
         # Print table
@@ -366,7 +382,7 @@ class StatusDisplay:
                 print(
                     f"  Reasoning:     {self.format_token_count(stats['reasoning_output_tokens'])}"
                 )
-                cost_str = f"${stats['cost_usd']:.4f}" if stats['cost_usd'] > 0 else "--"
+                cost_str = format_cost(combine_cost_summaries(stats["cost_summaries"]))
                 print(f"  Cost (USD):    {cost_str}")
             print()
             return
@@ -402,43 +418,197 @@ class StatusDisplay:
                 self.format_token_count(stats["cache_write_tokens"]),
                 self.format_token_count(stats["cache_read_tokens"]),
                 self.format_token_count(stats["reasoning_output_tokens"]),
-                f"${stats['cost_usd']:.4f}" if stats['cost_usd'] > 0 else "--",
+                format_cost(combine_cost_summaries(stats["cost_summaries"])),
             )
 
         # Print status table
         console.print()
         console.print(table)
 
+    @staticmethod
+    def _legacy_entry_usage(entry):
+        """Retain historical counters not represented by invocation records."""
+        from cafe.core.cost import merge_cost_records
+
+        fields = {
+            "input_tokens": "input_tokens",
+            "output_tokens": "output_tokens",
+            "cache_write_tokens": "cache_write_input_tokens",
+            "cache_read_tokens": "cache_read_input_tokens",
+            "reasoning_output_tokens": "reasoning_output_tokens",
+        }
+        records = merge_cost_records([], entry.cost_records)
+        remaining = {}
+        for field, raw_field in fields.items():
+            total = getattr(entry, field)
+            if total is None:
+                remaining[field] = None
+                continue
+            recorded = 0
+            for record in records:
+                raw = record.get("usage", {})
+                value = raw.get(raw_field)
+                if value is None and field == "cache_write_tokens":
+                    value = raw.get("cache_creation_input_tokens")
+                recorded += value or 0
+            remaining[field] = max(0, total - recorded)
+        return remaining
+
+    @staticmethod
+    def _legacy_cost_summary(records, aggregate_cost, *, unknown=False):
+        summary = summarize_cost(records, legacy_cost=aggregate_cost)
+        if records:
+            if not summary["counts"]["legacy"] and not unknown:
+                return None
+            summary = summarize_cost([], legacy_cost=summary["legacy"])
+        if unknown:
+            summary.update(incomplete=True, unknown=max(1, summary["unknown"]))
+        return summary
+
+    def _entry_cost_summary(self, entry):
+        summary = summarize_cost(entry.cost_records, legacy_cost=entry.cost_usd)
+        if (
+            entry.cost_records
+            and not summary["counts"]["legacy"]
+            and any(self._legacy_entry_usage(entry).values())
+        ):
+            summary.update(incomplete=True, unknown=max(1, summary["unknown"]))
+        return summary
+
     def _aggregate_model_usage(self, entries: List[TimelineEntry]) -> dict:
         """Aggregate usage without combining separate workflow phases."""
         aggregated = {}
+        seen = set()
+        seen_legacy = set()
         for entry in entries:
-            if not entry.cli or not entry.model:
-                continue
-
-            phase = entry.phase or "--"
-            key = (phase, entry.cli, entry.model)
-            if key not in aggregated:
-                aggregated[key] = {
-                    "phase": phase,
-                    "cli": entry.cli,
-                    "model": entry.model,
-                    "iterations": 0,
-                    "input_tokens": 0,
-                    "output_tokens": 0,
-                    "cache_write_tokens": 0,
-                    "cache_read_tokens": 0,
-                    "reasoning_output_tokens": 0,
-                    "cost_usd": 0.0,
-                }
-
-            stats = aggregated[key]
-            stats["iterations"] += 1
-            stats["input_tokens"] += entry.input_tokens or 0
-            stats["output_tokens"] += entry.output_tokens or 0
-            stats["cache_write_tokens"] += entry.cache_write_tokens or 0
-            stats["cache_read_tokens"] += entry.cache_read_tokens or 0
-            stats["reasoning_output_tokens"] += entry.reasoning_output_tokens or 0
-            stats["cost_usd"] += entry.cost_usd or 0.0
-
+            if entry.cost_records:
+                rows = []
+                for record in entry.cost_records:
+                    identity = record.get("invocation_id")
+                    if identity in seen:
+                        continue
+                    seen.add(identity)
+                    raw = record.get("usage", {})
+                    rows.append(
+                        (
+                            record.get("cli") or "unknown",
+                            record.get("model") or "unknown",
+                            {
+                                "input_tokens": raw.get("input_tokens"),
+                                "output_tokens": raw.get("output_tokens"),
+                                "cache_write_tokens": raw.get("cache_write_input_tokens"),
+                                "cache_read_tokens": raw.get("cache_read_input_tokens"),
+                                "reasoning_output_tokens": raw.get("reasoning_output_tokens"),
+                            },
+                            summarize_cost([record]),
+                        )
+                    )
+                legacy_usage = self._legacy_entry_usage(entry)
+                combined = summarize_cost(entry.cost_records, legacy_cost=entry.cost_usd)
+                legacy_summary = self._legacy_cost_summary(
+                    entry.cost_records,
+                    entry.cost_usd,
+                    unknown=bool(any(legacy_usage.values()) and not combined["counts"]["legacy"]),
+                )
+                legacy_id = (entry.phase, entry.iteration, entry.start_time)
+                if legacy_summary is not None and legacy_id not in seen_legacy:
+                    seen_legacy.add(legacy_id)
+                    rows.append((entry.cli or "unknown", entry.model or "unknown",
+                                 legacy_usage, legacy_summary))
+            else:
+                if not entry.cli or not entry.model:
+                    continue
+                rows = [
+                    (
+                        entry.cli,
+                        entry.model,
+                        {
+                            key: getattr(entry, key)
+                            for key in (
+                                "input_tokens",
+                                "output_tokens",
+                                "cache_write_tokens",
+                                "cache_read_tokens",
+                                "reasoning_output_tokens",
+                            )
+                        },
+                        summarize_cost([], legacy_cost=entry.cost_usd),
+                    )
+                ]
+            for cli, model, usage, summary in rows:
+                phase = entry.phase or "--"
+                key = (phase, cli, model)
+                if key not in aggregated:
+                    aggregated[key] = {
+                        "phase": phase,
+                        "cli": cli,
+                        "model": model,
+                        "iterations": 0,
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "cache_write_tokens": 0,
+                        "cache_read_tokens": 0,
+                        "reasoning_output_tokens": 0,
+                        "cost_usd": 0.0,
+                        "cost_summaries": [],
+                        "_iterations": set(),
+                    }
+                stats = aggregated[key]
+                stats["_iterations"].add((entry.iteration, entry.start_time))
+                stats["iterations"] = len(stats["_iterations"])
+                for field, value in usage.items():
+                    stats[field] += value or 0
+                stats["cost_usd"] += float(summary["known"])
+                stats["cost_summaries"].append(summary)
         return aggregated
+
+    def render_cost_summary(self, entries: List[TimelineEntry], groups: List[dict]) -> None:
+        """Show step and workflow known subtotals, including chat coverage gaps."""
+        from cafe.core.cost import merge_cost_records
+
+        phases = {}
+        for entry in entries:
+            if entry.entry_type != "iteration":
+                continue
+            phase = phases.setdefault(entry.phase, {"records": [], "legacy": []})
+            if entry.cost_records:
+                phase["records"] = merge_cost_records(phase["records"], entry.cost_records)
+                combined = summarize_cost(entry.cost_records, legacy_cost=entry.cost_usd)
+                legacy = self._legacy_cost_summary(
+                    entry.cost_records,
+                    entry.cost_usd,
+                    unknown=bool(any(self._legacy_entry_usage(entry).values())
+                                 and not combined["counts"]["legacy"]),
+                )
+                if legacy is not None:
+                    phase["legacy"].append(legacy)
+            else:
+                phase["legacy"].append(summarize_cost([], legacy_cost=entry.cost_usd))
+        for group in groups:
+            phase = phases.setdefault(group.get("phase") or "--", {"records": [], "legacy": []})
+            if group.get("cost_records"):
+                phase["records"] = merge_cost_records(phase["records"], group["cost_records"])
+            summary = self._legacy_cost_summary(
+                group.get("cost_records", []),
+                group.get("stats", {}).get("total_cost_usd"),
+                unknown="total_cost_usd" in group.get("unknown_fields", []),
+            )
+            if summary is not None:
+                phase["legacy"].append(summary)
+        if not phases:
+            return
+        summaries = []
+        lines = ["Cost (USD; API-equivalent estimates are not subscription invoices)"]
+        for name, phase in phases.items():
+            parts = list(phase["legacy"])
+            if phase["records"]:
+                parts.append(summarize_cost(phase["records"]))
+            summary = combine_cost_summaries(parts)
+            summaries.append(summary)
+            lines.append(f"{name}: {format_cost(summary)}")
+        lines.append(f"Workflow: {format_cost(combine_cost_summaries(summaries))}")
+        text = "\n".join(lines)
+        if RICH_AVAILABLE:
+            console.print(text, markup=False)
+        else:
+            print(text)

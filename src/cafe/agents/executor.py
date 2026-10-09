@@ -20,6 +20,7 @@ from cafe.agents.transport_types import (
     _validated_evidence_scalar,
 )
 from cafe.constraints import execution_context, numeric_limit
+from cafe.core.cost import prepare_cost_accounting
 from cafe.core.types import AgentCLI, AgentConfig, AgentResponse, PermissionDenial, TokenUsage
 
 
@@ -415,8 +416,10 @@ class AgentExecutor:
         """One accounting primitive for ordinary and callback subprocesses."""
         for name in TokenUsage.model_fields:
             value = getattr(usage, name)
-            if name == "turn_usages":
-                self._total_token_usage.turn_usages.extend(value)
+            if name in {"turn_usages", "cost_records"}:
+                setattr(
+                    self._total_token_usage, name, [*getattr(self._total_token_usage, name), *value]
+                )
             elif value is not None:
                 prior = getattr(self._total_token_usage, name)
                 setattr(self._total_token_usage, name, (prior or 0) + value)
@@ -709,7 +712,7 @@ class AgentExecutor:
 
     @staticmethod
     def _compact_usage(usage):
-        numeric_fields = {name for name in TokenUsage.model_fields if name != "turn_usages"}
+        numeric_fields = set(TokenUsage.model_fields) - {"turn_usages", "cost_records"}
         turns = [
             {key: value for key, value in turn.items()
              if key in numeric_fields | {"turn", "turn_index"} and isinstance(value, (int, float))}
@@ -746,6 +749,7 @@ class AgentExecutor:
         _retry_count: int = 0,
         allow_session_recovery: bool = True,
         invoke_attempt: Callable[[], AgentResponse] | None = None,
+        _prior_usage: TokenUsage | None = None,
         **streaming_kwargs,
     ) -> AgentResponse:
         """Generic session recovery wrapper for all CLIs with session support.
@@ -770,9 +774,45 @@ class AgentExecutor:
         """
         try:
             if invoke_attempt is not None:
-                return invoke_attempt()
-            return self._execute_with_streaming(cmd=cmd, cli_name=cli_name, **streaming_kwargs)
+                response = invoke_attempt()
+            else:
+                response = self._execute_with_streaming(
+                    cmd=cmd, cli_name=cli_name, **streaming_kwargs
+                )
+            if _prior_usage is not None:
+                from cafe.core.usage import merge_token_usage_stats
+
+                response.token_usage = TokenUsage(
+                    **merge_token_usage_stats(
+                        _prior_usage.model_dump(exclude_unset=True), response.token_usage
+                    )
+                )
+                if response.transport_result is not None:
+                    response.transport_result = replace(
+                        response.transport_result, usage=response.token_usage
+                    )
+            return response
         except AgentExecutionError as e:
+            prior = _prior_usage
+            failed = getattr(e, "accounting_usage", None)
+            evidence = getattr(e, "transport_result", None)
+            if not isinstance(failed, TokenUsage) and evidence is not None:
+                failed = evidence.usage
+            if not isinstance(failed, TokenUsage):
+                from cafe.core.cost import account_cost
+
+                failed = account_cost(
+                    TokenUsage(), cli=self.config.cli.value, model=None, complete=False
+                )
+                self._accumulate_usage(failed)
+            from cafe.core.usage import merge_token_usage_stats
+
+            prior = TokenUsage(
+                **merge_token_usage_stats(
+                    prior.model_dump(exclude_unset=True) if prior is not None else {}, failed
+                )
+            )
+            e.accounting_usage = prior
             # Check if it's a session not found error or prompt too long error
             error_msg = str(e).lower()
             session_error_phrases = [
@@ -817,6 +857,7 @@ class AgentExecutor:
                             f"Failed to create {cli_name} session: {create_error}"
                         )
                         wrapped_error.cli_command_args = cmd[1:]
+                        wrapped_error.accounting_usage = prior
                         raise wrapped_error from create_error
 
                     # Update command with new session
@@ -847,6 +888,7 @@ class AgentExecutor:
                     update_cmd_with_session_fn=update_cmd_with_session_fn,
                     max_retries=max_retries,
                     _retry_count=_retry_count + 1,
+                    _prior_usage=prior,
                     allow_session_recovery=allow_session_recovery,
                     invoke_attempt=invoke_attempt,
                     **streaming_kwargs,
@@ -1268,9 +1310,22 @@ class AgentExecutor:
         Raises:
             AgentExecutionError: If execution fails
         """
+        # Transient telemetry paths belong to one physical attempt, not stored
+        # agent command/configuration or a later retry.
+        cmd = list(cmd)
+        accounting_environment = os.environ if env is None else env
+        from cafe.agents.cli.provider_usage import prepare_provider_usage
+
+        provider_usage = prepare_provider_usage(self.config.cli.value, cmd, accounting_environment)
         accounting = self._get_cli_strategy().prepare_response_accounting(
-            cmd, os.environ if env is None else env
+            cmd, accounting_environment
         )
+        cost_accounting = prepare_cost_accounting(self.config.cli.value, accounting_environment)
+        native_model_reader = None
+        if self.config.cli == AgentCLI.CODEX:
+            from cafe.agents.cli.codex_usage import prepare_model_reader
+
+            native_model_reader = prepare_model_reader(accounting_environment)
         try:
             process = subprocess.Popen(
                 cmd,
@@ -1283,6 +1338,8 @@ class AgentExecutor:
                 cwd=str(process_cwd) if process_cwd is not None else None,
             )
         except FileNotFoundError as e:
+            if provider_usage is not None:
+                provider_usage.close()
             # CLI command not found - provide user-friendly error
             cli_name = cmd[0] if cmd else "unknown"
             err = AgentExecutionError(
@@ -1290,6 +1347,10 @@ class AgentExecutor:
             )
             err.error_type = "cli_not_found"
             raise err from e
+        except BaseException:
+            if provider_usage is not None:
+                provider_usage.close()
+            raise
 
         if execution_control is not None and execution_control.on_process_started is not None:
             try:
@@ -1305,6 +1366,8 @@ class AgentExecutor:
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait(timeout=2)
+                if provider_usage is not None:
+                    provider_usage.close()
                 raise
 
         # Check stderr first for immediate errors (e.g., session locked)
@@ -1439,13 +1502,38 @@ class AgentExecutor:
                     if accounting is not None:
                         parsed.token_usage = accounting(parsed.token_usage, output_lines)
                         parsed.usage_available = bool(parsed.token_usage.model_fields_set)
+                    if provider_usage is not None:
+                        parsed.token_usage = provider_usage(
+                            parsed.token_usage, output_lines, observation_evidence.observed_session_id
+                        )
+                        parsed.usage_available = bool(
+                            parsed.token_usage.model_fields_set - {"turn_usages", "cost_records"}
+                        )
                     for name in ("duration_ms", "duration_api_ms"):
                         value = getattr(token_usage, name)
                         if value is not None:
                             setattr(parsed.token_usage, name, value)
                             parsed.usage_available = True
+                    cost_model = observation_evidence.reported_model or parsed.model
+                    cost_model_source = "provider" if cost_model is not None else "unavailable"
+                    if cost_model is None and native_model_reader is not None:
+                        cost_model = native_model_reader(observation_evidence.observed_session_id)
+                        if cost_model is not None:
+                            cost_model_source = "native_journal"
+                    parsed.token_usage = cost_accounting(
+                        parsed.token_usage,
+                        cost_model,
+                        complete=(
+                            received_terminal_stream_event
+                            and returncode == 0
+                            and observation_evidence.failure_code is None
+                        ) if parse_stream_json else returncode == 0,
+                    )
+                    for cost_record in parsed.token_usage.cost_records:
+                        cost_record.update(session_id=observation_evidence.observed_session_id)
+                        cost_record.setdefault("model_source", cost_model_source)
                     parsed.token_usage = TokenUsage(**parsed.token_usage.model_dump(exclude_unset=True))
-                    if parsed.usage_available:
+                    if parsed.usage_available or parsed.token_usage.cost_records:
                         self._accumulate_usage(parsed.token_usage)
                 except (ValueError, TypeError, AttributeError) as cause:
                     error = AgentExecutionError("Malformed provider statistics", error_type="invalid_evidence")
@@ -1479,6 +1567,7 @@ class AgentExecutor:
                 """Replace any streamed error payload with one safe durable record."""
                 nonlocal streaming_file_handle, safe_error_record
                 parsed = collect_usage()
+                error.accounting_usage = parsed.token_usage.model_copy(deep=True)
                 error.transport_result = replace(parsed.transport_result,
                     failure_code=parsed.transport_result.failure_code or error.error_type or "execution_failed",
                     error_excerpt=sanitize_error_excerpt(error))
@@ -1736,7 +1825,6 @@ class AgentExecutor:
                                             except BaseException:
                                                 observer_failed = True
                                                 raise
-
 
                                 if any(key in data and not isinstance(data[key], dict)
                                        for key in ("usage", "stats")):
@@ -2148,6 +2236,9 @@ class AgentExecutor:
 
             # Return response (either from stream-json or combined lines)
             if parse_stream_json:
+                parsed_response = collect_usage()
+                token_usage = parsed_response.token_usage
+                model = parsed_response.model or model
                 # response_text is already the last fragment, use output_lines if empty
                 final_response = response_text if response_text else "".join(output_lines)
                 # streaming_log contains extracted text content for context.json
@@ -2162,23 +2253,16 @@ class AgentExecutor:
                 final_streaming_log = output_lines
 
             # Model is already tracked separately, duration stays in token_usage
-            usage_available = bool(token_usage.model_fields_set)
-            if usage_available and parse_stream_json:
-                self._accumulate_usage(token_usage)
+            usage_available = parsed_response.usage_available
             return AgentResponse(
                 response=final_response,
                 token_usage=token_usage,
                 usage_available=usage_available,
                 usage_accounted=True,
-                transport_result=parsed_response.transport_result if not parse_stream_json else replace(
-                    observation_evidence,
-                    reported_model=model,
-                    usage=self._compact_usage(token_usage) if usage_available else None,
-                    completed=True if received_terminal_stream_event else None, returncode=returncode,
-                ),
+                transport_result=parsed_response.transport_result,
                 permission_denials=permission_denials,
                 streaming_log=final_streaming_log,
-                native_review_observations=cli_strategy.native_review_observations(
+                native_review_observations=self._get_cli_strategy().native_review_observations(
                     output_lines, observed_at=native_observed_at),
                 model=model,
                 cli=self.config.cli,
@@ -2244,6 +2328,8 @@ class AgentExecutor:
                 if streaming_file_handle is not None and not streaming_file_handle.closed:
                     streaming_file_handle.close()
                 process_output.close()
+                if provider_usage is not None:
+                    provider_usage.close()
 
 
 def validate_native_review_projection(phase_chains, step_names, configuration):

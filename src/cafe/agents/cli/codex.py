@@ -148,7 +148,10 @@ class CodexCLI(AbstractCLI):
             raw_cost = data.get("total_cost_usd", usage_data.get("total_cost_usd"))
             if raw_cost is not None:
                 try:
-                    reported_cost_usd = max(float(raw_cost), 0.0)
+                    import math
+                    candidate = float(raw_cost)
+                    if not isinstance(raw_cost, bool) and math.isfinite(candidate) and candidate >= 0:
+                        reported_cost_usd = candidate
                 except (TypeError, ValueError):
                     pass
 
@@ -161,7 +164,7 @@ class CodexCLI(AbstractCLI):
                 token_usage = TokenUsage(**{
                     ("cache_read_input_tokens" if key == "cached_input_tokens" else key): value
                     for key, value in usage_data.items()
-                    if key in TokenUsage.model_fields or key == "cached_input_tokens"
+                    if (key in TokenUsage.model_fields and key != "cost_records") or key == "cached_input_tokens"
                 })
                 if turn_usages:
                     token_usage.turn_usages = turn_usages

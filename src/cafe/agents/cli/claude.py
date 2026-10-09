@@ -273,7 +273,7 @@ class ClaudeCLI(AbstractCLI):
                     if isinstance(usage_data, dict):
                         token_usage = TokenUsage(**{
                             key: value for key, value in usage_data.items()
-                            if key in TokenUsage.model_fields and key != "turn_usages"
+                            if key in TokenUsage.model_fields and key not in {"turn_usages", "cost_records"}
                         })
 
                 if "total_cost_usd" in data:

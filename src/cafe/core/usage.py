@@ -13,6 +13,7 @@ from typing import Any, Dict
 import yaml
 
 from cafe.core.types import TokenUsage
+from cafe.core.cost import merge_cost_records
 from cafe.core.workspace_lock import workspace_execution_lock
 from cafe.utils.issue_config import issue_config_lock
 from cafe.utils.yaml_utils import safe_load
@@ -21,7 +22,22 @@ from cafe.utils.yaml_utils import safe_load
 def merge_token_usage_stats(existing: Any, incoming: TokenUsage) -> Dict[str, Any]:
     """Merge one raw attempt into the existing iteration stats shape."""
     merged = dict(existing) if isinstance(existing, dict) else {}
+    prior_records = merged.get("cost_records", [])
+    if incoming.cost_records and all(
+        record.get("invocation_id") in {prior.get("invocation_id") for prior in prior_records}
+        for record in incoming.cost_records
+    ):
+        return merged
     incoming_data = incoming.model_dump()
+    duplicate_ids = {record.get("invocation_id") for record in prior_records}
+    for record in incoming.cost_records:
+        if record.get("invocation_id") not in duplicate_ids:
+            continue
+        for key, value in record.get("usage", {}).items():
+            if isinstance(incoming_data.get(key), (int, float)) and isinstance(value, (int, float)):
+                incoming_data[key] -= value
+        if record.get("amount_usd") is not None:
+            incoming_data["total_cost_usd"] -= float(record["amount_usd"])
     additive_fields = (
         "input_tokens",
         "output_tokens",
@@ -51,6 +67,7 @@ def merge_token_usage_stats(existing: Any, incoming: TokenUsage) -> Dict[str, An
     merged["turn_usages"] = (list(prior_turns) if isinstance(prior_turns, list) else []) + (
         list(incoming_turns) if isinstance(incoming_turns, list) else []
     )
+    merged["cost_records"] = merge_cost_records(prior_records, incoming.cost_records)
     return merged
 
 
@@ -281,6 +298,12 @@ def _validate_chat_usage(metadata):
         if type(calls) is not int or type(incomplete) is not int or not 0 <= incomplete <= calls:
             raise ValueError("invalid chat accounting call counts")
         stats, unknown = group.get("stats"), group.get("unknown_fields")
+        if "cost_records" in group:
+            from cafe.core.cost import summarize_cost
+            records = group["cost_records"]
+            if not isinstance(records, list) or any(not isinstance(record, dict) for record in records):
+                raise ValueError("invalid chat cost records")
+            summarize_cost(records)
         if (
             not isinstance(stats, dict)
             or not isinstance(unknown, list)
@@ -354,6 +377,13 @@ def chat_usage_sink(
                 )
                 group.update(stats={}, calls=0, incomplete_calls=0, unknown_fields=[])
                 groups.append(group)
+            existing_ids = {record.get("invocation_id") for record in group.get("cost_records", [])}
+            records = [record for record in records if not (
+                record.usage is not None and record.usage.cost_records
+                and all(cost.get("invocation_id") in existing_ids for cost in record.usage.cost_records)
+            )]
+            if not records:
+                continue
             missing = set(group["unknown_fields"])
             incomplete = model is None or mode == "interactive"
             for record in records:
@@ -386,6 +416,8 @@ def chat_usage_sink(
                 }
                 if not issue_metadata and usage is not None:
                     current["stats"] = merge_token_usage_stats(current.get("stats"), usage)
+                if usage is not None and usage.cost_records:
+                    group["cost_records"] = merge_cost_records(group.get("cost_records"), usage.cost_records)
             group["calls"] += 1
             group["incomplete_calls"] += int(incomplete)
             group["unknown_fields"] = sorted(missing)
@@ -399,8 +431,24 @@ def chat_usage_sink(
 def phase_stats_without_chat(stats, groups):
     """Accounting consumers must not also bill chat under phase/model metadata."""
     remaining = dict(stats) if isinstance(stats, dict) else {}
+    money = [remaining["total_cost_usd"]] if "total_cost_usd" in remaining else []
+    cost_count = len(remaining.get("cost_records", []))
     for group in groups or ():
         for key, value in group.get("stats", {}).items():
             if key in CHAT_USAGE_FIELDS and isinstance(value, (int, float)) and key in remaining:
-                remaining[key] -= value
+                if key == "total_cost_usd":
+                    money.append(-value)
+                else:
+                    remaining[key] -= value
+        if group.get("cost_records") and remaining.get("cost_records"):
+            chat_ids = {record.get("invocation_id") for record in group["cost_records"]}
+            remaining["cost_records"] = [record for record in remaining["cost_records"]
+                                         if record.get("invocation_id") not in chat_ids]
+    if len(money) > 1:
+        amount = math.fsum(money)
+        # Grouped float totals can differ from the phase's accumulation order.
+        # Judge zero against the original operands, not the tiny residual;
+        # preserve meaningful legacy amounts and genuinely invalid negatives.
+        tolerance = sum(math.ulp(value) for value in money) * max(2, cost_count)
+        remaining["total_cost_usd"] = 0.0 if abs(amount) <= tolerance else amount
     return remaining

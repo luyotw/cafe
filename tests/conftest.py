@@ -34,6 +34,17 @@ def _ensure_src_on_path() -> None:
 _ensure_src_on_path()
 
 
+@pytest.fixture(autouse=True)
+def isolated_pricing_cache(monkeypatch, tmp_path):
+    """Ordinary tests use packaged rates without touching real caches or HTTP.
+
+    Pricing refresh tests inject their own transport and exercise real refresh
+    behavior independently of the subprocess test doubles.
+    """
+    monkeypatch.setenv("CAFE_PRICING_AUTO_UPDATE", "0")
+    monkeypatch.setenv("CAFE_PRICING_CACHE_DIR", str(tmp_path / "pricing-cache"))
+
+
 @pytest.fixture
 def isolated_global_catalog(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Give catalog journeys their own global layer and lock, with real builtins."""

@@ -106,6 +106,7 @@ class TokenUsage(BaseModel):
     duration_ms: Optional[int] = None
     duration_api_ms: Optional[int] = None
     turn_usages: List[Dict[str, Any]] = Field(default_factory=list)
+    cost_records: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class AgentResponse(BaseModel):
