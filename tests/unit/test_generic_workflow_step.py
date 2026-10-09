@@ -7204,6 +7204,7 @@ def test_current_workspace_consumer_fails_closed_when_companion_is_missing(tmp_p
 
 def test_missing_workspace_companion_recovers_from_declared_verified_producer(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -7278,6 +7279,58 @@ def test_missing_workspace_companion_recovers_from_declared_verified_producer(
 
     initial_version = recovered.version
     initial_head = recovered.head_sha
+    from unittest.mock import Mock
+    from cafe.core.workspace_lock import workspace_execution_lock
+
+    verify = Mock(wraps=verify_workspace_artifact)
+    monkeypatch.setattr("cafe.phases.generic_workflow_step.verify_workspace_artifact", verify)
+    with workspace_execution_lock(repo):
+        for _ in range(2):
+            executor._refresh_and_validate_workspace_inputs(
+                step_def=playbook["steps"]["consume"], blackboard_state=state,
+                reuse_verified_workspace=True,
+            )
+    # One real Git verification per guard, with no reuse across guards.
+    assert verify.call_count == 2
+    executor._refresh_and_validate_workspace_inputs(
+        step_def=playbook["steps"]["consume"], blackboard_state=state,
+    )
+    # Direct correction dispatch has no enclosing two-pass stable boundary.
+    assert verify.call_count == 4
+
+    real_verify = verify_workspace_artifact
+
+    def dirty_after_refresh(workspace, *, repo):
+        checked = real_verify(workspace, repo=repo)
+        if checked.valid:
+            (repo / "tracked.txt").write_text("changed between checks\n", encoding="utf-8")
+        return checked
+
+    with monkeypatch.context() as context:
+        context.setattr("cafe.phases.generic_workflow_step.verify_workspace_artifact", dirty_after_refresh)
+        with pytest.raises(ValueError, match="worktree is dirty"):
+            executor._refresh_and_validate_workspace_inputs(
+                step_def=playbook["steps"]["consume"], blackboard_state=state,
+            )
+    subprocess.run(["git", "restore", "tracked.txt"], cwd=repo, check=True)
+
+    child = repo / "child"
+    child.mkdir()
+    original_inputs = executor._step_input_artifacts
+
+    def retarget_repo(step_def, state):
+        artifacts = original_inputs(step_def, state)
+        executor.git_ops.repo_path = str(child)
+        return artifacts
+
+    with monkeypatch.context() as context:
+        context.setattr(executor, "_step_input_artifacts", retarget_repo)
+        with pytest.raises(ValueError, match="active worktree root"):
+            executor._refresh_and_validate_workspace_inputs(
+                step_def=playbook["steps"]["consume"], blackboard_state=state,
+                reuse_verified_workspace=True,
+            )
+    executor.git_ops.repo_path = str(repo)
     (repo / "tracked.txt").write_text("refreshed\n", encoding="utf-8")
     subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
     subprocess.run(
@@ -7302,7 +7355,7 @@ def test_missing_workspace_companion_recovers_from_declared_verified_producer(
 
     (repo / "tracked.txt").write_text("uncommitted conflict\n", encoding="utf-8")
     with pytest.raises(ValueError, match="worktree is dirty"):
-        executor._refresh_declared_workspace_input(
+        executor._refresh_and_validate_workspace_inputs(
             step_def=playbook["steps"]["consume"],
             blackboard_state=state,
         )
