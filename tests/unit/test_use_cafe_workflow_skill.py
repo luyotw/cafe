@@ -4278,3 +4278,62 @@ def test_kickoff_displays_only_requested_task_overrides(
     assert "| need_clarification | manager_confirmable |" in result.stdout
     assert "| spec | clarification-answers | user_required |" in result.stdout
     assert "| spec | output-review |" not in result.stdout
+
+
+def test_version_update_helper_uses_installed_bundle_for_all_checks(monkeypatch):
+    module = _load_script_module(
+        SKILL_ROOT / "scripts" / "sync_helper_with_preflight.py", "sync_installed_bundle"
+    )
+    calls = []
+    monkeypatch.setenv("PYTHONPATH", "/stale/checkout/src")
+    monkeypatch.setenv("PYTHONHOME", "/stale/python")
+
+    def run(command, **kwargs):
+        environment = kwargs["env"]
+        assert "PYTHONPATH" not in environment
+        assert "PYTHONHOME" not in environment
+        assert environment["CAFE_SKIP_ENTRYPOINT_CHECK"] == "1"
+        assert environment["CAFE_SKIP_GLOBAL_SKILL_SYNC"] == "1"
+        calls.append(command)
+        if command[1:] == ["update", "check", "--json"]:
+            stdout = json.dumps(_helper_update())
+        elif command[1:] == ["catalog", "check", "--json"]:
+            stdout = json.dumps(_helper_catalog())
+        else:
+            stdout = "updated: codex/use-cafe-workflow"
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", run)
+    code, receipt = module.execute(
+        executable="/installed/bin/cafe", skills=["use-cafe-workflow"],
+        clis=["codex"], installed_bundle=True,
+    )
+    assert code == 0 and receipt["post_change_verified"] is True
+    assert len(calls) == 5
+    assert all(call[0] == "/installed/bin/cafe" for call in calls)
+
+
+@pytest.mark.parametrize("observed", ["0.8.0", "0.8.1"])
+def test_version_update_helper_rejects_wrong_version_before_publication(monkeypatch, observed):
+    module = _load_script_module(
+        SKILL_ROOT / "scripts" / "sync_helper_with_preflight.py", "sync_update_version_binding"
+    )
+    calls = []
+
+    def run(_executable, arguments):
+        calls.append(tuple(arguments))
+        if tuple(arguments) == ("update", "check", "--json"):
+            payload = _helper_update()
+            payload.update(installed_version=observed, latest_version=observed,
+                           release_url=f"https://github.com/luyotw/cafe/releases/tag/v{observed}")
+            return _helper_command(payload)
+        return _helper_command(_helper_catalog())
+
+    monkeypatch.setattr(module, "_run_command", run)
+    code, receipt = module.execute(
+        executable="/installed/bin/cafe", skills=["use-cafe-workflow"],
+        clis=["codex"], expected_version="0.8.0",
+    )
+    assert (code == 0) is (observed == "0.8.0")
+    assert (receipt["publication"] is not None) is (observed == "0.8.0")
+    assert (len(calls) == 5) is (observed == "0.8.0")

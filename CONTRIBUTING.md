@@ -41,7 +41,10 @@ You can contribute to this project in several ways:
     never publish bundled workflow helpers into user-level agent CLI directories.
     Ordinary observational CLI commands also leave those directories untouched.
     Eligible mutating commands may fill missing helpers from the released package
-    or canonical main checkout, but never update an existing copy. Use
+    or canonical main checkout, but never update an existing copy at startup.
+    An approved `cafe update apply` also synchronizes and verifies bundled helpers
+    from the installed release for detected and already installed CLI destinations.
+    This is included in the version update and needs no separate helper approval. Use
     `cafe skill sync-global` deliberately to publish feature-worktree helper
     changes; its output identifies the exact source and each destination result.
 

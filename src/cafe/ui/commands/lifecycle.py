@@ -73,19 +73,21 @@ def _offer_cli_update(*, interactive: bool) -> None:
         "[yellow]A newer CAFE CLI version is available: "
         f"installed={result.installed_version}, available={result.latest_version}.[/yellow]"
     )
-    if not prompt_confirm("Install the CAFE CLI update now?", default=False):
+    if not prompt_confirm("Install the CAFE update and synchronize bundled helper skills now?", default=False):
         return
 
     try:
         update_service.apply(result.token or "")
     except UpdateApplyError as exc:
-        console.print(f"[yellow]CAFE CLI update was not installed: {exc}[/yellow]")
+        console.print(f"[yellow]CAFE update did not complete: {exc}[/yellow]")
+        if exc.runtime_installed:
+            raise typer.Exit(1) from exc
         return
     except Exception:
         console.print("[yellow]CAFE CLI update was not installed; continuing preparation.[/yellow]")
         return
 
-    console.print("[green]✓ CAFE CLI update installed.[/green]")
+    console.print("[green]✓ CAFE and bundled helper skills updated.[/green]")
 
 
 def _prepared_identity_is_reusable(

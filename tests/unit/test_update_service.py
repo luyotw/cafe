@@ -9,6 +9,7 @@ from cafe.updates.service import (
     LatestRelease,
     UpdateApplyError,
     UpdateService,
+    SYNC_INSTALLED_HELPERS,
     _latest_github_release,
 )
 
@@ -163,6 +164,11 @@ def test_apply_targets_exact_approved_release_and_mandatorily_rechecks() -> None
     def run(command: list[str]) -> _RunResult:
         commands.append(command)
         state["installed"] = "1.1.0"
+        if "-I" in command:
+            return _RunResult(stdout=json.dumps({
+                "schema_version": 1, "installed_version": "1.1.0",
+                "post_change_verified": True,
+            }))
         return _RunResult()
 
     service = UpdateService(
@@ -175,7 +181,7 @@ def test_apply_targets_exact_approved_release_and_mandatorily_rechecks() -> None
 
     result = service.apply(preview.token)
 
-    assert commands == [
+    assert commands[0] == (
         [
             "/approved/python",
             "-m",
@@ -184,10 +190,14 @@ def test_apply_targets_exact_approved_release_and_mandatorily_rechecks() -> None
             "--upgrade",
             "https://github.com/luyotw/cafe/archive/refs/tags/v1.1.0.tar.gz",
         ]
+    )
+    assert commands[1] == [
+        "/approved/python", "-I", "-c", SYNC_INSTALLED_HELPERS, "1.1.0",
     ]
     assert result.installed_version == "1.1.0"
     assert result.status == "current"
     assert state["checks"] >= 3
+    assert result.helper_sync["post_change_verified"] is True
 
 
 def test_apply_rejects_absent_or_stale_approval_before_install() -> None:
@@ -218,3 +228,159 @@ def test_apply_fails_when_post_check_does_not_observe_approved_version() -> None
 
     with pytest.raises(UpdateApplyError, match="post-update check"):
         service.apply(preview.token)
+
+
+@pytest.mark.parametrize("failure", ["exit", "exception", "malformed", "version", "unverified"])
+def test_helper_sync_failure_reports_the_installed_runtime_as_partial(failure):
+    state = {"installed": "1.0.0"}
+    commands = []
+
+    def run(command):
+        commands.append(command)
+        if "pip" in command:
+            state["installed"] = "1.1.0"
+            return _RunResult()
+        if failure == "exception":
+            raise OSError("locked helper directory")
+        if failure == "exit":
+            return _RunResult(returncode=1, stderr="publication failed")
+        if failure == "malformed":
+            return _RunResult(stdout="not JSON")
+        return _RunResult(stdout=json.dumps({
+            "schema_version": 1,
+            "installed_version": "wrong" if failure == "version" else "1.1.0",
+            "post_change_verified": False if failure == "unverified" else True,
+        }))
+
+    service = UpdateService(
+        installed_version=lambda: state["installed"],
+        latest_release=lambda: _release("1.1.0"), runner=run,
+    )
+    with pytest.raises(UpdateApplyError, match="was installed, but bundled helper") as error:
+        service.apply(service.check().token)
+    assert error.value.runtime_installed is True
+    assert state["installed"] == "1.1.0"
+    assert len(commands) == 2
+
+
+def test_failed_install_never_synchronizes_helpers():
+    commands = []
+
+    def run(command):
+        commands.append(command)
+        return _RunResult(returncode=1, stderr="installer failed")
+
+    service = UpdateService(
+        installed_version=lambda: "1.0.0", latest_release=lambda: _release("1.1.0"), runner=run,
+    )
+    with pytest.raises(UpdateApplyError, match="installer failed"):
+        service.apply(service.check().token)
+    assert len(commands) == 1 and "pip" in commands[0]
+
+
+@pytest.fixture
+def installed_helper_bundle(tmp_path, monkeypatch):
+    """Use real staged publication with an installed bundle and a stale source decoy."""
+    import cafe
+    from cafe.skills import global_installer
+
+    package = tmp_path / "installed" / "cafe"
+    source = package / "data" / "skills"
+    home = tmp_path / "user"
+    for name in global_installer.DEFAULT_GLOBAL_SKILLS:
+        folder = source / name
+        folder.mkdir(parents=True)
+        (folder / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: test\n---\nnew release\n"
+        )
+    monkeypatch.setattr(cafe, "__file__", str(package / "__init__.py"))
+    monkeypatch.setattr("importlib.metadata.version", lambda name: "1.1.0")
+    monkeypatch.setattr("pathlib.Path.home", classmethod(lambda cls: home))
+    monkeypatch.setattr(global_installer, "_default_source_root", lambda: tmp_path / "stale")
+    monkeypatch.setattr(global_installer, "detect_global_skill_clis", lambda **kw: ["claude"])
+    monkeypatch.setattr("sys.argv", ["-c", "1.1.0"])
+    old = home / ".codex" / "skills" / "use-cafe-workflow"
+    old.mkdir(parents=True)
+    (old / "SKILL.md").write_text("old release")
+    custom = home / ".codex" / "skills" / "my-skill"
+    custom.mkdir()
+    (custom / "SKILL.md").write_text("user owned")
+    return source, home
+
+
+def test_update_refreshes_installed_and_detected_clis_from_new_bundle(
+    installed_helper_bundle, capsys,
+):
+    from cafe.skills.global_installer import DEFAULT_GLOBAL_SKILLS
+
+    source, home = installed_helper_bundle
+    with pytest.raises(SystemExit) as result:
+        exec(SYNC_INSTALLED_HELPERS, {})
+    assert result.value.code == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["clis"] == ["claude", "codex"]
+    assert receipt["source_root"] == str(source)
+    assert receipt["post_change_verified"] is True
+    for cli in ("claude", "codex"):
+        for name in DEFAULT_GLOBAL_SKILLS:
+            assert (home / f".{cli}" / "skills" / name / "SKILL.md").read_bytes() == (
+                source / name / "SKILL.md"
+            ).read_bytes()
+    assert (home / ".codex/skills/my-skill/SKILL.md").read_text() == "user owned"
+    assert not (home / ".gemini").exists()
+    with pytest.raises(SystemExit) as again:
+        exec(SYNC_INSTALLED_HELPERS, {})
+    assert again.value.code == 0
+    assert {r["status"] for r in json.loads(capsys.readouterr().out)["results"]} == {"unchanged"}
+
+
+def test_update_helper_batch_failure_restores_previous_copy(
+    installed_helper_bundle, monkeypatch, capsys,
+):
+    from cafe.skills import global_installer
+
+    _source, home = installed_helper_bundle
+    publish = global_installer._publish_staged_replacement
+
+    def fail(operation):
+        if operation.cli == "codex" and operation.skill == "use-cafe-workflow":
+            raise OSError("locked destination")
+        return publish(operation)
+
+    monkeypatch.setattr(global_installer, "_publish_staged_replacement", fail)
+    with pytest.raises(SystemExit) as result:
+        exec(SYNC_INSTALLED_HELPERS, {})
+    assert result.value.code == 1
+    assert json.loads(capsys.readouterr().out)["post_change_verified"] is False
+    assert (home / ".codex/skills/use-cafe-workflow/SKILL.md").read_text() == "old release"
+    assert not (home / ".claude/skills/use-cafe-workflow").exists()
+
+
+def test_update_helper_postcheck_detects_changed_destination(
+    installed_helper_bundle, monkeypatch, capsys,
+):
+    from cafe.skills import global_installer
+
+    sync = global_installer.sync_global_skills
+
+    def change_after_sync(**kwargs):
+        result = sync(**kwargs)
+        (result.results[0].destination / "SKILL.md").write_text("changed after publication")
+        return result
+
+    monkeypatch.setattr(global_installer, "sync_global_skills", change_after_sync)
+    with pytest.raises(SystemExit) as result:
+        exec(SYNC_INSTALLED_HELPERS, {})
+    assert result.value.code == 1
+    assert json.loads(capsys.readouterr().out)["post_change_verified"] is False
+
+
+def test_update_helper_checks_runtime_identity_before_writes(
+    installed_helper_bundle, monkeypatch,
+):
+    _source, home = installed_helper_bundle
+    monkeypatch.setattr("sys.argv", ["-c", "wrong-version"])
+    with pytest.raises(SystemExit, match="approved version"):
+        exec(SYNC_INSTALLED_HELPERS, {})
+    assert (home / ".codex/skills/use-cafe-workflow/SKILL.md").read_text() == "old release"
+    assert not (home / ".claude").exists()
