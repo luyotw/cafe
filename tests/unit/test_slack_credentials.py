@@ -651,3 +651,14 @@ def test_v1_success_never_opens_legacy_fallback(home, monkeypatch):
     assert load_slack_webhook_url() == DEFAULT
     assert opened.count(path) == 1
     assert home / ".slack-webhook" not in opened
+
+
+def test_legacy_bounded_text_read_preserves_whitespace_compatibility(home):
+    legacy = home / ".slack-webhook"
+    legacy.write_text(DEFAULT + " " * 8192)
+    assert load_slack_webhook_url() == DEFAULT
+
+
+def test_legacy_without_repository_identity_preserves_config_independence(home):
+    (home / ".cafe/config.yaml").write_text("malformed: [")
+    assert load_slack_webhook_url() == DEFAULT

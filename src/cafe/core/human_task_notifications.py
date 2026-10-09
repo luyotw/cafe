@@ -655,15 +655,26 @@ def _load_slack_destinations(descriptor: int) -> dict[str, str]:
 
 
 def _load_legacy_slack_webhook(path: Path) -> str:
+    """Retain the legacy bounded text read while sanitizing decoder failures."""
     descriptor = _open_slack_credential(path)
     assert descriptor is not None
-    contents = _read_slack_credential(descriptor, limit=MAX_CREDENTIAL_BYTES)
-    invalid = False
+    code = ""
     try:
-        webhook_url = contents.decode("utf-8").strip()
+        if not _private_credential_metadata(os.fstat(descriptor)):
+            raise SlackNotificationError("validation_error", "slack_credentials_unsafe")
+        with os.fdopen(descriptor, encoding="utf-8") as stream:
+            descriptor = -1
+            webhook_url = stream.read(MAX_CREDENTIAL_BYTES + 1).strip()
     except UnicodeError:
-        invalid = True
-    if invalid:
+        code = "slack_credentials_invalid"
+    except OSError:
+        code = "slack_credentials_unreadable"
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    if code:
+        raise SlackNotificationError("validation_error", code)
+    if len(webhook_url.encode("utf-8")) > MAX_CREDENTIAL_BYTES:
         raise SlackNotificationError("validation_error", "slack_credentials_invalid")
     if not webhook_url:
         raise SlackNotificationError("validation_error", "slack_credentials_empty")
@@ -677,6 +688,8 @@ def load_slack_webhook_url(*, repository_root: Path | None = None) -> str:
     store_path = _trusted_user_home() / MACHINE_CONFIG_DIRECTORY / SLACK_CREDENTIAL_STORE_FILENAME
     descriptor = _open_slack_credential(store_path, allow_absent=True)
     destinations = _load_slack_destinations(descriptor) if descriptor is not None else None
+    if destinations is None and repository_root is None:
+        return _load_legacy_slack_webhook(_slack_credential_file())
     config_path, raw_config = _load_machine_config()
     declaration = _human_task_notification_declaration(raw_config)
     route = _project_webhook_route(
