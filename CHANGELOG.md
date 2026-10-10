@@ -4,12 +4,35 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.9.0] - 2026-10-10
+
 ### Added
 
 - Record provider cost evidence and cost summaries for workflow executions,
   including failed attempts, unknown pricing and preserved historical totals.
 - Add pricing inspection and background rate updates with stale-cache handling
   and manual overrides (#607).
+- Show persisted worker costs in Manager progress and offer an optional
+  Manager-inclusive report after verified cleanup, retaining accounting when
+  workflow resources are removed (#621, #623).
+- Add named Slack notification destinations in private machine credentials,
+  with exact repository routing and legacy configuration compatibility (#619).
+- Verify approved post-integration checks before delivery result acceptance;
+  resume long-running checks through the existing background worker (#617).
+
+### Changed
+
+- Move integration planning and mandatory action permission into delivery for
+  the twelve bundled development playbooks. PR confirmation reviews content;
+  adopting workflows must reconfirm changed stop contracts (#617).
+- Default Manager cleanup proposals to archive accepted workflow state and
+  remove verified feature resources, while preserving explicit user choices
+  and the canonical checkout.
+- Describe the estimated implementation footprint in kickoff scope, naming
+  files for small changes and modules for larger changes.
+
+See [the v0.9.0 release notes](docs/releases/v0.9.0.md) for cost coverage,
+delivery migration, Slack configuration and upgrade guidance.
 
 ## [0.8.2] - 2026-10-10
 

@@ -112,7 +112,9 @@ def verify(root: Path) -> None:
 
 
 def seed_current(root: Path) -> None:
-    """Persist a v0.8 delivery review with that actual wheel."""
+    """Persist a v0.8 delivery review and historical costs with that actual wheel."""
+    from cafe.core.types import TokenUsage
+
     graph = PlaybookLoader(project_root=root, global_root=root / "global").load("standard")
     assert "deliver" in graph["steps"]
     issue = root / ".cafe" / "issues" / "upgrade"
@@ -151,6 +153,9 @@ def seed_current(root: Path) -> None:
             {
                 "task": task.to_dict(),
                 "workflow_id": board.workflow_id,
+                "usage": TokenUsage(input_tokens=100, output_tokens=20, total_cost_usd=0.125)
+                .model_dump(mode="json"),
+                "zero_usage": TokenUsage().model_dump(mode="json"),
             }
         )
     )
@@ -158,7 +163,10 @@ def seed_current(root: Path) -> None:
 
 def verify_current(root: Path) -> None:
     """Read pending authority unchanged after a v0.8 upgrade."""
+    from decimal import Decimal
+    from cafe.core.cost import summarize_cost
     from cafe.core.restart_policy import RECHECK_PRIORITY, resolve_restart_policy
+    from cafe.core.types import TokenUsage
 
     original = json.loads((root / "upgrade-current.json").read_text())
     issue = root / ".cafe" / "issues" / "upgrade"
@@ -172,8 +180,14 @@ def verify_current(root: Path) -> None:
         resolve_restart_policy(yaml.safe_load((issue / "issue.yaml").read_text()))
         == RECHECK_PRIORITY
     )
+    usage = TokenUsage.model_validate(original["usage"])
+    assert usage.input_tokens == 100 and usage.output_tokens == 20 and not usage.cost_records
+    summary = summarize_cost(usage.cost_records, legacy_cost=usage.total_cost_usd)
+    assert summary["legacy"] == Decimal("0.125")
+    zero = TokenUsage.model_validate(original["zero_usage"])
+    assert summarize_cost(zero.cost_records, legacy_cost=zero.total_cost_usd)["unknown"] == 1
     assert not (issue / "delivery").exists(), "Reading an old review cannot grant effects"
-    print("v0.8 pending delivery review and restart policy remain readable.")
+    print("v0.8 pending delivery review, restart policy and historical costs remain readable.")
 
 
 def main() -> None:
