@@ -173,7 +173,7 @@ def test_builtin_pr_pauses_for_action_review_before_delivery(
     assert state.current_step == "user"
     assert attempts == 2
     assert len(pending) == 1
-    assert pending[0].policy_id == "delivery-review"
+    assert pending[0].policy_id == "pr-review"
     assert any(
         event.event_type == "baton_rejected"
         and event.data.get("invalid_value") == "workflow_complete"
@@ -187,8 +187,8 @@ def test_builtin_pr_pauses_for_action_review_before_delivery(
         from_step="pr",
         trigger="confirm_output",
         raw_payload={
-            "task": "delivery-review",
-            "decision": "review_only",
+            "task": "pr-review",
+            "decision": "fix_now", "feedback": "Reassess the PR content.",
             "human_task_id": pending[0].id,
         },
         source="integration",

@@ -253,7 +253,8 @@ def test_custom_clarification_current_task_has_independent_driver_facts(
         capture_output=True,
     )
     assert "spec: user confirmation (manager may not act)" in progress.stdout
-    assert progress.stdout.rstrip().endswith("○ cleanup (closeout) · Pending")
+    assert progress.stdout.rstrip().endswith("Used cost (excluding Manager): USD unknown + incomplete coverage")
+    assert "○ cleanup (closeout) · Pending\n\n" in progress.stdout
     for diagnostic in ("route_status=", "pause_status=", "resolution_owner=", "evidence_reason="):
         assert diagnostic not in progress.stdout
 
@@ -672,7 +673,8 @@ workflow:
         driver_state={"deliver": "pending", "cleanup": "pending"},
     )
     assert "⏸︎ design · Awaiting response" in progress
-    assert progress.endswith("○ cleanup (closeout) · Pending")
+    assert progress.endswith("Used cost (excluding Manager): USD unknown + incomplete coverage")
+    assert "○ cleanup (closeout) · Pending\n\n" in progress
     for diagnostic in ("route_status=", "pause_status=", "resolution_owner=", "evidence_reason="):
         assert diagnostic not in progress
     callback_spec = importlib.util.spec_from_file_location(

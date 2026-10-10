@@ -31,6 +31,13 @@ All notable changes to this project will be documented in this file.
 - Describe the estimated implementation footprint in kickoff scope, naming
   files for small changes and modules for larger changes.
 
+### Fixed
+
+- Preserve structured PR correction feedback independently of assignable
+  content review; keep legacy mandatory feedback gates as the default.
+- Derive Manager confirmation tasks from the actual step bindings instead of
+  unused legacy tasks declared by a shared skill.
+
 See [the v0.9.0 release notes](docs/releases/v0.9.0.md) for cost coverage,
 delivery migration, Slack configuration and upgrade guidance.
 

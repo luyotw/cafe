@@ -283,10 +283,10 @@ def test_pr_review_handoff_tracks_published_or_local_only_journey(
 
     assert result.final_status_code == "BATON_CONFIRM_OUTPUT"
     task = HumanTaskRecordStore(issue_dir).tasks()[0]
-    assert task.policy_id == "delivery-review"
-    assert "Action proposal SHA256:" in task.prompt
+    assert task.policy_id == "pr-review"
+    assert "Action proposal SHA256:" not in task.prompt
+    assert "integrate_only" not in task.continuations
     if auto_create:
-        assert f"Verified PR URL: {verified_url}" in task.prompt
         assert len(publication_calls) == 1
     else:
         assert "Publication mode:" not in task.prompt
