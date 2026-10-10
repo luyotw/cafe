@@ -323,8 +323,8 @@ Represented but excluded observations are subtracted before identifying genuine
 historical residuals, so overlap, conflicts and unreconciled inclusion cannot be
 recast as legacy spend. Exactly reconciled inclusive child detail remains
 non-additive beneath the authoritative parent. The additive `accounting_residual`
-map in iteration/chat stats retains independent legacy counters and money across
-recollection and chat/phase partitioning; older stats derive residuals from all
+map in `TokenUsage` and iteration/chat stats retains independent legacy counters and money across
+recollection, model roundtrips, phase-result handoffs and chat/phase partitioning; older stats derive residuals from all
 represented observations. This is projection metadata, not a new execution or
 user configuration parameter. An empty unreliable admitted amount is unknown,
 while a recorded complete zero remains zero.
@@ -385,3 +385,10 @@ through the existing bounded bootstrap before importing CAFE. Run it with the
 CLI's Python interpreter and `--project-root`; source and installed helper bundles
 require no manually configured `PYTHONPATH`. Ordinary projects keep their current
 installed runtime.
+
+Counter admission preserves the adapter's declared semantics. Native-normalized
+records and caller `token_total_evidence` with `kind=input_plus_output` use the
+normalized subset/total checks and retain validation gaps. Other admitted caller
+records keep valid provider counters and cache aliases without assuming that
+input includes cache. Generic reducers neither choose semantics from provider
+names nor derive totals for a provider whose semantics were not attested.

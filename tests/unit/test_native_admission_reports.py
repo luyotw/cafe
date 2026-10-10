@@ -347,3 +347,212 @@ def test_incomplete_zero_known_amount_is_unknown_in_public_renderers(monkeypatch
     StatusDisplay().render_cost_summary([entry], [])
     output = capsys.readouterr().out
     assert "unknown" in output and "$0.0000" not in output
+
+
+def test_token_usage_roundtrip_preserves_residual_through_public_iteration_sink(tmp_path):
+    from cafe.core.usage import iteration_usage_sink
+
+    incoming = TokenUsage(
+        input_tokens=180, output_tokens=18, total_cost_usd=1.8, cost_records=list(segments())
+    )
+    projected = TokenUsage.model_validate(
+        merge_token_usage_stats(dict(input_tokens=7, total_cost_usd=0.25), incoming)
+    )
+    assert projected.model_dump(exclude_unset=True)["accounting_residual"]["total_cost_usd"] == 0.25
+    path = tmp_path / "iteration.json"
+    path.write_text(json.dumps(dict(iteration=1)))
+    sink = iteration_usage_sink(tmp_path, path)
+    for usage in (projected, incoming, projected):
+        sink(usage)
+        stats = json.loads(path.read_text())["stats"]
+        assert stats["input_tokens"] == 7 and stats["total_cost_usd"] == 0.25
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        dict(input_tokens=10, output_tokens=2, total_tokens=99),
+        dict(input_tokens=10, output_tokens=2, total_tokens=12, cache_read_input_tokens=99),
+    ],
+)
+def test_public_source_preserves_normalization_gaps_with_known_categories(tmp_path, usage):
+    directory = tmp_path / "compose/iteration_001"
+    directory.mkdir(parents=True)
+    parent = dict(
+        invocation_id="neutral",
+        provenance="reported",
+        amount_usd="0.2",
+        usage=usage,
+        complete=True,
+        token_total_evidence=dict(
+            kind="input_plus_output", source="native_adapter", version="verified"
+        ),
+    )
+    (directory / "iteration.json").write_text(
+        json.dumps(dict(stats=dict(cost_records=[parent, record(100, "final")])))
+    )
+    summary = summarize_sources(collect_cost_sources(tmp_path))
+    assert summary["native_usage"]["tokens"]["input_tokens"] == 110
+    assert summary["native_usage"]["tokens"]["output_tokens"] == 12
+    assert summary["native_usage"]["combined_tokens"] is None
+    assert not summary["native_usage"]["complete"] and summary["native_usage"]["gaps"]
+    assert summary["incomplete"]
+
+
+@pytest.mark.parametrize("provider", ["cursor-agent", "custom-provider"])
+def test_public_source_keeps_non_native_exclusive_cache_categories(tmp_path, provider):
+    directory = tmp_path / "compose/iteration_001"
+    directory.mkdir(parents=True)
+    parent = dict(
+        invocation_id="neutral",
+        cli=provider,
+        provenance="reported",
+        amount_usd="0.2",
+        complete=True,
+        usage=dict(
+            input_tokens=10,
+            output_tokens=2,
+            total_tokens=12,
+            cache_read_input_tokens=20,
+            cache_creation_input_tokens=30,
+        ),
+    )
+    stats = merge_token_usage_stats(
+        {},
+        TokenUsage(
+            input_tokens=110,
+            output_tokens=12,
+            cache_read_input_tokens=20,
+            cache_creation_input_tokens=30,
+            total_cost_usd=1.2,
+            cost_records=[parent, record(100, "final")],
+        ),
+    )
+    (directory / "iteration.json").write_text(json.dumps(dict(stats=stats)))
+    result = summarize_sources(collect_cost_sources(tmp_path))
+    assert result["native_usage"]["tokens"]["cache_read_input_tokens"] == 20
+    assert result["native_usage"]["tokens"]["cache_write_input_tokens"] == 30
+    assert not any(stats.get("accounting_residual", {}).values())
+    assert result["known"] == Decimal("1.2")
+
+
+@pytest.mark.parametrize(
+    "residual",
+    [
+        {"input_tokens": -1},
+        {"input_tokens": 0.5},
+        {"total_cost_usd": True},
+        {"total_cost_usd": float("nan")},
+        {"unsupported": 1},
+    ],
+)
+def test_token_usage_validates_residual_before_roundtrip(residual):
+    with pytest.raises(ValueError):
+        TokenUsage(accounting_residual=residual)
+
+
+@pytest.mark.parametrize("route", ["confirmed", "complete", "clarification", "already_completed"])
+def test_phase_result_keeps_residual_for_following_persisted_consumer(tmp_path, route):
+    from cafe.agents.manager import AgentManager
+    from cafe.core.session import SessionManager
+    from cafe.core.status_codes import PhaseStatusCode
+    from tests.unit.test_phase_progress import ConcretePhase
+
+    projected = TokenUsage.model_validate(
+        merge_token_usage_stats(
+            dict(input_tokens=7, total_cost_usd=0.25),
+            TokenUsage(
+                input_tokens=180,
+                output_tokens=18,
+                total_cost_usd=1.8,
+                cost_records=list(segments()),
+            ),
+        )
+    )
+    phase_dir = tmp_path / "compose"
+    phase_dir.mkdir()
+    phase = ConcretePhase(phase_dir, interactive=False)
+    phase.agent_manager = AgentManager(
+        session_manager=SessionManager(sessions_dir=str(tmp_path / "sessions"))
+    )
+    phase.agent_manager._total_token_usage = projected
+    if route == "already_completed":
+        (phase_dir / "status.json").write_text(
+            json.dumps(
+                dict(status="completed", status_code=PhaseStatusCode.CONFIRMED.value, iteration=1)
+            )
+        )
+        result = phase._check_if_already_completed([PhaseStatusCode.CONFIRMED])
+    else:
+        code = {
+            "confirmed": PhaseStatusCode.CONFIRMED,
+            "complete": PhaseStatusCode.READY_FOR_REVIEW,
+            "clarification": PhaseStatusCode.NEED_CLARIFICATION,
+        }[route]
+        result = phase._handle_standard_status_codes(
+            code,
+            "evidence",
+            complete_codes=[PhaseStatusCode.READY_FOR_REVIEW],
+            continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
+        )
+    assert result is not None
+    roundtrip = TokenUsage.model_validate(result.data["token_usage"])
+    replay = merge_token_usage_stats(roundtrip.model_dump(exclude_unset=True), projected)
+    assert replay["input_tokens"] == 7 and replay["total_cost_usd"] == 0.25
+
+
+@pytest.mark.parametrize("consumer", ["executor", "manager"])
+def test_public_execution_retains_residual_across_repeated_usage_roundtrips(
+    tmp_path, monkeypatch, consumer
+):
+    from cafe.agents.executor import AgentExecutor
+    from cafe.agents.manager import AgentManager
+    from cafe.core.session import SessionManager
+    from cafe.core.types import AgentCLI, AgentConfig
+    from tests.unit.test_conversation_transport import provider_process
+
+    monkeypatch.setenv("CAFE_PRICING_AUTO_UPDATE", "0")
+    supply = provider_process.__wrapped__(monkeypatch)
+    projected = TokenUsage.model_validate(
+        merge_token_usage_stats(
+            dict(input_tokens=7, total_cost_usd=0.25),
+            TokenUsage(
+                input_tokens=180,
+                output_tokens=18,
+                total_cost_usd=1.8,
+                cost_records=list(segments()),
+            ),
+        )
+    )
+    config = AgentConfig(name="accounting", cli=AgentCLI.CLAUDE)
+    if consumer == "executor":
+        caller = AgentExecutor(config, stream_output=False)
+    else:
+        caller = AgentManager(
+            session_manager=SessionManager(sessions_dir=str(tmp_path / "sessions")),
+            stream_agent_output=False,
+        )
+        caller.register_agent(config)
+    # Restore the already persisted accounting state before exercising public execution.
+    caller._total_token_usage = projected
+    for _ in range(2):
+        supply(
+            [
+                dict(type="system", subtype="init", session_id="accounting-session"),
+                dict(
+                    type="result",
+                    result="complete",
+                    usage=dict(input_tokens=0, output_tokens=0),
+                    total_cost_usd=0,
+                ),
+            ]
+        )
+        if consumer == "executor":
+            caller.execute("Collect accounting evidence")
+        else:
+            caller.execute("accounting", "Collect accounting evidence")
+        observed = caller.get_total_token_usage()
+        assert observed.input_tokens == 7
+        assert observed.total_cost_usd == 0.25
+        assert observed.accounting_residual["input_tokens"] == 7
+        assert observed.accounting_residual["total_cost_usd"] == 0.25

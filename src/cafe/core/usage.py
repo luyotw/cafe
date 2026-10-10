@@ -23,7 +23,11 @@ def merge_token_usage_stats(existing: Any, incoming: TokenUsage) -> Dict[str, An
     """Merge one raw attempt into the existing iteration stats shape."""
     merged = dict(existing) if isinstance(existing, dict) else {}
     prior_records = merged.get("cost_records", [])
-    if any("native_usage" in r for r in [*prior_records, *incoming.cost_records]):
+    if (
+        any("native_usage" in r for r in [*prior_records, *incoming.cost_records])
+        or merged.get("accounting_residual")
+        or incoming.accounting_residual
+    ):
         return _merge_native_usage(merged, incoming)
     if incoming.cost_records and all(
         record.get("invocation_id") in {prior.get("invocation_id") for prior in prior_records}

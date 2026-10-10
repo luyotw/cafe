@@ -25,7 +25,7 @@ def test_merge_preserves_supported_statistics_and_unrelated_fields():
     merged = merge_token_usage_stats(dict(input_tokens=1, other="retained"), usage)
     assert merged["other"] == "retained"
     assert merged["input_tokens"] == 3
-    for name, value in usage.model_dump().items():
+    for name, value in usage.model_dump(exclude_unset=True).items():
         if name != "input_tokens":
             assert merged[name] == value
 

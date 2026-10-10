@@ -49,7 +49,7 @@ class NativeEvidence(BaseModel):
     source: dict
 
 
-def normalized_counters(raw):
+def normalized_counters(raw, *, inclusive=True):
     values, gaps, rejected = {}, [], set()
     if not isinstance(raw, dict):
         return values, ["counters_unavailable"]
@@ -67,6 +67,8 @@ def normalized_counters(raw):
             values.pop(key, None)
         elif key not in rejected:
             values[key] = value
+    if not inclusive:
+        return values, gaps
     for subset, whole in (
         ("cache_read_input_tokens", "input_tokens"),
         ("cache_write_input_tokens", "input_tokens"),
@@ -295,15 +297,20 @@ def accounting_admission(records):
                 overlap.update((child["invocation_id"], other["invocation_id"]))
                 gaps.append("overlapping_physical_ranges")
 
+    def counters(row):
+        proof = row.get("token_total_evidence", {})
+        inclusive = bool(row.get("native_usage")) or (
+            isinstance(proof, dict)
+            and proof.get("kind") == "input_plus_output"
+            and bool(proof.get("source"))
+        )
+        return normalized_counters(row.get("usage", {}), inclusive=inclusive)
+
     def total(rows):
+        known = [counters(row)[0] for row in rows]
         result = {}
         for key in COUNTERS:
-            known = []
-            for r in rows:
-                usage, _ = normalized_counters(r.get("usage", {}))
-                value = usage.get(key)
-                known.append(value)
-            values = [v for v in known if type(v) is int]
+            values = [usage[key] for usage in known if key in usage]
             if values:
                 result[key] = sum(values)
         return result
@@ -316,11 +323,12 @@ def accounting_admission(records):
     scopes = [r for r in records if r.get("native_usage", {}).get("kind") == "scope"]
     gaps.extend(gap for r in scopes for gap in r["native_usage"]["gaps"])
     for r in additive:
-        if type(r.get("usage", {}).get("total_tokens")) is not int:
+        usage, invalid = counters(r)
+        gaps.extend(invalid)
+        if type(usage.get("total_tokens")) is not int:
             gaps.append("total_tokens_unavailable")
         if r.get("native_usage", {}).get("kind") != "child" and (
-            not {"input_tokens", "output_tokens"} <= r.get("usage", {}).keys()
-            or not r.get("complete", True)
+            not {"input_tokens", "output_tokens"} <= usage.keys() or not r.get("complete", True)
         ):
             gaps.append("caller_token_coverage_incomplete")
     tokens = total(additive)

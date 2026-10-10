@@ -1951,6 +1951,11 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                             ),
                             "total_cost_usd": token_usage.total_cost_usd,
                             "cost_records": getattr(token_usage, "cost_records", []),
+                            **(
+                                {"accounting_residual": token_usage.accounting_residual}
+                                if getattr(token_usage, "accounting_residual", None)
+                                else {}
+                            ),
                         },
                     },
                 )
@@ -2194,6 +2199,11 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                     ),
                     "total_cost_usd": token_usage.total_cost_usd,
                     "cost_records": getattr(token_usage, "cost_records", []),
+                    **(
+                        {"accounting_residual": token_usage.accounting_residual}
+                        if getattr(token_usage, "accounting_residual", None)
+                        else {}
+                    ),
                 },
             }
 
@@ -2237,6 +2247,11 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                     ),
                     "total_cost_usd": token_usage.total_cost_usd,
                     "cost_records": getattr(token_usage, "cost_records", []),
+                    **(
+                        {"accounting_residual": token_usage.accounting_residual}
+                        if getattr(token_usage, "accounting_residual", None)
+                        else {}
+                    ),
                 },
             }
             if hasattr(self, "_get_completion_data"):
@@ -2277,6 +2292,11 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                     ),
                     "total_cost_usd": token_usage.total_cost_usd,
                     "cost_records": getattr(token_usage, "cost_records", []),
+                    **(
+                        {"accounting_residual": token_usage.accounting_residual}
+                        if getattr(token_usage, "accounting_residual", None)
+                        else {}
+                    ),
                 },
             }
             if hasattr(self, "_get_completion_data"):
