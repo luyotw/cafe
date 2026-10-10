@@ -1,5 +1,6 @@
 """Closeout choice is a user-confirmed Manager policy independent of delivery facts."""
 
+import json
 from copy import deepcopy
 from datetime import datetime, timezone
 
@@ -190,3 +191,33 @@ def test_pre_upgrade_missing_verification_preserves_only_completed_acceptance(
             validate_response(tmp_path, binding, task, {"decision": "confirm"})
         assert records.get_result(task.id) is None
         assert accepted_delivery_result(tmp_path, p.workflow_id) is None
+
+
+@pytest.mark.parametrize("damage", ["workflow", "version", "digest", "binding", "symlink"])
+def test_delivery_result_projection_rejects_changed_identity_and_unsafe_files(tmp_path, damage):
+    from cafe.delivery.closeout import read_result_contract
+    issue = tmp_path / "issue"
+    directory = issue / "delivery"
+    directory.mkdir(parents=True)
+    value = {"version": 1, "workflow_id": "workflow", "contract_sha256": "a" * 64,
+             "delivery_result": {"step": "ship", "task_id": "accept", "artifact": "result"}}
+    path = directory / "result-contract.json"
+    path.write_text(json.dumps(value))
+    assert read_result_contract(issue, "workflow") == value["delivery_result"]
+    if damage == "workflow":
+        value["workflow_id"] = "other"
+    elif damage == "version":
+        value["version"] = True
+    elif damage == "digest":
+        value["contract_sha256"] = "stale"
+    elif damage == "binding":
+        value["delivery_result"]["task_id"] = ""
+    elif damage == "symlink":
+        target = tmp_path / "outside.json"
+        target.write_text(json.dumps(value))
+        path.unlink()
+        path.symlink_to(target)
+    if damage != "symlink":
+        path.write_text(json.dumps(value))
+    with pytest.raises(ValueError):
+        read_result_contract(issue, "workflow")

@@ -1,7 +1,7 @@
 ---
 name: cafe-pr
 description: Prepare the local pull request title and description for publication
-version: 1.11.0
+version: 1.11.1
 workflow:
   step_defaults:
     version: 1
@@ -17,15 +17,12 @@ workflow:
       hooks:
         prepare_input:
         - GitHubPRCreator
-        - GitHubPRFeedbackSource
         - UserInputCollector
         publish_output:
         - GitHubPRCreator
         - LocalReviewContextProvider
         - PRLinkOpener
       behavior:
-        completion: baton
-        publish_confirmation: true
         context_providers:
         - git_history
         - local_review

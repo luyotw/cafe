@@ -4,6 +4,32 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.9.1] - 2026-10-10
+
+### Fixed
+
+- Allow the Manager to confirm subagent-flow delivery results when the confirmed
+  task assignment permits it, while preserving mandatory action permission.
+- Separate Manager cleanup, archive and leave choices from delivery result
+  acceptance. Preserve legacy combined tasks and require recorded user authority
+  before terminal effects; proxy acceptance grants no cleanup authority.
+- Clarify kickoff scope, delivery versus cleanup ownership and saved preference
+  changes; preserve delegated result confirmation when proposing preferences.
+
+- Keep graph-dependent PR feedback hooks and publication authority explicit in
+  playbooks so reusable defaults do not break existing custom publication steps.
+- Project delivery task bindings through bounded evidence instead of importing
+  Manager private contracts into delivery.
+
+### Changed
+
+- Compose development playbooks from validated phase-owned step defaults,
+  preserving resolved behavior and project overrides. Reject invalid or
+  conflicting defaults before workflow execution (#439, #626).
+
+See [the v0.9.1 release notes](docs/releases/v0.9.1.md) for compatibility
+and upgrade guidance.
+
 ## [0.9.0] - 2026-10-10
 
 ### Added

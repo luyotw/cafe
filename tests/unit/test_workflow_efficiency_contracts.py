@@ -73,7 +73,8 @@ def test_develop_and_review_defer_repository_wide_gates_to_hooks_and_ci() -> Non
         "tdd",
         "tdd-qa",
     ):
-        playbook = yaml.safe_load((PLAYBOOKS / f"{playbook_name}.yaml").read_text())
+        from cafe.playbooks.loader import PlaybookLoader
+        playbook = PlaybookLoader(project_root=PROJECT_ROOT).load(playbook_name)
         allowed_tools = playbook["steps"]["review"]["allowed_tools"]
         assert "Bash(git:*)" in allowed_tools
         assert not any("cafe verification" in tool for tool in allowed_tools)

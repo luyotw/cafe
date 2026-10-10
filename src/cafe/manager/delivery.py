@@ -41,7 +41,8 @@ def delivery_result_steps(graph) -> set[str]:
 
 def publish_delivery_closeout(issue_dir, contract, contract_sha256):
     """Project exact Manager-owned cleanup commands for the delivery acceptance task."""
-    if contract.get("delivery_contract", {}).get("terminal_selection") != "delivery_outcome":
+    split = contract.get("closeout_contract")
+    if split is None and contract.get("delivery_contract", {}).get("terminal_selection") != "delivery_outcome":
         return
     from cafe.core.packet_io import atomic_write_bytes
 
@@ -49,6 +50,16 @@ def publish_delivery_closeout(issue_dir, contract, contract_sha256):
     if directory.is_symlink():
         raise ValueError("delivery closeout directory must not be a symlink")
     directory.mkdir(parents=True, exist_ok=True)
+    result_path = directory / "result-contract.json"
+    if result_path.is_symlink():
+        raise ValueError("delivery result contract must not be a symlink")
+    if split is not None:
+        atomic_write_bytes(result_path, canonical_json({
+            "version": 1, "workflow_id": contract["identity"]["workflow_id"],
+            "contract_sha256": contract_sha256, "delivery_result": split["delivery_result"],
+        }))
+        return
+    result_path.unlink(missing_ok=True)
     path = directory / "closeout.json"
     if path.is_symlink():
         raise ValueError("delivery closeout plan must not be a symlink")

@@ -229,18 +229,8 @@ def inspect_closeout(issue_dir, workflow_id, *, archived=False):
         return {"status": "legacy", "selection": None}
     binding = None
     if not archived:
-        from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
-        from cafe.manager.delivery import delivery_result_steps
-
-        graph = PlaybookLoader(
-            project_root=issue_dir.parent.parent.parent, read_only=True, resolve_presentation=False
-        ).load(state["playbook_id"])
-        graph = apply_issue_playbook_overrides(graph, issue_dir / "issue.yaml")
-        owners = delivery_result_steps(graph)
-        if len(owners) != 1:
-            raise ValueError("legacy closeout requires one declared delivery result owner")
-        step = next(iter(owners))
-        binding = {"step": step, "task_id": graph["steps"][step]["delivery"]["result_task"]}
+        from cafe.delivery.closeout import resolve_result_binding
+        binding = resolve_result_binding(issue_dir, state["playbook_id"])
     accepted = accepted_delivery_result(issue_dir, workflow_id, archived=archived, binding=binding)
     if accepted is None:
         return {"status": "not_recorded", "selection": None}

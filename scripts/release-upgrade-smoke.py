@@ -112,8 +112,9 @@ def verify(root: Path) -> None:
 
 
 def seed_current(root: Path) -> None:
-    """Persist a v0.8 delivery review and historical costs with that actual wheel."""
+    """Persist v0.9 PR/delivery tasks and cost evidence with that actual wheel."""
     from cafe.core.types import TokenUsage
+    from cafe.core.cost import account_cost
 
     graph = PlaybookLoader(project_root=root, global_root=root / "global").load("standard")
     assert "deliver" in graph["steps"]
@@ -136,7 +137,7 @@ def seed_current(root: Path) -> None:
     policy, binding = resolve_step_human_task(
         playbook_data=graph, step_name="pr", trigger="confirm_output"
     )
-    assert policy.id == "delivery-review"
+    assert policy.id == "pr-review"
     task = HumanTaskRecordStore(issue).materialize(
         workflow_id=board.workflow_id,
         step="pr",
@@ -148,6 +149,17 @@ def seed_current(root: Path) -> None:
         continuations=binding.outcomes,
         assignee_type="user",
     )
+    delivery_issue = root / ".cafe" / "issues" / "delivery-upgrade"
+    delivery_board = BlackboardStore(delivery_issue).load_or_create("deliver", playbook_id="standard")
+    delivery_policy, delivery_binding = resolve_step_human_task(
+        playbook_data=graph, step_name="deliver", trigger="confirm_output"
+    )
+    delivery_task = HumanTaskRecordStore(delivery_issue).materialize(
+        workflow_id=delivery_board.workflow_id, step="deliver", iteration=1,
+        trigger="confirm_output", policy_id=delivery_policy.id,
+        prompt=delivery_policy.prompt, expected_result=delivery_policy.model_dump(mode="json"),
+        continuations=delivery_binding.outcomes, assignee_type="user",
+    )
     (root / "upgrade-current.json").write_text(
         json.dumps(
             {
@@ -156,13 +168,16 @@ def seed_current(root: Path) -> None:
                 "usage": TokenUsage(input_tokens=100, output_tokens=20, total_cost_usd=0.125)
                 .model_dump(mode="json"),
                 "zero_usage": TokenUsage().model_dump(mode="json"),
+                "reported_usage": account_cost(TokenUsage(total_cost_usd=0), cli="claude", model=None).model_dump(mode="json"),
+                "delivery_task": delivery_task.to_dict(),
+                "delivery_workflow_id": delivery_board.workflow_id,
             }
         )
     )
 
 
 def verify_current(root: Path) -> None:
-    """Read pending authority unchanged after a v0.8 upgrade."""
+    """Read pending authority and cost evidence unchanged after a v0.9 upgrade."""
     from decimal import Decimal
     from cafe.core.cost import summarize_cost
     from cafe.core.restart_policy import RECHECK_PRIORITY, resolve_restart_policy
@@ -186,8 +201,19 @@ def verify_current(root: Path) -> None:
     assert summary["legacy"] == Decimal("0.125")
     zero = TokenUsage.model_validate(original["zero_usage"])
     assert summarize_cost(zero.cost_records, legacy_cost=zero.total_cost_usd)["unknown"] == 1
+    reported = TokenUsage.model_validate(original["reported_usage"])
+    assert reported.model_dump(mode="json") == original["reported_usage"]
+    reported_summary = summarize_cost(reported.cost_records)
+    assert reported_summary["unknown"] == 0
+    assert reported_summary["reported"] == Decimal("0")
+    delivery_issue = root / ".cafe" / "issues" / "delivery-upgrade"
+    delivery_records = HumanTaskRecordStore(delivery_issue)
+    assert delivery_records.get_task(original["delivery_task"]["id"]).to_dict() == original["delivery_task"]
+    assert delivery_records.get_result(original["delivery_task"]["id"]) is None
+    assert delivery_records.active_wait_state(original["delivery_workflow_id"], step="deliver") is not None
+    assert not (delivery_issue / "delivery").exists(), "Reading a pending result cannot grant cleanup"
     assert not (issue / "delivery").exists(), "Reading an old review cannot grant effects"
-    print("v0.8 pending delivery review, restart policy and historical costs remain readable.")
+    print("v0.9 pending PR/delivery tasks, restart policy and cost evidence remain readable.")
 
 
 def main() -> None:

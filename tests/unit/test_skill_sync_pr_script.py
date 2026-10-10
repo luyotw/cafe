@@ -197,13 +197,12 @@ def test_builtin_playbooks_publish_pr_through_sync_hook() -> None:
         "src/cafe/data/playbooks/tdd-qa.yaml",
         "src/cafe/data/playbooks/hotfix.yaml",
     ]:
-        content = (project_root / rel_path).read_text(encoding="utf-8")
-        import yaml
-
-        hooks = yaml.safe_load(content)["steps"]["pr"]["hooks"]["publish_output"]
+        from cafe.playbooks.loader import PlaybookLoader
+        graph = PlaybookLoader(project_root=project_root).load(Path(rel_path).stem)
+        hooks = graph["steps"]["pr"]["hooks"]["publish_output"]
         assert hooks[:3] == ["GitHubPRCreator", "LocalReviewContextProvider", "PRLinkOpener"]
         assert "DevelopmentActionContext" not in hooks
-        assert "DevelopmentActionContext" in yaml.safe_load(content)["steps"]["deliver"]["hooks"]["publish_output"]
+        assert "DevelopmentActionContext" in graph["steps"]["deliver"]["hooks"]["publish_output"]
 
 
 def test_sync_pr_rejects_uncommitted_changes(tmp_path: Path) -> None:
