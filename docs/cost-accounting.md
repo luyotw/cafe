@@ -252,3 +252,100 @@ UTC read boundary, including for untimestamped legacy records; it is not an
 invented historical invocation completion time. Active/unpersisted usage,
 including the response presenting the report, is outside this as-of cutoff.
 Unknown Manager coverage makes the combined result an incomplete known subtotal.
+
+## Codex native descendants
+
+An admitted caller can pass an `AccountingScope` (workflow ID, caller correlation,
+existing durable usage sink) through AgentManager, executor and conversation
+transport. Codex records an open checkpoint before process submission, observes
+bounded native progress when stdout delivers activity, and freezes a real cutoff
+on success or recoverable failure. Accounting failures do not change exit status,
+explicit terminal requirements, authorization or the configured retry/fallback
+chain. Abrupt process death can leave only the open checkpoint; it is incomplete.
+
+Local discovery supports the inspected `codex-cli 0.159.3` journal format.
+SQLite is an optional read-only index, selected by `thread_spawn_edges` and
+`threads` schema capabilities, including `rollout_path` or `session_path`.
+Its mutable model metadata is never execution-model proof. Candidates are
+validated against native `session_meta` identities/ancestry. Missing or
+incompatible indexes use bounded header discovery in `sessions` and
+`archived_sessions`. Symlinks, special files, conflicting identities and
+read/depth/node/time bounds leave coverage gaps. Limits are 256 tree nodes,
+16 levels, 8,192 directory entries, 256 KiB per line, a 4 MiB tail per journal,
+16 MiB per collection and three seconds for native observation; skipped owned
+ranges remain incomplete, while the entry snapshot can use a verified tail; no collector
+waits for, terminates or creates an agent.
+
+The implementation interpretation is grounded in the version-matched
+[protocol](https://github.com/openai/codex/blob/rust-v0.159.3/codex-rs/protocol/src/protocol.rs),
+[session usage update](https://github.com/openai/codex/blob/rust-v0.159.3/codex-rs/core/src/session/mod.rs),
+[session state](https://github.com/openai/codex/blob/rust-v0.159.3/codex-rs/core/src/state/session.rs),
+[context history](https://github.com/openai/codex/blob/rust-v0.159.3/codex-rs/core/src/context_manager/history.rs)
+and [spawn history filtering](https://github.com/openai/codex/blob/rust-v0.159.3/codex-rs/core/src/agent/control/spawn.rs).
+`TokenUsageInfo::append_last_usage` advances one session's cumulative counters;
+response accounting updates that session's state, while child execution uses a
+separate thread/session state. Shared rollout-budget consumption is a separate
+operation, not parent `token_count` accumulation. Supported parent/child native
+counters are therefore exclusive. Other versions remain unknown and child detail
+is non-additive when parent inclusion cannot be verified. Inclusive or overlapping
+observations without exact reconciliation retain detail but withhold a complete
+combined total; comparing equal numbers is never proof of overlap.
+
+Resume and fork reconstruction can seed prior `token_count` information. Spawn
+filtering removes `TokenUsageRecord` inheritance but can retain older `EventMsg`
+usage depending on history mode. A fresh timestamp alone therefore cannot prove
+a generic fork's zero baseline. An existing child requires an entry snapshot and
+an owned causal resubmission; historical ancestry alone never admits continuation.
+An inherited fork can use its evidenced pre-birth cumulative baseline; a new
+per-thread `token_usage_record` counter uses the verified fresh thread state.
+A new non-fork/non-referenced child born during exclusively admitted work can use
+the verified initial-zero semantics. Missing or reset baseline categories stay
+unknown. Sanitized replay tests use these protocol shapes and never issue paid
+model calls.
+
+Each child record preserves workflow/caller/attempt identity, root/immediate
+parent/session identity, agent path, owned turns, start/end offsets and cumulative
+counters, cutoff, source locator/digest/version, actual `turn_context` model,
+known categories and gaps in the existing `cost_records` envelope. Transcript
+bodies are not retained. Missing cached or reasoning counters stay unknown;
+cached input is included in input, and reasoning in output. Totals use valid
+provider totals or verified input plus output, never the sum of all categories.
+Cache-write aliases are reconciled once. Monotonic open endpoint refinements
+replace earlier projections; finalized replay is idempotent and conflicting final
+proof remains incomplete. Unsupported overlapping physical ranges are excluded
+from combined totals. Compatibility scalars are known subtotals; records and
+coverage distinguish unknown from an attested zero.
+
+Child valuation reuses the rate card pinned at entry, actual model evidence,
+verified categories and the existing context-band rules. A database or configured
+parent model cannot price a child. Mixed models without aligned counter boundaries,
+unknown categories, unknown context bands and missing rates retain token evidence
+with unavailable USD. Historical reports never fetch rates or reprice. Existing
+status/timeline and the affirmative inclusive closeout report show child detail,
+child/caller known subtotals and incomplete coverage. Worker-only progress excludes
+Manager descendants; the existing closeout preference remains human-owned.
+
+### Native Manager delegation bracket
+
+The owning helper `native_delegation_accounting.py begin|finalize` validates the
+current confirmed Manager contract, supplied fresh facts, persisted host binding,
+workflow identity and actual `CODEX_THREAD_ID` on both boundaries. Use one explicit
+correlation, begin before authorized native delegation, and finalize in cleanup at
+the as-of cutoff. It writes the existing retained Manager envelope under the
+accounting locks, with a shared root claim lock preventing overlapping workflow
+claims. Only causal spawn/resume work within the selected host turn is admitted;
+unbracketed history and unrelated turns stay outside that scope. Entry snapshots,
+pinned rates, partial child records and open coverage survive archive and cleanup.
+A missing entry or changed binding is rejected; accounting grants no authority.
+
+The separate proposed **Codex App Server live subagent usage ingestion** issue
+would ingest `thread/tokenUsage/updated` through an already authorized connection,
+with reconnect/replay and turn correlation. It depends on this normalized interval
+contract and an authorized observable App Server transport. This issue introduces
+no transport, daemon or external issue mutation.
+
+The neutral projection also accepts an explicit `exact_inclusive` parent
+attestation naming the included child segment and its exact start/end evidence.
+It preserves the parent's recorded amount and treats that child's detail as
+non-additive. Current Codex collection emits exclusive evidence only; numerical
+similarity or an unsupported inclusive flag cannot establish this attestation.

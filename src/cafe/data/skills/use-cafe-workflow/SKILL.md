@@ -70,6 +70,19 @@ contract; new preferences never rewrite it.
 6. At an existing pause, route the exact active task through its declared owner
    and schema. At the declared terminal state, use the completion route.
 
+## Native delegation accounting
+
+Before already-authorized native Codex delegation, run
+`scripts/native_delegation_accounting.py begin --project-root <root> --issue-dir
+<issue-dir> --issue-name <issue> --workflow-id <workflow-id> --correlation <unique-id>
+--fresh-facts <current-entry-facts-json>`. Finalize the same correlation in cleanup
+with `finalize` and newly validated current entry facts. The helper validates the
+existing contract and exact host binding; it grants no delegation, phase or
+closeout authority. Keep the entry checkpoint when interrupted and use the
+existing recovery route if binding or concurrent claims are ambiguous. Do not
+silently allocate the host's historical descendants. Subprocess callback/chat
+accounting already brackets each admitted call through its retained sink.
+
 ## Always-on boundaries
 
 - You are the primary Manager: use your current CLI/session as the primary

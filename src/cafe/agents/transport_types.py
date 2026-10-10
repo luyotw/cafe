@@ -49,3 +49,18 @@ class TransportResult:
     failure_code: str | None = None
     error_excerpt: str | None = None
     returncode: int | None = None
+
+
+@dataclass(frozen=True)
+class AccountingScope:
+    """Caller-admitted identity and durable sink; no execution or pricing authority."""
+
+    workflow_id: str
+    caller_id: str
+    publish: object
+
+    def __post_init__(self):
+        _validated_evidence_scalar(self.workflow_id)
+        _validated_evidence_scalar(self.caller_id)
+        if not callable(self.publish):
+            raise ValueError("accounting publication must be callable")

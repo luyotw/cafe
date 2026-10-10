@@ -23,6 +23,8 @@ def merge_token_usage_stats(existing: Any, incoming: TokenUsage) -> Dict[str, An
     """Merge one raw attempt into the existing iteration stats shape."""
     merged = dict(existing) if isinstance(existing, dict) else {}
     prior_records = merged.get("cost_records", [])
+    if any("native_usage" in r for r in [*prior_records, *incoming.cost_records]):
+        return _merge_native_usage(merged, incoming)
     if incoming.cost_records and all(
         record.get("invocation_id") in {prior.get("invocation_id") for prior in prior_records}
         for record in incoming.cost_records
@@ -68,6 +70,75 @@ def merge_token_usage_stats(existing: Any, incoming: TokenUsage) -> Dict[str, An
         list(incoming_turns) if isinstance(incoming_turns, list) else []
     )
     merged["cost_records"] = merge_cost_records(prior_records, incoming.cost_records)
+    return merged
+
+
+def _merge_native_usage(existing, incoming):
+    """Replace represented native endpoints while retaining historical residuals."""
+    from decimal import Decimal
+
+    from cafe.core.native_accounting import native_projection
+
+    old_records = existing.get("cost_records", [])
+    records = merge_cost_records(old_records, incoming.cost_records)
+
+    def represented(rows):
+        view = native_projection(rows)
+        result = dict(view["tokens"])
+        excluded = set(view["excluded_ids"])
+        result["total_cost_usd"] = float(
+            sum(
+                (
+                    Decimal(r["amount_usd"])
+                    for r in rows
+                    if r.get("amount_usd") is not None
+                    and r["invocation_id"] not in excluded
+                    and r.get("native_usage", {}).get("kind") != "scope"
+                ),
+                Decimal(0),
+            )
+        )
+        if not any(
+            r.get("amount_usd") is not None
+            and r["invocation_id"] not in excluded
+            and r.get("native_usage", {}).get("kind") != "scope"
+            for r in rows
+        ):
+            result.pop("total_cost_usd", None)
+        return result
+
+    old, new, added = map(represented, (old_records, records, incoming.cost_records))
+    merged = dict(existing)
+    raw = incoming.model_dump(exclude_unset=True)
+    for key in (
+        "input_tokens",
+        "output_tokens",
+        "cache_read_input_tokens",
+        "cache_write_input_tokens",
+        "cache_creation_input_tokens",
+        "reasoning_output_tokens",
+        "total_cost_usd",
+    ):
+        residual = max(0, existing.get(key, 0) - old.get(key, 0))
+        # Only unrepresented data can be a new residual; record copies are idempotent.
+        incoming_residual = max(0, raw.get(key, 0) - added.get(key, 0))
+        if incoming.cost_records and all(
+            r["invocation_id"] in {r["invocation_id"] for r in old_records}
+            for r in incoming.cost_records
+        ):
+            incoming_residual = 0
+        if key in existing or key in raw or key in new:
+            merged[key] = residual + incoming_residual + new.get(key, 0)
+    seen = {r["invocation_id"] for r in old_records}
+    new_call = not incoming.cost_records or any(
+        r["invocation_id"] not in seen for r in incoming.cost_records
+    )
+    if new_call:
+        for key in ("duration_ms", "duration_api_ms"):
+            if raw.get(key) is not None:
+                merged[key] = (merged.get(key) or 0) + raw[key]
+        merged["turn_usages"] = [*existing.get("turn_usages", []), *incoming.turn_usages]
+    merged["cost_records"] = records
     return merged
 
 
@@ -132,9 +203,9 @@ def _exchange_usage_file(parent_fd, source, destination, destination_parent_fd):
         raise OSError(error, os.strerror(error))
 
 
-def iteration_usage_sink(repository_root: Path, context_file: Path):
+def iteration_usage_sink(repository_root: Path, context_file: Path, *, workspace_locked=False):
     """Pin an existing caller-admitted metadata target; never create an iteration."""
-    return _metadata_usage_sink(repository_root, context_file)
+    return _metadata_usage_sink(repository_root, context_file, workspace_locked=workspace_locked)
 
 
 def _metadata_usage_sink(
@@ -142,6 +213,7 @@ def _metadata_usage_sink(
     context_file,
     *,
     issue_metadata=False,
+    workspace_locked=False,
     update=None,
     validate=None,
 ):
@@ -174,7 +246,7 @@ def _metadata_usage_sink(
 
     def persist(usage):
         with (
-            workspace_execution_lock(root),
+            nullcontext() if workspace_locked else workspace_execution_lock(root),
             _usage_parent(target, expected_parents=parents) as (parent_fd, _parents),
             issue_config_lock(target, parent_fd=parent_fd) if issue_metadata else nullcontext(),
         ):
@@ -358,6 +430,28 @@ def chat_usage_sink(
             by_model.setdefault(result.reported_model, []).append(result)
         for model, records in by_model.items():
             key = (cli, requested_model, model, mode, phase)
+            incoming_attempts = {
+                c["native_usage"]["attempt_id"]
+                for r in records
+                if r.usage is not None
+                for c in r.usage.cost_records
+                if "native_usage" in c
+            }
+            # Entry checkpoints precede model observation. Refine their group rather
+            # than leaving a permanently open copy under the unknown model.
+            if model is not None and incoming_attempts:
+                for item in groups:
+                    if (
+                        item.get("reported_model") is None
+                        and tuple(item.get(k) for k in ("cli", "requested_model", "mode", "phase"))
+                        == (cli, requested_model, mode, phase)
+                        and item.get("native_attempts")
+                        and set(item["native_attempts"]) <= incoming_attempts
+                        and item["calls"] == len(item["native_attempts"])
+                        and not item.get("legacy_incomplete_calls")
+                        and not item.get("legacy_unknown_fields")
+                    ):
+                        item["reported_model"] = model
             group = next(
                 (
                     item
@@ -377,6 +471,54 @@ def chat_usage_sink(
                 )
                 group.update(stats={}, calls=0, incomplete_calls=0, unknown_fields=[])
                 groups.append(group)
+            native_results = [
+                r
+                for r in records
+                if r.usage is not None and any("native_usage" in c for c in r.usage.cost_records)
+            ]
+            if native_results:
+                group.setdefault("legacy_unknown_fields", list(group["unknown_fields"]))
+                group.setdefault("legacy_incomplete_calls", group["incomplete_calls"])
+                prior_attempts = set(group.get("native_attempts", []))
+                attempts = set(prior_attempts)
+                for result in native_results:
+                    usage = result.usage
+                    attempts.update(
+                        c["native_usage"]["attempt_id"]
+                        for c in usage.cost_records
+                        if "native_usage" in c
+                    )
+                    previous = dict(group["stats"], cost_records=group.get("cost_records", []))
+                    merged = merge_token_usage_stats(previous, usage)
+                    group["stats"] = {k: v for k, v in merged.items() if k in CHAT_USAGE_FIELDS}
+                    group["cost_records"] = merged["cost_records"]
+                    if not issue_metadata:
+                        current["stats"] = merge_token_usage_stats(current.get("stats"), usage)
+                group["calls"] += len(attempts - prior_attempts)
+                group["native_attempts"] = sorted(attempts)
+                missing = set(group["legacy_unknown_fields"])
+                physical = [
+                    c
+                    for c in group["cost_records"]
+                    if c.get("native_usage", {}).get("kind") != "scope"
+                ]
+                for field in CHAT_USAGE_FIELDS:
+                    if not physical or any(field not in c.get("usage", {}) for c in physical):
+                        if (
+                            field != "total_cost_usd"
+                            or any(c.get("amount_usd") is None for c in physical)
+                            or not physical
+                        ):
+                            missing.add(field)
+                from cafe.core.native_accounting import native_projection
+
+                view = native_projection(group["cost_records"])
+                incomplete = bool(missing) or not view["complete"] or model is None
+                group["incomplete_calls"] = group["legacy_incomplete_calls"] + (
+                    len(attempts) if incomplete else 0
+                )
+                group["unknown_fields"] = sorted(missing)
+                records = [r for r in records if r not in native_results]
             existing_ids = {record.get("invocation_id") for record in group.get("cost_records", [])}
             records = [record for record in records if not (
                 record.usage is not None and record.usage.cost_records

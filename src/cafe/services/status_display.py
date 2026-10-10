@@ -606,7 +606,12 @@ class StatusDisplay:
             summary = combine_cost_summaries(parts)
             summaries.append(summary)
             lines.append(f"{name}: {format_cost(summary)}")
-        lines.append(f"Workflow: {format_cost(summarize_sources(sources))}")
+        workflow_summary = summarize_sources(sources)
+        lines.append(f"Workflow: {format_cost(workflow_summary)}")
+        if "native_usage" in workflow_summary:
+            from cafe.core.native_accounting import format_native_usage
+
+            lines.extend(format_native_usage(workflow_summary["native_usage"]))
         text = "\n".join(lines)
         if RICH_AVAILABLE:
             console.print(text, markup=False)

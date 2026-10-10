@@ -44,6 +44,7 @@ class ConversationTransport:
         delivery_id=None,
         required_evidence: frozenset[Evidence] = frozenset(),
         on_usage=None,
+        accounting_scope=None,
         on_acceptance=None,
         on_response=None,
         allowed_tools=None,
@@ -58,6 +59,8 @@ class ConversationTransport:
         self.executor.config.session_id = session_id
         responses = []
         response_options = {"on_response": responses.append} if on_response is not None else {}
+        if accounting_scope is not None:
+            response_options["accounting_scope"] = accounting_scope
         try:
             executed = self.executor.execute_event_driver(
                 prompt, expected_session_id=session_id, event_id=delivery_id,
@@ -122,15 +125,23 @@ class ConversationTransport:
         *,
         required_evidence: frozenset[Evidence] = frozenset(),
         on_usage=None,
+        accounting_scope=None,
         allowed_tools=None,
         allowed_directories=None,
         execution_control=None,
         environment_overrides=None,
     ) -> TransportResult:
         return self._callback(
-            prompt, session_id=None, delivery_id=None, required_evidence=required_evidence,
-            on_usage=on_usage, allowed_tools=allowed_tools, allowed_directories=allowed_directories,
-            execution_control=execution_control, environment_overrides=environment_overrides,
+            prompt,
+            session_id=None,
+            delivery_id=None,
+            required_evidence=required_evidence,
+            on_usage=on_usage,
+            accounting_scope=accounting_scope,
+            allowed_tools=allowed_tools,
+            allowed_directories=allowed_directories,
+            execution_control=execution_control,
+            environment_overrides=environment_overrides,
         )
 
     def deliver_to_exact_session(
@@ -143,6 +154,7 @@ class ConversationTransport:
         on_acceptance=None,
         on_response=None,
         on_usage=None,
+        accounting_scope=None,
         allowed_tools=None,
         allowed_directories=None,
         execution_control=None,
@@ -152,9 +164,17 @@ class ConversationTransport:
         if not isinstance(delivery_id, str) or not delivery_id.strip() or delivery_id not in prompt:
             raise ValueError("delivery requires a correlation identity in its prompt")
         return self._callback(
-            prompt, session_id=session_id, delivery_id=delivery_id, required_evidence=required_evidence,
-            on_acceptance=on_acceptance, on_response=on_response, on_usage=on_usage, allowed_tools=allowed_tools,
-            allowed_directories=allowed_directories, execution_control=execution_control,
+            prompt,
+            session_id=session_id,
+            delivery_id=delivery_id,
+            required_evidence=required_evidence,
+            on_acceptance=on_acceptance,
+            on_response=on_response,
+            on_usage=on_usage,
+            accounting_scope=accounting_scope,
+            allowed_tools=allowed_tools,
+            allowed_directories=allowed_directories,
+            execution_control=execution_control,
             environment_overrides=environment_overrides,
         )
 
@@ -222,12 +242,16 @@ class ConversationTransport:
         required_evidence: frozenset[Evidence] = frozenset(),
         on_response=None,
         on_usage=None,
+        accounting_scope=None,
         **kwargs,
     ) -> TransportResult:
         self._admit("run_one_shot", required_evidence)
         selected_session = self.executor.config.session_id
         try:
-            response = self.executor.execute(prompt, exact_session=True, **kwargs)
+            options = dict(kwargs)
+            if accounting_scope is not None:
+                options["accounting_scope"] = accounting_scope
+            response = self.executor.execute(prompt, exact_session=True, **options)
         except AgentExecutionError as error:
             self.executor.config.session_id = selected_session
             result = getattr(error, "transport_result", None) or TransportResult(

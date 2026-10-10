@@ -619,6 +619,7 @@ def _chat_usage_sink(issue_dir: Path, step_name: str, *, cli, requested_model, m
                 "See chat usage coverage in cafe status.\n"
             )
 
+    record.publish_accounting = lambda usage: sink((TransportResult(usage=usage),))
     return record
 
 
@@ -805,6 +806,17 @@ def _launch_chat_session(
                 )
             )
             responses = []
+            accounting_options = {}
+            if usage_sink is not None:
+                from cafe.agents.transport_types import AccountingScope
+
+                board = BlackboardStore(issue_dir).load_read_only()
+                if board.workflow_id:
+                    accounting_options["accounting_scope"] = AccountingScope(
+                        board.workflow_id,
+                        f"chat/{execution_step}/{agent_name}",
+                        usage_sink.publish_accounting,
+                    )
 
             def attempt():
                 try:
@@ -814,6 +826,7 @@ def _launch_chat_session(
                         ),
                         environment_overrides=chat_env,
                         on_response=responses.append,
+                        **accounting_options,
                         **({"read_only": True} if read_only else {}),
                     )
                 except (AgentExecutionError, OSError, ValueError) as error:

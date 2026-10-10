@@ -53,6 +53,8 @@ def prepare_cost_accounting(cli, environment):
             valuation_date=valuation_date,
         )
 
+    record.native_state = state
+    record.invocation_id = invocation_id
     return record
 
 
@@ -314,14 +316,9 @@ def _estimate_tokens(record, known, state, valuation_date=None):
 
 def merge_cost_records(existing, incoming):
     """Keep each invocation once, including records carried by chat aggregates."""
-    records = []
-    seen = set()
-    for record in [*(existing or []), *(incoming or [])]:
-        identity = record.get("invocation_id") if isinstance(record, dict) else None
-        if identity and identity not in seen:
-            records.append(copy.deepcopy(record))
-            seen.add(identity)
-    return records
+    from cafe.core.native_accounting import merge_native_records
+
+    return merge_native_records(existing, incoming)
 
 
 def summarize_cost(records, *, legacy_cost=None):
@@ -331,8 +328,21 @@ def summarize_cost(records, *, legacy_cost=None):
     unknown = 0
     incomplete = False
     stale = False
+    from cafe.core.native_accounting import native_projection
+
+    records = merge_cost_records([], records)
+    native = native_projection(records) if any("native_usage" in r for r in records) else None
+    excluded = set(native["excluded_ids"]) if native else set()
+    incomplete = bool(native and not native["complete"])
     seen = set()
     for record in records or []:
+        if record.get("native_usage", {}).get("kind") == "scope":
+            if record["native_usage"]["gaps"] or not record.get("complete", True):
+                unknown += 1
+            # Coverage checkpoints are not additional calls or unavailable prices.
+            continue
+        if record.get("invocation_id") in excluded:
+            continue  # Projection distinguishes exact inclusion from unresolved overlap.
         identity = record.get("invocation_id")
         if identity in seen:
             continue
@@ -371,6 +381,7 @@ def summarize_cost(records, *, legacy_cost=None):
         else:
             unknown += 1
     return {
+        **({"native_usage": native, "_native_records": records} if native is not None else {}),
         **totals,
         "known": sum(totals.values()),
         "unknown": unknown,
@@ -403,11 +414,18 @@ def combine_cost_summaries(summaries):
         stale=False,
         counts=dict.fromkeys(("reported", "estimated", "legacy"), 0),
     )
+    native_records = []
     for summary in summaries:
+        native_records = merge_cost_records(native_records, summary.get("_native_records", []))
         for key in ("reported", "estimated", "legacy", "known", "unknown"):
             result[key] += summary[key]
         for key in ("incomplete", "stale"):
             result[key] = result[key] or summary[key]
         for key in result["counts"]:
             result["counts"][key] += summary["counts"][key]
+    if native_records:
+        from cafe.core.native_accounting import native_projection
+
+        result["native_usage"] = native_projection(native_records)
+        result["_native_records"] = native_records
     return result

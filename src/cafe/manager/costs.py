@@ -217,7 +217,11 @@ class ManagerUsageSink:
                 sources.append(source)
             known = {r["invocation_id"]: r for s in sources for r in s["records"]}
             for record in raw.get("cost_records", []):
-                if record["invocation_id"] in known and known[record["invocation_id"]] != record:
+                if (
+                    record["invocation_id"] in known
+                    and known[record["invocation_id"]] != record
+                    and "native_usage" not in record
+                ):
                     raise ValueError("conflicting retained invocation evidence")
             source["records"] = merge_cost_records(source["records"], raw.get("cost_records", []))
             # Repeated provider telemetry is the same evidence, never extra spend.
@@ -226,6 +230,11 @@ class ManagerUsageSink:
             source["gap"] = not bool(source["records"])
             data["manager_gaps"].pop(self.current, None)
             self.store._write(data)
+
+    def accounting_scope(self):
+        from cafe.agents.transport_types import AccountingScope
+
+        return AccountingScope(self.store.identity["workflow_id"], self.current, self)
 
     def gap(self, identity=None):
         with self.store.locked(write=True):
@@ -503,6 +512,10 @@ def accounted_call(sink, identity, operation, *args, **kwargs):
     if sink is None:
         return operation(*args, **kwargs)
     with sink.attempt(identity):
+        import inspect
+
+        if "accounting_scope" in inspect.signature(operation).parameters:
+            kwargs.setdefault("accounting_scope", sink.accounting_scope())
         return operation(*args, **kwargs)
 
 
@@ -563,3 +576,114 @@ def validate_project_source(project_root, issue_dir, issue_name):
         return
     if common_dir(directory) != common_dir(project_root):
         raise ValueError("accounting source belongs to another Git project")
+
+
+@contextmanager
+def _native_claim_lock(store, root_session_id):
+    """Serialize root claims; evidence remains in existing accounting envelopes."""
+    from hashlib import sha256
+
+    store._safe(create=True)
+    key = sha256(root_session_id.encode()).hexdigest()
+    path = store.common / "cafe/costs" / f"native-{key}.lock"
+    with open_lock_file(path) as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def native_delegation_begin(store, binding, correlation, home):
+    """Persist entry before submission. Binding validation belongs to the adapter."""
+    import time
+
+    from cafe.agents.cli.codex_subagent_usage import NativeInterval
+    from cafe.agents.transport_types import _validated_evidence_scalar
+
+    _validated_evidence_scalar(correlation)
+    root = binding["root_session_id"]
+    with _native_claim_lock(store, root):
+        deadline, read_bytes = time.monotonic() + 3, 0
+        for index, path in enumerate((store.common / "cafe/costs").glob("*/*.json")):
+            if index >= 512 or time.monotonic() > deadline:
+                raise ValueError("native claim validation exceeds bound")
+            read_bytes += path.lstat().st_size
+            if read_bytes > MAX_ACCOUNTING_BYTES:
+                raise ValueError("native claim evidence exceeds bound")
+            data = read_accounting_file(path)
+            for source in data.get("manager_sources", []):
+                claim = source.get("native_delegation")
+                if claim and claim["binding"]["root_session_id"] == root and not claim["finalized"]:
+                    if data["identity"] == store.identity and source["source_id"] == correlation:
+                        if claim["binding"] == binding:
+                            return dict(status="open", correlation=correlation, replay=True)
+                    raise ValueError("native root already has an open delegation claim")
+        native = NativeInterval(
+            home,
+            workflow_id=store.identity["workflow_id"],
+            caller_id=correlation,
+            attempt_id=correlation,
+            root_session_id=root,
+            require_causal=True,
+        )
+        from cafe.core.cost import prepare_cost_accounting
+
+        pricing = prepare_cost_accounting("codex", os.environ)
+        with store.locked(write=True):
+            data = store._read()
+            if any(s["source_id"] == correlation for s in data["manager_sources"]):
+                raise ValueError("native correlation already finalized or used")
+            data["manager_sources"].append(
+                dict(
+                    source_id=correlation,
+                    records=[native.open_record()],
+                    legacy_cost=None,
+                    gap=True,
+                    native_delegation=dict(
+                        binding=binding,
+                        checkpoint=native.checkpoint(),
+                        rate=pricing.native_state,
+                        finalized=False,
+                    ),
+                )
+            )
+            data["manager_gaps"][correlation] = "native delegation open at entry"
+            store._write(data)
+        return dict(status="open", correlation=correlation)
+
+
+def native_delegation_finalize(store, binding, correlation, home):
+    """Freeze an as-of prefix, including available partial work, without waiting."""
+    from cafe.agents.cli.codex_subagent_usage import NativeInterval
+
+    with _native_claim_lock(store, binding["root_session_id"]), store.locked(write=True):
+        data = store._read()
+        source = next((s for s in data["manager_sources"] if s["source_id"] == correlation), None)
+        if source is None or "native_delegation" not in source:
+            raise ValueError("native delegation has no recorded entry boundary")
+        claim = source["native_delegation"]
+        if claim["binding"] != binding:
+            raise ValueError("native delegation workflow binding changed")
+        if claim["finalized"]:
+            return dict(status="finalized", correlation=correlation, replay=True)
+        native = NativeInterval(
+            home,
+            workflow_id=store.identity["workflow_id"],
+            caller_id=correlation,
+            attempt_id=correlation,
+            root_session_id=binding["root_session_id"],
+            checkpoint=claim["checkpoint"],
+            require_causal=True,
+        )
+        native.rate = claim["rate"]
+        records = native.collect(final=True)
+        source["records"] = merge_cost_records(source["records"], records)
+        source["gap"] = any(not r["complete"] for r in source["records"])
+        claim["finalized"] = True
+        if source["gap"]:
+            data["manager_gaps"][correlation] = "native delegation partial at cutoff"
+        else:
+            data["manager_gaps"].pop(correlation, None)
+        store._write(data)
+        return dict(status="finalized", correlation=correlation, partial=source["gap"])

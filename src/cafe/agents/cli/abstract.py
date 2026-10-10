@@ -49,6 +49,10 @@ class AbstractCLI(ABC):
         """
         return None
 
+    def prepare_descendant_accounting(self, environment, scope, *, attempt_id):
+        """Optional bounded provider reader; scope is supplied by an admitted caller."""
+        return None
+
     @abstractmethod
     def build_command(
         self,

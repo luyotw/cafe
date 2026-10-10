@@ -169,7 +169,9 @@ def summarize_sources(sources, *, exclude_ids=(), ambiguous_sources=()):
                 key = record["invocation_id"]
                 if key in excluded or key in conflicting:
                     continue
-                if key in records and records[key] != record:
+                if key in records and "native_usage" in record and "native_usage" in records[key]:
+                    records[key] = merge_cost_records([records[key]], [record])[0]
+                elif key in records and records[key] != record:
                     parts.append(summarize_cost([]))
                     conflicting.add(key)
                     records.pop(key)
