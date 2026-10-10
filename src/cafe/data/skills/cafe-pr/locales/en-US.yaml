@@ -44,3 +44,9 @@ human_task.cafe_pr.delivery_draft: '{id}: {title}
 human_task.cafe_pr.delivery_review_source: "Review source: {artifact} v{version}, {path}, producer {producer}, SHA256 {sha256}"
 
 human_task.cafe_pr.delivery_publication: "Verified PR URL: {url}"
+
+human_task.cafe_pr.pr_review: Review the published PR content. Confirmation continues
+  to delivery and grants no integration or issue-creation authority.
+human_task.cafe_pr.pr_fix: Revise the PR content
+human_task.cafe_pr.pr_confirm: Confirm PR content and continue to delivery
+human_task.cafe_pr.pr_details: Clarify the missing PR content or publication detail.

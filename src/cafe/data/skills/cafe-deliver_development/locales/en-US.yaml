@@ -16,3 +16,38 @@ human_task.delivery.confirm: Accept results and leave external state unchanged
 human_task.delivery.confirm_cleanup: Accept results and run the displayed cleanup plan
 human_task.delivery.confirm_archive: Accept results and archive only; retain worktree and branch
 human_task.delivery.revise: Recover or revise delivery
+
+human_task.delivery.delivery_review.prompt: Review the displayed exact integration
+  and issue drafts. Approval authorizes only the shown actions and their displayed
+  host capability boundaries in this same decision. For selected follow-ups, enter
+  only the displayed proposal IDs separated by spaces or commas.
+human_task.delivery.delivery_review.fix_now: Request implementation corrections
+human_task.delivery.delivery_review.integrate_selected: Authorize integration and
+  selected follow-up IDs
+human_task.delivery.delivery_review.integrate_only: Authorize integration with no
+  follow-up issues
+human_task.delivery.delivery_review.review_only: Review only; do not authorize delivery
+human_task.delivery.delivery_details.prompt: Provide the integration strategy, target
+  branch and local destination checkout (for local integration), and issue repository
+  when selecting follow-ups.
+human_task.delivery.delivery_bundle: 'Repository: {repository}
+
+  Source: {source}
+
+  Target: {target}
+
+  Strategy: {strategy}
+
+  Destination: {destination}
+
+  Issue repository: {issues}'
+human_task.delivery.delivery_draft: '{id}: {title}
+
+  {body}
+
+  Evidence: {evidence}
+
+  Evidence HEAD: {evidence_head}; impact: {impact}; confidence: {confidence}'
+human_task.delivery.delivery_review_source: 'Review source: {artifact} v{version},
+  {path}, producer {producer}, SHA256 {sha256}'
+human_task.delivery.delivery_publication: 'Verified PR URL: {url}'

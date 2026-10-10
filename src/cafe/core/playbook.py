@@ -1088,6 +1088,13 @@ class PlaybookDefinition(BaseModel):
                 ):
                     raise ValueError("delivery approval and correction must name declared steps")
                 approval = self.steps[binding.approval_step]
+                if binding.publication_artifact and (
+                    binding.publication_artifact not in (approval.input_artifacts or [])
+                    or approval.output_artifact != binding.result_artifact
+                    or not any(task.trigger == "need_permission" and task.task_id == binding.approval_task
+                               for task in approval.human_tasks)
+                ):
+                    raise ValueError("delivery-owned action review requires the declared publication input, result and permission task")
                 if (
                     approval.delivery != binding
                     or binding.actions_artifact == binding.result_artifact

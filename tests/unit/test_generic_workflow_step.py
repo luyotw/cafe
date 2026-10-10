@@ -1008,6 +1008,7 @@ def test_agent_invocation_marker_is_true_before_agent_control_returns(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager(""))
+    reservations = []
 
     def fake_execute(**kwargs):
         kwargs["agent_executor"]("test prompt")
@@ -1017,7 +1018,8 @@ def test_agent_invocation_marker_is_true_before_agent_control_returns(
     state = BlackboardStore(executor.issue_dir).load_or_create("spec")
 
     with pytest.raises(KeyboardInterrupt):
-        executor.execute_step("spec", executor.playbook["steps"]["spec"], state)
+        executor.execute_step("spec", executor.playbook["steps"]["spec"], state,
+                              before_agent=lambda: reservations.append("reserved"))
 
     context = json.loads(
         (executor.issue_dir / "spec" / "iteration_001" / "iteration.json").read_text(
@@ -1025,6 +1027,7 @@ def test_agent_invocation_marker_is_true_before_agent_control_returns(
         )
     )
     assert context["agent_invoked"] is True
+    assert reservations == ["reserved"]
 
 
 def test_generic_workflow_step_status_transition_writes_strict_baton_payload(

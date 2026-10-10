@@ -97,6 +97,7 @@ from cafe.core.workflow_models import (
     PlaybookRunResult,
     StepExecutionResult,
     StepInterrupted,
+    StepWaiting,
 )
 from cafe.core.workspace_artifact import WorkspaceArtifact, WorkspaceArtifactError
 from cafe.utils.checklist_validator import completion_requires_checklist, validate_checklist
@@ -2006,6 +2007,17 @@ class BlackboardWorkflowRuntime:
             step_def=step_def,
             runtime=runtime,
         )
+        if self._owner_for_step(step_def) == "agent":
+            try:
+                reserves_at_agent = "before_agent" in inspect.signature(self.executor).parameters
+            except (TypeError, ValueError):
+                reserves_at_agent = False
+            if reserves_at_agent or (
+                self.blackboard.host_wait and self.blackboard.host_wait["step"] == current_step
+            ):
+                # Host observations must survive a kill without consuming an agent attempt.
+                # Lifecycle-aware executors reserve immediately before their provider call.
+                return attempt_count
         attempts = self.blackboard.step_attempt_counts
         attempts[current_step] = attempt_count
         self.blackboard_store.save(self.blackboard)
@@ -2708,18 +2720,28 @@ class BlackboardWorkflowRuntime:
         extra_prompt: Optional[str] = None,
         same_invocation_retry: bool = False,
     ) -> StepIterationFrame:
-        self.blackboard_store.record_event(
-            self.blackboard,
-            "step_started",
-            {
-                "step": current_step,
-                "attempt": attempt_count,
-                "hop": hop_count,
-                "runtime": runtime,
-            },
-        )
+        if not self.blackboard.host_wait or self.blackboard.host_wait["step"] != current_step:
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "step_started",
+                {
+                    "step": current_step,
+                    "attempt": attempt_count,
+                    "hop": hop_count,
+                    "runtime": runtime,
+                },
+            )
         feedback_ledger = WorkflowFeedbackLedger(self.issue_dir)
         self._agent_baton_snapshot = self._baton_file_snapshot()
+
+        def before_agent() -> None:
+            if self.blackboard.step_attempt_counts.get(current_step) != attempt_count:
+                self._ensure_step_attempt_within_limit(
+                    current_step=current_step, step_def=step_def, runtime=runtime,
+                )
+                self.blackboard.step_attempt_counts[current_step] = attempt_count
+                self.blackboard.host_wait = None
+                self.blackboard_store.save(self.blackboard)
 
         try:
             if self.execution_context is not None:
@@ -2732,6 +2754,7 @@ class BlackboardWorkflowRuntime:
             execute_kwargs = {
                 "extra_prompt": extra_prompt,
                 "same_invocation_retry": same_invocation_retry,
+                "before_agent": before_agent,
                 "validate_producer_handoff": lambda path: self._validate_producer_handoff(
                     current_step=current_step, path=path
                 ),
@@ -2757,6 +2780,19 @@ class BlackboardWorkflowRuntime:
                 self.blackboard,
                 **execute_kwargs,
             )
+            # Older/custom executors may not expose the lifecycle callback.
+            # A completed result still counts as one phase attempt.
+            before_agent()
+        except StepWaiting as waiting:
+            self._rollback_step_attempt(current_step=current_step, attempt_count=attempt_count)
+            marker = {"step": current_step, "identity": waiting.identity}
+            if self.blackboard.host_wait != marker:
+                self.blackboard.host_wait = marker
+                self.blackboard_store.save(self.blackboard)
+                self.blackboard_store.record_event(
+                    self.blackboard, "step_waiting", marker,
+                )
+            raise
         except KeyboardInterrupt:
             self.blackboard_store.record_event(
                 self.blackboard,
@@ -2810,6 +2846,9 @@ class BlackboardWorkflowRuntime:
                 },
             )
             raise StepInterrupted(step=current_step, hop=hop_count, reason=reason, detail=detail)
+        if self.blackboard.host_wait is not None:
+            self.blackboard.host_wait = None
+            self.blackboard_store.save(self.blackboard)
         if validate_assignee_type:
             self._validate_assignee_type(current_step, step_def)
 
@@ -6033,6 +6072,31 @@ class BlackboardWorkflowRuntime:
         )
 
     def run(
+        self, *, max_transitions: int = 30, start_step: Optional[str] = None,
+        single_step: bool = False,
+    ) -> PlaybookRunResult:
+        # A long-lived worker must observe authoritative changes made while asleep.
+        if self.blackboard.host_wait is not None:
+            self.blackboard = self.blackboard_store.load_or_create(
+                self.start_step, playbook_id=self.playbook_id, tolerate_invalid_baton=True,
+            )
+            if self.blackboard.host_wait is not None and (
+                self.blackboard.host_wait["step"] != self.blackboard.current_step
+            ):
+                self.blackboard.host_wait = None
+                self.blackboard_store.save(self.blackboard)
+        try:
+            return self._run_impl(
+                max_transitions=max_transitions, start_step=start_step, single_step=single_step,
+            )
+        except StepWaiting as waiting:
+            self._flush_phase_terminal()
+            return PlaybookRunResult(
+                final_step=waiting.step, final_status_code="HOST_WAITING",
+                completed=False, detail=waiting.detail, wait_seconds=waiting.delay,
+            )
+
+    def _run_impl(
         self,
         *,
         max_transitions: int = 30,

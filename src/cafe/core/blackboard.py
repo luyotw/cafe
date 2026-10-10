@@ -187,6 +187,7 @@ def _merge_generic_state(
         "handoff_summary",
         "handoff_contract",
         "ownership_cursor",
+        "host_wait",
         "conversation_locale",
         "conversation_locale_source",
     ):
@@ -652,6 +653,7 @@ class BlackboardState:
     handoff_summary: str = ""
     handoff_contract: Optional[HandoffContract] = None
     ownership_cursor: Optional[Dict[str, Any]] = None
+    host_wait: Optional[Dict[str, Any]] = None
     step_attempt_counts: Dict[str, int] = field(default_factory=dict)
     conversation_locale: Optional[str] = None
     conversation_locale_source: Optional[str] = None
@@ -676,6 +678,7 @@ class BlackboardState:
                 self.handoff_contract.to_dict() if self.handoff_contract is not None else None
             ),
             "ownership_cursor": dict(self.ownership_cursor) if self.ownership_cursor else None,
+            "host_wait": dict(self.host_wait) if self.host_wait else None,
             "step_attempt_counts": dict(self.step_attempt_counts),
             "conversation_locale": self.conversation_locale,
             "conversation_locale_source": self.conversation_locale_source,
@@ -719,6 +722,13 @@ class BlackboardState:
         if raw_cursor is not None and not isinstance(raw_cursor, dict):
             raise ValueError("blackboard ownership_cursor must be an object or null")
         cursor = dict(raw_cursor) if raw_cursor is not None else None
+        host_wait = data.get("host_wait")
+        if host_wait is not None and (
+            not isinstance(host_wait, dict) or set(host_wait) != {"step", "identity"}
+            or any(not isinstance(value, str) or not value or len(value) > 512
+                   for value in host_wait.values())
+        ):
+            raise ValueError("blackboard host_wait must identify a step and observation")
         if cursor is not None and "attempt_count" not in cursor and "visit_count" in cursor:
             cursor["attempt_count"] = cursor.pop("visit_count")
 
@@ -761,6 +771,7 @@ class BlackboardState:
                 else None
             ),
             ownership_cursor=cursor,
+            host_wait=dict(host_wait) if host_wait else None,
             step_attempt_counts=attempts,
             # Absence is never backfilled: a record written before the locale
             # contract stays without one instead of gaining an apparent choice.

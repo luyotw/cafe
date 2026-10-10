@@ -1,7 +1,7 @@
 ---
 name: cafe-pr
 description: Prepare the local pull request title and description for publication
-version: 1.9.0
+version: 1.11.0
 workflow:
   notification:
     step_label:
@@ -16,6 +16,29 @@ workflow:
     - external-side-effects
     fallback_strength: equivalent
   human_tasks:
+  - id: pr-review
+    pattern: confirm_output
+    prompt: {message_key: human_task.cafe_pr.pr_review}
+    prompt_locales:
+      zh-TW: {message_key: human_task.cafe_pr.pr_review}
+    input_schema: decision
+    decisions:
+    - id: fix_now
+      label: {message_key: human_task.cafe_pr.pr_fix}
+      label_locales:
+        zh-TW: {message_key: human_task.cafe_pr.pr_fix}
+      requires_feedback: true
+      correction: true
+    - id: confirm
+      label: {message_key: human_task.cafe_pr.pr_confirm}
+      label_locales:
+        zh-TW: {message_key: human_task.cafe_pr.pr_confirm}
+  - id: pr-details
+    pattern: revision_feedback
+    prompt: {message_key: human_task.cafe_pr.pr_details}
+    prompt_locales:
+      zh-TW: {message_key: human_task.cafe_pr.pr_details}
+    input_schema: feedback
   - id: local-review
     pattern: confirm_output
     prompt:
@@ -237,12 +260,14 @@ When there is no corrective feedback for this cycle, or this batch has no applic
 - A missing remote branch or PR is normal before the hook runs and does not mean the PR phase is incomplete.
 - Do not restate PR content in the response; use the blackboard and next-step baton for handoff.
 
+### Publication and delivery boundary
+
+Complete the PR content, publication and declared content review without requiring an integration strategy, local destination checkout or verification tool selection. Use the `pr-review` task when bound: `confirm` approves the PR content and continues; it never authorizes merge or follow-up issue creation. Include original open Follow-up Proposals for the delivery phase to assess and select later. Known missing implementation checks belong in the current Todo List and correction route, but missing delivery configuration must not block PR completion.
+
+The selected delivery phase owns strategy recommendation, target identity, verification scope, and the exact action permission bundle. It prepares and confirms that bundle before execution. Do not prepare `delivery_request.json` for a new delivery-owned binding or ask the user to choose a merge mode here. Legacy project catalogs with an explicit PR-owned `delivery` binding retain their existing task contract and cannot turn content confirmation into action approval.
+
 ## Output
 Write PR content to: {output_file}
 
 ## Handoff
 - Write the next-step baton for this result; the runtime updates the blackboard.
-
-### Declared development delivery review
-
-When this step declares a `delivery` binding, prepare `delivery_request.json` beside the PR output with only `mode` (`local` or `github`), `strategy`, `target_branch`, `destination` (absolute clean target checkout for local), and `issue_repository` (explicit GitHub destination for selected issues). Source/repository/PR identities and Review drafts are supplied and checked by the host. Ask for missing material details through the declared clarification task. Do not guess a strategy or convert publication into action approval. The host displays and freezes the exact bundle before `delivery-review`; users supply only the selected `FUP-NNN` IDs. The host executes nothing during this PR step.

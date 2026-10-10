@@ -652,6 +652,7 @@ class GenericWorkflowStepExecutor(Phase):
         validated_pr_auto_create: Optional[bool] = None,
         validate_producer_handoff: Optional[Callable[[Path], None]] = None,
         execution_context: Optional[Mapping[str, Any]] = None,
+        before_agent: Optional[Callable[[], None]] = None,
     ) -> StepExecutionResult:
         if execution_context is not None:
             from cafe.core.execution_checkpoints import checkpoint
@@ -890,6 +891,10 @@ class GenericWorkflowStepExecutor(Phase):
         def run_agent(prompt: str) -> str:
             nonlocal producing_directories
             last_prompt[:] = [prompt]
+            if before_agent is not None:
+                # A cached response can still dispatch completion corrections.
+                # Reserve before either the normal or resumed agent path.
+                before_agent()
             if workspace_eligible:
                 progress = self._load_workspace_publication(iteration_dir)
                 if progress is not None:

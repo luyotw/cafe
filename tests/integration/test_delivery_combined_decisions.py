@@ -38,7 +38,7 @@ def activate_closeout(context, command):
     proposal["confirmation_contract"] = {
         "user_required": [],
         "manager_confirmable": [],
-        "mandatory_human_stops": [context[7]["step_name"], context[-1]],
+        "mandatory_human_stops": [context[-1]],
     }
     activate_confirmed_contract(
         ActivateConfirmedContract(
