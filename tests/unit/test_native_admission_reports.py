@@ -440,6 +440,59 @@ def test_public_sink_does_not_recast_rejected_represented_cache_as_legacy(tmp_pa
         assert summary["incomplete"]
 
 
+@pytest.mark.parametrize(
+    "canonical,alias",
+    [
+        ("cache_read_input_tokens", "cached_input_tokens"),
+        ("cache_write_input_tokens", "cache_creation_input_tokens"),
+    ],
+)
+@pytest.mark.parametrize("independent", [False, True])
+def test_public_persisted_source_withholds_conflicted_alias_residual_without_independent_evidence(
+    tmp_path, canonical, alias, independent
+):
+    from cafe.core.usage import iteration_usage_sink
+
+    parent = dict(
+        invocation_id="attested",
+        provenance="reported",
+        amount_usd="0.2",
+        complete=True,
+        usage=dict(input_tokens=10, output_tokens=2, total_tokens=12, **{canonical: 3, alias: 4}),
+        token_total_evidence=dict(kind="input_plus_output", source="native_adapter"),
+    )
+    child = record(100, "final")
+    directory = tmp_path / "compose/iteration_001"
+    directory.mkdir(parents=True)
+    path = directory / "iteration.json"
+    stats = dict(
+        input_tokens=110,
+        output_tokens=12,
+        total_cost_usd=1.2,
+        cost_records=[parent, child],
+        **{canonical: 3},
+    )
+    residual_keys = [canonical]
+    if alias == "cache_creation_input_tokens":
+        stats[alias] = 4
+        residual_keys.append(alias)
+    if independent:
+        stats["accounting_residual"] = dict.fromkeys(residual_keys, 7)
+        stats.update(dict.fromkeys(residual_keys, 7))
+    path.write_text(json.dumps(dict(iteration=1, stats=stats)))
+    sink = iteration_usage_sink(tmp_path, path)
+    for _ in range(2):
+        sink(TokenUsage(cost_records=[child]))
+        stats = json.loads(path.read_text())["stats"]
+        for key in residual_keys:
+            assert stats[key] == (7 if independent else 0)
+            assert stats.get("accounting_residual", {}).get(key, 0) == (7 if independent else 0)
+        summary = summarize_sources(collect_cost_sources(tmp_path))
+        assert canonical not in summary["native_usage"]["tokens"]
+        assert summary["incomplete"]
+        assert summary["known"] == Decimal("1.2")
+
+
 @pytest.mark.parametrize("provider", ["cursor-agent", "custom-provider"])
 def test_public_source_keeps_non_native_exclusive_cache_categories(tmp_path, provider):
     directory = tmp_path / "compose/iteration_001"

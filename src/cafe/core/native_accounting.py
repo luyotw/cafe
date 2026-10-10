@@ -359,6 +359,13 @@ def accounting_admission(records):
         represented_rows.extend(observations)
     # Semantically rejected counters are still represented observations, not legacy work.
     represented = total(represented_rows, observations=True)
+    represented_unknown = set()
+    for row in represented_rows:
+        _, invalid = normalized_counters(row.get("usage", {}), inclusive=False)
+        for gap in invalid:
+            for prefix in ("invalid_", "conflicting_"):
+                if gap.startswith(prefix) and gap[len(prefix) :] in COUNTERS:
+                    represented_unknown.add(gap[len(prefix) :])
     amounts = [
         Decimal(str(r["amount_usd"])) for r in represented_rows if r.get("amount_usd") is not None
     ]
@@ -366,7 +373,13 @@ def accounting_admission(records):
         if any(not value.is_finite() or value < 0 for value in amounts):
             raise ValueError("Invalid recorded cost")
         represented["total_cost_usd"] = sum(amounts, Decimal(0))
-    return dict(records=records, admitted=additive, represented=represented, native_usage=view)
+    return dict(
+        records=records,
+        admitted=additive,
+        represented=represented,
+        represented_unknown=sorted(represented_unknown),
+        native_usage=view,
+    )
 
 
 def validate_accounting_residual(value):
@@ -399,6 +412,10 @@ def unrepresented_totals(stats, admission):
         if key in residual or stats.get(key) is None:
             continue
         canonical = "cache_write_input_tokens" if key == "cache_creation_input_tokens" else key
+        if canonical in admission.get("represented_unknown", []):
+            # An ambiguous observation cannot prove any independent scalar remainder.
+            residual[key] = 0
+            continue
         represented = admission["represented"].get(canonical, 0)
         if key == "total_cost_usd":
             amount = Decimal(str(stats[key])) - represented

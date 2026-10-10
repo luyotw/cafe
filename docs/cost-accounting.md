@@ -395,3 +395,6 @@ names nor derive totals for a provider whose semantics were not attested.
 Represented subtotals retain numerically valid observed counters even when their
 attested subset or total relationships fail admission. Such rejected observations
 cannot become legacy residuals; the admitted view keeps its validation gaps.
+Conflicting aliases or invalid numeric observations make their represented
+category ambiguous, so scalar-derived residuals for that category are withheld.
+Already validated independent `accounting_residual` evidence remains preserved.
