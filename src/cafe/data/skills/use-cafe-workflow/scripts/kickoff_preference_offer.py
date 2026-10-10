@@ -228,7 +228,9 @@ def build_offer(args, proposal, model, *, store=None, templates=None, issue_id="
         unavailable.append("worktree.convention")
 
     for stage, key in (("cleanup", "cleanup.convention"),):
-        commands = [c["argv"] for c in proposal["delivery_contract"]["closeout_plan"][stage]]
+        plan = (proposal["closeout_contract"]["plan"] if "closeout_contract" in proposal
+                else proposal["delivery_contract"]["closeout_plan"])
+        commands = [c["argv"] for c in plan[stage]]
         descriptions = getattr(args, stage + "_description")
         defaults = [{stage: [], stage + "_description": []}] if not commands else []
         # This exact built-in closeout has no issue-specific arguments to infer.
@@ -276,6 +278,24 @@ def render_offer(offer, *, zh, table):
     """One visible optional operation next to the formatter's only confirmation prompt."""
     if not offer["entries"]:
         return "", None
+    from format_kickoff_contract import _literal_text
+
+    action_keys = {"delivery.convention", "cleanup.convention"}
+    placeholder_labels = dict(zip(
+        ("issue_id", "issue_name", "project_root", "worktree"),
+        ("編號", "工作項目", "專案目錄", "工作目錄") if zh else
+        ("issue number", "work item", "project directory", "work directory"),
+    ))
+
+    def readable_description(description):
+        # Exact reusable placeholders remain in the command details.
+        expanded = render_delivery_template(
+            {"deliver": [["display"]], "deliver_description": [description]},
+            placeholder_labels,
+        )["deliver_description"][0]
+        # The table renderer owns pipe escaping; prose still escapes other markup.
+        return _literal_text(expanded).replace("\\|", "|")
+
     labels = {
         "conversation.locale": "對話語言" if zh else "Conversation language",
         "manager.mode": "Manager 模式" if zh else "Manager mode",
@@ -299,10 +319,10 @@ def render_offer(offer, *, zh, table):
         if key == "confirmation.assignments":
             empty = "無" if zh else "none"
             return f"User: {', '.join(value['user_required']) or empty}; Manager: {', '.join(value['manager_confirmable']) or empty}"
-        if key in {"delivery.convention", "cleanup.convention"}:
+        if key in action_keys:
             stage = "deliver" if key == "delivery.convention" else "cleanup"
-            return "; ".join(shlex.join(argv) + " — " + description
-                             for argv, description in zip(value[stage], value[stage + "_description"])) or (
+            return ("；" if zh else "; ").join(readable_description(description)
+                             for description in value[stage + "_description"]) or (
                                  "不執行" if zh else "No actions")
         return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
 
@@ -324,6 +344,32 @@ def render_offer(offer, *, zh, table):
     parts = [heading, offer["project"]]
     if rows:
         parts.extend([intro, table(["項目", "已存值", "本次設定"] if zh else ["Setting", "Saved", "This kickoff"], rows)])
+    details = []
+    for entry in offer["entries"]:
+        if entry["key"] not in action_keys:
+            continue
+        stage = "deliver" if entry["key"] == "delivery.convention" else "cleanup"
+        details.append(f"**{labels[entry['key']]}**")
+        previous = entry["previous"]
+        for label, value in (
+            ("已存指令" if zh else "Saved commands", previous["value"] if previous["present"] else None),
+            ("本次指令" if zh else "Proposed commands", entry["value"]),
+        ):
+            details.append(f"**{label}**")
+            if value is None:
+                details.append("未儲存" if zh else "Not saved")
+            elif not value[stage]:
+                details.append("不執行" if zh else "No actions")
+            else:
+                for argv in value[stage]:
+                    command = shlex.join(argv)
+                    longest_run = max((len(run) for run in re.findall(r"`+", command)), default=0)
+                    fence = "`" * max(3, longest_run + 1)
+                    details.append(f"{fence}bash\n{command}\n{fence}")
+    if details:
+        summary = "技術細節：完整指令（供核對）" if zh else "Technical details: exact commands for verification"
+        parts.append("<details>\n<summary>" + summary + "</summary>\n\n" +
+                     "\n\n".join(details) + "\n\n</details>")
     return "\n\n".join(parts), prompt if rows else None
 
 

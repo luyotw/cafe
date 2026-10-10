@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Mapping, Optional, Union
 
@@ -13,6 +14,7 @@ from pydantic import (
     ConfigDict,
     Field,
     ValidationError,
+    TypeAdapter,
     field_validator,
     model_validator,
 )
@@ -1388,6 +1390,75 @@ def normalize_playbook_yaml(data: Dict) -> Dict:
     return data
 
 
+def _merge_step_defaults(defaults: Mapping[str, Any], overrides: Mapping[str, Any]) -> Dict:
+    """Recursively merge mappings only; lists, scalars and null replace."""
+    merged = deepcopy(dict(defaults))
+    for key, value in overrides.items():
+        if isinstance(merged.get(key), dict) and isinstance(value, dict):
+            merged[key] = _merge_step_defaults(merged[key], value)
+        else:
+            merged[key] = deepcopy(value)
+    return merged
+
+
+def _validated_phase_defaults(skill: str, skill_loader: SkillLoader) -> Dict:
+    """Validate declarations independently so overrides cannot hide bad defaults."""
+    declaration = skill_loader.get_workflow_declaration(skill).step_defaults
+    if declaration is None:
+        return {}
+    values = deepcopy(declaration.values)
+    if "max_iterations" in values:
+        values["max_attempts_per_cycle"] = values.pop("max_iterations")
+    for field, value in values.items():
+        try:
+            TypeAdapter(StepConfig.model_fields[field].annotation).validate_python(value)
+            if field == "max_attempts_per_cycle":
+                StepConfig._validate_attempt_limit(value)
+            elif field == "hooks":
+                _validate_script_hook_stages(skill, StepHooks.model_validate(value))
+            elif field == "allowed_tools":
+                warnings = _collect_tool_warnings(skill, value)
+                if warnings:
+                    raise ValueError("; ".join(warnings))
+        except ValueError as exc:
+            raise ValueError(f"Skill '{skill}' step_defaults.values.{field}: {exc}") from exc
+    return values
+
+
+def _resolve_phase_step_defaults(data: Dict, skill_loader: SkillLoader) -> Dict:
+    """Assemble each primary selector's static contract before Playbook validation."""
+    resolved = deepcopy(data)
+    steps = resolved.get("steps")
+    if not isinstance(steps, dict):
+        return resolved  # Existing schema validation reports malformed graph shapes.
+    for name, raw_step in steps.items():
+        if not isinstance(raw_step, dict) or "skill" not in raw_step:
+            continue
+        selector = StepConfig._validate_skill(
+            TypeAdapter(SkillSelector).validate_python(raw_step["skill"])
+        )
+        overrides = StepConfig._migrate_legacy_attempt_limit(raw_step)
+        candidates = []
+        for skill in skill_selector_names(selector):
+            try:
+                defaults = _validated_phase_defaults(skill, skill_loader)
+                candidates.append(_merge_step_defaults(defaults, overrides))
+            except (SkillDiscoveryError, FileNotFoundError) as exc:
+                raise ValueError(f"Step '{name}' references unknown skill '{skill}'") from exc
+            except ValueError as exc:
+                raise ValueError(f"Step '{name}', Skill '{skill}': {exc}") from exc
+        if len(candidates) > 1:
+            contracts = [StepConfig.model_validate(candidate).model_dump() for candidate in candidates]
+            if any(contract != contracts[0] for contract in contracts[1:]):
+                raise ValueError(
+                    f"Step '{name}' selects Skills {skill_selector_names(selector)} with "
+                    "conflicting step_defaults; declare explicit overrides to make their "
+                    "resolved contracts equivalent"
+                )
+        steps[name] = candidates[0]
+    return resolved
+
+
 def load_playbook_file(
     path: Path,
     *,
@@ -1400,6 +1471,7 @@ def load_playbook_file(
     if data is None:
         raise ValueError(f"Playbook is empty: {path}")
     data = normalize_playbook_yaml(data)
+    data = _resolve_phase_step_defaults(data, skill_loader)
     try:
         model = PlaybookDefinition.model_validate(data)
     except ValidationError as exc:

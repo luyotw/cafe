@@ -23,7 +23,7 @@ def phase_owned_graph(graph) -> bool:
 
 
 def phase_owned_contract(contract) -> bool:
-    return contract.get("delivery_contract", {}).get("schema_version") == 5
+    return contract.get("delivery_contract", {}).get("schema_version") in {5, 6}
 
 
 def delivery_result_steps(graph) -> set[str]:
@@ -34,14 +34,15 @@ def delivery_result_steps(graph) -> set[str]:
         name
         for name, step in graph.get("steps", {}).items()
         if (binding := step.get("delivery"))
-        and name != binding["approval_step"]
+        and binding.get("result_task")
         and step.get("output_artifact") == binding["result_artifact"]
     }
 
 
 def publish_delivery_closeout(issue_dir, contract, contract_sha256):
     """Project exact Manager-owned cleanup commands for the delivery acceptance task."""
-    if contract.get("delivery_contract", {}).get("terminal_selection") != "delivery_outcome":
+    split = contract.get("closeout_contract")
+    if split is None and contract.get("delivery_contract", {}).get("terminal_selection") != "delivery_outcome":
         return
     from cafe.core.packet_io import atomic_write_bytes
 
@@ -49,6 +50,16 @@ def publish_delivery_closeout(issue_dir, contract, contract_sha256):
     if directory.is_symlink():
         raise ValueError("delivery closeout directory must not be a symlink")
     directory.mkdir(parents=True, exist_ok=True)
+    result_path = directory / "result-contract.json"
+    if result_path.is_symlink():
+        raise ValueError("delivery result contract must not be a symlink")
+    if split is not None:
+        atomic_write_bytes(result_path, canonical_json({
+            "version": 1, "workflow_id": contract["identity"]["workflow_id"],
+            "contract_sha256": contract_sha256, "delivery_result": split["delivery_result"],
+        }))
+        return
+    result_path.unlink(missing_ok=True)
     path = directory / "closeout.json"
     if path.is_symlink():
         raise ValueError("delivery closeout plan must not be a symlink")
@@ -209,7 +220,7 @@ class DeliveryContractV2(_DeliveryContractBase):
         return value
 
 
-class DeliveryContractV3(BaseModel):
+class _ProductDeliveryFacts(BaseModel):
     """Compact confirmed outcome and its task-specific authority boundaries."""
 
     model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
@@ -222,15 +233,6 @@ class DeliveryContractV3(BaseModel):
     implementation_direction: str = Field(min_length=1)
     permissions: list[str]
     constraints: list[str]
-    closeout_plan: DeliveryCloseoutPlan
-
-    @field_validator("schema_version")
-    @classmethod
-    def _version(cls, value: int) -> int:
-        if value != 3:
-            raise ValueError("unsupported Delivery Contract version")
-        return value
-
     @field_validator(
         "in_scope",
         "out_of_scope",
@@ -243,6 +245,28 @@ class DeliveryContractV3(BaseModel):
         if any(not value for value in values) or len(set(values)) != len(values):
             raise ValueError("delivery lists must contain distinct non-empty statements")
         return values
+
+
+class DeliveryContractV3(_ProductDeliveryFacts):
+    closeout_plan: DeliveryCloseoutPlan
+
+    @field_validator("schema_version")
+    @classmethod
+    def _version(cls, value: int) -> int:
+        if value != 3:
+            raise ValueError("unsupported Delivery Contract version")
+        return value
+
+
+class DeliveryContractV6(_ProductDeliveryFacts):
+    """Phase-owned delivery facts; terminal actions belong to Manager closeout."""
+
+    @field_validator("schema_version")
+    @classmethod
+    def _version(cls, value: int) -> int:
+        if value != 6:
+            raise ValueError("unsupported phase-owned delivery facts")
+        return value
 
 
 class CleanupCloseoutPlan(BaseModel):
@@ -299,6 +323,8 @@ def normalize_delivery_contract(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("Delivery Contract must be a mapping")
     version = value.get("schema_version")
+    if version == 6:
+        return DeliveryContractV6.model_validate(value).model_dump(mode="json")
     if version == 5:
         return DeliveryContractV5.model_validate(value).model_dump(mode="json")
     if version == 4:

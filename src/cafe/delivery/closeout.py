@@ -14,6 +14,69 @@ TERMINAL_DECISIONS = {
 }
 
 
+def retained_combined_task(issue_dir, step, task, saved, current, machine_contract):
+    """Read an exact legacy acceptance schema without refreshing its saved bytes."""
+    binding = step.get("delivery") or {}
+    if (task.trigger != "confirm_output" or task.policy_id != binding.get("result_task")
+            or "Closeout plan SHA256:" not in task.prompt):
+        return False
+    if read_result_contract(issue_dir, task.workflow_id) is not None:
+        return False
+    plan = read_plan(issue_dir, task.workflow_id)
+    if (plan is None or plan_text(plan) not in task.prompt):
+        return False
+    if {d.id for d in saved.decisions} != {"confirm", "revise", "confirm_cleanup", "confirm_archive"}:
+        return False
+    reduced = saved.model_copy(update={"decisions": tuple(d for d in saved.decisions
+                                                     if d.id not in {"confirm_cleanup", "confirm_archive"})})
+    return (machine_contract(current) in (machine_contract(reduced), machine_contract(saved))
+            and set(task.continuations) == {d.id for d in saved.decisions}
+            and all(task.continuations[d] == "_done" for d in TERMINAL_DECISIONS)
+            and task.continuations["revise"] == task.step)
+
+
+def read_result_contract(issue_dir, workflow_id):
+    """Read only the bounded host projection needed to supersede a result task."""
+    path = issue_dir / "delivery" / "result-contract.json"
+    if not path.exists():
+        return None
+    if (path.is_symlink() or path.parent.is_symlink()
+            or not path.resolve().is_relative_to(issue_dir.resolve())
+            or path.stat().st_size > 256 * 1024):
+        raise ValueError("unsafe delivery result contract")
+    value = json.loads(path.read_text())
+    if (not isinstance(value, dict)
+            or set(value) != {"version", "workflow_id", "contract_sha256", "delivery_result"}
+            or type(value["version"]) is not int or value["version"] != 1
+            or value["workflow_id"] != workflow_id
+            or not isinstance(value["contract_sha256"], str)
+            or not re.fullmatch(r"[0-9a-f]{64}", value["contract_sha256"])
+            or not isinstance(value["delivery_result"], dict)
+            or set(value["delivery_result"]) != {"step", "task_id", "artifact"}
+            or any(not isinstance(v, str) or not v for v in value["delivery_result"].values())):
+        raise ValueError("invalid delivery result contract")
+    return value["delivery_result"]
+
+
+def resolve_result_binding(issue_dir, playbook_id):
+    """Resolve a result owner through the public project graph and issue overrides."""
+    from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
+    graph = PlaybookLoader(
+        project_root=issue_dir.parent.parent.parent, read_only=True, resolve_presentation=False
+    ).load(playbook_id)
+    graph = apply_issue_playbook_overrides(graph, issue_dir / "issue.yaml")
+    owners = [
+        (name, step["delivery"])
+        for name, step in graph["steps"].items()
+        if step.get("delivery") and step["delivery"].get("result_task")
+        and step.get("output_artifact") == step["delivery"]["result_artifact"]
+    ]
+    if len(owners) != 1:
+        raise ValueError("legacy closeout requires one declared delivery result owner")
+    name, binding = owners[0]
+    return {"step": name, "task_id": binding["result_task"]}
+
+
 def read_plan(issue_dir, workflow_id):
     path = issue_dir / "delivery" / "closeout.json"
     if not path.exists():
@@ -53,6 +116,12 @@ def plan_text(plan):
 
 def validate_choice(issue_dir, snapshot, task, decision):
     if decision not in TERMINAL_DECISIONS:
+        return
+    result_contract = read_result_contract(issue_dir, snapshot.proposal.workflow_id)
+    if result_contract is not None:
+        if (task.step != result_contract["step"] or task.policy_id != result_contract["task_id"]
+                or decision != "confirm"):
+            raise ValueError("result acceptance cannot select terminal actions")
         return
     plan = read_plan(issue_dir, snapshot.proposal.workflow_id)
     if plan is None:

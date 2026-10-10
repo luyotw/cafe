@@ -204,6 +204,98 @@ def _kickoff_proposal(command: list[str]) -> dict:
     return module.build_confirmed_proposal(module._parser().parse_args(command[2:]))
 
 
+@pytest.mark.parametrize("delegate_result", [False, True])
+def test_subagent_delivery_result_owner_does_not_delegate_action_permission(
+    tmp_path: Path, delegate_result: bool,
+) -> None:
+    from cafe.manager._schema import build_initial_contract
+    from cafe.manager.delivery_comparison import digest, obligations
+    from cafe.manager.task_authority import decide_task_authority
+    from tests.unit.test_driver_task_authority import _task
+
+    command = _kickoff_formatter_command(
+        tmp_path / "strategic_context.yaml",
+        playbook_id="subagent-flow",
+        phase_chains={
+            step: "codex:exact-model"
+            for step in ("spec_plan", "develop", "pr", "deliver")
+        },
+        manager_confirmable=("spec_plan", "deliver") if delegate_result else ("spec_plan",),
+    )
+    if not delegate_result:
+        command.insert(command.index("--manager-confirmable"), "deliver")
+    proposal = _kickoff_proposal(command)
+    contract = build_initial_contract(
+        proposal=proposal,
+        issue_name="issue346",
+        workflow_id="delivery-owner-test",
+        confirmed_by="user",
+        confirmed_at="2026-10-10T00:00:00+00:00",
+    )
+    task = _task("decision", trigger="confirm_output", task_id="delivery-outcome")
+    task.update(issue="issue346", workflow_id="delivery-owner-test")
+    task["provenance"]["step"] = "deliver"
+    required = obligations(contract["delivery_contract"])
+    result_text = "\n".join([*required.values(), "No additional actions authorized."])
+    data = {
+        "boundary": {
+            "step": "deliver", "task_id": task["id"], "iteration": 1,
+            "intent": "confirm_output", "owner": "user", "active": True,
+        },
+        "identity": {"issue_name": "issue346", "workflow_id": "delivery-owner-test"},
+        "contract_sha256": digest(contract),
+        "delivery_contract": contract["delivery_contract"],
+        "obligations": required,
+        "artifacts": {"delivery_result": result_text},
+        "missing_artifacts": [], "scheduled": True, "eligible": delegate_result,
+    }
+    packet = {"data": data, "snapshot_sha256": digest(data)}
+    assessment = {
+        "snapshot_sha256": packet["snapshot_sha256"],
+        "coverage": {
+            name: {
+                "status": "preserved", "source": "delivery_result", "quote": text,
+                "reason": "The complete verified result covers this requirement.",
+                **({"implementation": "src/example.py", "verification": "tests/test_example.py"}
+                   if name.startswith("acceptance_invariants[") else {}),
+            }
+            for name, text in required.items()
+        },
+        "deviation": {
+            "status": "clear", "source": "delivery_result",
+            "quote": "No additional actions authorized.",
+            "reason": "Result confirmation changes no action or permission.",
+        },
+    }
+    result = decide_task_authority(
+        task=task,
+        contract=contract,
+        current_task_id=task["id"],
+        response={"task": "delivery-outcome", "human_task_id": task["id"], "decision": "confirm"},
+        evidence={
+            "basis": "confirmed_exact",
+            "exhaustive": True,
+            "delivery_comparison": {
+                "snapshot_sha256": packet["snapshot_sha256"], "assessment": assessment,
+            },
+        },
+        confirmed_sources={"current_output:delivery_result": result_text},
+        trusted_comparison=packet,
+    )
+    assert result["allowed"] is delegate_result, result
+    assert result["resolution_owner"] == (
+        "manager_confirmable" if delegate_result else "user_required"
+    )
+
+    task["provenance"].update(trigger="need_permission", policy_id="delivery-review")
+    permission = decide_task_authority(
+        task=task, contract=contract, current_task_id=task["id"],
+    )
+    assert permission["allowed"] is False
+    assert permission["resolution_owner"] == "user_required"
+    assert permission["evidence_reason"] == "permission_or_capability"
+
+
 @pytest.fixture
 def run_kickoff_formatter(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
     """Run the real CLI entry point without starting another Python interpreter."""
@@ -1097,7 +1189,7 @@ mandate:
 
     assert result.returncode == 0, result.stderr
     assert "## Kickoff Contract — issue346" in result.stdout
-    assert "### Deliver and cleanup plan to confirm" in result.stdout
+    assert "### Manager closeout plan to confirm" in result.stdout
     assert _rendered_closeout_commands(result.stdout) == {
         "cleanup": [["git", "worktree", "remove", "/tmp/issue346"]],
     }
@@ -1205,7 +1297,8 @@ mandate:
     assert "#### cleanup" in result.stdout
     assert result.stdout.count("[]") == 1
     assert _rendered_closeout_commands(result.stdout) == {"cleanup": []}
-    assert not any(token.info == "bash" for token in MarkdownIt().parse(result.stdout))
+    cleanup_section = result.stdout.split("#### cleanup", 1)[1].split("### ", 1)[0]
+    assert not any(token.info == "bash" for token in MarkdownIt().parse(cleanup_section))
 
 
 @pytest.mark.parametrize("stage", ["cleanup"])
@@ -1300,7 +1393,7 @@ def test_kickoff_closeout_descriptions_do_not_change_the_confirmed_proposal(tmp_
     for stage in ("cleanup",):
         command[command.index(f"--{stage}-description") + 1] = f"Reworded {stage} explanation."
     assert _kickoff_proposal(command) == original
-    for actions in original["delivery_contract"]["closeout_plan"].values():
+    for actions in original["closeout_contract"]["plan"].values():
         assert all(set(action) == {"argv"} for action in actions)
 
 
@@ -1612,8 +1705,8 @@ def test_confirmed_kickoff_activates_one_issue_scoped_manager_contract(tmp_path:
     assert "pr" not in contract
     assert "playbook" not in contract
     assert contract["locales"] == {"conversation": {"value": "zh-TW", "source": "explicit"}}
-    assert contract["delivery_contract"]["schema_version"] == 5
-    closeout_plan = contract["delivery_contract"]["closeout_plan"]
+    assert contract["delivery_contract"]["schema_version"] == 6
+    closeout_plan = contract["closeout_contract"]["plan"]
     assert "deliver" not in closeout_plan
     assert closeout_plan["cleanup"] == [{"argv": ["git", "worktree", "remove", "/tmp/issue346"]}]
     assert "proactive_review.yaml" not in {path.name for path in (issue_dir / "manager").iterdir()}
@@ -1774,6 +1867,7 @@ def test_kickoff_formatter_shows_only_task_decisions_without_mutating_the_projec
     proposal = _kickoff_proposal(command)
     assert set(proposal) == {
         "delivery_contract",
+        "closeout_contract",
         "locales",
         "confirmation_contract",
         "task_contract",
@@ -1790,11 +1884,7 @@ def test_kickoff_formatter_shows_only_task_decisions_without_mutating_the_projec
     )
     assert proposal["delivery_contract"] == {
         **product,
-        "schema_version": 5,
-        "terminal_selection": "delivery_outcome",
-        "closeout_plan": {
-            "cleanup": [{"argv": ["git", "worktree", "remove", "/tmp/issue346"]}],
-        },
+        "schema_version": 6,
     }
 
 
@@ -1925,7 +2015,7 @@ def test_kickoff_formatter_keeps_the_rendered_policy_stable_until_activation(
     for key, expected in proposal.items():
         assert contract[key] == expected, key
     assert set(contract) == set(proposal) | {"schema_version", "identity", "revision", "provenance"}
-    for actions in contract["delivery_contract"]["closeout_plan"].values():
+    for actions in contract.get("closeout_contract", {}).get("plan", contract["delivery_contract"].get("closeout_plan", {})).values():
         assert all(set(action) == {"argv"} for action in actions)
     for stage in ("cleanup",):
         description = normal_command[normal_command.index(f"--{stage}-description") + 1]
@@ -3391,7 +3481,7 @@ def test_kickoff_derives_proactive_defaults_only_at_scheduled_pauses(
         "develop": "not_required",
         "review": "not_required",
         "pr": "required",
-        "deliver": "required",
+        "deliver": "not_required",
     }
     section = result.stdout.split("### Proactive review at scheduled pauses", 1)[1]
     section = section.split("### Reactive user handoffs", 1)[0]
@@ -3410,6 +3500,17 @@ def test_kickoff_defaults_apply_to_custom_assignable_and_mandatory_gates(
 ) -> None:
     playbooks_root = tmp_path / ".cafe" / "playbooks"
     playbooks_root.mkdir(parents=True)
+    skill = tmp_path / ".cafe/skills/custom-review"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: custom-review\ndescription: Review a custom output.\nworkflow:\n"
+        "  prompt_inputs:\n  - {artifacts: [workflow_feedback], placeholder: workflow_feedback_file, required: false}\n"
+        "  human_tasks:\n  - id: local-review\n    pattern: confirm_output\n"
+        "    prompt: Review the result.\n    input_schema: decision\n    decisions:\n"
+        "    - {id: fix_now, label: Revise, requires_feedback: true, correction: true}\n"
+        "    - {id: create_follow_up, label: Follow up}\n"
+        "    - {id: continue_without_issue, label: Continue}\n---\n"
+    )
     (playbooks_root / "custom-gates.yaml").write_text(
         """\
 playbook:
@@ -3432,7 +3533,7 @@ steps:
     'on': {confirm_output: define}
   publish:
     type: skill
-    skill: cafe-pr
+    skill: custom-review
     role: author
     assignee_type: agent
     input_artifacts: [requirements, workflow_feedback]
@@ -4064,7 +4165,8 @@ def test_manager_keeps_completion_separate_from_external_authority() -> None:
         assert "cafe.branch.integrate" not in text
         assert "pr.auto_create" not in text
     assert "integration and selected follow-up issue creation belong to the development delivery phase" in kickoff
-    assert "only user confirmation authorizes execution" in " ".join(kickoff.split())
+    assert "kickoff confirmation authorizes execution after workflow completion and delivery acceptance" in " ".join(kickoff.split())
+    assert "explicit user reconfirmation through the existing Manager contract API" in " ".join(kickoff.split())
     assert '[gh, issue, close, "123", --repo, owner/repo]' in kickoff
     assert "[cafe, close, --archive-only]" in kickoff
 
@@ -4105,12 +4207,12 @@ def test_manager_confirms_cleanup_or_terminal_archive() -> None:
 
     assert "handle follow-up work" in skill
     assert "`references/completion_and_authority.md`" in skill
-    assert "non-empty `cleanup` array" in normalized
-    assert "Archive without delivery by running exactly `cafe close --archive-only`" in reference
-    assert "Leave all external state unchanged" in reference
+    assert "`closeout_contract`" in normalized
+    assert "executes exactly `cafe close --archive-only`" in reference
+    assert "`leave` performs no mutation" in normalized
     assert "run the `cleanup` array directly and in order from the issue worktree" in normalized
-    assert "terminal closeout does not rerun it" in normalized
-    assert "Do not infer archive from terminal wording" in normalized
+    assert "closeout never repeats integration" in normalized
+    assert "result proxy confirmation grants none of that authority" in normalized
     assert "requires no closeout-plan entry" in normalized
     assert "without merging, pushing, closing the GitHub issue" in normalized
     assert "Stop and report the first command failure." in normalized

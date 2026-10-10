@@ -2,7 +2,7 @@
 name: cafe-deliver_development
 description: Verify development delivery with approved project tools, help close missing
   verification work, and request acceptance of complete results.
-version: 1.2.0
+version: 1.3.0
 workflow:
   execution_profile:
     workload: publication
@@ -60,14 +60,6 @@ workflow:
         message_key: human_task.delivery.delivery_outcome
     input_schema: decision
     decisions:
-    - id: confirm_cleanup
-      label: {message_key: human_task.delivery.confirm_cleanup}
-      label_locales:
-        zh-TW: {message_key: human_task.delivery.confirm_cleanup}
-    - id: confirm_archive
-      label: {message_key: human_task.delivery.confirm_archive}
-      label_locales:
-        zh-TW: {message_key: human_task.delivery.confirm_archive}
     - id: confirm
       label: {message_key: human_task.delivery.confirm}
       label_locales:
@@ -130,7 +122,7 @@ The host executes only the exact approved tool bytes and options under the revie
 
 For a failed required check, normalize corrections into the existing Todo List and use the injected correction route. Unknown or missing evidence never proves success. Tools and verification scope changed after approval need fresh delivery action review; preserve completed integration effects and never edit old approval bytes. Legacy snapshots missing verification scope follow that review route.
 
-Only when `delivery_complete` is true, including every agreed verification or an explicitly approved no-verification reason, request the declared user `confirm_output` handoff. Display the terminal plan with the results; the same reply accepts the outcome and chooses cleanup, archive-only or leaving external state unchanged. Manager executes that exact choice after workflow completion; this phase performs no cleanup.
+Only when `delivery_complete` is true, including every agreed verification or an explicitly approved no-verification reason, request the declared user `confirm_output` handoff. Display only the completed delivery results and verification evidence. The reply accepts or revises those results. Manager owns the separately confirmed closeout choice and plan, and executes it after workflow completion. This phase does not display or select cleanup, archive, or resource retention.
 
 ## Output
 

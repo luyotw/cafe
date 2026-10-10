@@ -1,0 +1,22 @@
+{
+  "origin_head": "178e3e1c031860b9eb5ec2eacea5c52fade30226",
+  "contract": "SHA-256 of sorted compact JSON containing complete normalized model, effective behavior and static simulation (sets sorted); captured before defaults implementation",
+  "playbooks": {
+    "bug": "0a7ce093e996ffb521c3b689a07270412a338785e1e98a195bacfefe22bac13f",
+    "direct-qa": "5f30ff546d38492e37b0047e4900e863e466fe73eef6c546427bd949d8c7ab77",
+    "direct-subagent-review": "96c179d311ee18cd4bad095a63b5dc751378d42697ec3766cd3f1559ec369b93",
+    "direct": "5856b4bc962e524f5fbdb14140a5101035d1ba7dddf93469460c1f2ded2a07ff",
+    "editorial": "f30669a3e3092d415af4e14fbc703b0054d15c13b1d77ecfb6b190852184763d",
+    "hotfix": "5d270272163f95651bbfea1e0395eaec845bf03650bee5e3a5df34d2121f07a1",
+    "incident": "b7fa2893acbb957253a7de45c63c62bfcfa4a4787a6dd4d3696282194c548730",
+    "research": "ed8662f19a692ef89860a9fef65a98793b395e77ea846b3ff4d4bd62bd77d373",
+    "simple": "1143414091f6669b2700cd4eabc62594a7a239e8d25d2b0366acba4df28d74f0",
+    "standard-qa": "9f59a8d10eddc99dbf4f9fc0ed7b26c10b36c794f095b293e275a0a9a6972ee0",
+    "standard": "19c363c35140d6bb3df8bb53b53a47f3a096cb56aea45aa607ef7c37303216d4",
+    "streamlined": "167351055be3d0521b1ff2d76dcded1d8e47d728667c2e840884cdd3f9ef6dee",
+    "subagent-flow-qa": "fad2d53b9f229b88551142c81382db2706205038457bb371687abd0455b7e8b2",
+    "subagent-flow": "673bd08f305afaa6367b36480a1f21f5f2af2fd1ad2a7797e968cd722778f9e6",
+    "tdd-qa": "673e11db345720a627b9faa6ce9a1d724f9379faa41cd34aca088c9f577b7a62",
+    "tdd": "a6b0946ecfe86bdb3e62dbec1e40a55b2571e3160261a5939c8095b8d6fd021f"
+  }
+}

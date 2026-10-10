@@ -151,9 +151,9 @@ operation replaces it.
 
 For graphs declaring `delivery`, integration and selected follow-up issue creation belong to the development delivery phase. Kickoff confirms the product outcome and separately proposed cleanup. Do not supply Manager `deliver` argv or descriptions, infer them from templates, or execute phase operations through closeout.
 
-Repository delivery discovery retains descriptive conventions, source coverage, freshness and gaps. Resolve exact PR/source/target/strategy or local destination when the PR action review presents actual immutable artifacts. The user selects an explicit subset of original Review drafts or an empty selection. The displayed PR decision covers action selection and its host capability boundaries together, while preserving distinct durable approvals. Final result acceptance remains a separate user decision; only user confirmation authorizes execution of the shown action bundle. Legacy proposals without displayed host boundaries retain separate capability approval.
+Repository delivery discovery retains descriptive conventions, source coverage, freshness and gaps. Resolve exact PR/source/target/strategy or local destination when the PR action review presents actual immutable artifacts. The authorized decision owner selects an explicit subset of original Review drafts or an empty selection. The displayed PR decision covers action selection and its host capability boundaries together, while preserving distinct durable approvals. Final result acceptance remains a separate decision governed by the confirmed gate ownership: assignable delivery gates default to `manager_confirmable`; mandatory gates remain user-owned. Action execution additionally requires the shown bundle's task and capability approvals; delegation of result acceptance alone does not supply them. Legacy proposals without displayed host boundaries retain separate capability approval.
 
-The formatter produces a version-5 nested `delivery_contract` for adopting graphs with `closeout_plan.cleanup` only. Keep exact literal cleanup argv and one description per action. The default is full cleanup: close a verified bound GitHub issue, then use `scripts/cleanup_worktree.py` to archive CAFE state and remove the exact feature worktree, local branch, and bound remote branch. This is a Manager skill default; explicit current decisions and repository preferences retain precedence. The preparation helper fills literal interpreter, script, repository, worktree, issue, and remote arguments. Explain all deletion effects before kickoff confirmation. Never remove the canonical checkout; when no separate feature worktree exists, propose archive-only and explain that limitation. Ordinary `cafe close` can integrate a local branch and is not a fresh phase-owned cleanup fallback. The PR decision explicitly covers the displayed action and host capability boundaries together. Delivery acceptance also selects full cleanup, archive-only, or leaving external state unchanged in the same reply; Manager executes the recorded selection after completion without a second terminal question.
+The formatter produces version-6 product `delivery_contract` facts and a separate version-1 Manager `closeout_contract` for adopting graphs. Keep exact literal cleanup argv and one description per action. The default is full cleanup: close a verified bound GitHub issue, then use `scripts/cleanup_worktree.py` to archive CAFE state and remove the exact feature worktree, local branch, and bound remote branch. This is a Manager skill default; explicit current decisions and repository preferences retain precedence. The preparation helper fills literal interpreter, script, repository, worktree, issue, and remote arguments. Explain all deletion effects before kickoff confirmation. Never remove the canonical checkout; when no separate feature worktree exists, propose archive-only and explain that limitation. Ordinary `cafe close` can integrate a local branch and is not a fresh phase-owned cleanup fallback. The PR decision explicitly covers the displayed action and host capability boundaries together. Kickoff confirmation selects the displayed Manager closeout action. Delivery acceptance only confirms results; Manager executes the already-confirmed choice after completion without a second terminal question.
 
 For a verified repository and issue, a literal cleanup proposal is:
 
@@ -192,7 +192,9 @@ obtain explicit user confirmation of:
   default mandatory gates to `required` while they remain user-owned, except
   the declared delivery result owner, whose proactive review defaults to
   `not_required` because PR action review and receipt validation already cover
-  the delivery boundary. Its final acceptance remains user-owned. Let
+  the delivery boundary. Delivery result ownership follows the validated gate
+  classification and confirmed partition; do not make an assignable deliver
+  gate user-owned merely because it is final acceptance. Let
   direct user overrides take precedence. Normalize ineligible phases internally
   to `not_required`; they require no kickoff choice;
 - the exact ordered CLI/model chain for every phase, containing one primary and
@@ -319,7 +321,10 @@ confirmation before preparation or workflow execution.
    steps remain user-owned and never enter the kickoff partition. Both classes
    come from `steps.<step>."on".confirm_output`.
 3. Present each candidate by step and purpose. Default every candidate to
-   `manager_confirmable` with proactive review `required`, then allow the user to
+   `manager_confirmable`; proactive review defaults to `required` except for
+   a declared delivery result owner, which defaults to `not_required` even when
+   action permission lives in that same phase. Preserve the formatter defaults
+   and add an override only for an explicit user request. Allow the user to
    override any candidate into exactly one of:
    - `user_required`: stop for the real user;
    - `manager_confirmable`: the manager may verify and continue.
@@ -377,7 +382,8 @@ rewrites digests.
 
 Before rendering, read the request and relevant existing evidence, then propose
 one compact version-3 product `delivery_contract` object. Use the user's
-language. Keep purpose, scope, and implementation direction separate:
+language and apply the readable-contract rules below before filling its text.
+Keep purpose, scope, and implementation direction separate:
 
 | Field | Content |
 | --- | --- |
@@ -389,6 +395,61 @@ language. Keep purpose, scope, and implementation direction separate:
 | `implementation_direction` | Recommended approach; advisory, not a binding method |
 | `permissions` | Task-specific action and target authorizations; no implied side effects |
 | `constraints` | A flat list of actual fixed limits, not generic quality or architecture boilerplate |
+
+#### Write for the person approving the work
+
+Assume the reader understands the task but does not know CAFE's internals.
+Write every delivery section so they can decide what will change, why it is
+useful, how completion will be checked, and what actions they are authorizing.
+Even for an engineering task, the contract must be understandable without
+reading source code or decoding field names.
+
+- Goal: state the current problem and the improvement in everyday language.
+  For example, "Several workflow files repeat the same settings. Let each step
+  define them once so future changes need fewer edits."
+- Scope: name the affected files or modules using the file-count rule below,
+  explain each area's job in familiar words, and say what changes there.
+  Preserve identifiable names or paths, but avoid inventories of internal
+  classes, fields or algorithms. Testing methods belong in acceptance.
+- Exclusions: describe recognizable work that this change will not include,
+  such as "Keep the existing step order and approval points."
+- Acceptance: describe a concrete situation and the expected result, such as
+  "When a workflow supplies its own setting, use it instead of the default."
+  State compatibility, error handling and required verification in the same
+  plain terms. A list of test names or unexplained terms such as "resolved
+  contract equivalence" does not tell the user what passing means.
+- Implementation direction: give a brief explanation of how the change works,
+  for example, "Read the step's defaults first, apply settings from the workflow,
+  then check the combined result." Keep detailed schemas, merge algorithms
+  and implementation worklists in the existing technical issue or phase
+  artifacts, rather than copying them into the confirmation text.
+- Permissions: say which actions may run and where they apply. Explain an
+  unfamiliar action briefly, such as "push the branch to GitHub and open a
+  pull request for review"; retain exact repository, branch or other targets.
+- Constraints: state actual boundaries and their practical consequences,
+  such as "Existing workflows must keep the same steps, approval points and
+  results." Explain a necessary architecture boundary by what it protects.
+
+Use one main point per bullet and short sentences. Lead with an action or
+result rather than stacked technical nouns. Keep a technical identifier only
+when it helps identify the target or express an exact requirement, and explain
+its meaning where it first appears. Translate necessary technical distinctions
+into concrete behavior instead of merely adding a glossary or replacing one
+jargon term with another. For example, "scalar/list replacement and recursive
+mapping merge" becomes "A workflow's own value or list replaces the default;
+for grouped settings, it overrides the specified entries and keeps the others."
+If a fixed requirement permits only certain fields, explain the allowed types
+of settings and the rejected behavior; preserve any essential exact names
+alongside that explanation. Plain language must retain every confirmed
+requirement, edge case, fixed limit and authorization target.
+
+Before rendering, reread every delivery section as someone unfamiliar with
+the implementation. Rewrite any bullet whose purpose, change or expected
+result requires knowledge of an internal identifier. Fix the actual input
+facts before rendering; do not append a simpler summary to a dense contract
+or silently rewrite an already confirmed contract.
+
+#### Describe the adjustment footprint
 
 Before writing `in_scope`, inspect the relevant repository areas and estimate
 the distinct files that need adjustment, excluding test files. Count planned
@@ -423,7 +484,7 @@ approval from scope or technical advice. The Manager's standing rule remains:
 > integrations.
 
 The formatter adds separately supplied `--cleanup` commands
-to the version-3 product core as a version-5 cleanup-only `closeout_plan` for adopting graphs; do not put that field in
+to a separate Manager `closeout_contract.plan` for adopting graphs; do not put that field in
 `--delivery-contract` as well:
 
 | Field | Content |
@@ -537,9 +598,28 @@ will save; it is presentation, not workflow authority. Do not add a second
 confirmation prompt or repeat the reason for requesting confirmation after the
 formatter output. Ordinary follow-up discussion may be concise.
 
+Apply `kickoff_inputs.md`'s behavior comparison rule to the preference section
+as well as the delivery facts. A pair of long command strings is not an
+explanation of a changed default. Preserve the formatter's complete output and
+expandable exact-command details; add a short grounded explanation beside a
+comparison if its saved/current descriptions omit the material difference.
+Presentation explanations never modify the pinned preference offer or grant
+action authority.
+
 ## After confirmation or direct formatter use
 
 Continue with `kickoff_execution.md` for the direct formatter CLI example,
 preparation checklist, durable activation and attached execution polling. Read
 the applicable section before that operation. Preparing a proposal through the
 consolidated helper requires none of those execution examples.
+
+### Manager closeout selection
+
+For phase-owned development delivery, propose `closeout_choice: cleanup` for a
+non-empty cleanup plan and `leave` for an empty plan unless the user requests
+archive or a later decision (`pending`). The formatter displays this selection
+and persists a separate Manager `closeout_contract`; kickoff confirmation
+authorizes execution after workflow completion and delivery acceptance. Do not
+move cleanup selection into deliver or add a second terminal prompt for an
+already-confirmed choice. Changed commands, targets, effects or selections need
+explicit user reconfirmation through the existing Manager contract API.

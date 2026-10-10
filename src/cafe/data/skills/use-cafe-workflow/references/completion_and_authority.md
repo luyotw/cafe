@@ -107,37 +107,40 @@ a fixed shipping checklist to every playbook.
 
 ### Confirm cleanup, archive, or no action
 
-For phase-owned development delivery, inspect the combined acceptance first:
+For phase-owned development delivery, Manager owns closeout independently of
+result acceptance. New full kickoff contracts persist `closeout_contract` with
+an explicit `cleanup`, `archive`, `leave`, or `pending` choice and the exact
+ordered cleanup argv. Kickoff confirmation authorizes that displayed choice;
+deliver's `confirm` only accepts results and never changes the choice.
+
+Inspect the selection and verified delivery prerequisites:
 
 ```bash
 python3 <skill-dir>/scripts/inspect_delivery_closeout.py --issue-dir <issue-dir> --workflow-id <workflow-id>
 ```
 
-An `accepted` selection is the user's already-recorded terminal decision, bound
-to the current exact cleanup contract and verified delivery receipts. Do not ask
-again: `cleanup` runs only that confirmed array through `execute_closeout.py`;
-`archive` runs only `cafe close --archive-only`; `leave` performs no terminal
-mutation. Manager executes after workflow completion and worker quiescence.
-Changed plans, invalid receipts, or mismatched authority require recovery, not
-inferred acceptance. The confirmed contract's `terminal_selection:
-delivery_outcome` selects this flow; a missing projection cannot switch it to
-legacy behavior. A new combined delivery flow with no recorded selection
-is incomplete authority; do not replace its missing acceptance with a generic
-terminal prompt.
+After workflow completion and worker quiescence, an `accepted` selection runs
+without another question: `cleanup` executes the confirmed array; `archive`
+executes exactly `cafe close --archive-only` through the same evidence executor;
+`leave` performs no mutation. Never omit cleanup just because deliver completed.
+`pending` requires Manager to obtain an explicit user selection and persist a
+user-reconfirmed Manager contract before execution. A changed plan, command
+order, target, effect, or invalid receipt likewise requires recovery or user
+reconfirmation; result proxy confirmation grants none of that authority.
 
-For an explicit `legacy` inspection result (a confirmed contract without that
-selection flag), after the Manager has
-verified workflow completion, offer the user these terminal choices once:
+Older contracts keep their original bytes and combined task schema. A recorded
+user-submission completion can supply its explicit terminal choice. Manager
+proxy or untyped historical results only prove acceptance, never a user choice
+of cleanup or leave. With missing selection, preserve successful integration
+and request a separate Manager closeout selection; use the existing confirmed
+contract replacement API, retaining the old task/result and action receipts.
+Archived historical choices remain readable evidence, not new execution authority.
+Do not overwrite pending task schemas. Switch to a pure result task only through
+normal supersession when the declaration or displayed evidence changes.
 
-1. Run the confirmed non-empty `cleanup` array.
-2. Archive without delivery by running exactly `cafe close --archive-only`.
-3. Leave all external state unchanged.
-
-The terminal selection is required even when the cleanup plan appeared
-in kickoff; a verified combined delivery reply already supplies that selection.
-`deliver` remains owned by its declared workflow path or separate
-user authority; terminal closeout does not rerun it. Do not infer archive from
-terminal wording or from a declined cleanup plan.
+For non-phase-owned `legacy` workflows, after verifying completion offer cleanup,
+archive-only, or leave once if no existing explicit selection applies. Existing
+legacy action authority remains unchanged; closeout never repeats integration.
 
 After the user confirms, run the `cleanup` array directly and in order from the
 issue worktree. Keep every argv exactly as confirmed; do not add, remove,

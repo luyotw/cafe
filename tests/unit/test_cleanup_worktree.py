@@ -155,9 +155,7 @@ def test_archived_acceptance_uses_correlated_receipts_without_live_source_querie
                     f"Action snapshot SHA256: {snapshot.digest}\nDelivery result SHA256: {digest(report)}\n" + plan_text(plan))
     records.complete(workflow_id=p.workflow_id, task_id=terminal.id,
                      payload={"decision": "confirm_cleanup"}, source="user")
-    module = load_kickoff_module("inspect_delivery_closeout")
-    contract = {"identity": {"workflow_id": p.workflow_id},
-                "delivery_contract": {"closeout_plan": {"cleanup": [{"argv": c} for c in cleanup]}}}
+    from cafe.manager.closeout import accepted_delivery_result
     monkeypatch.setattr("cafe.delivery.selection.validate_source_identity",
                         lambda *a: pytest.fail("An archived outcome cannot query a live source checkout."))
     monkeypatch.setattr("cafe.delivery.verification.observe_delivery",
@@ -169,6 +167,6 @@ def test_archived_acceptance_uses_correlated_receipts_without_live_source_querie
         report_path.write_text(json.dumps(report))
     if change:
         with pytest.raises(ValueError):
-            module._archived_choice(tmp_path, contract, "a" * 64)
+            accepted_delivery_result(tmp_path, p.workflow_id, archived=True)
     else:
-        assert module._archived_choice(tmp_path, contract, "a" * 64)["choice"] == "cleanup"
+        assert accepted_delivery_result(tmp_path, p.workflow_id, archived=True)["decision"] == "confirm_cleanup"

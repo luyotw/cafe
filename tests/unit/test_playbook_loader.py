@@ -801,6 +801,8 @@ steps:
   fixed-review:
     role: developer
     skill: cafe-pr
+    behavior: {completion: status_code, publish_confirmation: false}
+    hooks: {prepare_input: [], publish_output: []}
     human_tasks:
       - trigger: confirm_output
         task_id: local-review
@@ -2760,3 +2762,212 @@ def test_legacy_applicability_migration_preserves_graph_and_restores_eligibility
 
     assert migrated.automatic_selection_eligible is True
     assert migrated.model.steps["run"].model_dump() == legacy_graph
+
+
+@pytest.fixture
+def defaults_assembly(tmp_path):
+    """U3–U7/I1: real isolated catalogs exercise the public production loader."""
+    builtin = tmp_path / "builtin"
+    project = tmp_path / "project"
+    global_root = tmp_path / "global"
+    playbook = {
+        "playbook": {"id": "assembly", "applicability": {
+            "summary": "Custom assembly", "use_when": ["Assemble a report"],
+            "avoid_when": ["No report required"]}},
+        "roles": {"editor": {}},
+        "commands": {"prepare": {"prompt_for_spec_plan_config": False}},
+        "steps": {"assemble": {"skill": "synthesis", "role": "editor",
+                               "on": {"workflow_complete": "_done"}}},
+    }
+
+    def write_skill(name, values, layer="builtin", workflow=None):
+        roots = {"builtin": builtin / "skills", "global": global_root / "skills",
+                 "project": project / ".cafe" / "skills"}
+        directory = roots[layer] / name
+        directory.mkdir(parents=True, exist_ok=True)
+        metadata = {"name": name, "description": "Custom phase", "workflow": workflow or {}}
+        if values is not None:
+            metadata["workflow"]["step_defaults"] = {"version": 1, "values": values}
+        (directory / "SKILL.md").write_text("---\n" + yaml.safe_dump(metadata) + "---\n")
+
+    def load(overrides=None, selector="synthesis", shared=(), role_skills=(), chat_skills=(), overlays=(), strict=True):
+        import copy
+        data = copy.deepcopy(playbook)
+        data["steps"]["assemble"].update(overrides or {})
+        data["steps"]["assemble"]["skill"] = selector
+        data["skills"] = {"workflow": {"shared": list(shared), "roles": {"editor": {"mode": "extend", "skills": list(role_skills)}}},
+                          "chat": {"shared": list(chat_skills)}}
+        if overlays:
+            data["skills"]["workflow"]["steps"] = {"assemble": {"mode": "extend", "skills": list(overlays)}}
+        path = project / ".cafe" / "playbooks" / "assembly.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(yaml.safe_dump(data, sort_keys=False))
+        return PlaybookLoader(project_root=project, global_root=global_root,
+                              builtin_root=builtin, resolve_presentation=False,
+                              read_only=True).load_model("assembly", strict=strict).model
+
+    return write_skill, load
+
+
+def test_defaults_custom_assembly_preserves_override_merge_and_independence(defaults_assembly):
+    """U3/I1: replacement, recursive mapping merge and repeated-load independence."""
+    write, load = defaults_assembly
+    values = {"assignee_type": "agent", "output_artifact": "report",
+              "allowed_tools": ["Read", "Edit"],
+              "hooks": {"before_execute": ["NewChangesGate"], "prepare_input": ["UserInputCollector"]},
+              "behavior": {"completion": "baton", "context_providers": ["git_history"]}}
+    write("synthesis", values)
+    step = load({"output_artifact": "summary", "allowed_tools": ["Read"],
+                 "hooks": {"prepare_input": []},
+                 "behavior": {"context_providers": ["local_review"]}}).steps["assemble"]
+    assert step.output_artifact == "summary"
+    assert step.allowed_tools == ["Read"]
+    assert step.hooks.prepare_input == []
+    assert step.hooks.before_execute == ["NewChangesGate"]
+    assert step.behavior.completion == "baton"
+    assert step.behavior.context_providers == ["local_review"]
+    step.hooks.before_execute.clear()
+    fresh = load({"hooks": {}, "behavior": {}}).steps["assemble"]
+    assert fresh.hooks.before_execute == ["NewChangesGate"]
+    assert fresh.behavior.context_providers == ["git_history"]
+    assert fresh.allowed_tools == values["allowed_tools"]
+    assert load({"output_artifact": None}).steps["assemble"].output_artifact is None
+    assert load({"allowed_tools": []}).steps["assemble"].allowed_tools == []
+    for field in ("hooks", "behavior", "allowed_tools", "assignee_type"):
+        with pytest.raises(ValueError):
+            load({field: None})
+
+
+@pytest.mark.parametrize("field", ["max_iterations", "max_attempts_per_cycle"])
+def test_defaults_attempt_alias_and_issue_override_journey(defaults_assembly, tmp_path, field):
+    """U4/I3: either explicit spelling and per-issue override beats the default."""
+    write, load = defaults_assembly
+    write("synthesis", {"max_iterations": 5})
+    assert load().steps["assemble"].max_attempts_per_cycle == 5
+    assert load({field: 1}).steps["assemble"].max_attempts_per_cycle == 1
+    assert load({field: None}).steps["assemble"].max_attempts_per_cycle is None
+    with pytest.raises(ValueError):
+        load({"max_iterations": 1, "max_attempts_per_cycle": 2})
+    issue = tmp_path / "issue.yaml"
+    issue.write_text(yaml.safe_dump({"playbook_overrides": {"steps": {"assemble": {field: 3}}}}))
+    resolved = apply_issue_playbook_overrides(load().model_dump(mode="json", exclude_unset=True), issue)
+    assert StepConfig.model_validate(resolved["steps"]["assemble"]).max_attempts_per_cycle == 3
+
+
+@pytest.mark.parametrize("bad", [0, -1, True])
+def test_defaults_reject_invalid_attempt_limits_before_overrides(defaults_assembly, bad):
+    """U4/U7: explicit valid overrides cannot hide invalid declarations."""
+    write, load = defaults_assembly
+    write("synthesis", {"max_iterations": bad})
+    with pytest.raises(ValueError, match="synthesis"):
+        load({"max_attempts_per_cycle": 5})
+
+
+@pytest.mark.parametrize("values, overrides", [
+    ({"assignee_type": "robot"}, {"assignee_type": "agent"}),
+    ({"allowed_tools": "Read"}, {"allowed_tools": []}),
+    ({"hooks": {"prepare_input": [{"script": "echo unsafe"}]}}, {"hooks": {"prepare_input": []}}),
+    ({"hooks": {"after_execute": [{"capability": "publish"}]}}, {"hooks": {"after_execute": []}}),
+    ({"behavior": {"runtime_tool_grants": ["unknown"]}}, {"behavior": {"runtime_tool_grants": []}}),
+    ({"behavior": {"completion": "unknown"}}, {"behavior": {"completion": "baton"}}),
+    ({"behavior": {"context_providers": ["unknown"]}}, {"behavior": {"context_providers": []}}),
+    ({"behavior": {"feedback_target": "hidden"}}, {"behavior": {"feedback_target": None}}),
+])
+@pytest.mark.parametrize("strict", [False, True])
+def test_invalid_defaults_cannot_be_hidden(defaults_assembly, values, overrides, strict):
+    """U1/U2/U7: diagnostics preserve Skill, step and field provenance."""
+    write, load = defaults_assembly
+    write("synthesis", values)
+    with pytest.raises(ValueError) as caught:
+        load(overrides, strict=strict)
+    assert "synthesis" in str(caught.value)
+    assert "assemble" in str(caught.value)
+    assert next(iter(values)) in str(caught.value)
+
+
+def test_defaults_catalog_precedence_and_nonprimary_exclusion(defaults_assembly):
+    """U5: only actual primary defaults participate, across catalog precedence."""
+    write, load = defaults_assembly
+    write("synthesis", {"output_artifact": "builtin_report"})
+    assert load().steps["assemble"].output_artifact == "builtin_report"
+    write("synthesis", {"output_artifact": "global_report"}, layer="global")
+    assert load().steps["assemble"].output_artifact == "global_report"
+    write("synthesis", {"output_artifact": "project_report"}, layer="project")
+    for name in ("shared", "role_skill", "chat_skill", "overlay"):
+        write(name, {"output_artifact": "injected", "max_iterations": 99})
+    model = load(shared=("shared",), role_skills=("role_skill",),
+                 chat_skills=("chat_skill",), overlays=("overlay",))
+    assert model.steps["assemble"].output_artifact == "project_report"
+    assert model.steps["assemble"].max_attempts_per_cycle is None
+
+
+def test_defaults_primary_alias_resolution(defaults_assembly):
+    """U5: legacy Skill aliases retain their existing catalog resolution."""
+    write, load = defaults_assembly
+    write("cafe-develop", {"output_artifact": "report"})
+    assert load(selector="develop").steps["assemble"].output_artifact == "report"
+
+
+def test_defaults_iteration_selectors_require_equivalent_final_contracts(defaults_assembly):
+    """U6: normalize all selectable candidates; overrides can make them equivalent."""
+    write, load = defaults_assembly
+    write("synthesis", {"max_iterations": 5, "allowed_tools": ["Read"]})
+    write("alternate", {"max_iterations": 5, "allowed_tools": ["Edit"]})
+    selector = {"1": "synthesis", "default": "alternate"}
+    with pytest.raises(ValueError, match="assemble"):
+        load(selector=selector)
+    assert load({"allowed_tools": []}, selector=selector).steps["assemble"].max_attempts_per_cycle == 5
+    write("alternate", None)
+    assert load({"allowed_tools": [], "max_attempts_per_cycle": 5}, selector=selector).steps["assemble"].allowed_tools == []
+    write("synthesis", None)
+    assert load(selector=selector).steps["assemble"].max_attempts_per_cycle is None
+
+
+def test_defaults_do_not_bypass_required_tools_or_graph_validation(defaults_assembly):
+    """U7: validation still checks the resolved step in its real graph context."""
+    write, load = defaults_assembly
+    write("synthesis", {"allowed_tools": ["Read"]}, workflow={"required_tools": ["Read"]})
+    assert load().steps["assemble"].allowed_tools == ["Read"]
+    with pytest.raises(ValueError):
+        load({"allowed_tools": []})
+    with pytest.raises(ValueError):
+        load({"on": {"await_agent": "missing"}})
+    with pytest.raises(ValueError):
+        load({"workspace_artifact": "workspace"})
+    with pytest.raises(ValueError):
+        load({"human_tasks": [{"trigger": "confirm_output", "task_id": "missing",
+                               "outcomes": {"confirm": "_done"}}]})
+
+
+@pytest.mark.parametrize("tools", [["Read", "Read"], ["Bash", "Bash(git:*)"]])
+@pytest.mark.parametrize("strict", [False, True])
+def test_defaults_tool_diagnostics_cannot_be_hidden_by_replacement(defaults_assembly, tools, strict):
+    """U7: invalid duplicate/redundant grants cannot disappear behind an override."""
+    write, load = defaults_assembly
+    write("synthesis", {"allowed_tools": tools})
+    with pytest.raises(ValueError, match="allowed_tools"):
+        load({"allowed_tools": ["Read"]}, strict=strict)
+
+
+@pytest.mark.parametrize("field", ["max_iterations", "max_attempts_per_cycle"])
+def test_defaults_issue_override_reaches_structured_task_production_caller(
+    defaults_assembly, tmp_path, field
+):
+    """I3: structured-task loading preserves Skill defaults and per-issue limits."""
+    from types import SimpleNamespace
+    from cafe.ui.commands.tasks import load_task_playbook
+
+    write, load = defaults_assembly
+    write("synthesis", {"max_iterations": 5}, layer="project")
+    load()  # Author the real Playbook in the project's catalog.
+    project = tmp_path / "project"
+    issue = project / ".cafe" / "issues" / "custom"
+    issue.mkdir(parents=True)
+    preflight = SimpleNamespace(playbook_id="assembly", issue_dir=issue)
+    assert load_task_playbook(preflight, project_root=project)["steps"]["assemble"]["max_attempts_per_cycle"] == 5
+    (issue / "issue.yaml").write_text(yaml.safe_dump(
+        {"playbook_overrides": {"steps": {"assemble": {field: 3}}}}))
+    resolved = load_task_playbook(preflight, project_root=project)
+    assert resolved["steps"]["assemble"]["max_attempts_per_cycle"] == 3
+    assert "max_iterations" not in resolved["steps"]["assemble"]
+    assert resolved["steps"]["assemble"]["on"] == {"workflow_complete": "_done"}

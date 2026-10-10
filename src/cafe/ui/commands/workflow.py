@@ -1115,6 +1115,7 @@ def workflow(
                             blackboard=blackboard,
                             raw_payload=user_input,
                             source="command",
+                            completion_authority={"kind": "user_submission"},
                         )
                         if durable_result is not None:
                             if durable_result.rejection is not None:
@@ -1182,6 +1183,7 @@ def workflow(
                                 trigger=human_task_trigger,
                                 raw_payload=user_input,
                                 source="command",
+                                completion_authority={"kind": "user_submission"},
                             )
                             if result.rejection is not None:
                                 console.print(f"[yellow]{result.rejection.message}[/yellow]")

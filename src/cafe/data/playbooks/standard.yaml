@@ -110,9 +110,7 @@ steps:
     role: developer
     handoff_label: "Continue implementation"
     chat_role: developer
-    assignee_type: agent
     input_artifacts: [spec, plan, review_feedback, pr_result, workflow_feedback, delivery_result]
-    output_artifact: code
     workspace_artifact: workspace
     behavior:
       completion: status_code
@@ -126,10 +124,6 @@ steps:
       - trigger: no_changes_needed
         task_id: no-change-decision
         outcomes: {agree: pr, disagree: develop}
-    allowed_tools: [Read, Edit, Write, Grep, Glob, Bash, WebFetch, WebSearch]
-    hooks:
-      prepare_input: [UserInputCollector]
-      after_execute: [NoChangesNeededHandler, PermissionRetryHandler]
     "on":
       await_agent: review
       manual_handoff: pr
@@ -143,10 +137,8 @@ steps:
     role: reviewer
     handoff_label: "Run review again"
     chat_role: reviewer
-    assignee_type: agent
     input_artifacts: [spec, plan, code, workspace, workflow_feedback]
     workspace_input_artifact: workspace
-    output_artifact: review_feedback
     behavior:
       completion: status_code
       runtime_tool_grants: [web_research, git_inspection]
@@ -157,12 +149,7 @@ steps:
       - trigger: manual_handoff
         task_id: iteration-limit
         outcomes: {resume: review}
-    allowed_tools: [Read, Grep, Glob, "Bash(git:*)"]
-    max_attempts_per_cycle: 5
     allowed_goto: [spec, develop, plan]
-    hooks:
-      prepare_input: [UserInputCollector]
-      before_execute: [NewChangesGate]
     "on":
       await_agent: pr
       manual_handoff: develop
@@ -172,10 +159,11 @@ steps:
     handoff_label: Revise PR content
     type: skill
     skill: cafe-pr
+    hooks:
+      prepare_input: [GitHubPRCreator, GitHubPRFeedbackSource, UserInputCollector]
     role: developer
     handoff_label: Refresh PR output
     chat_role: developer
-    assignee_type: agent
     input_artifacts:
     - spec
     - plan
@@ -184,7 +172,6 @@ steps:
     - review_feedback
     - workflow_feedback
     workspace_input_artifact: workspace
-    output_artifact: pr_result
     behavior:
       completion: baton
       publish_confirmation: true
@@ -193,29 +180,11 @@ steps:
       feedback_source_kind: github_pr
       feedback_todo_source: pr_comment
       feedback_todo_id_prefix: PRC
-      context_providers:
-      - git_history
-      - local_review
-    allowed_tools:
-    - Read
-    - Edit
-    - Write
-    - Grep
-    - Glob
     capability_requests:
     - cafe.pr.publish
     allowed_goto:
     - develop
     - review
-    hooks:
-      prepare_input:
-      - GitHubPRCreator
-      - GitHubPRFeedbackSource
-      - UserInputCollector
-      publish_output:
-      - GitHubPRCreator
-      - LocalReviewContextProvider
-      - PRLinkOpener
     human_tasks:
     - trigger: confirm_output
       task_id: pr-review
@@ -286,8 +255,6 @@ steps:
       task_id: delivery-outcome
       feedback_delivery: {artifact: workflow_feedback, source_kind: delivery, todo_source: workflow_feedback, todo_id_prefix: DLV}
       outcomes:
-        confirm_cleanup: _done
-        confirm_archive: _done
         confirm: _done
         revise: deliver
     - trigger: need_clarification

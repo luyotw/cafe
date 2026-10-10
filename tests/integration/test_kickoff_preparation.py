@@ -711,7 +711,8 @@ def test_confirmed_inputs_fill_selected_journey_without_copying_full_reports(
     defaults = load_kickoff_module("format_kickoff_contract")._parser()
     added = set(ready["formatter_inputs"]) - set(values)
     assert added == set(ready["prefilled"])
-    assert all(ready["formatter_inputs"][key] == defaults.get_default(key) for key in added)
+    assert ready["formatter_inputs"]["closeout_choice"] == "cleanup"
+    assert all(ready["formatter_inputs"][key] == defaults.get_default(key) for key in added - {"closeout_choice"})
     expected = _render_with_store(values, tmp_path / "config")
     output = tmp_path / "proposal.md"
     assert cli.main(["render", *common, "--output", str(output)]) == 0

@@ -601,6 +601,7 @@ def apply_human_task_payload(
     raw_payload: str | Mapping[str, Any],
     source: str,
     supervisor_handoff_to: Optional[str] = None,
+    completion_authority: Mapping[str, Any] | None = None,
 ) -> HumanTaskApplication:
     """Validate and apply one response while retaining a pause on rejection."""
     record_store = HumanTaskRecordStore(issue_dir)
@@ -636,6 +637,7 @@ def apply_human_task_payload(
             source=source,
             record_store=record_store,
             supervisor_handoff_to=supervisor_handoff_to,
+            completion_authority=completion_authority,
         )
 
 
@@ -646,6 +648,7 @@ def apply_durable_human_task_payload_if_present(
     blackboard: Any,
     raw_payload: str | Mapping[str, Any],
     source: str,
+    completion_authority: Mapping[str, Any] | None = None,
 ) -> Optional[HumanTaskApplication]:
     """Apply a durable task response before intent-based user-input routing.
 
@@ -732,6 +735,7 @@ def apply_durable_human_task_payload_if_present(
             raw_payload=raw_payload,
             source=source,
             record_store=record_store,
+            completion_authority=completion_authority,
         )
 
 
@@ -793,6 +797,7 @@ def _apply_human_task_payload(
     source: str,
     record_store: HumanTaskRecordStore,
     supervisor_handoff_to: Optional[str] = None,
+    completion_authority: Mapping[str, Any] | None = None,
 ) -> HumanTaskApplication:
     """Apply a response while holding the matching durable-record transaction."""
     store = BlackboardStore(issue_dir)
@@ -901,7 +906,11 @@ def _apply_human_task_payload(
                     raise ValueError("Saved interruption task has an invalid decision contract")
                 binding = binding.model_copy(update={"outcomes": dict(durable_task.continuations)})
             elif _task_machine_contract(snapshot) != _task_machine_contract(policy):
-                raise ValueError("Saved task policy does not match the current declaration")
+                from cafe.delivery.closeout import retained_combined_task
+                if not retained_combined_task(issue_dir, playbook_data.get("steps", {}).get(from_step, {}),
+                                               durable_task, snapshot, policy, _task_machine_contract):
+                    raise ValueError("Saved task policy does not match the current declaration")
+                binding = binding.model_copy(update={"outcomes": dict(durable_task.continuations)})
         except (OSError, TypeError, ValueError) as exc:
             return _durable_task_routing_rejection(
                 issue_dir=issue_dir,
@@ -1201,6 +1210,7 @@ def _apply_human_task_payload(
                     task_id=durable_task.id,
                     payload=completion_payload,
                     source=source,
+                    completion_authority=completion_authority,
                 )
             except (HumanTaskCorrelationError, OSError, ValueError) as exc:
                 rejection = HumanTaskRejection(

@@ -64,10 +64,23 @@ def _task(kwargs, prompt, *, trigger="confirm_output"):
         and t.status == HumanTaskStatus.PENDING
     ]
     shown_prompt = policy.prompt + "\n\n" + prompt
+    superseded = []
     if existing:
         if existing[-1].prompt != shown_prompt:
-            raise ValueError("pending task no longer matches shown action evidence")
-        return existing[-1]
+            from cafe.delivery.closeout import read_result_contract
+            reference = read_result_contract(phase.issue_dir, state.workflow_id)
+            # A user-reconfirmed split contract can supersede the old combined
+            # acceptance while retaining its prompt and all integration receipts.
+            prior = existing[-1]
+            markers = re.findall(r"(?:Action snapshot|Delivery result) SHA256: [0-9a-f]{64}", prompt)
+            if (trigger != "confirm_output" or reference is None
+                    or reference["step"] != step or reference["task_id"] != policy.id
+                    or "Closeout plan SHA256:" not in prior.prompt
+                    or len(markers) != 2 or any(marker not in prior.prompt for marker in markers)):
+                raise ValueError("pending task no longer matches shown action evidence")
+            superseded = [t.id for t in existing]
+        else:
+            return existing[-1]
     return records.materialize(
         workflow_id=state.workflow_id,
         step=step,
@@ -78,6 +91,9 @@ def _task(kwargs, prompt, *, trigger="confirm_output"):
         expected_result=policy.model_dump(mode="json"),
         continuations=binding.outcomes,
         assignee_type="user",
+        handoff_key=(f"delivery-result:{state.workflow_id}:{step}:{phase.iteration}:{digest(shown_prompt)}"
+                     if superseded else None),
+        superseded_task_ids=superseded,
     )
 
 
@@ -486,17 +502,29 @@ class DevelopmentDeliveryOutcome(NoOpHook):
             path = phase.issue_dir / "delivery" / snapshot.digest / "result.json"
             report = json.loads(path.read_text())
             validate_complete_report(phase.issue_dir, snapshot, report)
-            from cafe.delivery.closeout import read_plan, plan_text
-
-            plan = read_plan(phase.issue_dir, snapshot.proposal.workflow_id)
             evidence = (
                 f"Action snapshot SHA256: {snapshot.digest}\n"
                 f"Delivery result SHA256: {digest(report)}\n\n"
                 + json.dumps(report, ensure_ascii=False, indent=2)
             )
-            if plan is not None:
-                evidence += "\n\n" + plan_text(plan)
-                evidence += "\n\nArchive only: cafe close --archive-only"
+            # A pending combined legacy task owns its original display/schema.
+            # Reuse it only while the exact result and terminal plan still match.
+            from cafe.delivery.closeout import retained_combined_task
+            from cafe.ui.human_tasks import _task_machine_contract
+            from cafe.core.human_tasks import HumanTaskPolicy
+            records = HumanTaskRecordStore(phase.issue_dir)
+            policy, _ = resolve_step_human_task(
+                playbook_data=phase.playbook, step_name=kwargs["step_name"], trigger="confirm_output",
+                iteration=phase.iteration, skill_loader=SkillLoader(project_root=Path(phase.git_ops.repo_path)),
+            )
+            for task in reversed(records.tasks()):
+                if (task.workflow_id == snapshot.proposal.workflow_id and task.step == kwargs["step_name"]
+                        and task.status == HumanTaskStatus.PENDING and task.iteration == phase.iteration
+                        and f"Action snapshot SHA256: {snapshot.digest}" in task.prompt
+                        and f"Delivery result SHA256: {digest(report)}" in task.prompt
+                        and retained_combined_task(phase.issue_dir, kwargs["step_def"], task,
+                            HumanTaskPolicy.model_validate(task.expected_result), policy, _task_machine_contract)):
+                    return HookResult(context_updates={"delivery_receipts_file": str(path)})
             _task(
                 kwargs,
                 evidence,

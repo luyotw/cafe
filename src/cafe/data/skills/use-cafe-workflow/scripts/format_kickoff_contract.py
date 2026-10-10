@@ -117,9 +117,8 @@ def _kickoff_delivery_contract(
     delivery = normalize_delivery_contract(
         {
             **core,
-            "schema_version": 5 if phase_owned else 3,
-            **({"terminal_selection": "delivery_outcome"} if phase_owned else {}),
-            "closeout_plan": plan,
+            "schema_version": 6 if phase_owned else 3,
+            **({} if phase_owned else {"closeout_plan": plan}),
         }
     )
     pr_auto_create = next(
@@ -131,10 +130,10 @@ def _kickoff_delivery_contract(
         None,
     )
     validate_closeout_plan_policy(
-        delivery["closeout_plan"],
+        plan,
         allow_squash=None if pr_auto_create is None else not pr_auto_create,
     )
-    _closeout_descriptions(args, delivery["closeout_plan"])
+    _closeout_descriptions(args, plan)
     return delivery
 
 
@@ -149,6 +148,21 @@ def _closeout_descriptions(args: argparse.Namespace, plan: dict[str, Any]) -> di
             )
         descriptions[stage] = values
     return descriptions
+
+
+def _manager_closeout(args, model):
+    from cafe.manager.closeout import normalize_closeout_contract
+    owners = delivery_result_steps(model)
+    if len(owners) != 1:
+        raise ValueError("Manager closeout requires one declared delivery result owner")
+    step = next(iter(owners))
+    return normalize_closeout_contract({
+        "schema_version": 1,
+        "choice": args.closeout_choice or ("cleanup" if args.cleanup else "leave"),
+        "plan": {"cleanup": [{"argv": command} for command in args.cleanup]},
+        "delivery_result": {"step": step, "task_id": model.steps[step].delivery.result_task,
+                            "artifact": model.steps[step].output_artifact},
+    })
 
 
 def _positive_seconds(value: str) -> int:
@@ -506,6 +520,7 @@ def _parser() -> argparse.ArgumentParser:
         metavar="JSON_ARGV_LIST",
         help="Legacy/nonadopting closeout only; rejected by phase-owned development graphs.",
     )
+    parser.add_argument("--closeout-choice", choices=["cleanup", "archive", "leave", "pending"])
     parser.add_argument(
         "--cleanup",
         required=True,
@@ -788,6 +803,10 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
             {"cli": cli} if model_name is None else {"cli": cli, "model": model_name}
             for cli, model_name in _parse_event_manager_entries(args.event_manager)
         ]
+    if phase_owned_graph(model):
+        proposal["closeout_contract"] = _manager_closeout(args, model)
+    elif args.closeout_choice is not None:
+        raise ValueError("--closeout-choice requires phase-owned development delivery")
     return proposal
 
 
@@ -973,12 +992,13 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
                 for decision in proactive_decisions
                 if decision["decision"] == "required"
             },
-            **({} if proposal["delivery_contract"]["schema_version"] == 5 else {"deliver": "pending"}),
+            **({} if proposal["delivery_contract"]["schema_version"] in {5, 6} else {"deliver": "pending"}),
             "cleanup": "pending",
         },
     )
     delivery = proposal["delivery_contract"]
-    closeout = delivery["closeout_plan"]
+    closeout = (proposal["closeout_contract"]["plan"] if "closeout_contract" in proposal
+                else delivery["closeout_plan"])
     mismatch_ids = catalog.get("content_mismatch_entry_ids", [])
     catalog_reminder = []
     if mismatch_ids:
@@ -1031,19 +1051,21 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
                 if args.task_user_required or args.task_manager_confirmable
                 else []
             ),
-            "### Deliver and cleanup plan to confirm",
+            "### Manager closeout plan to confirm" if "closeout_contract" in proposal else "### Deliver and cleanup plan to confirm",
             _render_closeout(closeout, _closeout_descriptions(args, closeout), zh=zh),
             (
                 (
-                    "交付結果確認時，同一次回覆選擇執行上述收尾計畫、僅封存，或保留現狀。"
-                    "流程完成後依選擇執行，不再另問一次；更改命令、順序、目標或影響時另行確認。"
+                    f"收尾選擇：{ {'cleanup': '執行上述收尾計畫', 'archive': '僅封存，保留 worktree 與分支', 'leave': '保留現狀', 'pending': '流程完成後由 Manager 詢問'}[proposal['closeout_contract']['choice']]}。"
+                    "確認此契約即確認這項選擇。流程完成且交付結果驗收後，由 Manager 執行，不再另問一次。"
+                    "deliver 只驗收成果；更改收尾命令、順序、目標或影響時另行確認。"
                     if zh else
-                    "Accepting the delivery results also selects the above cleanup plan, "
-                    "archive-only, or leaving external state unchanged. After workflow completion, "
-                    "the selected action runs without another confirmation; changed commands, "
-                    "order, targets or effects require fresh confirmation."
+                    f"Manager closeout selection: {proposal['closeout_contract']['choice']}. "
+                    "Confirming this contract confirms that selection. After workflow completion "
+                    "and delivery acceptance, Manager executes it without another confirmation "
+                    "(pending requires a later Manager question). Delivery confirmation only accepts "
+                    "results. Changed commands, order, targets or effects require fresh confirmation."
                 )
-                if delivery.get("terminal_selection") == "delivery_outcome"
+                if "closeout_contract" in proposal
                 else text("commands_confirmation")
             ),
             *catalog_reminder,

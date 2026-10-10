@@ -41,6 +41,8 @@ def complete_driver_task(
         response,
         project_root=project_root,
         source="command",
+        completion_authority={"kind": "manager_proxy", "contract_sha256": contract_sha256,
+                              "sources_sha256": sources_sha256},
     )
     detail = service.inspect_read_only(task_id)
     return {

@@ -778,3 +778,30 @@ def test_execution_without_declared_scope_does_not_invent_resume_scope(
     assert "Current resume scope (declared step inputs):" not in resumed_prompt
     assert "HISTORICAL_OUTPUT" not in fresh_prompt
     assert "HISTORICAL_OUTPUT" not in resumed_prompt
+
+
+@pytest.mark.parametrize("playbook_id", [
+    "direct", "direct-subagent-review", "subagent-flow", "subagent-flow-qa", "direct-qa",
+    "simple", "standard", "standard-qa", "tdd", "tdd-qa", "hotfix", "bug",
+])
+def test_phase_default_assembly_validates_and_simulates_public_cli_journey(
+    tmp_path: Path, monkeypatch, playbook_id: str
+) -> None:
+    """I2/U9: all development assemblies remain valid through the public CLI."""
+    from typer.testing import CliRunner
+    from cafe.ui.cli import app
+    from cafe.playbooks.simulate import analyze_playbook
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: tmp_path / "global")
+    runner = CliRunner()
+    for command in (["playbook", "validate", playbook_id, "--strict"],
+                    ["playbook", "simulate", playbook_id]):
+        result = runner.invoke(app, command)
+        assert result.exit_code == 0, (command, result.stdout, result.exception)
+    simulation = analyze_playbook(
+        PlaybookLoader(project_root=tmp_path, global_root=tmp_path / "global").load_model(
+            playbook_id, strict=True).model)
+    assert simulation.unreachable_steps == ()
+    assert simulation.dead_end_steps == ()
+    assert simulation.missing_intent_handlers == ()

@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including passive supervision, bounded recovery, and declarative repair when execution leaves its safe operating envelope.
-metadata: {version: 1.75.6}
+metadata: {version: 1.76.1}
 ---
 
 # Use CAFE Workflow
@@ -98,7 +98,9 @@ contract; new preferences never rewrite it.
   policy JSON and diagnostic metadata are not part of the response. The
   formatter owns the single confirmation prompt and final progress block;
   retain its project-preference section and the distinct confirm-only versus
-  confirm-and-remember replies in the final message. A question sent while
+  confirm-and-remember replies in the final message. Explain changed preferences
+  in terms of their old/new behavior and reason; keep raw action commands in
+  technical details, following `kickoff_inputs.md`. A question sent while
   preparing the contract never replaces that visible choice;
   do not append a second request or diagram. For every other user-visible reply,
   end with the diagram from `scripts/render_workflow_progress.py`, following
@@ -107,7 +109,7 @@ contract; new preferences never rewrite it.
 - Follow only the effective graph, confirmed contract, and action-specific
   authority. “Continue” or workflow completion grants no repair, merge, deploy,
   publish, close, delete, cleanup, or other external mutation authority. The
-  closeout exceptions are an exact `closeout_plan` argv array confirmed as part
-  of the complete Delivery Contract, or `cafe close --archive-only` after the
+  closeout exceptions are an exact closeout choice and argv array confirmed as part
+  of the complete Manager contract, or `cafe close --archive-only` after the
   user explicitly selects terminal archive; both execute only through
   `completion_and_authority.md`.

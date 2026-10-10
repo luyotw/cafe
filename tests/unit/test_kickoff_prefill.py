@@ -71,7 +71,7 @@ def test_delivery_replaces_closeout_without_an_extra_default_review(tmp_path, sa
         preference_store=prefs,
     )
     assert report["formatter_draft"]["proactive_review_decision"] == [
-        "spec_plan=required", "develop=not_required", "pr=required", "deliver=required",
+        "spec_plan=required", "develop=not_required", "pr=required", "deliver=not_required",
     ]
     assert not (tmp_path / ".cafe/issues").exists()
 

@@ -111,7 +111,7 @@ does not repair stale evidence. Supplied false and empty values are preserved.
 An empty `phase_chain` requests no per-phase overrides; assembly fills configured
 chains for the selected graph. Product fields use the existing `DeliveryContractV3`
 schema. `implementation_direction` is a string; list fields are arrays.
-`closeout_plan` is built by the formatter. The adopting graph owns exact integration review later; kickoff accepts cleanup only. A null cleanup slot may receive a valid default; explicit `[]` excludes cleanup. Deliberate `cleanup` choices are literal
+The formatter builds the separate Manager `closeout_contract` for phase-owned graphs. `closeout_choice` selects cleanup, archive, leave, or pending; confirmation authorizes the displayed choice. The adopting graph owns exact integration review later; kickoff accepts cleanup only. A null cleanup slot may receive a valid default; explicit `[]` excludes cleanup. Deliberate `cleanup` choices are literal
 argv arrays, with one description per action. `schema` exposes all field types
 and the existing parser's allowed values without conditional filtering.
 An unknown or invalid field blocks rendering but preserves the editable values
@@ -132,6 +132,23 @@ confirmation question. The section lists applicable missing or changed entries,
 groups identical model chains without losing fallback order, and shows saved
 values beside current values. Identical project preferences are omitted. User
 preferences may supply proposal values but do not count as saved project choices.
+
+Compare behavior, not command syntax. For a changed action convention, explain
+what the saved rule does, what the proposal does, and why the change is useful.
+Use short action descriptions in the comparison; keep shell commands, machine
+paths and reusable placeholders in the formatter's expandable technical details.
+Read the owning command/help or verified repository evidence when a description
+omits a material effect. Do not infer behavior from an executable's name, treat
+different argv as proof of different behavior, or rewrite stored preferences to
+improve their wording. If the descriptions alone leave the difference unclear,
+add a brief evidence-backed explanation beside the rendered comparison while
+preserving all formatter content, exact commands and the pinned offer values.
+
+For example: "Saved: merge during cleanup, then archive and remove local work
+resources. Proposed: delivery handles the approved merge; cleanup only archives
+and removes local work resources. Reason: this workflow has a separate delivery
+step." State remote-branch retention or deletion explicitly when applicable.
+This is a presentation example, not a default or action authorization.
 
 The final replies have separate meanings:
 
