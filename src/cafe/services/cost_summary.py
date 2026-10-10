@@ -10,7 +10,7 @@ from pathlib import Path
 
 import yaml
 
-from cafe.core.cost import combine_cost_summaries, summarize_cost
+from cafe.core.cost import combine_cost_summaries, merge_cost_records, summarize_cost
 from cafe.core.usage import _usage_parent, phase_stats_without_chat
 
 MAX_SOURCE_BYTES = 16 * 1024 * 1024
@@ -34,18 +34,61 @@ def read_accounting_file(path: Path):
     return value
 
 
+def unrecorded_usage(stats, records):
+    """Retain aggregate token coverage absent from deduplicated invocation usage."""
+    fields = (
+        "input_tokens",
+        "output_tokens",
+        "cache_write_input_tokens",
+        "cache_read_input_tokens",
+        "reasoning_output_tokens",
+    )
+    remaining = {}
+    records = merge_cost_records([], records)
+    for field in fields:
+        total = stats.get(field)
+        if total is None and field == "cache_write_input_tokens":
+            total = stats.get("cache_creation_input_tokens")
+        if total is None:
+            remaining[field] = None
+            continue
+        recorded = 0
+        for record in records:
+            usage = record.get("usage", {})
+            value = usage.get(field)
+            if value is None and field == "cache_write_input_tokens":
+                value = usage.get("cache_creation_input_tokens")
+            recorded += value or 0
+        remaining[field] = max(0, total - recorded)
+    return remaining
+
+
+def _coverage_gap(stats, records):
+    try:
+        return bool(
+            records
+            and not summarize_cost(records, legacy_cost=stats.get("total_cost_usd"))["counts"][
+                "legacy"
+            ]
+            and any(unrecorded_usage(stats, records).values())
+        )
+    except (ValueError, TypeError, KeyError, AttributeError, InvalidOperation):
+        return True
+
+
 def collect_cost_sources(issue_dir: Path) -> list[dict]:
     """Keep source identities stable across active/archive/snapshot copies."""
     sources = []
 
     def add(identity, stats, records=None, gap=False):
         stats = stats if isinstance(stats, dict) else {}
+        records = records if records is not None else stats.get("cost_records", [])
         sources.append(
             dict(
                 source_id=identity,
-                records=records if records is not None else stats.get("cost_records", []),
+                records=records,
                 legacy_cost=stats.get("total_cost_usd"),
-                gap=gap,
+                gap=gap or _coverage_gap(stats, records),
             )
         )
 
@@ -74,7 +117,12 @@ def collect_cost_sources(issue_dir: Path) -> list[dict]:
             groups = data.get("chat_usage", [])
             stats = phase_stats_without_chat(data.get("stats"), groups)
             # An all-chat aggregate does not create an additional unknown execution.
-            if stats.get("cost_records") or not groups or stats.get("total_cost_usd"):
+            if (
+                stats.get("cost_records")
+                or not groups
+                or stats.get("total_cost_usd")
+                or any(unrecorded_usage(stats, []).values())
+            ):
                 add(identity, stats)
             chats(identity, groups)
         except (OSError, ValueError, TypeError, AttributeError, yaml.YAMLError):

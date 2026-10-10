@@ -105,3 +105,24 @@ def test_conflicting_invocation_is_unknown_instead_of_an_arbitrary_amount():
     )
     assert result["known"] == 0
     assert result["incomplete"]
+
+
+def test_unpriced_legacy_usage_keeps_source_incomplete(tmp_path):
+    phase = tmp_path / "custom" / "iteration_001"
+    phase.mkdir(parents=True)
+    stats = dict(
+        total_cost_usd=1,
+        input_tokens=100,
+        output_tokens=100,
+        cost_records=[record("new", usage=dict(input_tokens=10, output_tokens=10))],
+    )
+    (phase / "iteration.json").write_text(json.dumps(dict(stats=stats)))
+    result = summarize_sources(collect_cost_sources(tmp_path))
+    assert result["known"] == 1
+    assert result["incomplete"]
+    # A priced legacy remainder keeps the existing status interpretation.
+    stats["total_cost_usd"] = 2
+    (phase / "iteration.json").write_text(json.dumps(dict(stats=stats)))
+    result = summarize_sources(collect_cost_sources(tmp_path))
+    assert result["known"] == 2
+    assert not result["incomplete"]

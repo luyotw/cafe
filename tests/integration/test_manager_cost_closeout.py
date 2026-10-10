@@ -17,7 +17,7 @@ def removed_journey(tmp_path):
     worktree = tmp_path / "issue-worktree"
     root, issue, evidence = _journey(
         tmp_path,
-        [[sys.executable, "-c", f"import shutil; shutil.rmtree({str(worktree)!r})"]],
+        [["git", "-C", str(tmp_path / "repo"), "worktree", "remove", "--force", str(worktree)]],
         stage="cleanup",
     )
     assert _run(root, issue, "--initialize").returncode == 0
@@ -166,3 +166,27 @@ def test_remote_only_cleanup_checks_closed_issue_without_requiring_worktree_remo
     state["state"] = "OPEN"
     with pytest.raises(ValueError):
         module.closeout_cost(root, "issue474", "workflow-474", issue)
+
+
+def test_cleanup_cannot_substitute_an_absent_issue_path(tmp_path):
+    root, issue, evidence = _journey(tmp_path, [[sys.executable, "-c", "pass"]], stage="cleanup")
+    assert _run(root, issue, "--initialize").returncode == 0
+    assert _run(root, issue, "--execute", "--stage", "cleanup", "--index", "0").returncode == 0
+    module = adapter("report_closeout_cost")
+    with pytest.raises(ValueError, match="target"):
+        module.closeout_cost(root, "issue474", "workflow-474", tmp_path / "unrelated-missing")
+    assert issue.is_dir()
+
+
+def test_unknown_custom_effect_requires_existing_recovery_even_after_removal(tmp_path):
+    worktree = tmp_path / "issue-worktree"
+    root, issue, evidence = _journey(
+        tmp_path,
+        [[sys.executable, "-c", f"import shutil; shutil.rmtree({str(worktree)!r})"]],
+        stage="cleanup",
+    )
+    assert _run(root, issue, "--initialize").returncode == 0
+    assert _run(root, issue, "--execute", "--stage", "cleanup", "--index", "0").returncode == 0
+    assert not issue.exists()
+    with pytest.raises(ValueError, match="external state"):
+        adapter("report_closeout_cost").closeout_cost(root, "issue474", "workflow-474", issue)

@@ -265,3 +265,24 @@ def test_snapshot_invalid_cutoff_is_a_visible_validation_error(tmp_path):
     store.path.write_text(json.dumps(data))
     with pytest.raises(ValueError):
         store.read()
+
+
+def test_unpriced_coverage_survives_footer_snapshot_and_report(tmp_path):
+    from cafe.manager.costs import worker_footer
+
+    root, issue = cost_journey(tmp_path)
+    path = issue / "custom/iteration_001/iteration.json"
+    stats = dict(
+        total_cost_usd=1,
+        input_tokens=100,
+        output_tokens=100,
+        cost_records=[record("new", usage=dict(input_tokens=10, output_tokens=10))],
+    )
+    path.write_text(json.dumps(dict(stats=stats)))
+    assert worker_cost(root, issue, "topic", "wf")["incomplete"]
+    assert "incomplete coverage" in worker_footer(issue, locale="en-US", project_root=root)
+    preserve_worker_cost(root, issue, "topic", "wf")
+    shutil.rmtree(issue)
+    result = inclusive_report(root, "topic", "wf")
+    assert result["worker"]["known"] == 1
+    assert result["worker"]["incomplete"]

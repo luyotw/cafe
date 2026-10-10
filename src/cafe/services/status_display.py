@@ -428,7 +428,7 @@ class StatusDisplay:
     @staticmethod
     def _legacy_entry_usage(entry):
         """Retain historical counters not represented by invocation records."""
-        from cafe.core.cost import merge_cost_records
+        from cafe.services.cost_summary import unrecorded_usage
 
         fields = {
             "input_tokens": "input_tokens",
@@ -437,22 +437,10 @@ class StatusDisplay:
             "cache_read_tokens": "cache_read_input_tokens",
             "reasoning_output_tokens": "reasoning_output_tokens",
         }
-        records = merge_cost_records([], entry.cost_records)
-        remaining = {}
-        for field, raw_field in fields.items():
-            total = getattr(entry, field)
-            if total is None:
-                remaining[field] = None
-                continue
-            recorded = 0
-            for record in records:
-                raw = record.get("usage", {})
-                value = raw.get(raw_field)
-                if value is None and field == "cache_write_tokens":
-                    value = raw.get("cache_creation_input_tokens")
-                recorded += value or 0
-            remaining[field] = max(0, total - recorded)
-        return remaining
+        remaining = unrecorded_usage(
+            {raw: getattr(entry, field) for field, raw in fields.items()}, entry.cost_records
+        )
+        return {field: remaining[raw] for field, raw in fields.items()}
 
     @staticmethod
     def _legacy_cost_summary(records, aggregate_cost, *, unknown=False):

@@ -55,8 +55,11 @@ def _effect_complete(argv, project_root, worktree, issue_dir, archive):
                 text=True,
             )
             return not result.stdout.strip()
-        if args[:2] == ["worktree", "remove"] and len(args) == 3:
-            target = Path(args[2])
+        if args[:2] == ["worktree", "remove"]:
+            targets = [arg for arg in args[2:] if arg not in {"--force", "-f"}]
+            if len(targets) != 1 or targets[0].startswith("-"):
+                return False
+            target = Path(targets[0])
             if not target.is_absolute():
                 target = target_root / target
             listing = subprocess.run(
@@ -68,9 +71,8 @@ def _effect_complete(argv, project_root, worktree, issue_dir, archive):
             return not target.exists() and f"worktree {target.absolute()}\n" not in listing
     if argv[:2] == ["cafe", "close"]:
         return archive.is_dir() and not Path(issue_dir).exists()
-    # Other confirmed effects need the existing Manager external-state recovery
-    # when their lifecycle target remains live. Never accept a caller's boolean.
-    return not Path(issue_dir).exists() and not Path(issue_dir).is_symlink()
+    # Unknown external effects require the existing human recovery route.
+    return False
 
 
 def verify_closeout(project_root, issue_name, workflow_id, issue_dir, operation, archive_dir=None):
@@ -88,6 +90,9 @@ def verify_closeout(project_root, issue_name, workflow_id, issue_dir, operation,
             receipt = _read(path, issue_name=issue_name, workflow_id=workflow_id)
         if receipt is None:
             raise ValueError("cleanup evidence is missing")
+        target = Path(receipt["worktree"]) / ".cafe/issues" / issue_name
+        if Path(issue_dir).absolute() != target.absolute():
+            raise ValueError("cleanup issue path differs from the receipt target")
         commands = receipt["commands"].get("cleanup", [])
         if not commands or any(
             c["status"] != "succeeded" or c["returncode"] != 0 for c in commands
