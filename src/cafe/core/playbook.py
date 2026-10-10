@@ -1416,6 +1416,10 @@ def _validated_phase_defaults(skill: str, skill_loader: SkillLoader) -> Dict:
                 StepConfig._validate_attempt_limit(value)
             elif field == "hooks":
                 _validate_script_hook_stages(skill, StepHooks.model_validate(value))
+            elif field == "allowed_tools":
+                warnings = _collect_tool_warnings(skill, value)
+                if warnings:
+                    raise ValueError("; ".join(warnings))
         except ValueError as exc:
             raise ValueError(f"Skill '{skill}' step_defaults.values.{field}: {exc}") from exc
     return values

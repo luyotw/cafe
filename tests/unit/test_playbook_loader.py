@@ -2937,3 +2937,37 @@ def test_defaults_do_not_bypass_required_tools_or_graph_validation(defaults_asse
     with pytest.raises(ValueError):
         load({"human_tasks": [{"trigger": "confirm_output", "task_id": "missing",
                                "outcomes": {"confirm": "_done"}}]})
+
+
+@pytest.mark.parametrize("tools", [["Read", "Read"], ["Bash", "Bash(git:*)"]])
+@pytest.mark.parametrize("strict", [False, True])
+def test_defaults_tool_diagnostics_cannot_be_hidden_by_replacement(defaults_assembly, tools, strict):
+    """U7: invalid duplicate/redundant grants cannot disappear behind an override."""
+    write, load = defaults_assembly
+    write("synthesis", {"allowed_tools": tools})
+    with pytest.raises(ValueError, match="allowed_tools"):
+        load({"allowed_tools": ["Read"]}, strict=strict)
+
+
+@pytest.mark.parametrize("field", ["max_iterations", "max_attempts_per_cycle"])
+def test_defaults_issue_override_reaches_structured_task_production_caller(
+    defaults_assembly, tmp_path, field
+):
+    """I3: structured-task loading preserves Skill defaults and per-issue limits."""
+    from types import SimpleNamespace
+    from cafe.ui.commands.tasks import load_task_playbook
+
+    write, load = defaults_assembly
+    write("synthesis", {"max_iterations": 5}, layer="project")
+    load()  # Author the real Playbook in the project's catalog.
+    project = tmp_path / "project"
+    issue = project / ".cafe" / "issues" / "custom"
+    issue.mkdir(parents=True)
+    preflight = SimpleNamespace(playbook_id="assembly", issue_dir=issue)
+    assert load_task_playbook(preflight, project_root=project)["steps"]["assemble"]["max_attempts_per_cycle"] == 5
+    (issue / "issue.yaml").write_text(yaml.safe_dump(
+        {"playbook_overrides": {"steps": {"assemble": {field: 3}}}}))
+    resolved = load_task_playbook(preflight, project_root=project)
+    assert resolved["steps"]["assemble"]["max_attempts_per_cycle"] == 3
+    assert "max_iterations" not in resolved["steps"]["assemble"]
+    assert resolved["steps"]["assemble"]["on"] == {"workflow_complete": "_done"}
