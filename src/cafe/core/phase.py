@@ -1004,6 +1004,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             target.cache_read_input_tokens += source.cache_read_input_tokens
             target.reasoning_output_tokens += source.reasoning_output_tokens
             target.total_cost_usd += source.total_cost_usd
+            target.cost_records = [*target.cost_records, *source.cost_records]
             if source.turn_usages:
                 target.turn_usages.extend(source.turn_usages)
             if source.duration_ms is not None:
@@ -1145,6 +1146,10 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
 
         except Exception as e:
             # Agent execution failed - attempt recovery
+            failed_usage = getattr(e, "accounting_usage", None)
+            if isinstance(failed_usage, TokenUsage):
+                accumulate_token_usage(cumulative_token_usage, failed_usage)
+                self._merge_iteration_token_usage(failed_usage)
             from cafe.agents.diagnostics import sanitize_error_excerpt
             from cafe.core.types import CriticalPhaseError
 
@@ -1751,7 +1756,9 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         print(f"Duration (total):          {duration_str}")
 
         # Total cost
-        cost_str = f"${token_usage.total_cost_usd:.4f}" if token_usage.total_cost_usd > 0 else "--"
+        from cafe.core.cost import format_cost, summarize_cost
+        cost_str = format_cost(summarize_cost(
+            getattr(token_usage, "cost_records", []), legacy_cost=token_usage.total_cost_usd))
         print(f"Total cost:                {cost_str}")
 
         print("=" * 60)
@@ -1942,6 +1949,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                                 0,
                             ),
                             "total_cost_usd": token_usage.total_cost_usd,
+                            "cost_records": getattr(token_usage, "cost_records", []),
                         },
                     },
                 )
@@ -2184,6 +2192,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                         0,
                     ),
                     "total_cost_usd": token_usage.total_cost_usd,
+                    "cost_records": getattr(token_usage, "cost_records", []),
                 },
             }
 
@@ -2226,6 +2235,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                         0,
                     ),
                     "total_cost_usd": token_usage.total_cost_usd,
+                    "cost_records": getattr(token_usage, "cost_records", []),
                 },
             }
             if hasattr(self, "_get_completion_data"):
@@ -2265,6 +2275,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                         0,
                     ),
                     "total_cost_usd": token_usage.total_cost_usd,
+                    "cost_records": getattr(token_usage, "cost_records", []),
                 },
             }
             if hasattr(self, "_get_completion_data"):

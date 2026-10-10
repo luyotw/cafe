@@ -596,6 +596,7 @@ def test_one_shot_error_preserves_copilot_reported_model_and_partial_usage(provi
     assert launch.call_count == 1
 
 
+@pytest.mark.parametrize("resume", [False, True])
 @pytest.mark.parametrize("returncode", [0, 1])
 @pytest.mark.parametrize(
     "reported,requested,failure",
@@ -610,7 +611,7 @@ def test_one_shot_error_preserves_copilot_reported_model_and_partial_usage(provi
     ids=["matching", "absent", "mismatch", "limit", "over-limit-matching", "over-limit-conflicting"],
 )
 def test_copilot_plain_model_validation_is_identical_on_success_and_error(
-    provider_process, returncode, reported, requested, failure
+    provider_process, returncode, reported, requested, failure, resume
 ):
     summary = (
         f"Breakdown by AI model:\n  {reported} 2 in, 1 out, 0 cached\n"
@@ -618,7 +619,9 @@ def test_copilot_plain_model_validation_is_identical_on_success_and_error(
     )
     launch = provider_process([], returncode=returncode, stderr=summary)
     launch.return_value.stdout.readline.side_effect = ["reply\n", ""]
-    selected = transport(AgentCLI.COPILOT, model=requested, session_id="bound")
+    selected = transport(
+        AgentCLI.COPILOT, model=requested, session_id="bound" if resume else None
+    )
     responses, usages = [], []
     if failure or returncode:
         with pytest.raises(AgentExecutionError) as caught:
@@ -633,11 +636,22 @@ def test_copilot_plain_model_validation_is_identical_on_success_and_error(
         assert len(responses) == 1
     assert result.reported_model == (reported if reported is None or len(reported) <= 512 else None)
     if reported is not None:
-        assert result.usage.input_tokens == 2
-        assert selected.executor.get_total_token_usage().input_tokens == 2
-        assert len(usages) == 1
+        if resume:
+            # Session-cumulative text cannot establish this invocation's delta
+            # without a verified native baseline. Model evidence still applies.
+            assert result.usage is None
+            assert usages == []
+            accounting = selected.executor.get_total_token_usage()
+            assert accounting.input_tokens == 0
+            assert "input_tokens" not in accounting.cost_records[0]["usage"]
+            assert accounting.cost_records[0]["provenance"] == "unavailable"
+            assert accounting.cost_records[0]["reason"] == "native_metrics_unavailable"
+        else:
+            assert len(usages) == 1
+            assert result.usage.input_tokens == 2
+            assert selected.executor.get_total_token_usage().input_tokens == 2
     assert selected.executor.config.model == requested
-    assert selected.executor.config.session_id == "bound"
+    assert selected.executor.config.session_id == ("bound" if resume else None)
     assert launch.call_count == 1
 
 

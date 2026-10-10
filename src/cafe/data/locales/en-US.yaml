@@ -50,3 +50,10 @@ manager.kickoff.global_sync_heading: '### Optional Global catalog sync'
 manager.kickoff.global_sync_reminder: 'These existing Global entries differ from the project content: {entries}. Kickoff confirmation does not approve publication; request synchronization separately if desired.'
 manager.kickoff.commands_confirmation: Confirmation authorizes these commands in order; changes to commands, order, targets or effects require reconfirmation.
 manager.kickoff.no_commands: No commands ([]).
+manager.progress.cost_footer: 'Used cost (excluding Manager): USD {cost}'
+manager.progress.cost.reported: 'reported'
+manager.progress.cost.estimated: 'estimated'
+manager.progress.cost.legacy: 'legacy'
+manager.progress.cost.unknown: 'unknown'
+manager.progress.cost.partial: 'incomplete coverage'
+manager.progress.cost.stale: 'stale rates'

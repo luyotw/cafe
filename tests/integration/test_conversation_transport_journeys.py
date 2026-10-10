@@ -1,6 +1,7 @@
 """Real caller composition with process doubles (Plan I1–I6/U8–U9)."""
 
 import json
+import subprocess
 from unittest.mock import MagicMock
 
 import pytest
@@ -14,9 +15,19 @@ from cafe.ui import chat
 from tests.unit.test_conversation_transport import provider_process, init
 from tests.unit.test_event_driver_callback import (
     _callback_module,
-    _v3_event_context,
-    _contract_event_context,
+    _v3_event_context as _original_v3_event_context,
+    _contract_event_context as _original_contract_event_context,
 )
+
+
+def _v3_event_context(callback, tmp_path, *args, **kwargs):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    return _original_v3_event_context(callback, tmp_path, *args, **kwargs)
+
+
+def _contract_event_context(callback, tmp_path, *args, **kwargs):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    return _original_contract_event_context(callback, tmp_path, *args, **kwargs)
 
 
 @pytest.fixture
@@ -222,7 +233,10 @@ def test_callback_persists_acquisition_and_acceptance_before_output_finishes(
     assert accepted_before_completion == [True]
     assert launch.call_count == 2
     assert updated["events"][event["event_id"]]["status"] == "accepted"
-    assert json.loads(target.read_text())["stats"]["input_tokens"] == 5
+    assert "stats" not in json.loads(target.read_text())
+    from cafe.manager.costs import CostStore
+    retained = CostStore(tmp_path, directory.parent.name, event["workflow_id"]).read()
+    assert sum(record["usage"]["input_tokens"] for source in retained["manager_sources"] for record in source["records"]) == 5
     assert "stats" not in json.loads(future.read_text())
     callback._run_v3_callback(directory, updated, event, repository_root=tmp_path)
     assert launch.call_count == 2
@@ -311,10 +325,16 @@ def test_public_callback_uses_confirmed_transport_and_accounts_existing_iteratio
     callback.run_callback(event, repository_root=tmp_path)
     persisted = json.loads((directory / "dispatch_state.json").read_text())
     assert persisted["events"][event["event_id"]]["status"] == "accepted"
-    assert json.loads(target.read_text())["stats"]["input_tokens"] == 5
+    assert "stats" not in json.loads(target.read_text())
+    from cafe.manager.costs import CostStore
+    retained = CostStore(tmp_path, directory.parent.name, event["workflow_id"]).read()
+    assert sum(record["usage"]["input_tokens"] for source in retained["manager_sources"] for record in source["records"]) == 5
     callback.run_callback(event, repository_root=tmp_path)
     assert launch.call_count == 2
-    assert json.loads(target.read_text())["stats"]["input_tokens"] == 5
+    assert "stats" not in json.loads(target.read_text())
+    from cafe.manager.costs import CostStore
+    retained = CostStore(tmp_path, directory.parent.name, event["workflow_id"]).read()
+    assert sum(record["usage"]["input_tokens"] for source in retained["manager_sources"] for record in source["records"]) == 5
 
 
 @pytest.mark.parametrize("metadata_state", ["absent", "valid", "malformed", "inaccessible"])
@@ -381,7 +401,7 @@ def test_one_shot_chat_reports_metadata_admission_failure_before_provider_launch
 def test_callback_usage_write_failure_after_acceptance_is_observable_without_replay(
     tmp_path, monkeypatch, provider_process, failed_output, entrypoint
 ):
-    import cafe.core.usage as usage_module
+    import cafe.manager.costs as usage_module
 
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
     monkeypatch.chdir(tmp_path)
@@ -391,7 +411,7 @@ def test_callback_usage_write_failure_after_acceptance_is_observable_without_rep
     target.parent.mkdir(parents=True)
     target.write_text(json.dumps(dict(iteration=7, timestamp="2020-01-01T00:00:00+00:00", other="kept")))
     launch, _delivery = _callback_processes(provider_process, event, failed_output=failed_output)
-    exchange = usage_module._exchange_usage_file
+    exchange = usage_module.ManagerUsageSink.__call__
     writes = 0
     failure = OSError("usage publication failed")
 
@@ -402,7 +422,7 @@ def test_callback_usage_write_failure_after_acceptance_is_observable_without_rep
             raise failure
         return exchange(*args, **kwargs)
 
-    monkeypatch.setattr(usage_module, "_exchange_usage_file", fail_delivery_publication)
+    monkeypatch.setattr(usage_module.ManagerUsageSink, "__call__", fail_delivery_publication)
     notification = MagicMock()
     monkeypatch.setattr(callback, "_notify_callback_failure", notification)
     with pytest.raises(OSError) as caught:
@@ -419,7 +439,9 @@ def test_callback_usage_write_failure_after_acceptance_is_observable_without_rep
     assert persisted["entries"][0]["session"]["id"] == "bound"
     assert persisted["active_index"] == 0
     metadata = json.loads(target.read_text())
-    assert metadata["stats"]["input_tokens"] == 2 and metadata["other"] == "kept"
+    assert "stats" not in metadata and metadata["other"] == "kept"
+    retained = usage_module.CostStore(tmp_path, directory.parent.name, event["workflow_id"]).read()
+    assert sum(record["usage"]["input_tokens"] for source in retained["manager_sources"] for record in source["records"]) == 2
     publication_slots = list(target.parent.glob(".usage-*"))
     assert publication_slots == []
     callback.run_callback(event, repository_root=tmp_path)

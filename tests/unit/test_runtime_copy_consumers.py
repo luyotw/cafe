@@ -110,6 +110,8 @@ def test_every_builtin_localized_declaration_uses_keys_and_materializes_plain_co
     loader = SkillLoader(project_root=tmp_path, global_root=tmp_path / "global")
     # Delivery hooks consume additional authored messages outside frontmatter.
     hook_messages = set()
+    hook_messages.update("human_task.delivery." + suffix for suffix in ("delivery_bundle", "delivery_publication", "delivery_review_source", "delivery_draft", "delivery_details.prompt"))
+    hook_messages.update("human_task.cafe_pr." + suffix for suffix in ("delivery_bundle", "delivery_publication", "delivery_review_source", "delivery_draft"))
     hook_tree = ast.parse((BUILTINS.parents[1] / "delivery/phase_hooks.py").read_text())
     for node in ast.walk(hook_tree):
         if (

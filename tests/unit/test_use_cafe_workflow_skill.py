@@ -180,6 +180,7 @@ def _kickoff_formatter_command(
         "--repository-content-locale",
         "zh-TW",
         "--user-required",
+        *(["pr"] if playbook_id in {"standard", "standard-qa", "simple", "tdd", "tdd-qa", "direct", "direct-qa", "hotfix", "bug", "subagent-flow", "subagent-flow-qa", "direct-subagent-review"} else []),
         "--manager-confirmable",
         *manager_confirmable,
         "--worktree",
@@ -1564,6 +1565,8 @@ def test_confirmed_kickoff_activates_one_issue_scoped_manager_contract(tmp_path:
     )
     issue_dir = tmp_path / "issues" / "issue346"
     issue_dir.mkdir(parents=True)
+    from cafe.core.audit_events import AuditEventStore
+    AuditEventStore(issue_dir).initialize("prepared-346")
     (issue_dir / "blackboard.json").write_text(
         json.dumps(
             {
@@ -1666,6 +1669,8 @@ def test_confirmed_event_driven_kickoff_binds_the_visible_codex_thread(
     )
     issue_dir = tmp_path / "issues" / "issue346"
     issue_dir.mkdir(parents=True)
+    from cafe.core.audit_events import AuditEventStore
+    AuditEventStore(issue_dir).initialize("prepared-346")
     (issue_dir / "blackboard.json").write_text(
         json.dumps({"workflow_id": "prepared-346"}), encoding="utf-8"
     )
@@ -1872,6 +1877,8 @@ def test_kickoff_formatter_keeps_the_rendered_policy_stable_until_activation(
     )
     issue_dir = tmp_path / "issues" / "issue346"
     issue_dir.mkdir(parents=True)
+    from cafe.core.audit_events import AuditEventStore
+    AuditEventStore(issue_dir).initialize("prepared-346")
     (issue_dir / "blackboard.json").write_text(
         json.dumps(
             {
@@ -2346,6 +2353,7 @@ def test_kickoff_contract_formatter_accepts_primary_only_chains(
             "--user-required",
             "spec",
             "plan",
+            "pr",
             "--current-checkout",
             *_proactive_review_args("standard"),
         ]
@@ -2743,11 +2751,11 @@ def test_kickoff_contract_formatter_rejects_mandatory_gate_assignment(
 
     command = _kickoff_formatter_command(strategic_context)
     manager_index = command.index("--manager-confirmable")
-    command[manager_index + 1 : manager_index + 3] = ["spec", "plan", "pr"]
+    command[manager_index + 1 : manager_index + 3] = ["spec", "plan", "deliver"]
     result = run_kickoff_formatter(command)
 
     assert result.returncode == 2
-    assert "unknown gates: pr" in result.stderr
+    assert "unknown gates: deliver" in result.stderr
 
 
 def test_kickoff_contract_formatter_uses_cafe_python_when_site_packages_are_missing(
@@ -2787,6 +2795,7 @@ def test_kickoff_contract_formatter_uses_cafe_python_when_site_packages_are_miss
             "--user-required",
             "spec",
             "plan",
+            "pr",
             "--worktree",
             ".cafe/worktrees/issue346",
             *_proactive_review_args("standard"),
@@ -2930,6 +2939,7 @@ def test_kickoff_formatter_rejects_unresolved_phase_models(
             "en-US",
             "--user-required",
             "spec",
+            "pr",
             "--current-checkout",
         ],
         cwd=tmp_path,
@@ -2977,15 +2987,15 @@ def test_builtin_confirmation_gate_candidates_come_from_playbook_declarations() 
     }
 
     assert actual == {
-        "direct": (),
-        "direct-qa": (),
-        "simple": ("spec",),
-        "standard": ("spec", "plan"),
-        "standard-qa": ("spec", "plan"),
-        "tdd": ("spec", "plan"),
-        "tdd-qa": ("spec", "plan"),
+        "direct": ("pr",),
+        "direct-qa": ("pr",),
+        "simple": ("spec", "pr"),
+        "standard": ("spec", "plan", "pr"),
+        "standard-qa": ("spec", "plan", "pr"),
+        "tdd": ("spec", "plan", "pr"),
+        "tdd-qa": ("spec", "plan", "pr"),
         "editorial": ("brief",),
-        "hotfix": (),
+        "hotfix": ("pr",),
         "incident": (),
         "research": (),
     }
@@ -2995,15 +3005,15 @@ def test_builtin_confirmation_gate_candidates_come_from_playbook_declarations() 
         for playbook_id in actual
     }
     assert mandatory == {
-        "direct": ("pr", "deliver"),
-        "direct-qa": ("pr", "deliver"),
-        "simple": ("pr", "deliver"),
-        "standard": ("pr", "deliver"),
-        "standard-qa": ("pr", "deliver"),
-        "tdd": ("pr", "deliver"),
-        "tdd-qa": ("pr", "deliver"),
+        "direct": ("deliver",),
+        "direct-qa": ("deliver",),
+        "simple": ("deliver",),
+        "standard": ("deliver",),
+        "standard-qa": ("deliver",),
+        "tdd": ("deliver",),
+        "tdd-qa": ("deliver",),
         "editorial": (),
-        "hotfix": ("pr", "deliver"),
+        "hotfix": ("deliver",),
         "incident": (),
         "research": (),
     }
@@ -3288,9 +3298,9 @@ def test_kickoff_cli_forwards_custom_task_overrides_and_overall_authority(tmp_pa
     )
     assert proposal["task_contract"] == {
         "user_required": [
-            {"phase": "pr", "task_id": "local-review"},
-            {"phase": "pr", "task_id": "delivery-review"},
+            {"phase": "pr", "task_id": "pr-review"},
             {"phase": "deliver", "task_id": "delivery-outcome"},
+            {"phase": "deliver", "task_id": "delivery-review"},
             {"phase": "review", "task_id": "choose-release"},
         ],
         "manager_confirmable": [
@@ -3381,7 +3391,7 @@ def test_kickoff_derives_proactive_defaults_only_at_scheduled_pauses(
         "develop": "not_required",
         "review": "not_required",
         "pr": "required",
-        "deliver": "not_required",
+        "deliver": "required",
     }
     section = result.stdout.split("### Proactive review at scheduled pauses", 1)[1]
     section = section.split("### Reactive user handoffs", 1)[0]

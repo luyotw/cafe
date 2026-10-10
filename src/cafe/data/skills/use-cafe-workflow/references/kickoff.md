@@ -153,17 +153,19 @@ For graphs declaring `delivery`, integration and selected follow-up issue creati
 
 Repository delivery discovery retains descriptive conventions, source coverage, freshness and gaps. Resolve exact PR/source/target/strategy or local destination when the PR action review presents actual immutable artifacts. The user selects an explicit subset of original Review drafts or an empty selection. The displayed PR decision covers action selection and its host capability boundaries together, while preserving distinct durable approvals. Final result acceptance remains a separate user decision; only user confirmation authorizes execution of the shown action bundle. Legacy proposals without displayed host boundaries retain separate capability approval.
 
-The formatter produces a version-5 nested `delivery_contract` for adopting graphs with `closeout_plan.cleanup` only. Keep exact literal cleanup argv and one description per action. The default proposal closes a verified bound GitHub issue, then archives CAFE state with `cafe close --archive-only`. Archive-only retains the checkout and branch; removing those resources needs separate explicit commands and authority. Ordinary `cafe close` can integrate a local branch and is not a fresh phase-owned cleanup fallback. The PR decision explicitly covers the displayed action and host capability boundaries together. Delivery acceptance also selects cleanup, archive-only, or leaving external state unchanged in the same reply; Manager executes the recorded selection after completion without a second terminal question.
+The formatter produces a version-5 nested `delivery_contract` for adopting graphs with `closeout_plan.cleanup` only. Keep exact literal cleanup argv and one description per action. The default is full cleanup: close a verified bound GitHub issue, then use `scripts/cleanup_worktree.py` to archive CAFE state and remove the exact feature worktree, local branch, and bound remote branch. This is a Manager skill default; explicit current decisions and repository preferences retain precedence. The preparation helper fills literal interpreter, script, repository, worktree, issue, and remote arguments. Explain all deletion effects before kickoff confirmation. Never remove the canonical checkout; when no separate feature worktree exists, propose archive-only and explain that limitation. Ordinary `cafe close` can integrate a local branch and is not a fresh phase-owned cleanup fallback. The PR decision explicitly covers the displayed action and host capability boundaries together. Delivery acceptance also selects full cleanup, archive-only, or leaving external state unchanged in the same reply; Manager executes the recorded selection after completion without a second terminal question.
 
 For a verified repository and issue, a literal cleanup proposal is:
 
 ```yaml
 cleanup:
   - argv: [gh, issue, close, "123", --repo, owner/repo]
-  - argv: [cafe, close, --archive-only]
+  - argv: [python3, /path/to/use-cafe-workflow/scripts/cleanup_worktree.py, --project-root, /path/to/repo, --worktree, /path/to/repo/.cafe/worktrees/issue123, --issue-name, issue123, --remote, origin]
 ```
 
-Omit GitHub issue closure when no binding is available. An explicit empty cleanup list is valid when the user excludes cleanup. Unknown endpoints remain gaps. Inspect actual targets and worker quiescence before any authorized cleanup. Existing confirmed legacy contracts retain their original exact argv, digest and receipts; incomplete merge bindings pause for clarification. Compact and non-adopting graphs retain their declared delivery path.
+Replace every example path and issue identifier with the verified literal value. Omit remote deletion when no remote is bound, and omit GitHub issue closure when no binding is available. An explicit empty cleanup list is valid when the user excludes cleanup. Unknown endpoints remain gaps. Inspect actual targets and worker quiescence before any authorized cleanup. Existing confirmed contracts retain their original exact argv, digest and receipts; a changed default never rewrites them. Compact and non-adopting graphs retain their declared delivery path.
+
+When the user explicitly prefers preservation, use `argv: [cafe, close, --archive-only]` instead of the full-cleanup helper.
 
 ## Kickoff contract: first blocking gate
 
@@ -381,11 +383,34 @@ language. Keep purpose, scope, and implementation direction separate:
 | --- | --- |
 | `schema_version` | `3` |
 | `outcome` | Purpose: the intended result and why it matters |
-| `in_scope`, `out_of_scope` | Explicit lists; include required edge cases and integrations |
+| `in_scope` | Intended changes, required edge cases and integrations, plus the adjustment footprint described below |
+| `out_of_scope` | Explicit list of excluded behavior |
 | `acceptance_invariants` | Concrete completion criteria, without a second evidence checklist |
 | `implementation_direction` | Recommended approach; advisory, not a binding method |
 | `permissions` | Task-specific action and target authorizations; no implied side effects |
 | `constraints` | A flat list of actual fixed limits, not generic quality or architecture boilerplate |
+
+Before writing `in_scope`, inspect the relevant repository areas and estimate
+the distinct files that need adjustment, excluding test files. Count planned
+additions, modifications and deletions once per file; do not count every file
+in an affected directory. Use this total across the whole change to choose the
+scope presentation:
+
+- For at most three non-test files, list each filename with its
+  repository-relative path and a concise description of the intended change.
+- For more than three non-test files, list the affected module names and their
+  intended changes, then state the approximate total as, for example,
+  `約 6 個檔案（不含測試）` or `about 6 files (excluding tests)`. A bounded range
+  is appropriate when the exact footprint is still uncertain. Use recognizable
+  repository module or directory names instead of an exhaustive file list.
+
+For example, three implementation files plus two test files still use the
+filename form. Four implementation files use the module form even if they all
+belong to one module. A test-only change states that zero non-test files need
+adjustment and describes the test scope. Excluding tests from this count does
+not exclude required testing from the work or acceptance criteria. Keep this
+footprint in `in_scope`, alongside the required behavior; the estimate is not a
+fixed file-count constraint.
 
 Use explicit empty lists for `out_of_scope`, `permissions`, and `constraints`
 when none apply. Purpose, in-scope behavior, completion criteria and recommended

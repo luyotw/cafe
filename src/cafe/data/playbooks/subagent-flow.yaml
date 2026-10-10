@@ -128,7 +128,7 @@ steps:
       no_changes_needed: develop
 
   pr:
-    handoff_label: Revise PR action review
+    handoff_label: Revise PR content
     type: skill
     skill: cafe-pr
     handoff_label: Refresh PR output
@@ -171,22 +171,16 @@ steps:
       - GitHubPRCreator
       - LocalReviewContextProvider
       - PRLinkOpener
-      - DevelopmentActionContext
     human_tasks:
     - trigger: confirm_output
-      task_id: delivery-review
+      task_id: pr-review
+      mandatory_confirmation: false
+      feedback_delivery: {artifact: workflow_feedback, source_kind: local_review, todo_source: workflow_feedback, todo_id_prefix: WF}
       outcomes:
         fix_now: pr
-        integrate_selected: deliver
-        integrate_only: deliver
-        review_only: pr
-      feedback_delivery:
-        artifact: workflow_feedback
-        source_kind: local_review
-        todo_source: workflow_feedback
-        todo_id_prefix: WF
+        confirm: deliver
     - trigger: need_clarification
-      task_id: delivery-details
+      task_id: pr-details
       outcomes:
         submit: pr
     'on':
@@ -194,13 +188,6 @@ steps:
       need_permission: pr
       manual_handoff: develop
       need_clarification: pr
-    delivery: &id001
-      actions_artifact: delivery_actions
-      result_artifact: delivery_result
-      approval_step: pr
-      approval_task: delivery-review
-      result_task: delivery-outcome
-      correction_step: develop
   deliver:
     type: skill
     skill: cafe-deliver_development
@@ -210,11 +197,17 @@ steps:
     input_artifacts:
     - pr_result
     - workspace
-    - delivery_actions
     - workflow_feedback
     workspace_input_artifact: workspace
     output_artifact: delivery_result
-    delivery: *id001
+    delivery:
+      actions_artifact: delivery_actions
+      result_artifact: delivery_result
+      approval_step: deliver
+      approval_task: delivery-review
+      result_task: delivery-outcome
+      correction_step: develop
+      publication_artifact: pr_result
     behavior:
       completion: baton
       feedback_target: develop
@@ -239,6 +232,7 @@ steps:
       prepare_input:
       - DevelopmentDeliveryExecutor
       publish_output:
+      - DevelopmentActionContext
       - DevelopmentDeliveryOutcome
     human_tasks:
     - trigger: confirm_output
@@ -254,9 +248,13 @@ steps:
       outcomes:
         submit: deliver
     - trigger: need_permission
-      task_id: delivery-permission
+      task_id: delivery-review
       outcomes:
-        submit: deliver
+        fix_now: deliver
+        integrate_selected: deliver
+        integrate_only: deliver
+        review_only: deliver
+      feedback_delivery: {artifact: workflow_feedback, source_kind: delivery, todo_source: workflow_feedback, todo_id_prefix: DLV}
     'on':
       confirm_output: deliver
       need_clarification: deliver

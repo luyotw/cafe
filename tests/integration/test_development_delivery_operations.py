@@ -4,7 +4,7 @@ import subprocess
 
 import pytest
 
-from cafe.delivery.contracts import approve_selection
+from cafe.delivery.contracts import DeliveryVerification, approve_selection
 from cafe.delivery.operations import execute_action
 from tests.unit.test_development_delivery import authority, proposal
 
@@ -32,6 +32,7 @@ def local_action(tmp_path):
     git(root, "add", ".")
     git(root, "commit", "-m", "Feature")
     p = proposal(
+        verification=DeliveryVerification(not_required_reason="Offline local integration only."),
         mode="local",
         strategy="ff-only",
         pr_number=None,

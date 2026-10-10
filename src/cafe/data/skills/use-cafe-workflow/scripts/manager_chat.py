@@ -260,6 +260,7 @@ def run_chat(cwd: Path, explicit: str | None = None) -> int:
     from cafe.agents.executor import AgentExecutionControl, AgentExecutionError, AgentExecutor
     from cafe.agents.transport import ConversationTransport
     from cafe.core.types import AgentCLI, AgentConfig
+    from cafe.manager.costs import manager_usage_sink, accounted_call
 
     target = None
     try:
@@ -294,8 +295,10 @@ def run_chat(cwd: Path, explicit: str | None = None) -> int:
                         name='workflow_manager_chat', cli=AgentCLI(current.cli), model=current.model,
                         session_id=current.session_id,
                     ), stream_output=False)
-                    ConversationTransport(executor).deliver_to_exact_session(
-                        prompt, current.session_id, correlation,
+                    sink = manager_usage_sink(cwd, current.issue_dir.name, current.workflow_id, correlation)
+                    accounted_call(
+                        sink, correlation, ConversationTransport(executor).deliver_to_exact_session,
+                        prompt, current.session_id, correlation, on_usage=sink,
                         required_evidence=frozenset({'model'}) if current.model else frozenset(),
                         on_response=lambda reply: print(reply.response),
                         execution_control=AgentExecutionControl(

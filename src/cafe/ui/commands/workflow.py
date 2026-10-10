@@ -7,7 +7,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import typer
 from rich.console import Console
@@ -530,7 +530,9 @@ def status() -> None:
 
         # Display aggregated model token usage status
         display.render_model_status_table(entries)
-        display.render_chat_usage_table(service.load_chat_usage(issue_name, phase_names))
+        chat_groups = service.load_chat_usage(issue_name, phase_names)
+        display.render_chat_usage_table(chat_groups)
+        display.render_cost_summary(entries, chat_groups)
 
     except Exception as e:
         console.print(f"[red]Error: Failed to display status: {e}[/red]")
@@ -923,6 +925,7 @@ def workflow(
             extra_prompt: Optional[str] = None,
             same_invocation_retry: bool = False,
             execution_context: Optional[Dict] = None,
+            before_agent: Optional[Callable[[], None]] = None,
         ) -> Any:
             iteration = next_runnable_iteration_number(issue_dir / step_name)
             console.print(f"[dim]Executing[/dim] step={step_name} iteration={iteration:03d}")
@@ -948,6 +951,8 @@ def workflow(
             assert step_executor is not None
             execute_kwargs = {"extra_prompt": extra_prompt}
             execute_signature = inspect.signature(step_executor.execute_step)
+            if "before_agent" in execute_signature.parameters:
+                execute_kwargs["before_agent"] = before_agent
             if execution_context is not None:
                 execute_kwargs["execution_context"] = execution_context
             if "same_invocation_retry" in execute_signature.parameters or any(
@@ -1265,7 +1270,10 @@ def workflow(
             )
 
             def run_composed_workflow():
-                return runner.run(start_step=pending_start_step, single_step=single_step)
+                nonlocal pending_start_step
+                requested_start = pending_start_step
+                pending_start_step = None
+                return runner.run(start_step=requested_start, single_step=single_step)
 
             host = WorkflowHost(issue_dir)
             if validated_worker_id is not None:
@@ -1283,6 +1291,18 @@ def workflow(
                 str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
                 playbook_id=str(playbook_data["playbook"]["id"]),
             )
+            if result.wait_seconds is not None:
+                console.print(
+                    f"[yellow]Workflow waiting for external verification[/yellow] step={result.final_step}"
+                )
+                if not single_step and validated_worker_id is None and not add_dir_values:
+                    # Foreground ownership was released before the child can acquire it.
+                    launch_background_worker()
+                else:
+                    console.print("[dim]Waiting state is saved; the next cafe make resumes observation.[/dim]")
+                    if add_dir_values:
+                        console.print("[dim]Resume with the same --add-dir grants; background handoff cannot preserve them.[/dim]")
+                return
             if result.final_status_code == "INVALID_FEEDBACK_DELIVERY":
                 console.print(
                     f"[yellow]Workflow paused[/yellow] step={result.final_step} "

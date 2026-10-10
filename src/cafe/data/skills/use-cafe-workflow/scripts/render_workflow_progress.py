@@ -589,6 +589,7 @@ def render_progress(
     issue_dir: Path | None = None,
     manager_state: Mapping[str, Any] | None = None,
     driver_state: Mapping[str, Any] | None = None,
+    project_root: Path | None = None,
 ) -> str:
     """Render progress without creating, resuming, or mutating workflow state."""
     language = _language(locale)
@@ -702,7 +703,8 @@ def render_progress(
             status_text,
         )
         body += ("\n│\n" if body else "") + closeout_line
-    return body
+    from cafe.manager.costs import worker_footer
+    return body + "\n\n" + worker_footer(issue_dir, project_root=project_root, locale=copy_locale)
 
 
 def _json_argument(value: str) -> dict[str, Any]:
@@ -776,6 +778,7 @@ def main() -> int:
                 contract=contract,
                 locale=args.locale,
                 issue_dir=issue_dir,
+                project_root=args.project_root,
                 manager_state=args.manager_state,
             )
         )

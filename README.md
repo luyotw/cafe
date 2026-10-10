@@ -389,11 +389,19 @@ workflow, then retry the same stable identifier; the inbox never switches the
 active issue or chooses an ambiguous record automatically.
 
 To make new HumanTasks from any built-in, global, or project playbook
-discoverable in a fixed Slack channel, follow the supported
+discoverable in Slack, follow the supported
 [Slack HumanTask notification guide](docs/human-task-slack-notifications.md).
-The channel-bound credential stays in `~/.slack-webhook`; project playbooks,
-hooks, tasks, and agents cannot choose another destination or receive the
-credential. Slack delivery never replaces `cafe task inspect` or
+Define channel-bound named destinations in the private, login-user-owned
+`~/.cafe/credentials.yaml` (version `1`), with a required `default`. Private
+`~/.cafe/config.yaml` routes absolute repository paths to destination names;
+unmatched repositories use `default`, and worktrees inherit their parent route.
+HumanTasks and workflow callback failure notices share this resolver. Project
+playbooks, hooks, tasks, agents and environment variables cannot choose a
+normal destination or receive its credential. `~/.slack-webhook` and inline
+webhook routes are deprecated compatibility sources used only when the new
+store is absent. The guide covers setup, permissions, rotation, manual migration
+and complete rollback; an invalid new store never falls back to legacy sources.
+Test-run notifications remain isolated on `~/.cafe/test-slack-webhook`. Slack delivery never replaces `cafe task inspect` or
 `cafe task complete`.
 
 ### Inspect and recover
@@ -563,9 +571,10 @@ Versioning policy, while roadmap stages describe product direction independently
 - [Roadmap](docs/roadmap.md)
 - [Versioning policy](docs/versioning.md)
 - [Changelog](CHANGELOG.md)
-- [Latest release notes](docs/releases/v0.8.2.md)
+- [Latest release notes](docs/releases/v0.9.0.md)
 - [Strategic positioning](docs/positioning.md)
 - [Known runtime constraints](docs/known-constraints.md)
+- [Cost accounting and automatic OpenAI rate updates](docs/cost-accounting.md)
 
 ## Contributing
 

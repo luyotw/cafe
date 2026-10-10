@@ -1,0 +1,843 @@
+{
+  "schema_version": 1,
+  "version": "c7531c5b7ea0a9bf20d844fe187de348fbbaaad4933cd838b3903983412040f1",
+  "source_url": "https://cursor.com/docs/models-and-pricing.md",
+  "fetched_at": 1791528457.2977364,
+  "etag": null,
+  "last_modified": null,
+  "data": {
+    "rates": {
+      "grok-4.7": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "2",
+              "cached_input": "0.5",
+              "cache_write": null,
+              "output": "6"
+            }
+          },
+          "short_context_limit": 256000,
+          "context_unverified": false
+        }
+      },
+      "grok-4.7-fast": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "4",
+              "cached_input": "1",
+              "cache_write": null,
+              "output": "12"
+            }
+          },
+          "short_context_limit": 256000,
+          "context_unverified": false
+        }
+      },
+      "grok-4.7-500k": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "4",
+              "cached_input": "1",
+              "cache_write": null,
+              "output": "12"
+            }
+          },
+          "short_context_limit": 256000,
+          "context_unverified": false
+        }
+      },
+      "grok-4.7-500k-fast": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "6",
+              "cached_input": "1.5",
+              "cache_write": null,
+              "output": "18"
+            }
+          },
+          "short_context_limit": 256000,
+          "context_unverified": false
+        }
+      },
+      "grok-4.6": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "2",
+              "cached_input": "0.5",
+              "cache_write": null,
+              "output": "6"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "grok-4.6-fast": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "4",
+              "cached_input": "1",
+              "cache_write": null,
+              "output": "12"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "grok-4.5": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "2",
+              "cached_input": "0.5",
+              "cache_write": null,
+              "output": "6"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "grok-4.5-fast": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "4",
+              "cached_input": "1",
+              "cache_write": null,
+              "output": "18"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "composer-2.5": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "0.5",
+              "cached_input": "0.2",
+              "cache_write": null,
+              "output": "2.5"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "composer-2.5-fast": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "3",
+              "cached_input": "0.5",
+              "cache_write": null,
+              "output": "15"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "claude-sonnet-4": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "3",
+              "cached_input": "0.3",
+              "cache_write": "3.75",
+              "output": "15"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "claude-sonnet-4-1m": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "6",
+              "cached_input": "0.6",
+              "cache_write": "7.5",
+              "output": "22.5"
+            }
+          },
+          "short_context_limit": 200000,
+          "context_unverified": false
+        }
+      },
+      "claude-haiku-4.5": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "1",
+              "cached_input": "0.1",
+              "cache_write": "1.25",
+              "output": "5"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "claude-opus-4.5": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "5",
+              "cached_input": "0.5",
+              "cache_write": "6.25",
+              "output": "25"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "claude-sonnet-4.5": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "3",
+              "cached_input": "0.3",
+              "cache_write": "3.75",
+              "output": "15"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "claude-opus-4.6": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "5",
+              "cached_input": "0.5",
+              "cache_write": "6.25",
+              "output": "25"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "claude-sonnet-4.6": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "3",
+              "cached_input": "0.3",
+              "cache_write": "3.75",
+              "output": "15"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "claude-opus-4.7": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "5",
+              "cached_input": "0.5",
+              "cache_write": "6.25",
+              "output": "25"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "claude-fable-5": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "1E+1",
+              "cached_input": "1",
+              "cache_write": "12.5",
+              "output": "5E+1"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "claude-fable-5.1": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "1E+1",
+              "cached_input": "0.25",
+              "cache_write": "12.5",
+              "output": "5E+1"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "claude-haiku-5.5": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "0.1",
+              "cached_input": "0.01",
+              "cache_write": "0.125",
+              "output": "0.5"
+            }
+          },
+          "short_context_limit": 100000,
+          "context_unverified": false
+        }
+      },
+      "claude-opus-4.7-fast": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "3E+1",
+              "cached_input": "3",
+              "cache_write": "37.5",
+              "output": "1.5E+2"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "claude-opus-4.8": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "5",
+              "cached_input": "0.5",
+              "cache_write": "6.25",
+              "output": "25"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "claude-opus-5": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "5",
+              "cached_input": "0.5",
+              "cache_write": "6.25",
+              "output": "25"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "claude-opus-5.5": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "4",
+              "cached_input": "0.2",
+              "cache_write": "5",
+              "output": "2E+1"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "claude-sonnet-5": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "2",
+              "cached_input": "0.2",
+              "cache_write": "2.5",
+              "output": "1E+1"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "claude-sonnet-5.5": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "2",
+              "cached_input": "0.1",
+              "cache_write": "2.5",
+              "output": "1E+1"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "gemini-2.5-flash": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "0.3",
+              "cached_input": "0.03",
+              "cache_write": null,
+              "output": "2.5"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "gemini-3-flash": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "0.5",
+              "cached_input": "0.05",
+              "cache_write": null,
+              "output": "3"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "gemini-3-pro": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "2",
+              "cached_input": "0.2",
+              "cache_write": null,
+              "output": "12"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "gemini-3-pro-image-preview": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "2",
+              "cached_input": "0.2",
+              "cache_write": null,
+              "output": "12"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "gemini-3.1-pro": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "2",
+              "cached_input": "0.2",
+              "cache_write": null,
+              "output": "12"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "gemini-3.5-flash": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "1.5",
+              "cached_input": "0.15",
+              "cache_write": null,
+              "output": "9"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "gemini-3.6-flash": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "1.5",
+              "cached_input": "0.15",
+              "cache_write": null,
+              "output": "7.5"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "gemini-3.7-flash": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "0.75",
+              "cached_input": "0.075",
+              "cache_write": null,
+              "output": "3.5"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "gemini-3.8-flash": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "0.75",
+              "cached_input": "0.075",
+              "cache_write": null,
+              "output": "3.5"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "glm-5.2": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "1.4",
+              "cached_input": "0.26",
+              "cache_write": null,
+              "output": "4.4"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "glm-5.3": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "1.4",
+              "cached_input": "0.26",
+              "cache_write": null,
+              "output": "4.4"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "glm-5.3-flash": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "0.15",
+              "cached_input": "0.029",
+              "cache_write": null,
+              "output": "0.5"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "gpt-5": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "1.25",
+              "cached_input": "0.125",
+              "cache_write": null,
+              "output": "1E+1"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "gpt-5-fast": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "2.5",
+              "cached_input": "0.25",
+              "cache_write": null,
+              "output": "2E+1"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "gpt-5-mini": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "0.25",
+              "cached_input": "0.025",
+              "cache_write": null,
+              "output": "2"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "gpt-5-codex": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "1.25",
+              "cached_input": "0.125",
+              "cache_write": null,
+              "output": "1E+1"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "gpt-5.1-codex": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "1.25",
+              "cached_input": "0.125",
+              "cache_write": null,
+              "output": "1E+1"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "gpt-5.1-codex-max": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "1.25",
+              "cached_input": "0.125",
+              "cache_write": null,
+              "output": "1E+1"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "gpt-5.1-codex-mini": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "0.25",
+              "cached_input": "0.025",
+              "cache_write": null,
+              "output": "2"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "gpt-5.2": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "1.75",
+              "cached_input": "0.175",
+              "cache_write": null,
+              "output": "14"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "gpt-5.2-codex": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "1.75",
+              "cached_input": "0.175",
+              "cache_write": null,
+              "output": "14"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "gpt-5.3-codex": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "1.75",
+              "cached_input": "0.175",
+              "cache_write": null,
+              "output": "14"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "gpt-5.4": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "2.5",
+              "cached_input": "0.25",
+              "cache_write": null,
+              "output": "15"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": true
+        }
+      },
+      "gpt-5.4-mini": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "0.75",
+              "cached_input": "0.075",
+              "cache_write": null,
+              "output": "4.5"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "gpt-5.4-nano": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "0.2",
+              "cached_input": "0.02",
+              "cache_write": null,
+              "output": "1.25"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "gpt-5.5": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "5",
+              "cached_input": "0.5",
+              "cache_write": null,
+              "output": "3E+1"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": true
+        }
+      },
+      "gpt-5.6-luna": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "0.2",
+              "cached_input": "0.02",
+              "cache_write": "0.25",
+              "output": "1.2"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": true
+        }
+      },
+      "gpt-5.6-sol": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "4",
+              "cached_input": "0.4",
+              "cache_write": "5",
+              "output": "2E+1"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": true,
+          "valid_through": "2026-11-21"
+        }
+      },
+      "gpt-5.6-terra": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "2",
+              "cached_input": "0.2",
+              "cache_write": "2.5",
+              "output": "12"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": true
+        }
+      },
+      "kimi-k2.7-code": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "0.95",
+              "cached_input": "0.19",
+              "cache_write": null,
+              "output": "4"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "kimi-k3": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "3",
+              "cached_input": "0.3",
+              "cache_write": null,
+              "output": "15"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      },
+      "muse-spark-1.3": {
+        "standard": {
+          "usd_per_million_tokens": {
+            "short": {
+              "input": "1.25",
+              "cached_input": "0.15",
+              "cache_write": null,
+              "output": "4.25"
+            }
+          },
+          "short_context_limit": null,
+          "context_unverified": false
+        }
+      }
+    },
+    "terms_sha256": "7181e7bccac3948b8a4ade0739b4a028701dfaf4dbc7c935ed386fb428d502bc",
+    "currency": "USD",
+    "unit": "million_tokens",
+    "parser_version": 1
+  }
+}

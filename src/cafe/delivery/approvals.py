@@ -23,11 +23,18 @@ def collect_review(proposal, issue_dir, registry):
         selected=proposal.proposals if proposal.issue_repository else (),
     )
     reviews = {}
-    for action in ["integration", *[item.id for item in preview.selected]]:
+    actions = ["integration", *[item.id for item in preview.selected]]
+    if proposal.verification is not None and proposal.verification.tool is not None:
+        actions.append("verification")
+    for action in actions:
         request = action_request(registry, preview, issue_dir, action)
         evaluation = evaluate_capability_request(registry, request)
         if evaluation.decision == PolicyDecision.DENY:
             raise ValueError("delivery capability policy denies the proposed action")
+        if action == "verification":
+            from cafe.delivery.verification import tool_bytes, validate_tool_capability
+            validate_tool_capability(evaluation.manifest)
+            tool_bytes(issue_dir.resolve().parents[2], proposal.verification.tool)
         reviews[action] = {
             "manifest": evaluation.manifest.model_dump(mode="json"),
             "request": reviewed_request(evaluation.request),
@@ -43,6 +50,10 @@ def review_text(reviews):
         + digest(reviews)
         + "\n\n"
         + json.dumps(reviews, ensure_ascii=False, sort_keys=True, indent=2)
+        + ("\n\nVerification authorizes repeated host execution of the exact approved "
+           "Python tool and options. Host code has access to the declared credentials; "
+           "read-only is a reviewed tool obligation, not an enforced OS sandbox."
+           if "verification" in reviews else "")
     )
 
 

@@ -43,17 +43,24 @@ def test_adopting_graphs_have_separate_action_review_and_result_acceptance():
         model = PlaybookLoader().load_model(name, strict=True).model
         approval = model.steps["pr"]
         delivery = model.steps["deliver"]
-        assert approval.delivery == delivery.delivery
-        assert "DevelopmentActionContext" in approval.hooks.publish_output
-        review = next(t for t in approval.human_tasks if t.trigger == "confirm_output")
-        assert review.outcomes["integrate_only"] == review.outcomes["integrate_selected"] == "deliver"
-        assert review.outcomes["review_only"] == "pr"
-        assert delivery.human_tasks[0].outcomes == {
+        assert approval.delivery is None
+        assert "DevelopmentActionContext" not in approval.hooks.publish_output
+        assert "DevelopmentActionContext" in delivery.hooks.publish_output
+        content = next(t for t in approval.human_tasks if t.trigger == "confirm_output")
+        assert content.task_id == "pr-review"
+        assert content.outcomes == {"fix_now": "pr", "confirm": "deliver"}
+        review = next(t for t in delivery.human_tasks if t.trigger == "need_permission")
+        assert review.task_id == delivery.delivery.approval_task == "delivery-review"
+        assert delivery.delivery.approval_step == "deliver"
+        assert set(review.outcomes.values()) == {"deliver"}
+        outcome = next(t for t in delivery.human_tasks if t.trigger == "confirm_output")
+        assert outcome.outcomes == {
             "confirm": "_done", "confirm_cleanup": "_done",
             "confirm_archive": "_done", "revise": "deliver",
         }
-        assert delivery.delivery.actions_artifact in delivery.input_artifacts
+        assert delivery.delivery.publication_artifact in delivery.input_artifacts
         assert delivery.delivery.correction_step in delivery.allowed_goto
+
 
 
 def test_all_bundled_playbooks_have_distinct_bounded_applicability() -> None:
@@ -134,17 +141,12 @@ def test_every_builtin_pr_requires_local_review_before_done() -> None:
 
     for playbook_id in DEVELOPMENT_PLAYBOOKS:
         pr = loader.load_model(playbook_id, strict=True).model.steps["pr"]
-        local_review = next(task for task in pr.human_tasks if task.task_id == "delivery-review")
+        local_review = next(task for task in pr.human_tasks if task.task_id == "pr-review")
 
         assert pr.on["confirm_output"] == "pr"
         assert "workflow_complete" not in pr.on
         assert local_review.trigger == "confirm_output"
-        assert local_review.outcomes == {
-            "fix_now": "pr",
-            "integrate_selected": "deliver",
-            "integrate_only": "deliver",
-            "review_only": "pr",
-        }
+        assert local_review.outcomes == {"fix_now": "pr", "confirm": "deliver"}
 
 
 def test_every_builtin_pr_curates_corrective_feedback_before_development() -> None:
@@ -153,7 +155,7 @@ def test_every_builtin_pr_curates_corrective_feedback_before_development() -> No
 
     for playbook_id in DEVELOPMENT_PLAYBOOKS:
         pr = loader.load_model(playbook_id, strict=True).model.steps["pr"]
-        local_review = next(task for task in pr.human_tasks if task.task_id == "delivery-review")
+        local_review = next(task for task in pr.human_tasks if task.task_id == "pr-review")
 
         assert pr.behavior.feedback_target == "pr"
         assert pr.behavior.feedback_artifact == "workflow_feedback"
@@ -373,8 +375,8 @@ def test_joint_spec_plan_has_one_planning_gate_and_same_phase_revisions(playbook
     if playbook_id == "subagent-flow-qa":
         expected_steps.insert(2, "qa")
     assert list(playbook.steps) == expected_steps
-    assert confirmation_gate_steps(playbook) == ("spec_plan",)
-    assert mandatory_confirmation_gate_steps(playbook) == ("pr", "deliver")
+    assert confirmation_gate_steps(playbook) == ("spec_plan", "pr")
+    assert mandatory_confirmation_gate_steps(playbook) == ("deliver",)
     assert planning.output_artifact == "plan"
     assert planning.input_artifacts == ["plan"]
     assert planning.todo_identity_input_artifact == "plan"
@@ -721,3 +723,29 @@ def test_qa_feedback_is_exposed_by_every_correction_and_publication_skill() -> N
     )
     assert resolved["feedback_file"] == "qa.md"
     assert resolved["review_feedback_file"] == "review.md"
+
+
+@pytest.mark.parametrize("mandatory", [None, True, False])
+def test_feedback_gate_assignment_preserves_legacy_default(mandatory):
+    from cafe.core.human_tasks import HumanTaskBinding
+
+    model = PlaybookLoader().load_model("standard", strict=True).model.model_copy(deep=True)
+    binding = next(t for t in model.steps["pr"].human_tasks if t.trigger == "confirm_output")
+    payload = binding.model_dump(exclude={"mandatory_confirmation"})
+    if mandatory is not None:
+        payload["mandatory_confirmation"] = mandatory
+    replacement = HumanTaskBinding.model_validate(payload)
+    model.steps["pr"].human_tasks = [replacement if t is binding else t for t in model.steps["pr"].human_tasks]
+    assert ("pr" in confirmation_gate_steps(model)) is (mandatory is False)
+    assert ("pr" in mandatory_confirmation_gate_steps(model)) is (mandatory is not False)
+    assert "deliver" in mandatory_confirmation_gate_steps(model)
+    permission = next(t for t in model.steps["deliver"].human_tasks if t.trigger == "need_permission")
+    assert permission.task_id == model.steps["deliver"].delivery.approval_task
+
+
+def test_feedback_gate_mandatory_flag_rejects_ambiguous_strings():
+    from cafe.core.human_tasks import HumanTaskBinding
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        HumanTaskBinding(trigger="confirm_output", task_id="content", mandatory_confirmation="false")

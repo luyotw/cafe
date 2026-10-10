@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -25,6 +26,10 @@ TEST_RUN_SLACK_WEBHOOK_FILENAME = ".cafe/test-slack-webhook"
 TEST_RUN_SLACK_ROUTING_ENV = "CAFE_TEST_RUN_SLACK_NOTIFICATIONS"
 SLACK_WEBHOOK_HOST = "hooks.slack.com"
 MAX_CREDENTIAL_BYTES = 8192
+MAX_CREDENTIAL_STORE_BYTES = 65536
+MAX_SLACK_DESTINATIONS = 128
+SLACK_CREDENTIAL_STORE_FILENAME = "credentials.yaml"
+SLACK_DESTINATION_NAME = re.compile(r"[a-z][a-z0-9_-]{0,63}\Z")
 MAX_MACHINE_CONFIG_BYTES = 65536
 MAX_PROJECT_ROUTES = 128
 MACHINE_CONFIG_DIRECTORY = ".cafe"
@@ -59,10 +64,11 @@ def _load_machine_config() -> tuple[Path, dict[object, object]]:
         descriptor = os.open(config_path, flags)
     except FileNotFoundError:
         return config_path, {}
-    except OSError as exc:
-        raise SlackNotificationError(
-            "validation_error", "human_task_notification_config_invalid"
-        ) from exc
+    except OSError:
+        descriptor = -1
+    if descriptor < 0:
+        raise SlackNotificationError("validation_error", "human_task_notification_config_invalid")
+    invalid = False
     try:
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode):
@@ -79,13 +85,14 @@ def _load_machine_config() -> tuple[Path, dict[object, object]]:
         raw_config = safe_load(config_bytes.decode("utf-8"))
     except SlackNotificationError:
         raise
-    except (OSError, UnicodeError, yaml.YAMLError) as exc:
-        raise SlackNotificationError(
-            "validation_error", "human_task_notification_config_invalid"
-        ) from exc
+    except (OSError, UnicodeError, yaml.YAMLError, ValueError, RecursionError):
+        invalid = True
     finally:
         if descriptor >= 0:
             os.close(descriptor)
+    # Raise outside the handler so parser/decoder context cannot expose secrets.
+    if invalid:
+        raise SlackNotificationError("validation_error", "human_task_notification_config_invalid")
     if raw_config is None:
         return config_path, {}
     if not isinstance(raw_config, dict):
@@ -122,7 +129,7 @@ def _normalise_project_root(repository_root: Path) -> str:
 
 
 def _is_private_machine_config(config_path: Path) -> bool:
-    """Direct URLs are credentials, so their config must be private and regular."""
+    """All nonempty routing maps require the existing private-config boundary."""
     try:
         metadata = config_path.lstat()
     except OSError:
@@ -149,15 +156,22 @@ def _bounded_project_webhook_declarations(
 
 
 def _project_webhook_route(
-    *, config_path: Path, declaration: dict[object, object], repository_root: Path
+    *,
+    config_path: Path,
+    declaration: dict[object, object],
+    repository_root: Path | None,
+    credential_mode: Literal["v1", "legacy"] = "legacy",
 ) -> str | None:
     """Validate only routes that resolve to the selected repository."""
     projects = _bounded_project_webhook_declarations(
         config_path=config_path,
         declaration=declaration,
     )
+    if repository_root is None:
+        return None
     selected_root = _normalise_project_root(repository_root)
-    selected_urls: set[str] = set()
+    route_field = "destination" if credential_mode == "v1" else "webhook_url"
+    selected_values: set[str] = set()
     for configured_root, configured_route in projects.items():
         if not isinstance(configured_root, str) or not configured_root:
             continue
@@ -174,25 +188,31 @@ def _project_webhook_route(
             raise SlackNotificationError(
                 "validation_error", "human_task_notification_config_invalid"
             )
-        if set(configured_route) != {"webhook_url"}:
+        if set(configured_route) != {route_field}:
             raise SlackNotificationError(
                 "validation_error", "human_task_notification_config_invalid"
             )
-        webhook_url = configured_route.get("webhook_url")
-        if not isinstance(webhook_url, str):
+        value = configured_route[route_field]
+        if not isinstance(value, str):
             raise SlackNotificationError(
                 "validation_error", "human_task_notification_config_invalid"
             )
-        try:
-            validated_url = _validate_slack_webhook_url(webhook_url)
-        except SlackNotificationError as exc:
-            raise SlackNotificationError(
-                "validation_error", "human_task_notification_config_invalid"
-            ) from exc
-        selected_urls.add(validated_url)
-    if len(selected_urls) > 1:
+        if credential_mode == "v1":
+            if SLACK_DESTINATION_NAME.fullmatch(value) is None:
+                raise SlackNotificationError(
+                    "validation_error", "human_task_notification_config_invalid"
+                )
+        else:
+            try:
+                value = _validate_slack_webhook_url(value)
+            except SlackNotificationError as exc:
+                raise SlackNotificationError(
+                    "validation_error", "human_task_notification_config_invalid"
+                ) from exc
+        selected_values.add(value)
+    if len(selected_values) > 1:
         raise SlackNotificationError("validation_error", "human_task_notification_config_invalid")
-    return next(iter(selected_urls), None)
+    return next(iter(selected_values), None)
 
 
 @dataclass(frozen=True)
@@ -206,7 +226,8 @@ class NotificationPresentation:
 def _safe_label(value: str | None, fallback: str) -> str:
     """Bound project-authored labels and reject Slack links, mentions and extra lines."""
     if (
-        not isinstance(value, str) or not value.strip()
+        not isinstance(value, str)
+        or not value.strip()
         or len(value) > MAX_NOTIFICATION_METADATA_LENGTH
         or any(
             ord(character) < 32 or ord(character) == 127 or character in "<>&@*`|~"
@@ -428,10 +449,11 @@ def load_human_task_notification_settings() -> HumanTaskNotificationSettings:
             code="human_task_notification_transport_unsupported",
         )
     try:
-        _bounded_project_webhook_declarations(
-            config_path=config_path,
-            declaration=declaration,
-        )
+        if os.environ.get(TEST_RUN_SLACK_ROUTING_ENV) != "1":
+            _bounded_project_webhook_declarations(
+                config_path=config_path,
+                declaration=declaration,
+            )
     except SlackNotificationError as exc:
         return HumanTaskNotificationSettings(
             enabled=False,
@@ -451,8 +473,10 @@ def _validate_slack_webhook_url(raw_url: str) -> str:
     try:
         parsed = urlparse(raw_url)
         port = parsed.port
-    except ValueError as exc:
-        raise SlackNotificationError("validation_error", "slack_credentials_invalid") from exc
+    except ValueError:
+        parsed = None
+    if parsed is None:
+        raise SlackNotificationError("validation_error", "slack_credentials_invalid")
     path_parts = parsed.path.removeprefix("/").split("/")
     valid_tokens = (
         len(path_parts) == 4
@@ -460,12 +484,16 @@ def _validate_slack_webhook_url(raw_url: str) -> str:
         and all(re.fullmatch(r"[A-Za-z0-9_-]+", token) for token in path_parts[1:])
     )
     if not (
-        parsed.scheme == "https"
+        not any(ord(character) <= 32 or ord(character) == 127 for character in raw_url)
+        and parsed.scheme == "https"
         and parsed.hostname == SLACK_WEBHOOK_HOST
+        and parsed.netloc.lower() in {SLACK_WEBHOOK_HOST, f"{SLACK_WEBHOOK_HOST}:443"}
         and port in {None, 443}
         and parsed.username is None
         and parsed.password is None
         and not parsed.params
+        and "?" not in raw_url
+        and "#" not in raw_url
         and not parsed.query
         and not parsed.fragment
         and valid_tokens
@@ -493,61 +521,193 @@ def _login_user_home() -> Path:
 
 
 def _slack_credential_file() -> Path:
-    """Select one package-defined credential file for the current process."""
+    """Select the fixed isolated test path or deprecated legacy path."""
     user_home = _trusted_user_home()
-    if os.environ.get(TEST_RUN_SLACK_ROUTING_ENV) == "1" and user_home == _login_user_home():
+    if os.environ.get(TEST_RUN_SLACK_ROUTING_ENV) == "1":
         return user_home / TEST_RUN_SLACK_WEBHOOK_FILENAME
     return user_home / SLACK_WEBHOOK_FILENAME
 
 
-def load_slack_webhook_url(*, repository_root: Path | None = None) -> str:
-    """Read a private machine project route or the package default credential."""
-    if repository_root is not None and os.environ.get(TEST_RUN_SLACK_ROUTING_ENV) != "1":
-        config_path, raw_config = _load_machine_config()
-        declaration = _human_task_notification_declaration(raw_config)
-        project_url = _project_webhook_route(
-            config_path=config_path,
-            declaration=declaration,
-            repository_root=repository_root,
-        )
-        if project_url is not None:
-            return project_url
-    credential_file = _slack_credential_file()
+def _private_credential_metadata(metadata: os.stat_result, *, allow_unlinked: bool = False) -> bool:
+    return (
+        stat.S_ISREG(metadata.st_mode)
+        and stat.S_IMODE(metadata.st_mode) & 0o077 == 0
+        and (not hasattr(os, "getuid") or metadata.st_uid == os.getuid())
+        # An unlinked open inode remains authoritative; reject additional links.
+        and (metadata.st_nlink == 1 or (allow_unlinked and metadata.st_nlink == 0))
+    )
+
+
+def _open_slack_credential(path: Path, *, allow_absent: bool = False) -> int | None:
+    """Observe mode with exactly one no-follow, non-blocking open."""
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    code = ""
     try:
-        descriptor = os.open(credential_file, flags)
-    except FileNotFoundError as exc:
-        raise SlackNotificationError("validation_error", "slack_credentials_missing") from exc
-    except OSError as exc:
-        if credential_file.is_symlink():
-            raise SlackNotificationError("validation_error", "slack_credentials_unsafe") from exc
-        raise SlackNotificationError("validation_error", "slack_credentials_unreadable") from exc
+        return os.open(path, flags)
+    except OSError as error:
+        if error.errno == errno.ENOENT:
+            if allow_absent:
+                return None
+            code = "slack_credentials_missing"
+        else:
+            code = "slack_credentials_unreadable"
+            if error.errno == errno.ELOOP:
+                code = "slack_credentials_unsafe"
+            else:
+                try:
+                    if not _private_credential_metadata(path.lstat()):
+                        code = "slack_credentials_unsafe"
+                except OSError:
+                    pass
+    raise SlackNotificationError("validation_error", code)
+
+
+def _read_slack_credential(descriptor: int, *, limit: int, allow_unlinked: bool = False) -> bytes:
+    """Validate and read only the opened inode, never reopen its pathname."""
+    code = ""
     try:
         metadata = os.fstat(descriptor)
-        private_mode = stat.S_IMODE(metadata.st_mode) & 0o077 == 0
-        owned_by_user = not hasattr(os, "getuid") or metadata.st_uid == os.getuid()
-        if not (
-            stat.S_ISREG(metadata.st_mode)
-            and private_mode
-            and owned_by_user
-            and metadata.st_nlink == 1
-        ):
+        if not _private_credential_metadata(metadata, allow_unlinked=allow_unlinked):
             raise SlackNotificationError("validation_error", "slack_credentials_unsafe")
-        with os.fdopen(descriptor, encoding="utf-8") as credential_stream:
+        if metadata.st_size > limit:
+            raise SlackNotificationError("validation_error", "slack_credentials_invalid")
+        with os.fdopen(descriptor, "rb") as stream:
             descriptor = -1
-            webhook_url = credential_stream.read(MAX_CREDENTIAL_BYTES + 1).strip()
-    except UnicodeError as exc:
-        raise SlackNotificationError("validation_error", "slack_credentials_invalid") from exc
-    except OSError as exc:
-        raise SlackNotificationError("validation_error", "slack_credentials_unreadable") from exc
+            contents = stream.read(limit + 1)
+    except OSError:
+        code = "slack_credentials_unreadable"
     finally:
         if descriptor >= 0:
             os.close(descriptor)
+    if code:
+        raise SlackNotificationError("validation_error", code)
+    if len(contents) > limit:
+        raise SlackNotificationError("validation_error", "slack_credentials_invalid")
+    return contents
+
+
+class _SlackCredentialStoreLoader(yaml.SafeLoader):
+    """Safe YAML with no aliases, anchors, explicit tags or duplicate keys."""
+
+    def compose_node(self, parent, index):
+        event = self.peek_event()
+        if (
+            isinstance(event, yaml.events.AliasEvent)
+            or getattr(event, "anchor", None) is not None
+            or getattr(event, "tag", None) is not None
+        ):
+            raise yaml.YAMLError("unsupported credential YAML syntax")
+        return super().compose_node(parent, index)
+
+    def construct_mapping(self, node, deep=False):
+        mapping = {}
+        for key_node, value_node in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            if not isinstance(key, str) or key == "<<" or key in mapping:
+                raise yaml.YAMLError("invalid credential mapping key")
+            mapping[key] = self.construct_object(value_node, deep=deep)
+        return mapping
+
+
+def _load_slack_destinations(descriptor: int) -> dict[str, str]:
+    """Validate the entire bounded v1 store before any destination selection."""
+    contents = _read_slack_credential(
+        descriptor, limit=MAX_CREDENTIAL_STORE_BYTES, allow_unlinked=True
+    )
+    invalid = False
+    try:
+        text = contents.decode("utf-8")
+        if not text.strip():
+            raise SlackNotificationError("validation_error", "slack_credentials_empty")
+        store = yaml.load(text, Loader=_SlackCredentialStoreLoader)
+    except (UnicodeError, yaml.YAMLError, ValueError, RecursionError):
+        invalid = True
+    if invalid:
+        raise SlackNotificationError("validation_error", "slack_credentials_invalid")
+    if not (
+        isinstance(store, dict)
+        and set(store) == {"version", "slack"}
+        and type(store["version"]) is int
+        and store["version"] == 1
+        and isinstance(store["slack"], dict)
+        and set(store["slack"]) == {"destinations"}
+    ):
+        raise SlackNotificationError("validation_error", "slack_credentials_invalid")
+    destinations = store["slack"]["destinations"]
+    if not (
+        isinstance(destinations, dict)
+        and "default" in destinations
+        and len(destinations) <= MAX_SLACK_DESTINATIONS
+    ):
+        raise SlackNotificationError("validation_error", "slack_credentials_invalid")
+    validated = {}
+    for name, destination in destinations.items():
+        if not (
+            isinstance(name, str)
+            and SLACK_DESTINATION_NAME.fullmatch(name) is not None
+            and isinstance(destination, dict)
+            and set(destination) == {"webhook_url"}
+            and isinstance(destination["webhook_url"], str)
+        ):
+            raise SlackNotificationError("validation_error", "slack_credentials_invalid")
+        validated[name] = _validate_slack_webhook_url(destination["webhook_url"])
+    return validated
+
+
+def _load_legacy_slack_webhook(path: Path) -> str:
+    """Retain the legacy bounded text read while sanitizing decoder failures."""
+    descriptor = _open_slack_credential(path)
+    assert descriptor is not None
+    code = ""
+    try:
+        if not _private_credential_metadata(os.fstat(descriptor)):
+            raise SlackNotificationError("validation_error", "slack_credentials_unsafe")
+        with os.fdopen(descriptor, encoding="utf-8") as stream:
+            descriptor = -1
+            webhook_url = stream.read(MAX_CREDENTIAL_BYTES + 1).strip()
+    except UnicodeError:
+        code = "slack_credentials_invalid"
+    except OSError:
+        code = "slack_credentials_unreadable"
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    if code:
+        raise SlackNotificationError("validation_error", code)
     if len(webhook_url.encode("utf-8")) > MAX_CREDENTIAL_BYTES:
         raise SlackNotificationError("validation_error", "slack_credentials_invalid")
     if not webhook_url:
         raise SlackNotificationError("validation_error", "slack_credentials_empty")
     return _validate_slack_webhook_url(webhook_url)
+
+
+def load_slack_webhook_url(*, repository_root: Path | None = None) -> str:
+    """Resolve exactly one machine-owned destination for both package consumers."""
+    if os.environ.get(TEST_RUN_SLACK_ROUTING_ENV) == "1":
+        return _load_legacy_slack_webhook(_slack_credential_file())
+    store_path = _trusted_user_home() / MACHINE_CONFIG_DIRECTORY / SLACK_CREDENTIAL_STORE_FILENAME
+    descriptor = _open_slack_credential(store_path, allow_absent=True)
+    destinations = _load_slack_destinations(descriptor) if descriptor is not None else None
+    if destinations is None and repository_root is None:
+        return _load_legacy_slack_webhook(_slack_credential_file())
+    config_path, raw_config = _load_machine_config()
+    declaration = _human_task_notification_declaration(raw_config)
+    route = _project_webhook_route(
+        config_path=config_path,
+        declaration=declaration,
+        repository_root=repository_root,
+        credential_mode="v1" if destinations is not None else "legacy",
+    )
+    if destinations is not None:
+        name = route if route is not None else "default"
+        if name not in destinations:
+            raise SlackNotificationError(
+                "validation_error", "slack_credentials_destination_missing"
+            )
+        return destinations[name]
+    if route is not None:
+        return route
+    return _load_legacy_slack_webhook(_slack_credential_file())
 
 
 class _RejectRedirectHandler(HTTPRedirectHandler):
@@ -582,12 +742,17 @@ def post_slack_notification(
         ) as response:  # noqa: S310 - URL is fixed/validated.
             status = response.status
             body = response.read(64).decode("utf-8", errors="replace").strip()
-    except HTTPError as exc:
-        raise SlackNotificationError("script_exit_error", "slack_http_error") from exc
-    except TimeoutError as exc:
-        raise SlackNotificationError("timeout_error", "slack_timeout") from exc
-    except (URLError, OSError) as exc:
-        raise SlackNotificationError("script_exit_error", "slack_transport_error") from exc
+    except HTTPError:
+        failure = ("script_exit_error", "slack_http_error")
+    except TimeoutError:
+        failure = ("timeout_error", "slack_timeout")
+    except (URLError, OSError):
+        failure = ("script_exit_error", "slack_transport_error")
+    else:
+        failure = None
+    # Transport errors can embed the request URL; retain only stable codes.
+    if failure is not None:
+        raise SlackNotificationError(*failure)
     if status != 200:
         raise SlackNotificationError("script_exit_error", "slack_http_error")
     if body != "ok":

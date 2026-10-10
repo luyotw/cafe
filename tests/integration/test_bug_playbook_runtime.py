@@ -235,6 +235,7 @@ class DefectAgent:
                         "target_branch": "main",
                         "destination": "" if github else str(self.repo.parent / "destination"),
                         "issue_repository": "",
+                        "verification": {"not_required_reason": "Offline integration; no post-merge checks in this fixture scope."},
                     }
                 )
             )
@@ -381,8 +382,8 @@ def test_demonstrated_defect_reaches_distinct_review_and_human_pr(journey):
     assert journey.agent.red.returncode == 1 and journey.agent.green.returncode == 0
     assert _git(journey.repo, "status", "--porcelain") == ""
     task = _pending(journey)
-    assert task.policy_id == "delivery-review" and task.step == "pr"
-    _answer(journey, task, decision="review_only")
+    assert task.policy_id == "pr-review" and task.step == "pr"
+    _answer(journey, task, decision="fix_now", feedback="Reassess the PR content.")
     assert BlackboardStore(journey.issue_dir).load_or_create("diagnose").current_step == "pr"
 
 
@@ -446,7 +447,7 @@ def test_fourth_unfinished_attempt_is_blocked_and_authorized_resume_retains_scop
     _answer(journey, task, decision="resume")
     journey.run()
     assert sum(p == phase for p, _ in journey.agent.calls) == 4
-    assert _pending(journey).policy_id == "delivery-review"
+    assert _pending(journey).policy_id == "pr-review"
 
 
 @pytest.mark.parametrize("phase", ["diagnose", "develop", "review"])
@@ -471,7 +472,7 @@ def test_human_response_resumes_affected_work_with_original_evidence(journey, ph
             resumed[1].get("checkpoint_output_file", resumed[1].get("develop_file", "")),
         ),
     )
-    assert _pending(journey).policy_id == "delivery-review"
+    assert _pending(journey).policy_id == "pr-review"
 
 
 @pytest.mark.parametrize("feedback_kind", ["local", "mixed"])
@@ -492,7 +493,7 @@ def test_pr_feedback_is_curated_before_repair_and_review(journey, feedback_kind)
     assert "WF-" in journey.agent.inputs[-3][1]["causal_todo_file"]
     if feedback_kind in ("github", "mixed"):
         assert "PRC-" in journey.agent.inputs[-3][1]["causal_todo_file"]
-    assert _pending(journey).policy_id == "delivery-review"
+    assert _pending(journey).policy_id == "pr-review"
 
 
 def test_publication_permission_approves_only_exact_request_then_returns_to_local_review(
@@ -595,7 +596,7 @@ def test_publication_permission_approves_only_exact_request_then_returns_to_loca
     ).run(start_step="pr")
     assert not resumed.completed
     assert published == ["published"], (resumed.final_status_code, resumed.detail)
-    assert _pending(journey).policy_id == "delivery-review"
+    assert _pending(journey).policy_id == "pr-review"
 
 
 @pytest.mark.parametrize("phase", ["before_red", "diagnose", "develop", "review"])
@@ -616,7 +617,7 @@ def test_interrupted_proof_resumes_with_prior_output_and_cannot_skip_review(jour
         resumed.get("previous_output_file", resumed.get("checkpoint_output_file", "")),
     )
     assert ("RED proof unfinished" if phase == "before_red" else journey.agent.identity) in previous
-    assert _pending(journey).policy_id == "delivery-review"
+    assert _pending(journey).policy_id == "pr-review"
 
 
 def test_missing_delivery_details_pause_for_clarification_without_corrupting_todo(journey):
@@ -626,7 +627,7 @@ def test_missing_delivery_details_pause_for_clarification_without_corrupting_tod
     result = journey.run("diagnose")
     assert not result.completed
     task = _pending(journey)
-    assert task.policy_id == "delivery-details" and task.step == "pr"
+    assert task.policy_id == "pr-review" and task.step == "pr"
     output = journey.issue_dir / "pr/iteration_001/output.md"
     assert parse_todo_list(output.read_text()) == ()
-    assert "## Delivery action details required" in output.read_text()
+    assert "## Delivery action details required" not in output.read_text()

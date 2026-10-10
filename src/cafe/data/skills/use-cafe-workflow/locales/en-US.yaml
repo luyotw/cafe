@@ -40,3 +40,13 @@ chat.delivery_failed: Manager delivery failed before acceptance. Restore the exi
   is preserved.
 chat.cancelled: Chat turn cancelled. Check the originating conversation before retrying
   a submitted message; worker and workflow state are preserved.
+cost.question: 'Would you like to calculate total cost including Manager?'
+cost.yes: 'Yes'
+cost.no: 'No'
+cost.declined: 'Cost report declined. Closeout is complete.'
+cost.cutoff: 'Accounting cutoff (UTC): {captured_at}'
+cost.worker: 'Subtotal excluding Manager: USD {cost}'
+cost.manager: 'Manager cost: USD {cost}'
+cost.combined: 'Combined total: USD {cost}'
+cost.limitations: 'This as-of report excludes active or unpersisted Manager usage, including the response presenting it. Incomplete coverage is a known subtotal, not a complete total.'
+cost.combined_known: 'Combined known subtotal (incomplete): USD {cost}'

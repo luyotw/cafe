@@ -69,6 +69,17 @@ def test_receipt_append_from_stale_view_preserves_both_writers(tmp_path):
     assert [r["capability"] for r in first.load_or_create("spec").capability_receipts] == ["a", "b"]
 
 
+def test_status_distinguishes_machine_wait_from_agent_and_user_wait(tmp_path):
+    issue_dir = tmp_path / "issues" / "issue"
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("spec")
+    state.host_wait = {"step": "spec", "identity": "approved-tool"}
+    store.save(state)
+    status = StatusService(issues_root=tmp_path / "issues").load_current_state("issue", ["spec"])
+    assert status["State"] == "Waiting for external verification"
+    assert status["Next"] == "cafe status"
+
+
 def test_ordinary_status_shows_single_source_callback_failure(tmp_path):
     issue_dir = tmp_path / "issues" / "issue"
     state = BlackboardStore(issue_dir).load_or_create("spec")

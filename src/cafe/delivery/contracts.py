@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
@@ -30,6 +30,7 @@ class DeliveryBinding(FrozenModel):
     result_task: str = "delivery-outcome"
     correction_step: str
     proposals_artifact: str | None = None
+    publication_artifact: str | None = None
 
 
 class ReviewSource(FrozenModel):
@@ -58,6 +59,41 @@ class FollowUp(FrozenModel):
     confidence: int = Field(ge=0, le=100)
 
 
+class VerificationTool(FrozenModel):
+    """One approved Python observer; its options belong to the owning phase."""
+
+    capability: str = Field(default="cafe.delivery.verify", min_length=1, max_length=128)
+    owner: str = Field(pattern=r"^(?:repository|cafe-[A-Za-z0-9_-]+)$")
+    path: str = Field(min_length=1, max_length=512)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    options: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def bounded_tool(self):
+        path = Path(self.path)
+        if path.is_absolute() or ".." in path.parts or path.suffix != ".py":
+            raise ValueError("verification tool must be a relative Python file")
+        if self.owner != "repository" and path.parts[0] != "scripts":
+            raise ValueError("skill verification tool must belong to scripts/")
+        if len(canonical_json(self.options)) > 16384:
+            raise ValueError("verification tool options exceed the bounded input size")
+        return self
+
+
+class DeliveryVerification(FrozenModel):
+    scope: str = Field(default="", max_length=4096)
+    tool: VerificationTool | None = None
+    not_required_reason: str = Field(default="", max_length=2048)
+
+    @model_validator(mode="after")
+    def explicit_scope(self):
+        if bool(self.tool) == bool(self.not_required_reason.strip()):
+            raise ValueError("declare a verification tool or an explicit no-verification reason")
+        if self.tool and not self.scope.strip():
+            raise ValueError("verification tool needs the agreed delivery scope")
+        return self
+
+
 class ActionProposal(FrozenModel):
     version: Literal[1] = 1
     workflow_id: str = Field(min_length=1)
@@ -78,6 +114,7 @@ class ActionProposal(FrozenModel):
     reviewed_artifact: str = ""
     reviewed_artifact_sha256: str = Field(default="", pattern=r"^(?:[0-9a-f]{64})?$")
     capability_review: dict[str, dict] | None = None
+    verification: DeliveryVerification | None = None
 
     @model_serializer(mode="wrap")
     def serialize(self, handler):
@@ -85,6 +122,8 @@ class ActionProposal(FrozenModel):
         # Preserve the exact digest of already-shown legacy proposals.
         if self.capability_review is None:
             value.pop("capability_review", None)
+        if self.verification is None:
+            value.pop("verification", None)
         return value
 
     @model_validator(mode="after")

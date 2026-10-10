@@ -608,3 +608,310 @@ def test_a_background_callback_failure_notification_uses_the_stored_locale(
 
     assert len(posts) == 1
     assert "無法讀取自動通知所需的狀態或設定" in json.loads(posts[0].data)["text"]
+
+
+def _named_store(home: Path) -> tuple[Path, str]:
+    path = home / ".cafe/credentials.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    routed = "https://hooks.slack.com/services/T/B/named-integration-secret"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "slack": {
+                    "destinations": {
+                        "default": {"webhook_url": VALID_WEBHOOK},
+                        "operations": {"webhook_url": routed},
+                    }
+                },
+            }
+        )
+    )
+    path.chmod(0o600)
+    return path, routed
+
+
+def _callback_notification_module():
+    import importlib.util
+
+    path = (
+        Path(__file__).parents[2]
+        / "src/cafe/data/skills/use-cafe-workflow/scripts/workflow_event_callback.py"
+    )
+    spec = importlib.util.spec_from_file_location("named_destination_callback", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("v1", [False, True])
+@pytest.mark.parametrize("route", [False, True])
+@pytest.mark.parametrize("worktree", [False, True])
+def test_human_task_and_callback_failure_share_destination_and_keep_deduplication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, v1: bool, route: bool, worktree: bool
+) -> None:
+    """Real callers use the same default/project route, including linked worktrees."""
+    import subprocess
+
+    import cafe.core.human_task_notifications as notification_mod
+    from cafe.core.workflow_runtime import HumanTaskNotificationDispatcher
+
+    home = tmp_path / "home"
+    home.mkdir()
+    _write_credential(home)
+    _, named = _named_store(home)
+    if not v1:
+        (home / ".cafe/credentials.yaml").unlink()
+    parent = tmp_path / "repository"
+    parent.mkdir()
+    active = parent
+    if worktree:
+        subprocess.run(["git", "init", "-q", str(parent)], check=True, capture_output=True)
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(parent),
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.test",
+                "commit",
+                "--allow-empty",
+                "-qm",
+                "Initial",
+            ],
+            check=True,
+            capture_output=True,
+        )
+        active = parent / ".cafe/worktrees/issue490"
+        subprocess.run(
+            ["git", "-C", str(parent), "worktree", "add", "-q", "-b", "issue490", str(active)],
+            check=True,
+            capture_output=True,
+        )
+    if route:
+        projects = {str(parent): {"destination": "operations"} if v1 else {"webhook_url": named}}
+        if worktree:
+            projects[str(active)] = {"destination": "missing"} if v1 else {"webhook_url": "invalid"}
+        config = home / ".cafe/config.yaml"
+        config.write_text(
+            yaml.safe_dump({"notifications": {"human_tasks": {"projects": projects}}})
+        )
+        config.chmod(0o600)
+    _set_home(monkeypatch, home)
+    posts = []
+    monkeypatch.setattr(
+        notification_mod,
+        "_open_slack_request",
+        lambda request, *, timeout: posts.append((request, timeout)) or _SlackResponse(),
+    )
+    issue_dir = active / ".cafe/issues/named-route"
+    _pause_for_output_review(issue_dir)
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("spec")
+    HumanTaskNotificationDispatcher(
+        issue_dir=issue_dir, blackboard_store=store, blackboard=state
+    ).notify(task)
+    callback = _callback_notification_module()
+    event = {
+        "issue": issue_dir.name,
+        "workflow_id": task.workflow_id,
+        "step": "spec",
+        "event_type": "phase_terminal",
+    }
+    callback._notify_callback_failure(
+        event, repository_root=active, error=ValueError("private callback detail")
+    )
+    callback._notify_callback_failure(
+        event, repository_root=active, error=ValueError("private callback detail")
+    )
+
+    assert len(posts) == 2
+    expected = named if route else VALID_WEBHOOK
+    assert [request.full_url for request, _ in posts] == [expected, expected]
+    assert [timeout for _, timeout in posts] == [5.0, 4.0]
+    payloads = [json.loads(request.data)["text"] for request, _ in posts]
+    assert all(parent.name in payload for payload in payloads)
+    assert payloads[0] != payloads[1]
+    assert task.status is HumanTaskStatus.PENDING
+    records = (issue_dir / "driver/callback_failure_notifications.json").read_text()
+    assert list(json.loads(records)["records"].values())[0]["outcome"] == "sent"
+    persisted = (issue_dir / "blackboard.json").read_text() + records
+    assert expected not in persisted
+    assert "private callback detail" not in persisted
+    assert state.capability_receipts[0]["success"] is True
+
+
+@pytest.mark.parametrize(
+    "source", ["store_yaml", "store_utf8", "config_yaml", "missing_destination"]
+)
+def test_failed_named_notifications_leave_secret_free_exceptions_logs_receipts_and_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog, source: str
+) -> None:
+    import traceback
+
+    import cafe.core.human_task_notifications as notification_mod
+
+    marker = "recognizable-secret-marker"
+    home = tmp_path / "home"
+    home.mkdir()
+    _write_credential(home)
+    credential, _ = _named_store(home)
+    repo = tmp_path / "repository"
+    issue_dir = repo / ".cafe/issues/named-failure"
+    expected_code = "slack_credentials_invalid"
+    if source == "store_yaml":
+        credential.write_text(f"version: 1\nslack: [{marker}")
+    elif source == "store_utf8":
+        credential.write_bytes(marker.encode() + b"\xff")
+    elif source == "config_yaml":
+        config = home / ".cafe/config.yaml"
+        config.write_text(f"notifications: [{marker}")
+        expected_code = "human_task_notification_config_invalid"
+    else:
+        config = home / ".cafe/config.yaml"
+        config.write_text(
+            yaml.safe_dump(
+                {
+                    "notifications": {
+                        "human_tasks": {"projects": {str(repo): {"destination": "missing"}}}
+                    }
+                }
+            )
+        )
+        config.chmod(0o600)
+        expected_code = "slack_credentials_destination_missing"
+    _set_home(monkeypatch, home)
+    monkeypatch.setattr(
+        notification_mod,
+        "_open_slack_request",
+        lambda *args, **kwargs: pytest.fail("invalid credentials must not post"),
+    )
+    _pause_for_output_review(issue_dir)
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    assert state.capability_receipts[0]["code"] == expected_code
+    assert HumanTaskRecordStore(issue_dir).tasks()[0].status is HumanTaskStatus.PENDING
+    callback = _callback_notification_module()
+    event = {"issue": issue_dir.name, "step": "spec", "event_type": "phase_terminal"}
+    # Config errors disable delivery before invoking the shared credential resolver.
+    if source == "config_yaml":
+        callback._notify_callback_failure(
+            event, repository_root=repo, error=ValueError("callback failed")
+        )
+    else:
+        with pytest.raises(notification_mod.SlackNotificationError) as caught:
+            callback._notify_callback_failure(
+                event, repository_root=repo, error=ValueError("callback failed")
+            )
+        assert caught.value.code == expected_code
+        error = caught.value
+        while error is not None:
+            assert marker not in repr(error)
+            error = error.__cause__ or error.__context__
+        assert marker not in "".join(traceback.format_exception(caught.value))
+    persisted = (issue_dir / "blackboard.json").read_text()
+    records = (issue_dir / "driver/callback_failure_notifications.json").read_text()
+    assert marker not in persisted + records + caplog.text
+    assert VALID_WEBHOOK not in persisted + records + caplog.text
+    record = list(json.loads(records)["records"].values())[0]
+    assert record["outcome"] == ("disabled" if source == "config_yaml" else "failed")
+    assert record["notification_code"] == (
+        expected_code if source == "config_yaml" else "SlackNotificationError"
+    )
+
+
+@pytest.mark.parametrize("available", [False, True])
+def test_test_run_human_task_and_callback_never_open_normal_credentials_or_routes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, available: bool
+) -> None:
+    import os
+
+    import cafe.core.human_task_notifications as notification_mod
+
+    home = tmp_path / "home"
+    home.mkdir()
+    _write_credential(home)
+    credential, named = _named_store(home)
+    credential.write_text("invalid production store")
+    # Even an invalid project map is irrelevant to an isolated test notification.
+    config = home / ".cafe/config.yaml"
+    config.write_text("notifications:\n  human_tasks:\n    projects: false\n")
+    config.chmod(0o600)
+    if available:
+        test_file = home / ".cafe/test-slack-webhook"
+        test_file.write_text(named)
+        test_file.chmod(0o600)
+    _set_home(monkeypatch, home)
+    monkeypatch.setattr(notification_mod, "_login_user_home", lambda: home)
+    monkeypatch.setenv("CAFE_TEST_RUN_SLACK_NOTIFICATIONS", "1")
+    posts, opened = [], []
+    original = os.open
+
+    def record_open(path, flags, *args, **kwargs):
+        opened.append(Path(path))
+        return original(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(notification_mod.os, "open", record_open)
+    monkeypatch.setattr(
+        notification_mod,
+        "_open_slack_request",
+        lambda request, *, timeout: posts.append(request) or _SlackResponse(),
+    )
+    repo = tmp_path / "repository"
+    issue_dir = repo / ".cafe/issues/test-isolation"
+    _pause_for_output_review(issue_dir)
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    callback = _callback_notification_module()
+    event = {"issue": issue_dir.name, "step": "spec", "event_type": "phase_terminal"}
+    if available:
+        callback._notify_callback_failure(event, repository_root=repo, error=ValueError("callback"))
+        assert [post.full_url for post in posts] == [named, named]
+        assert state.capability_receipts[0]["success"] is True
+    else:
+        with pytest.raises(notification_mod.SlackNotificationError) as caught:
+            callback._notify_callback_failure(
+                event, repository_root=repo, error=ValueError("callback")
+            )
+        assert caught.value.code == "slack_credentials_missing"
+        assert state.capability_receipts[0]["code"] == "slack_credentials_missing"
+        assert posts == []
+    assert credential not in opened
+    assert home / ".slack-webhook" not in opened
+
+
+def test_disabled_notifications_require_neither_valid_store_nor_legacy_credential(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    import cafe.core.human_task_notifications as notification_mod
+
+    home = tmp_path / "home"
+    home.mkdir()
+    credential, _ = _named_store(home)
+    credential.write_text("invalid store")
+    (home / ".cafe/config.yaml").write_text("notifications:\n  human_tasks:\n    enabled: false\n")
+    _set_home(monkeypatch, home)
+    opened = []
+    original = os.open
+
+    def record_open(path, flags, *args, **kwargs):
+        opened.append(Path(path))
+        return original(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(notification_mod.os, "open", record_open)
+    repo = tmp_path / "repository"
+    issue_dir = repo / ".cafe/issues/disabled-store"
+    _pause_for_output_review(issue_dir)
+    callback = _callback_notification_module()
+    callback._notify_callback_failure(
+        {"issue": issue_dir.name, "step": "spec", "event_type": "phase_terminal"},
+        repository_root=repo,
+        error=ValueError("callback"),
+    )
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    assert state.capability_receipts[0]["code"] == "human_task_notification_disabled"
+    assert credential not in opened
+    assert home / ".slack-webhook" not in opened

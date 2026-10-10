@@ -148,13 +148,8 @@ def test_human_and_pr_contracts_resolve_without_extra_authority(locale):
         step_name="pr",
         trigger="confirm_output",
     )
-    assert policy.id == "delivery-review"
-    assert binding.outcomes == {
-        "fix_now": "pr",
-        "integrate_selected": "deliver",
-        "integrate_only": "deliver",
-        "review_only": "pr",
-    }
+    assert policy.id == "pr-review"
+    assert binding.outcomes == {"fix_now": "pr", "confirm": "deliver"}
     pr = p["steps"]["pr"]
     assert pr["skill"] == "cafe-pr"
     assert pr["capability_requests"] == ["cafe.pr.publish"]
@@ -166,7 +161,6 @@ def test_human_and_pr_contracts_resolve_without_extra_authority(locale):
         "GitHubPRCreator",
         "LocalReviewContextProvider",
         "PRLinkOpener",
-        "DevelopmentActionContext",
     ]
 
 

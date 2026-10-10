@@ -39,6 +39,49 @@ pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
 runner = CliRunner()
 
+@pytest.mark.parametrize("single_step,extra_dir", [(False, False), (True, False), (False, True)])
+def test_foreground_machine_wait_releases_lock_before_optional_background_handoff(
+    tmp_path, monkeypatch, single_step, extra_dir,
+):
+    from cafe.workflow_execution.workflow_hosting import WorkflowHost
+    monkeypatch.chdir(tmp_path)
+    issue = tmp_path / ".cafe/issues/machine-wait"
+    _write_local_only_publication_contract(issue)
+    captured = {}
+    class WaitingRuntime:
+        def __init__(self, **kwargs):
+            pass
+        def run(self, **kwargs):
+            return PlaybookRunResult("spec", "HOST_WAITING", False, wait_seconds=30)
+    class Launcher:
+        def __init__(self, issue_dir):
+            self.issue = issue_dir
+        def launch(self, record, *, extra_args=None):
+            # Child ownership must be available after the parent host returned.
+            assert WorkflowHost(self.issue).run(lambda: "available", hosting="foreground").result == "available"
+            captured["args"] = extra_args
+            return 1234
+    with (
+        patch("cafe.ui.cli.GitOperations") as git_cls,
+        patch("cafe.ui.commands.workflow.BlackboardWorkflowRuntime", WaitingRuntime),
+        patch("cafe.ui.commands.workflow.FixedWorkerLauncher", Launcher),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "machine-wait"
+        git_cls.return_value = git
+        args = ["workflow", "--issue", "machine-wait", "--playbook", "standard", "--execute"]
+        if single_step:
+            args.append("--single-step")
+        if extra_dir:
+            args.extend(["--add-dir", str(tmp_path)])
+        result = runner.invoke(app, args)
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    assert "waiting for external verification" in result.stdout
+    assert bool(captured) == (not single_step and not extra_dir)
+    if extra_dir:
+        assert "same --add-dir grants" in result.stdout
+
+
 
 def _write_local_only_publication_contract(issue_dir: Path) -> None:
     issue_dir.mkdir(parents=True, exist_ok=True)

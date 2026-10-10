@@ -5,35 +5,54 @@ project playbook creates a new, durable HumanTask. This path is optional. The
 task inbox remains authoritative whether delivery succeeds, is disabled,
 deduplicated, denied, or fails.
 
-The webhook selects one channel when it is created in Slack. CAFE does not
-accept a channel, destination, webhook URL, or credential path from a playbook,
-project hook, task, agent response, or environment variable. Operators may
-instead set an exact repository path and webhook in their private machine
-configuration.
+Each Incoming Webhook is bound to one Slack channel. Operators define named
+**destinations** in the login user's machine-owned `~/.cafe/credentials.yaml`
+and reference those names in private `~/.cafe/config.yaml` repository routes.
+The same resolver serves HumanTasks and workflow callback failure notices. Each
+notification selects exactly one destination; fan-out is not supported.
+
+Project configuration, playbooks, hooks, tasks, agent responses, files in the
+working directory and environment variables cannot choose a destination, URL
+or credential path. CAFE resolves the login account's home independently of
+mutable `HOME`.
 
 ## Set up the supported path
 
-1. In Slack, create an Incoming Webhook for the channel that should receive
-   CAFE HumanTask notifications. This is an operator action governed by the
-   workspace's Slack administration policy. Installing or running CAFE does not
-   authorize CAFE to create a Slack app or webhook.
-2. Configure the machine-owned transport in `~/.cafe/config.yaml` (this setting
-   is optional because Slack remains the compatibility default). Disable it
-   explicitly when this machine should record a disabled outcome without making
-   an outbound request:
+1. Create an Incoming Webhook for each channel that should receive notices,
+   following your workspace's Slack administration policy. CAFE does not
+   create Slack apps or webhooks.
+2. Create the fixed credential store privately, using your login account:
 
-   ```yaml
-   notifications:
-     human_tasks:
-       enabled: true
-       transport: slack
+   ```bash
+   mkdir -p ~/.cafe
+   install -m 600 /dev/null ~/.cafe/credentials.yaml
+   ${EDITOR:-vi} ~/.cafe/credentials.yaml
+   chmod 600 ~/.cafe/credentials.yaml
    ```
 
-   To route one repository to its own channel, put its absolute checkout path
-   and Incoming Webhook URL in this same file. Because the URL is a credential,
-   the file must be private (`chmod 600 ~/.cafe/config.yaml`) and must not be
-   committed. CAFE resolves worktrees back to their parent repository, so the
-   main checkout path covers its `.cafe/worktrees/*` workflows as well:
+   For an existing installation, use the migration steps below instead of
+   overwriting credentials. Populate the store with real channel-bound URLs
+   in place of the placeholders:
+
+   ```yaml
+   version: 1
+   slack:
+     destinations:
+       default:
+         webhook_url: https://hooks.slack.com/services/...
+       openfun:
+         webhook_url: https://hooks.slack.com/services/...
+       operations:
+         webhook_url: https://hooks.slack.com/services/...
+   ```
+
+   `default` is required and is used when no project route matches, including
+   notifications without a repository identity. The store must be a regular
+   file owned by the login user, with no group/other permissions and no hard
+   links. Symlinks (including broken ones), directories, FIFOs, sockets and
+   devices are rejected. Never commit credentials or copy them into project
+   files, playbooks, tasks or scripts.
+3. Optionally configure delivery and named routes in `~/.cafe/config.yaml`:
 
    ```yaml
    notifications:
@@ -41,52 +60,164 @@ configuration.
        enabled: true
        transport: slack
        projects:
-         /home/you/work/open-forest-scripts:
-           webhook_url: https://hooks.slack.com/services/...
+         /home/you/work/cafe:
+           destination: default
+         /home/you/work/openfun:
+           destination: openfun
+         /home/you/work/production-tools:
+           destination: operations
+         /home/you/work/another-tool:
+           destination: operations
    ```
 
-   A project route only affects that exact resolved path; other repositories
-   keep using the default credential below. Project files, environment
-   variables, symbolic links, and relative paths cannot supply or redirect a
-   route. CAFE reads at most 64 KiB of machine configuration and accepts at
-   most 128 project routes. A configuration over either limit is invalid. A
-   malformed route fails closed when it resolves to the active repository,
-   while a malformed sibling route cannot suppress another repository's fixed
-   fallback credential.
+   Set `enabled: false` to record disabled outcomes without requiring any
+   credential. Omitting the transport setting retains Slack as the default.
+   An omitted or null `projects` value means no routes. Any nonempty project
+   map still requires a login-user-owned, regular, single-link private config
+   (`chmod 600 ~/.cafe/config.yaml`), even though named routes contain no URL.
+   The config must not be a symlink. Do not commit this machine configuration.
 
-3. Create the fixed user-owned credential file for normal HumanTasks and
-   restrict it to your account:
+   Routes use normalized **exact absolute repository paths**. CAFE resolves
+   linked worktrees back to their parent repository, so the parent checkout
+   route also covers `.cafe/worktrees/*` workflows. Multiple repositories may
+   share one destination. Explicit `destination: default` is valid. Relative
+   keys do not match, and unmatched malformed sibling route values do not
+   block another repository. Multiple keys resolving to the active repository
+   must agree on one destination; conflicting names fail closed.
+4. Run a supported workflow normally. A real durable pending HumanTask, such
+   as an output-review or permission task, causes one immediate delivery
+   attempt. Inspect its receipt as described below. Delivery failure leaves
+   the task available in the normal inbox.
 
-   ```bash
-   install -m 600 /dev/null ~/.slack-webhook
-   ${EDITOR:-vi} ~/.slack-webhook
-   chmod 600 ~/.slack-webhook
+No project-specific playbook, skill, credential or notification script is
+required.
+
+### Store validation and fail-closed routing
+
+The store's root contains exactly `version` and `slack`; `version` is integer
+`1` (not a boolean or string), and `slack` contains exactly `destinations`.
+Every mapping key must be a string. Each destination contains exactly one
+string field, `webhook_url`. Names are case-sensitive and match
+`^[a-z][a-z0-9_-]{0,63}$`. The reserved `default` destination is mandatory.
+Unknown fields, duplicate keys, YAML anchors, aliases, merge keys and explicit
+tags are invalid at every level. The file must use UTF-8.
+
+CAFE reads at most 64 KiB of raw credential bytes and accepts at most 128
+destinations, including `default`. It validates **every** destination before
+selecting a route: an invalid unused webhook invalidates the entire store.
+Only HTTPS URLs on `hooks.slack.com` with a `/services/...` webhook path are
+accepted. Port may be omitted or explicitly `443`; userinfo, other ports,
+query strings, fragments and HTTP redirects are rejected.
+
+A selected v1 route contains exactly `{destination: <name>}`. URLs, arbitrary
+credential paths, multiple destinations, mixed legacy/new fields and extra
+fields are invalid. A legal name absent from a valid store produces
+`slack_credentials_destination_missing`; it never falls back to `default`.
+Missing `default` is instead `slack_credentials_invalid` for the entire store.
+Machine config retains its existing 64 KiB limit and 128-project route limit.
+
+Each normal resolution attempts exactly one no-follow, non-blocking open of
+`~/.cafe/credentials.yaml`. A successful open is authoritative for metadata,
+bounded reading and parsing, even if the path is then replaced or removed.
+Only that open returning `ENOENT` selects legacy mode for that invocation.
+An observed v1 store that is unsafe, unreadable, empty or invalid fails closed;
+it never reads the legacy fallback or selects a legacy inline URL. A store
+created after the `ENOENT` observation takes effect on the next resolution.
+CAFE never creates, migrates, rewrites or deletes operator credentials.
+
+### Rotate a webhook
+
+Create the replacement webhook through Slack's administration interface.
+Prepare a private copy of `credentials.yaml`, replace the chosen destination's
+URL and retain valid entries for all other destinations. Install the copy at
+the fixed path with mode `0600` and login-user ownership. Using a replacement
+file on the same filesystem and renaming it avoids exposing partial YAML to
+notifications. Repository routes keep the same destination names.
+
+Verify a genuine new notification and its secret-free receipt before revoking
+the old webhook in Slack. An invocation that already opened the old inode may
+finish using that credential; subsequent resolutions use the replacement.
+Keep any temporary files or backups private, since they contain credentials.
+
+### Migrate from the deprecated legacy sources
+
+Legacy `~/.slack-webhook` and private per-project inline `{webhook_url: ...}`
+routes remain supported **only while the fixed v1 store is absent**. In legacy
+mode, a matching inline URL takes precedence over the fallback file. Selected
+`destination` routes are invalid in legacy mode. Conversely, inline URLs are
+invalid selected routes once the v1 store exists. Legacy removal timing and
+test credential migration are outside this change.
+
+For a single fallback credential:
+
+1. Temporarily set `notifications.human_tasks.enabled: false` in machine
+   config. Preserve its previous value for restoration, and keep a private
+   backup of existing settings and credentials.
+2. Stage `~/.cafe/credentials.yaml.new` with mode `0600`, login-user ownership
+   and the v1 schema above. Copy the URL from `~/.slack-webhook` into `default`.
+   The staged filename is for manual preparation; CAFE only reads the fixed
+   `credentials.yaml` path.
+3. Install the staged store at `~/.cafe/credentials.yaml`, restore the previous
+   enabled setting and verify the receipt for a genuine new HumanTask. Keep
+   the deprecated fallback private for rollback; CAFE no longer reads it.
+
+For multiple inline repository routes:
+
+1. Disable notifications and preserve private backups as above.
+2. Stage a v1 store with the old fallback URL as `default`. Copy each inline
+   webhook into a named destination such as `openfun` or `operations`. Reuse
+   one name when multiple repositories intentionally share a webhook.
+3. While delivery is disabled, replace every applicable inline route with its
+   destination reference. For example:
+
+   ```yaml
+   # Before: old private machine route
+   /home/you/work/openfun:
+     webhook_url: https://hooks.slack.com/services/...
    ```
 
-4. Put only the channel-bound Incoming Webhook URL in that file, on one line.
-   The supported form is `https://hooks.slack.com/services/...`. Never commit
-   this file or copy its value into a project `.cafe` directory, a playbook, a
-   task, or a script. It remains the fallback for repositories without a route.
-   CAFE resolves the login account's home directory independently of `HOME`
-   and rejects credential files that are symlinks, non-regular files, owned by
-   another user, hard-linked, or accessible by group/other users.
-5. Run any supported workflow normally. Do not invoke a notification script or
-   synthetic hook. When CAFE durably creates a real pending HumanTask, such as
-   an output-review or permission task, it makes one immediate attempt.
+   ```yaml
+   # After: replacement route
+   /home/you/work/openfun:
+     destination: openfun
+   ```
 
-No project-specific playbook, skill, credential, or script is required in a
-clean repository.
+   Keep only the replacement entry; do not retain duplicate repository keys.
+   Preserve absolute repository paths and keep config mode `0600`.
+4. Install the staged store at the fixed path, restore the previous enabled
+   setting and verify new notifications for routed and unrouted repositories.
+   All destinations must be valid, including those not used by the first test.
+
+### Roll back in a complete sequence
+
+1. Disable notifications while changing formats.
+2. **First restore** a private, valid legacy `~/.slack-webhook` and any former
+   inline `{webhook_url: ...}` routes in private machine config. Replace all
+   `destination` routes with their legacy equivalent (or remove them if the
+   intended legacy behavior is the fallback). Restore ownership and mode
+   `0600` on credential-bearing files.
+3. **Only then** move `~/.cafe/credentials.yaml` aside to a private backup or
+   remove it, so the fixed path is absent and the next resolution selects
+   legacy mode.
+4. Restore the prior enabled setting and verify a new notification receipt.
+
+Deleting the store while leaving selected `destination` routes is an invalid
+half-migration and fails closed. An invalid store left at the fixed path also
+prevents legacy fallback; repairing credentials or deliberately completing the
+rollback is required.
 
 ### Keep coverage-test notifications separate
 
 The global pytest bootstrap marks every test process, whether pytest starts in
 the repository root or a Git worktree. HumanTasks materialized by test fixtures
-then use the separate fixed credential `~/.cafe/test-slack-webhook`; subprocesses
-spawned by those tests inherit the same route. The credential must be a private
+and workflow callback failure notices use only the separate fixed credential
+`~/.cafe/test-slack-webhook`; subprocesses spawned by those tests inherit the
+same route. With `CAFE_TEST_RUN_SLACK_NOTIFICATIONS=1`, CAFE bypasses the normal
+v1 store, named destinations, project routing and legacy fallback. The credential must be a private
 regular file owned by the login user. If it is missing or invalid, test-run
 HumanTask delivery fails closed and never falls back to the normal HumanTask
-channel. The marker chooses only between these two package-defined paths: it
-cannot supply a URL, channel, or credential path from project content.
+channel. The marker selects this one fixed test path; it cannot supply a URL, channel,
+destination or credential path from project content.
 
 ## What the notification contains
 
@@ -135,10 +266,11 @@ symbolic credential is `slack_human_task_webhook`. Prompts, raw agent output,
 task feedback, project-defined fields, and credential values are never passed
 to the capability, notification, or receipt.
 
-The trusted package adapter first checks for an exact path route in the private
-machine config and otherwise reads the fallback `~/.slack-webhook` credential;
-the coverage test runner is the sole exception and uses the separately
-provisioned fixed test credential above. It accepts HTTPS Slack Incoming
+The trusted package adapter validates the whole machine-owned v1 store and
+selects an exact repository destination reference or `default`. Only an absent
+v1 store permits the deprecated private inline route / `~/.slack-webhook`
+resolver. HumanTasks and workflow callback failure notices share these rules;
+test runs use only the separately provisioned fixed test credential above. It accepts HTTPS Slack Incoming
 Webhook URLs only, rejects redirects, and bounds the connection attempt to five
 seconds. The URL is used as the outbound request destination but is not put in
 the message, repository, HumanTask record, project-hook input, log, or receipt.
@@ -170,8 +302,10 @@ Interpret the stable fields as follows:
 | Skipped | code `human_task_notification_config_invalid`, `human_task_notification_transport_unsupported`, or `human_task_notification_not_actionable` | The machine configuration is unusable, the provider is unsupported, or the task is no longer actionable; no post occurs. |
 | Deduplicated | code `human_task_notification_deduplicated`, `outcome: deduplicated` | CAFE already recorded a delivery decision for this task, so it does not post again. |
 | Denied | `success: false`, decision outcome `deny` | The exact request failed registered argument, effect, credential, permission, or package policy checks; the adapter did not run. |
-| Missing or unreadable credential | code `slack_credentials_missing`, `slack_credentials_empty`, `slack_credentials_unreadable`, or `slack_credentials_unsafe` | Repair the fallback user credential file, ownership, and permissions. |
-| Invalid credential | code `slack_credentials_invalid` | Replace the file contents with a valid channel-bound Slack HTTPS Incoming Webhook URL. |
+| Missing or unreadable credential | code `slack_credentials_missing`, `slack_credentials_empty`, `slack_credentials_unreadable`, or `slack_credentials_unsafe` | Repair the selected machine credential file, ownership and permissions; v1 errors never trigger legacy fallback. |
+| Invalid credential | code `slack_credentials_invalid` | Repair the entire v1 schema and every destination URL, or the legacy URL if the v1 store is absent. |
+| Missing named destination | code `slack_credentials_destination_missing` | Define the referenced name in the valid v1 store or correct the selected machine route. |
+| Unsafe route config | code `human_task_notification_config_unsafe` | Restore login ownership, a regular single-link file and private permissions on nonempty machine routing config. |
 | Slack/transport failure | code `slack_http_error`, `slack_response_not_ok`, `slack_timeout`, or `slack_transport_error` | Slack rejected the post or could not be reached. |
 | Interrupted | code `slack_notification_interrupted` | CAFE durably began an attempt but stopped before its final outcome could be recorded; it does not resend because Slack may already have accepted the post. |
 | Internal fail-closed error | code `slack_notification_internal_error` | The trusted path could not complete evaluation; inspect local installation/runtime health. |

@@ -115,6 +115,27 @@ esac
 
 "$SMOKE_VENV/bin/cafe" --help >/dev/null
 
+echo "Verifying packaged pricing commands and all four offline rate snapshots..."
+CAFE_PRICING_AUTO_UPDATE=0 CAFE_PRICING_CACHE_DIR="$RELEASE_TEMP_DIR/pricing-cache" \
+    "$SMOKE_VENV/bin/python" - "$SMOKE_VENV/bin/cafe" <<'PYPRICING'
+import json
+import subprocess
+import sys
+from cafe.core.cost import account_cost, summarize_cost
+from cafe.core.types import TokenUsage
+
+result = subprocess.run(
+    [sys.argv[1], "pricing", "status", "--provider", "all", "--json"],
+    capture_output=True, text=True, check=True,
+)
+cards = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+assert {card["provider"] for card in cards} == {"openai", "copilot", "cursor", "gemini"}
+assert all(card["version"] and card["models"] for card in cards)
+reported = account_cost(TokenUsage(total_cost_usd=0), cli="claude", model=None)
+assert reported.cost_records[0]["provenance"] == "reported"
+assert summarize_cost(reported.cost_records)["unknown"] == 0
+PYPRICING
+
 echo "Verifying packaged Manager and diagnostic chat commands..."
 "$SMOKE_VENV/bin/python" - "$SMOKE_VENV/bin/cafe" <<'PYCODE'
 import subprocess
@@ -161,7 +182,7 @@ echo "Verifying packaged development delivery capabilities..."
 from pathlib import Path
 from cafe.core.capabilities import default_capability_definition_dirs, load_capability_registry
 registry = load_capability_registry(default_capability_definition_dirs(Path.cwd()))
-for name in ("cafe.github.pr.merge", "cafe.branch.integrate", "cafe.github.issue.create"):
+for name in ("cafe.github.pr.merge", "cafe.branch.integrate", "cafe.github.issue.create", "cafe.delivery.verify"):
     definition = registry[name]
     assert definition.approval == "required", name
 PYCAPABILITIES
@@ -200,13 +221,13 @@ uv pip check --python "$UPGRADE_VENV/bin/python"
 "$UPGRADE_VENV/bin/python" "$PROJECT_ROOT/scripts/release-upgrade-smoke.py" verify --root "$UPGRADE_PROJECT"
 
 start_stage upgrade_current
-echo "Verifying v0.8.1 pending delivery review after upgrade to the current wheel..."
+echo "Verifying v0.8.2 pending delivery review after upgrade to the current wheel..."
 CURRENT_SOURCE="$RELEASE_TEMP_DIR/current-baseline"
 CURRENT_DIST="$RELEASE_TEMP_DIR/current-baseline-dist"
 CURRENT_VENV="$RELEASE_TEMP_DIR/current-upgrade-venv"
 CURRENT_PROJECT="$RELEASE_TEMP_DIR/current-upgrade-project"
 mkdir -p "$CURRENT_SOURCE" "$CURRENT_PROJECT"
-git -C "$PROJECT_ROOT" archive v0.8.1 | tar -x -C "$CURRENT_SOURCE"
+git -C "$PROJECT_ROOT" archive v0.8.2 | tar -x -C "$CURRENT_SOURCE"
 uv build "$CURRENT_SOURCE" --wheel --out-dir "$CURRENT_DIST" >/dev/null
 uv venv "$CURRENT_VENV" >/dev/null
 uv pip install --python "$CURRENT_VENV/bin/python" "$CURRENT_DIST"/*.whl >/dev/null

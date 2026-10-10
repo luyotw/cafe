@@ -13,6 +13,7 @@ _COUNTERS = frozenset(TokenUsage.model_fields) - {
     "duration_ms",
     "duration_api_ms",
     "turn_usages",
+    "cost_records",
 }
 _TAIL_BYTES = 2 * 1024 * 1024
 _LINE_BYTES = 256 * 1024
@@ -190,3 +191,58 @@ def prepare_resumed_usage(command, environment, *, selected_session=None):
             return TokenUsage(**durations)
 
     return project
+
+
+def prepare_model_reader(environment):
+    """Read model identity only from this invocation's exact native journal.
+
+    Stdout often omits the model. Never replace it with requested configuration
+    or a rolling alias. Large, missing or mixed-model evidence stays unknown.
+    """
+    from datetime import datetime, timezone
+
+    started_at = datetime.now(timezone.utc)
+    home = Path(environment.get("CODEX_HOME") or Path.home() / ".codex")
+
+    def read(session):
+        try:
+            if str(uuid.UUID(session)) != session:
+                return None
+            path = _find_journal(home, session)
+            with _open_journal(path) as handle:
+                first = handle.readline(_LINE_BYTES + 1)
+                metadata = json.loads(first)
+                if (metadata.get("type") != "session_meta"
+                        or metadata.get("payload", {}).get("id") != session):
+                    return None
+                size = os.fstat(handle.fileno()).st_size
+                offset = max(len(first), size - _TAIL_BYTES)
+                handle.seek(offset)
+                if offset > len(first):
+                    handle.readline(_LINE_BYTES + 1)
+                models = set()
+                boundary_seen = offset == len(first)
+                while handle.tell() < size:
+                    line = handle.readline(min(_LINE_BYTES + 1, size - handle.tell()))
+                    if len(line) > _LINE_BYTES or not line.endswith(b"\n"):
+                        return None
+                    record = json.loads(line)
+                    timestamp = record.get("timestamp")
+                    if not timestamp:
+                        continue
+                    instant = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                    if instant.tzinfo is None:
+                        return None
+                    if instant < started_at:
+                        boundary_seen = True
+                        continue
+                    if record.get("type") == "turn_context":
+                        model = record.get("payload", {}).get("model")
+                        if not isinstance(model, str) or not model.strip() or len(model) > 512:
+                            return None
+                        models.add(model)
+                return next(iter(models)) if boundary_seen and len(models) == 1 else None
+        except (OSError, ValueError, TypeError, AttributeError, RecursionError):
+            return None
+
+    return read

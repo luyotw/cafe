@@ -999,8 +999,9 @@ def confirmation_gate_steps(model: PlaybookDefinition) -> tuple[str, ...]:
 
     ``on.confirm_output`` is the playbook-level declaration that a completed
     step may hand its output to the user for approval. A matching binding that
-    declares feedback delivery is a mandatory human task, not an assignable
-    kickoff choice. Other user-owned intents such as clarification, permission,
+    declares feedback delivery defaults to a mandatory human task. An explicit
+    ``mandatory_confirmation: false`` keeps content review assignable without
+    dropping correction delivery. Other user-owned intents such as clarification, permission,
     and alignment checkpoints are reactive safety interruptions.
     """
     return tuple(
@@ -1022,7 +1023,9 @@ def mandatory_confirmation_gate_steps(model: PlaybookDefinition) -> tuple[str, .
 
 def _has_mandatory_confirmation_gate(step: StepConfig) -> bool:
     return any(
-        binding.trigger == "confirm_output" and binding.feedback_delivery is not None
+        binding.trigger == "confirm_output"
+        and binding.feedback_delivery is not None
+        and binding.mandatory_confirmation
         for binding in step.human_tasks
     )
 
@@ -1088,6 +1091,13 @@ class PlaybookDefinition(BaseModel):
                 ):
                     raise ValueError("delivery approval and correction must name declared steps")
                 approval = self.steps[binding.approval_step]
+                if binding.publication_artifact and (
+                    binding.publication_artifact not in (approval.input_artifacts or [])
+                    or approval.output_artifact != binding.result_artifact
+                    or not any(task.trigger == "need_permission" and task.task_id == binding.approval_task
+                               for task in approval.human_tasks)
+                ):
+                    raise ValueError("delivery-owned action review requires the declared publication input, result and permission task")
                 if (
                     approval.delivery != binding
                     or binding.actions_artifact == binding.result_artifact

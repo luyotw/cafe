@@ -1,4 +1,4 @@
-"""Registered host adapters for three exact development delivery effects."""
+"""Registered host adapters for exact delivery effects and approved observers."""
 
 import json
 from pathlib import Path
@@ -64,4 +64,39 @@ def adapter(*, repo_root, request, manifest, output_file, timeout_sec):
     except (OSError, ValueError, KeyError) as exc:
         raise CapabilityExecutionError(
             "delivery_binding", "invalid_action_binding", outputs={"reason": str(exc)[:1024]}
+        ) from exc
+
+
+def verification_adapter(*, repo_root, request, manifest, output_file, timeout_sec):
+    """Fixed observer execution; platform semantics belong to the approved tool."""
+    from cafe.core.capabilities import CapabilityExecutionError
+    from cafe.delivery.records import ActionStore
+    from cafe.delivery.verification import run_tool, validate_tool_capability
+    from cafe.delivery.approvals import validate_reviewed_request
+    from cafe.core.capabilities import evaluate_capability_request
+
+    try:
+        snapshot = snapshot_from_args(request.args)
+        issue_dir = Path(request.args["issue_dir"]).resolve()
+        issue_dir.relative_to(Path(repo_root).resolve() / ".cafe" / "issues")
+        validate_snapshot_authority(issue_dir, snapshot)
+        validate_tool_capability(manifest)
+        if (request.args["action"] != "verification"
+                or request.capability != snapshot.proposal.verification.tool.capability):
+            raise ValueError("verification capability differs from the approved tool")
+        if snapshot.proposal.capability_review is None or "verification" not in snapshot.proposal.capability_review:
+            raise ValueError("verification needs the displayed repeated host-execution authority")
+        validate_reviewed_request(
+            issue_dir=issue_dir, snapshot=snapshot, action="verification",
+            evaluation=evaluate_capability_request({manifest.id: manifest}, request.model_dump(mode="json")),
+        )
+        receipt = ActionStore(issue_dir, snapshot).read("integration")
+        if not receipt or receipt["state"] != "succeeded":
+            raise ValueError("successful integration evidence is required")
+        result = run_tool(repo_root, snapshot, receipt["commit"], timeout=min(timeout_sec, 30))
+        return {"state": result["state"], "payload": json.dumps(result, sort_keys=True)}, None
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise CapabilityExecutionError(
+            "verification_binding", "invalid_verification_binding",
+            outputs={"reason": str(exc)[:1024]},
         ) from exc

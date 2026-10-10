@@ -29,6 +29,17 @@ class PlaybookRunResult:
     final_status_code: str
     completed: bool
     detail: Optional[str] = None
+    wait_seconds: float | None = None
+
+
+class StepWaiting(Exception):
+    """Host-only normal waiting; neither an agent intent nor a HumanTask."""
+
+    def __init__(self, *, step: str, identity: str, delay: float, detail: str = ""):
+        if not 1 <= delay <= 300:
+            raise ValueError("host wait must use a bounded check interval")
+        self.step, self.identity, self.delay, self.detail = step, identity, delay, detail
+        super().__init__(detail or "Waiting for external verification")
 
 
 class StepInterrupted(Exception):

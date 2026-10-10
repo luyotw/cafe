@@ -483,6 +483,7 @@ class AgentManager:
             AgentExecutionError: If all agents (primary + backups) fail
         """
         self._failed_attempts = []
+        self._failed_cost_usage = TokenUsage()
         self._last_native_review_observations = []
         saved_sessions: Dict[AgentCLI, str] = {}
         base_executor = self.get_agent(agent_name)
@@ -671,6 +672,10 @@ class AgentManager:
         self._total_token_usage.cache_read_input_tokens += token_usage.cache_read_input_tokens
         self._total_token_usage.reasoning_output_tokens += token_usage.reasoning_output_tokens
         self._total_token_usage.total_cost_usd += token_usage.total_cost_usd
+        self._total_token_usage.cost_records = [
+            *self._total_token_usage.cost_records,
+            *token_usage.cost_records,
+        ]
         if token_usage.turn_usages:
             self._total_token_usage.turn_usages.extend(token_usage.turn_usages)
 
@@ -686,6 +691,14 @@ class AgentManager:
             else:
                 self._total_token_usage.duration_api_ms += token_usage.duration_api_ms
 
+        if self._failed_cost_usage.cost_records:
+            from cafe.core.usage import merge_token_usage_stats
+
+            token_usage = TokenUsage(
+                **merge_token_usage_stats(
+                    self._failed_cost_usage.model_dump(exclude_unset=True), token_usage
+                )
+            )
         return response, token_usage, permission_denials, cli_command_args, streaming_log, model
 
     def preview_cli_command_args(
@@ -995,7 +1008,7 @@ class AgentManager:
 
         # All agents (primary + all fallbacks) failed, compose error message
         tried_list = ", ".join(failed_agents)
-        raise AgentExecutionError(
+        error = AgentExecutionError(
             f"All agents failed. Tried: {tried_list}. "
             f"Please wait for transient failures to clear or add more backup agents.",
             error_type=getattr(primary_error, "error_type", None) or "agent_unavailable",
@@ -1004,6 +1017,8 @@ class AgentManager:
                 "Please wait for transient failures to clear or add more backup agents."
             ),
         )
+        error.accounting_usage = self._failed_cost_usage.model_copy(deep=True)
+        raise error
 
     def _record_failed_attempt(
         self,
@@ -1021,6 +1036,25 @@ class AgentManager:
             attempt=attempt,
             error=error,
         )
+        from cafe.core.cost import account_cost
+        from cafe.core.usage import merge_token_usage_stats
+
+        evidence = getattr(error, "transport_result", None)
+        usage = getattr(error, "accounting_usage", None)
+        if not isinstance(usage, TokenUsage):
+            usage = (
+                evidence.usage
+                if evidence is not None and evidence.usage is not None
+                else account_cost(TokenUsage(), cli=cli.value, model=None, complete=False)
+            )
+        prior = getattr(self, "_failed_cost_usage", TokenUsage())
+        self._failed_cost_usage = TokenUsage(
+            **merge_token_usage_stats(prior.model_dump(exclude_unset=True), usage)
+        )
+        self._total_token_usage = TokenUsage(
+            **merge_token_usage_stats(self._total_token_usage.model_dump(exclude_unset=True), usage)
+        )
+        error.accounting_usage = self._failed_cost_usage.model_copy(deep=True)
         if model is not None:
             from cafe.agents.diagnostics import sanitize_error_excerpt
 
@@ -1124,6 +1158,7 @@ class AgentManager:
         self._total_token_usage.cache_read_input_tokens += token_usage.cache_read_input_tokens
         self._total_token_usage.reasoning_output_tokens += token_usage.reasoning_output_tokens
         self._total_token_usage.total_cost_usd += token_usage.total_cost_usd
+        self._total_token_usage.cost_records = [*self._total_token_usage.cost_records, *token_usage.cost_records]
 
         # For duration, accumulate the values
         if token_usage.duration_ms is not None:
