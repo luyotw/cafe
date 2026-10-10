@@ -445,3 +445,45 @@ def test_overlay_is_explicit_unconditional_and_cannot_own_primary_settings():
     ):
         with pytest.raises(ValidationError):
             SkillWorkflowDeclaration.model_validate({"checklist_overlay": invalid})
+
+
+def test_step_defaults_version_one_accepts_only_phase_local_values():
+    """U1: all six fields are optional; omission preserves legacy declarations."""
+    values = {"assignee_type": "agent", "output_artifact": "report",
+              "allowed_tools": ["Read"], "hooks": {"prepare_input": []},
+              "behavior": {"completion": "baton"}, "max_iterations": 5}
+    contract = SkillWorkflowDeclaration.model_validate(
+        {"step_defaults": {"version": 1, "values": values}})
+    assert contract.step_defaults.values == values
+    assert SkillWorkflowDeclaration.model_validate({}).step_defaults is None
+
+
+@pytest.mark.parametrize("declaration", [
+    None, [], {}, {"version": 1}, {"version": 2, "values": {}},
+    {"version": True, "values": {}}, {"version": "1", "values": {}},
+    {"version": 1, "values": None}, {"version": 1, "values": [], "extra": True},
+])
+def test_step_defaults_reject_malformed_envelopes(declaration):
+    """U1: malformed or unsupported declarations fail closed."""
+    with pytest.raises(ValueError):
+        SkillWorkflowDeclaration.model_validate({"step_defaults": declaration})
+
+
+@pytest.mark.parametrize("field", [
+    "role", "input_artifacts", "initial_input", "human_tasks", "allowed_goto", "on",
+    "execution", "delivery", "capability_requests", "workspace_artifact",
+    "max_attempts_per_cycle", "unknown",
+])
+def test_step_defaults_reject_graph_and_unsupported_fields(field):
+    """U2: phase declarations cannot own orchestration or widen version 1."""
+    with pytest.raises(ValueError, match=field):
+        SkillWorkflowDeclaration.model_validate(
+            {"step_defaults": {"version": 1, "values": {field: None}}})
+
+
+@pytest.mark.parametrize("field", ["feedback_target", "feedback_artifact", "feedback_routes"])
+def test_step_defaults_reject_nested_routing(field):
+    """U2: graph and artifact routing cannot be hidden inside behavior."""
+    with pytest.raises(ValueError, match=field):
+        SkillWorkflowDeclaration.model_validate(
+            {"step_defaults": {"version": 1, "values": {"behavior": {field: None}}}})
