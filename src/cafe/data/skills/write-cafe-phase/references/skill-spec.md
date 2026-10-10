@@ -93,6 +93,54 @@ Supporting-skill selection is authoring-time work. Runtime does not search the
 network, download mutable latest content, or guess substitutes. External issue
 creation, comments, or closing require explicit user authorization.
 
+### Phase-owned step defaults
+
+A selected primary phase Skill may declare optional `workflow.step_defaults`:
+
+```yaml
+workflow:
+  step_defaults:
+    version: 1
+    values:
+      assignee_type: agent
+      output_artifact: report
+      allowed_tools: [Read, Grep, Glob]
+      hooks:
+        prepare_input: [UserInputCollector]
+      behavior:
+        completion: baton
+      max_iterations: 5
+```
+
+The envelope contains exactly integer `version: 1` and a `values` mapping (which
+may be empty). Omission preserves legacy behavior; explicit null, unsupported
+versions, extra keys and malformed values fail closed. Version 1 permits only
+`assignee_type`, `output_artifact`, `allowed_tools`, `hooks`, `behavior` and
+`max_iterations`. The latter must be a positive integer or null and normalizes
+to the canonical step field `max_attempts_per_cycle`.
+
+Defaults come only from the selected primary Skill through existing aliases
+and project/global/builtin precedence. Shared, role, chat and step overlay
+Skills never supply defaults. Each iteration selector candidate must yield an
+equivalent final step contract after schema normalization; conflicts require
+explicit Playbook overrides, not freezing selection to iteration 1.
+
+Raw Playbook values win. Mappings merge recursively; scalars, lists and null
+replace. Lists never concatenate; `[]` clears a list. `{}` retains mapping
+defaults and is not a deletion command. Null is preserved and the existing
+field validator accepts or rejects it. Declared values are validated before
+merging, so a valid override cannot hide an invalid default. The assembled
+Playbook still passes existing schema and strict semantic validation.
+
+Playbooks explicitly own `role`, `input_artifacts`, `initial_input`,
+`human_tasks` bindings/outcomes, `allowed_goto`, `on`, workspace bindings,
+execution, delivery and capability requests. Behavior defaults cannot contain
+`feedback_target`, `feedback_artifact` or `feedback_routes`; retain the complete
+feedback routing tuple in the Playbook. Extract only identical safe values and
+compare all affected consumers against independent pre-change resolved
+contracts. No whole-playbook inheritance, deletion syntax or graph assembly
+is implied.
+
 ### Workflow metadata contract
 
 Phase skills may declare provider-neutral workflow metadata in frontmatter.

@@ -801,6 +801,8 @@ steps:
   fixed-review:
     role: developer
     skill: cafe-pr
+    behavior: {completion: status_code, publish_confirmation: false}
+    hooks: {prepare_input: [], publish_output: []}
     human_tasks:
       - trigger: confirm_output
         task_id: local-review

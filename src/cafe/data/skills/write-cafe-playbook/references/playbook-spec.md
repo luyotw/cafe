@@ -127,6 +127,37 @@ contract and every other warning are resolved.
 
 ## 3. Step Fields
 
+### Assemble primary phase defaults explicitly
+
+A step's selected primary Skill may supply version-1 `workflow.step_defaults`
+using `{version: 1, values: {...}}`. Only `assignee_type`, `output_artifact`,
+`allowed_tools`, `hooks`, `behavior` and `max_iterations` are eligible. These
+fields may be omitted from raw YAML when the selected Skill provides them;
+the resolved step must still satisfy all existing validators. See the phase
+[defaults contract](../../write-cafe-phase/references/skill-spec.md#phase-owned-step-defaults).
+
+Resolve the Skill using existing catalog precedence and aliases, merge defaults
+before Playbook validation, then keep strict validation authoritative. Shared,
+role, chat and overlay Skills do not contribute defaults. Iteration-aware
+selectors require equivalent normalized resolved contracts for every candidate;
+explicit overrides can resolve a conflict.
+
+Playbook scalars/lists replace defaults and mappings merge recursively. An
+empty list clears; an empty mapping retains inherited keys. Null replaces and
+is accepted or rejected by the existing field validator. Invalid defaults fail
+even when explicitly overridden. Skill `max_iterations` normalizes to
+`max_attempts_per_cycle`; either raw Playbook spelling overrides the default,
+but declaring both raw spellings is invalid. Existing issue.yaml attempt-limit
+overrides apply afterward.
+
+Always declare graph assembly, role selection, artifact flow, initial input,
+HumanTask outcome targets, `allowed_goto`, `on`, workspace, execution, delivery
+and capability requests in Playbooks. Do not supply behavior routing through
+Skill defaults: `feedback_target`, `feedback_artifact` and `feedback_routes`
+are forbidden there. Keep the complete feedback tuple explicit. Compare full
+resolved contracts when removing identical declarations; distinct workflows
+retain their explicit choices.
+
 ### Current artifact contract
 
 - Declare each backward correction route on its producing step with

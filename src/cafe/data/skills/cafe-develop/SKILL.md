@@ -3,6 +3,26 @@ name: cafe-develop
 description: "依計畫進行程式開發與測試"
 version: 1.12.0
 workflow:
+  step_defaults:
+    version: 1
+    values:
+      assignee_type: agent
+      output_artifact: code
+      allowed_tools:
+      - Read
+      - Edit
+      - Write
+      - Grep
+      - Glob
+      - Bash
+      - WebFetch
+      - WebSearch
+      hooks:
+        prepare_input:
+        - UserInputCollector
+        after_execute:
+        - NoChangesNeededHandler
+        - PermissionRetryHandler
   notification:
     step_label:
       message_key: notification.step_labels.develop
