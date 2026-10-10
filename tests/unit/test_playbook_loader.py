@@ -2392,6 +2392,43 @@ def test_builtin_catalog_includes_hotfix_and_simple() -> None:
     assert "incident" in playbooks
 
 
+def test_cached_builtin_models_validate_only_requested_playbooks_strictly(
+    tmp_path, monkeypatch, cached_builtin_playbook_models,
+):
+    from unittest.mock import Mock
+    from tests import conftest
+    from cafe.playbooks import loader as loader_module
+
+    cache = {}
+    monkeypatch.setattr(conftest, "_BUILTIN_PLAYBOOK_CACHE", cache)
+    validate = Mock(wraps=loader_module.load_playbook_file)
+    monkeypatch.setattr(loader_module, "load_playbook_file", validate)
+    loader = PlaybookLoader(project_root=tmp_path / "project", global_root=tmp_path / "global")
+    first = loader.load_model("bug")
+    assert set(cache) == {"bug"}
+    assert validate.call_count == 1
+    assert validate.call_args.kwargs["strict"] is True
+    second = loader.load_model("bug", strict=True)
+    assert validate.call_count == 1
+    assert first is not second
+    assert first.as_dict() == second.as_dict()
+
+
+@pytest.mark.parametrize("source", ["project", "global"])
+def test_cached_builtin_models_reject_new_invalid_overrides(
+    tmp_path, cached_builtin_playbook_models, source,
+):
+    project, global_root = tmp_path / "project", tmp_path / "global"
+    loader = PlaybookLoader(project_root=project, global_root=global_root)
+    loader.load_model("bug", strict=True)
+    root = project / ".cafe" if source == "project" else global_root
+    override = root / "playbooks" / "bug.yaml"
+    override.parent.mkdir(parents=True, exist_ok=True)
+    override.write_text("playbook: [malformed]\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        loader.load_model("bug", strict=True)
+
+
 def test_builtin_playbooks_declare_en_us_conversation_locale(
     cached_builtin_playbook_models,
 ) -> None:

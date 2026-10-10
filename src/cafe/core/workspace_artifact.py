@@ -84,7 +84,11 @@ def workspace_correction_prompt(
 
 def inspect_workspace(repo: Path) -> WorkspaceInspection:
     """Use Git's ignore rules while retaining tracked and non-ignored changes."""
-    root = _repo_root(Path(repo))
+    return _inspect_workspace_root(_repo_root(Path(repo)))
+
+
+def _inspect_workspace_root(root: Path) -> WorkspaceInspection:
+    """Inspect a root already resolved during this same Git observation."""
     raw = _git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all")
     tokens = raw.split("\x00") if raw else []
     changes: list[dict[str, str]] = []
@@ -132,16 +136,29 @@ def _repo_root(repo: Path) -> Path:
     return root
 
 
-def _resolve_commit(repo: Path, value: str, *, field: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise WorkspaceArtifactError(f"workspace {field} SHA is missing")
-    try:
-        resolved = _git(repo, "rev-parse", "--verify", f"{value}^{{commit}}")
-    except WorkspaceArtifactError as exc:
-        raise WorkspaceArtifactError(f"workspace {field} SHA is not resolvable") from exc
-    if not _SHA.fullmatch(resolved):
-        raise WorkspaceArtifactError(f"workspace {field} SHA has an invalid form")
-    return resolved
+def _workspace_commits(repo: Path, base: str, head: str) -> tuple[Path, str, str]:
+    """Resolve the root and both commit objects in one fresh Git query.
+
+    Require exactly two canonical commit results: rev-parse can otherwise
+    return success with fewer results for an unknown revision. HEAD is still
+    checked separately at the original boundary immediately before status.
+    """
+    for field, value in (("base", base), ("head", head)):
+        if not isinstance(value, str) or not value.strip():
+            raise WorkspaceArtifactError(f"workspace {field} SHA is missing")
+        if any(character in value for character in ("\n", "\r", "\x00")):
+            raise WorkspaceArtifactError(f"workspace {field} SHA is not resolvable")
+    raw = _git(
+        repo.resolve(), "rev-parse", "--show-toplevel", "--revs-only",
+        "--end-of-options", f"{base}^{{commit}}", f"{head}^{{commit}}",
+    )
+    parts = raw.rsplit("\n", 2)
+    if len(parts) != 3 or not all(_SHA.fullmatch(value) for value in parts[1:]):
+        raise WorkspaceArtifactError("workspace base or head SHA is not resolvable")
+    root = Path(parts[0]).resolve()
+    if root != repo.resolve():
+        raise WorkspaceArtifactError("workspace repository must be the active worktree root")
+    return root, parts[1], parts[2]
 
 
 def _changed_files(repo: Path, base_sha: str, head_sha: str) -> tuple[dict[str, str], ...]:
@@ -293,9 +310,7 @@ def build_workspace_artifact(
     authenticated against a verification receipt.
     """
     del receipt_outputs
-    root = _repo_root(Path(repo))
-    resolved_base = _resolve_commit(root, base_sha, field="base")
-    resolved_head = _resolve_commit(root, head_sha, field="head")
+    root, resolved_base, resolved_head = _workspace_commits(Path(repo), base_sha, head_sha)
     if resolved_base != resolved_head:
         result = subprocess.run(
             ["git", "merge-base", "--is-ancestor", resolved_base, resolved_head],
@@ -310,7 +325,7 @@ def build_workspace_artifact(
         raise WorkspaceArtifactError("workspace version must be a positive integer")
     if _git(root, "rev-parse", "HEAD") != resolved_head:
         raise WorkspaceArtifactError("workspace head changed before snapshot creation")
-    inspect_workspace(root).require_clean()
+    _inspect_workspace_root(root).require_clean()
     return WorkspaceArtifact(
         name=name,
         version=version,
@@ -333,12 +348,10 @@ def verify_workspace_artifact(
             if isinstance(artifact, WorkspaceArtifact)
             else WorkspaceArtifact.from_dict(artifact)
         )
-        root = _repo_root(Path(repo))
+        root, base, head = _workspace_commits(Path(repo), current.base_sha, current.head_sha)
         reasons: list[str] = []
         if current.repository != str(root):
             reasons.append("workspace repository does not match the active worktree")
-        base = _resolve_commit(root, current.base_sha, field="base")
-        head = _resolve_commit(root, current.head_sha, field="head")
         if base != current.base_sha or head != current.head_sha:
             reasons.append("workspace commit identity is not canonical")
         if base != head:
@@ -347,10 +360,9 @@ def verify_workspace_artifact(
             )
             if result.returncode != 0:
                 reasons.append("workspace base is not an ancestor of head")
-        actual_head = _git(root, "rev-parse", "HEAD")
-        if actual_head != head:
+        if _git(root, "rev-parse", "HEAD") != head:
             reasons.append("workspace head is stale")
-        if not inspect_workspace(root).clean:
+        if not _inspect_workspace_root(root).clean:
             reasons.append("workspace worktree is dirty")
         if tuple(current.changed_files) != _changed_files(root, base, head):
             reasons.append("workspace changed-file set does not match Git comparison")
