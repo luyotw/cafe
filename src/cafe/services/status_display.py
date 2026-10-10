@@ -566,10 +566,19 @@ class StatusDisplay:
         """Show step and workflow known subtotals, including chat coverage gaps."""
         from cafe.core.cost import merge_cost_records
 
+        from cafe.services.cost_summary import summarize_sources
+
+        sources = []
         phases = {}
         for entry in entries:
             if entry.entry_type != "iteration":
                 continue
+            sources.append(dict(
+                source_id=f"{entry.phase}/{entry.iteration}/{entry.start_time}",
+                records=entry.cost_records, legacy_cost=entry.cost_usd,
+                gap=bool(entry.cost_records and any(self._legacy_entry_usage(entry).values())
+                         and not summarize_cost(entry.cost_records, legacy_cost=entry.cost_usd)["counts"]["legacy"]),
+            ))
             phase = phases.setdefault(entry.phase, {"records": [], "legacy": []})
             if entry.cost_records:
                 phase["records"] = merge_cost_records(phase["records"], entry.cost_records)
@@ -584,7 +593,10 @@ class StatusDisplay:
                     phase["legacy"].append(legacy)
             else:
                 phase["legacy"].append(summarize_cost([], legacy_cost=entry.cost_usd))
-        for group in groups:
+        for index, group in enumerate(groups):
+            sources.append(dict(source_id=f"chat/{index}", records=group.get("cost_records", []),
+                                legacy_cost=group.get("stats", {}).get("total_cost_usd"),
+                                gap="total_cost_usd" in group.get("unknown_fields", [])))
             phase = phases.setdefault(group.get("phase") or "--", {"records": [], "legacy": []})
             if group.get("cost_records"):
                 phase["records"] = merge_cost_records(phase["records"], group["cost_records"])
@@ -606,7 +618,7 @@ class StatusDisplay:
             summary = combine_cost_summaries(parts)
             summaries.append(summary)
             lines.append(f"{name}: {format_cost(summary)}")
-        lines.append(f"Workflow: {format_cost(combine_cost_summaries(summaries))}")
+        lines.append(f"Workflow: {format_cost(summarize_sources(sources))}")
         text = "\n".join(lines)
         if RICH_AVAILABLE:
             console.print(text, markup=False)
