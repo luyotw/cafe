@@ -306,8 +306,15 @@ def accounting_admission(records):
         )
         return normalized_counters(row.get("usage", {}), inclusive=inclusive)
 
-    def total(rows):
-        known = [counters(row)[0] for row in rows]
+    def total(rows, *, observations=False):
+        known = [
+            (
+                normalized_counters(row.get("usage", {}), inclusive=False)[0]
+                if observations
+                else counters(row)[0]
+            )
+            for row in rows
+        ]
         result = {}
         for key in COUNTERS:
             values = [usage[key] for usage in known if key in usage]
@@ -350,7 +357,8 @@ def accounting_admission(records):
         # Conflicting observations remain represented, even when none is admissible.
         observations = row.get("native_usage", {}).get("conflicts") or [row]
         represented_rows.extend(observations)
-    represented = total(represented_rows)
+    # Semantically rejected counters are still represented observations, not legacy work.
+    represented = total(represented_rows, observations=True)
     amounts = [
         Decimal(str(r["amount_usd"])) for r in represented_rows if r.get("amount_usd") is not None
     ]

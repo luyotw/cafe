@@ -399,6 +399,47 @@ def test_public_source_preserves_normalization_gaps_with_known_categories(tmp_pa
     assert summary["incomplete"]
 
 
+@pytest.mark.parametrize("legacy_cache", [0, 7])
+def test_public_sink_does_not_recast_rejected_represented_cache_as_legacy(tmp_path, legacy_cache):
+    from cafe.core.usage import iteration_usage_sink
+
+    parent = dict(
+        invocation_id="attested",
+        provenance="reported",
+        amount_usd="0.2",
+        complete=True,
+        usage=dict(input_tokens=10, output_tokens=2, total_tokens=12, cache_read_input_tokens=99),
+        token_total_evidence=dict(kind="input_plus_output", source="native_adapter"),
+    )
+    child = record(100, "final")
+    path = tmp_path / "iteration.json"
+    path.write_text(
+        json.dumps(
+            dict(
+                iteration=1,
+                stats=dict(
+                    input_tokens=110,
+                    output_tokens=12,
+                    cache_read_input_tokens=99 + legacy_cache,
+                    total_cost_usd=1.2,
+                    cost_records=[parent, child],
+                ),
+            )
+        )
+    )
+    sink = iteration_usage_sink(tmp_path, path)
+    for _ in range(2):
+        sink(TokenUsage(cost_records=[child]))
+        stats = json.loads(path.read_text())["stats"]
+        assert stats["cache_read_input_tokens"] == legacy_cache
+        assert (
+            stats.get("accounting_residual", {}).get("cache_read_input_tokens", 0) == legacy_cache
+        )
+        summary = summarize_cost(stats["cost_records"], legacy_cost=stats["total_cost_usd"])
+        assert "cache_read_input_tokens" not in summary["native_usage"]["tokens"]
+        assert summary["incomplete"]
+
+
 @pytest.mark.parametrize("provider", ["cursor-agent", "custom-provider"])
 def test_public_source_keeps_non_native_exclusive_cache_categories(tmp_path, provider):
     directory = tmp_path / "compose/iteration_001"

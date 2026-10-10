@@ -392,3 +392,6 @@ normalized subset/total checks and retain validation gaps. Other admitted caller
 records keep valid provider counters and cache aliases without assuming that
 input includes cache. Generic reducers neither choose semantics from provider
 names nor derive totals for a provider whose semantics were not attested.
+Represented subtotals retain numerically valid observed counters even when their
+attested subset or total relationships fail admission. Such rejected observations
+cannot become legacy residuals; the admitted view keeps its validation gaps.
