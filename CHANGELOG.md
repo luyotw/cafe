@@ -11,6 +11,26 @@ All notable changes to this project will be documented in this file.
 - Add pricing inspection and background rate updates with stale-cache handling
   and manual overrides (#607).
 
+## [0.8.2] - 2026-10-10
+
+### Fixed
+
+- Deliver callbacks to the original App-owned Codex Manager session through
+  the shared native queue after an exact native writer-conflict response.
+  Validate the bound thread, model and queue API before background launch;
+  preserve user stops and never replay ambiguous admissions (#612).
+
+### Changed
+
+- Reduce repeated workspace snapshot checks and batch Git observations while
+  preserving fresh validation at each execution boundary (#618).
+- Run the existing local commit/push test selections with four work-stealing
+  workers; strictly validate cached builtin playbooks when first requested,
+  retaining project/global override resolution (#618).
+
+See [the v0.8.2 release notes](docs/releases/v0.8.2.md) for callback recovery,
+performance changes and upgrade guidance.
+
 ## [0.8.1] - 2026-10-09
 
 ### Fixed
