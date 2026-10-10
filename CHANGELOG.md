@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.9.2] - 2026-10-11
+
+### Fixed
+
+- Project invocation-local native reviewers and verify independent completion for
+  Gemini, Copilot and Cursor in streamlined workflows. Preserve existing agents,
+  resumed native sessions, confirmed models and checkpoint-bound review evidence.
+- Add Codex native spawn/wait observation with child model and permission checks;
+  reject writable parents because Codex 0.159.3 inherits their permissions.
+- Capture native reviewer results on the structured response-parser path, including
+  Claude, and reject malformed or rewritten targeted-test evidence before delivery.
+
 ## [0.9.1] - 2026-10-10
 
 ### Fixed

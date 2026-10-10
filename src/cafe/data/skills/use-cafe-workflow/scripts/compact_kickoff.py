@@ -141,7 +141,7 @@ def discover(
                 validate_native_review_projection(
                     {phase["name"]: phase["chain"] for phase in inputs.get("phases", [])},
                     [name for name, step in model.steps.items() if step.execution.review_policy],
-                    configuration,
+                    configuration, working_directory=request["project_root"],
                 )
             except (
                 OSError,

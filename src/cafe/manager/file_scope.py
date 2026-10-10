@@ -62,7 +62,7 @@ def execution_scope_projection(issue_dir: Path, root: Path):
         validate_native_review_projection(
             {phase["name"]: phase["chain"] for phase in contract["phases"]},
             [name for name, step in graph["steps"].items() if step["execution"]["review_policy"]],
-            review,
+            review, working_directory=root,
         )
     from ._execution_projection import execution_inputs
     from cafe.core.execution_artifacts import bounded_execution_json
