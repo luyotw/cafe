@@ -359,3 +359,16 @@ cutoff. A descendant active at the ownership boundary remains partial.
 At an ended host ownership boundary, equal timestamps across journals do not
 prove causal order. Such observations are excluded with
 `ownership_boundary_ambiguous`; the verified earlier counter prefix stays known.
+
+Generic native reports consume explicit normalized `total_tokens`; they never
+choose arithmetic from a provider name. For the supported native version, the
+Codex adapter attests caller input-plus-output totals before saving records,
+alongside `token_total_evidence`. Historical records without a known normalized
+total retain their known categories and incomplete total coverage. Timeline
+entries with absent or null statistics remain displayable with unknown usage.
+
+The standalone native delegation helper selects the requested checkout runtime
+through the existing bounded bootstrap before importing CAFE. Run it with the
+CLI's Python interpreter and `--project-root`; source and installed helper bundles
+require no manually configured `PYTHONPATH`. Ordinary projects keep their current
+installed runtime.

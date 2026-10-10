@@ -127,6 +127,9 @@ def test_custom_worker_public_caller_keeps_child_identity_and_owns_cutoff(
     assert {r["model"] for r in view["children"]} == {"actual-child-model"}
     assert view["child_tokens"]["total_tokens"] == 165
     assert view["tokens"]["input_tokens"] == 160
+    assert view["tokens"]["total_tokens"] == 177
+    (root_record,) = [r for r in stats["cost_records"] if "native_usage" not in r]
+    assert root_record["usage"]["total_tokens"] == 12
     before = metadata.read_bytes()
     sink(result.usage)
     assert metadata.read_bytes() == before

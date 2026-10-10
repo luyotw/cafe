@@ -19,7 +19,7 @@ def record(end=100, status="progress", model="gpt-5.4", inclusion="exclusive", k
         provenance="estimated",
         amount_usd=str(end / 100),
         complete=status == "final",
-        usage=dict(input_tokens=end, output_tokens=end // 10),
+        usage=dict(input_tokens=end, output_tokens=end // 10, total_tokens=end + end // 10),
         native_usage=dict(
             version=1,
             segment_id="one",
@@ -115,7 +115,7 @@ def test_overlapping_physical_ranges_are_not_additive():
     two["invocation_id"] = "native:two"
     two["native_usage"]["segment_id"] = "two"
     two["native_usage"]["start"].update(offset=30, counters=dict(input_tokens=20, output_tokens=2))
-    two["usage"] = dict(input_tokens=80, output_tokens=8)
+    two["usage"] = dict(input_tokens=80, output_tokens=8, total_tokens=88)
     two["amount_usd"] = "0.8"
     view = native_projection([one, two])
     assert not view["complete"] and view["combined_tokens"] is None
@@ -163,7 +163,7 @@ def test_exact_inclusive_parent_preserves_authoritative_amount_and_child_detail(
         session_id="root",
         cli="codex",
         model="parent-model",
-        usage=dict(input_tokens=200, output_tokens=20),
+        usage=dict(input_tokens=200, output_tokens=20, total_tokens=220),
         provenance="reported",
         amount_usd="2",
         complete=True,

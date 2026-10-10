@@ -3,6 +3,8 @@
 import json
 from decimal import Decimal
 
+import pytest
+
 from cafe.services.cost_summary import collect_cost_sources, summarize_sources
 
 
@@ -126,3 +128,42 @@ def test_unpriced_legacy_usage_keeps_source_incomplete(tmp_path):
     result = summarize_sources(collect_cost_sources(tmp_path))
     assert result["known"] == 2
     assert not result["incomplete"]
+
+
+@pytest.mark.parametrize("provider", ["custom-provider", "codex"])
+@pytest.mark.parametrize("total", [None, 12])
+def test_custom_report_uses_explicit_neutral_totals_and_preserves_unknowns(
+    tmp_path, provider, total
+):
+    from tests.unit.test_native_accounting import record as native_record
+
+    parent_usage = dict(input_tokens=10, output_tokens=2)
+    if total is not None:
+        parent_usage["total_tokens"] = total
+    child = native_record(100, "final")
+    child["cli"] = "custom-provider"
+    child["usage"]["total_tokens"] = 110
+    directory = tmp_path / "compose/iteration_001"
+    directory.mkdir(parents=True)
+    (directory / "iteration.json").write_text(
+        json.dumps(
+            dict(
+                stats=dict(
+                    cost_records=[
+                        record("root", cli=provider, session_id="root", usage=parent_usage),
+                        child,
+                    ]
+                )
+            )
+        )
+    )
+    summary = summarize_sources(collect_cost_sources(tmp_path))
+    view = summary["native_usage"]
+    assert view["child_tokens"]["total_tokens"] == 110
+    assert view["tokens"]["total_tokens"] == 110 + (total or 0)
+    assert view["tokens"]["input_tokens"] == 110
+    assert len(view["children"]) == 1
+    if total is None:
+        assert not view["complete"] and view["combined_tokens"] is None
+    else:
+        assert view["complete"]

@@ -112,6 +112,24 @@ class NativeInterval:
             entry_gaps=self.entry_gaps,
         )
 
+    def attest_caller_usage(self, usage):
+        """Normalize root totals here; generic reports never infer provider semantics."""
+        if getattr(self, "root_version", None) != SUPPORTED_VERSION:
+            return usage
+        result = usage.model_copy(deep=True)
+        for record in result.cost_records:
+            if "native_usage" in record:
+                continue
+            counters, _ = normalized_counters(record.get("usage", {}))
+            if {"input_tokens", "output_tokens"} <= counters.keys():
+                record["usage"]["total_tokens"] = (
+                    counters["input_tokens"] + counters["output_tokens"]
+                )
+                record["token_total_evidence"] = dict(
+                    kind="input_plus_output", source="native_adapter", version=SUPPORTED_VERSION
+                )
+        return result
+
     def bind(self, root):
         root = session_id(root)
         if self.root is not None and self.root != root:

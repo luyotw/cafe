@@ -296,13 +296,6 @@ def native_projection(records):
             for r in rows:
                 usage = r.get("usage", {})
                 value = usage.get(key)
-                if (
-                    key == "total_tokens"
-                    and value is None
-                    and r.get("cli") == "codex"
-                    and ({"input_tokens", "output_tokens"} <= usage.keys())
-                ):
-                    value = usage["input_tokens"] + usage["output_tokens"]
                 known.append(value)
             values = [v for v in known if type(v) is int]
             if values:
@@ -317,6 +310,8 @@ def native_projection(records):
     scopes = [r for r in records if r.get("native_usage", {}).get("kind") == "scope"]
     gaps.extend(gap for r in scopes for gap in r["native_usage"]["gaps"])
     for r in additive:
+        if type(r.get("usage", {}).get("total_tokens")) is not int:
+            gaps.append("total_tokens_unavailable")
         if r.get("native_usage", {}).get("kind") != "child" and (
             not {"input_tokens", "output_tokens"} <= r.get("usage", {}).keys()
             or not r.get("complete", True)

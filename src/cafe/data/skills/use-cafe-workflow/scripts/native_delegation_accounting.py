@@ -10,7 +10,21 @@ import os
 import sys
 from pathlib import Path
 
-from cafe.manager.costs import CostStore, native_delegation_begin, native_delegation_finalize
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+
+from _runtime_bootstrap import align_checkout_runtime  # noqa: E402
+
+if __name__ == "__main__":
+    align_checkout_runtime()
+
+# Runtime selection must finish before these CAFE imports.
+from cafe.manager.costs import (  # noqa: E402
+    CostStore,
+    native_delegation_begin,
+    native_delegation_finalize,
+)
 
 
 def _adapter(name):

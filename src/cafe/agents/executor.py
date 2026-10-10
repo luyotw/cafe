@@ -1565,6 +1565,9 @@ class AgentExecutor:
                             if observation_evidence.observed_session_id:
                                 native_descendants.bind(observation_evidence.observed_session_id)
                             native_records = native_descendants.collect(final=True)
+                            parsed.token_usage = native_descendants.attest_caller_usage(
+                                parsed.token_usage
+                            )
                         except Exception:
                             native_records = [
                                 native_descendants.open_record(

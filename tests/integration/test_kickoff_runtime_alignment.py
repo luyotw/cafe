@@ -153,3 +153,71 @@ def test_preloaded_wrong_runtime_fails_without_mixing_modules(tmp_path, installe
     )
     assert result.returncode != 0
     assert "CAFE runtime already loaded" in result.stderr
+
+
+@pytest.mark.parametrize("bundled", [True, False])
+@pytest.mark.parametrize("external_runtime", ["stale", "absent"])
+def test_native_delegation_entry_bootstraps_requested_checkout_before_imports(
+    tmp_path, installed_helper, bundled, external_runtime
+):
+    scripts, env = installed_helper
+    if external_runtime == "absent":
+        # An importable package lacking CAFE's runtime represents an absent API.
+        (Path(env["PYTHONPATH"]) / "cafe/__init__.py").write_text("", encoding="utf-8")
+    script = (scripts if bundled else SCRIPT_ROOT) / "native_delegation_accounting.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "--project-root", str(PROJECT_ROOT), "--help"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "--correlation" in result.stdout and "--fresh-facts" in result.stdout
+
+
+def test_installed_native_delegation_bundle_keeps_current_runtime_for_ordinary_project(
+    tmp_path, installed_helper
+):
+    scripts, env = installed_helper
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(scripts / "native_delegation_accounting.py"),
+            "--project-root",
+            str(tmp_path),
+            "--help",
+        ],
+        cwd=tmp_path,
+        env={**env, "PYTHONPATH": str(PROJECT_ROOT / "src")},
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("bundled", [True, False])
+def test_native_delegation_entry_uses_cli_owning_interpreter_without_pythonpath(
+    tmp_path, installed_helper, bundled
+):
+    cli = shutil.which("cafe")
+    if cli is None:
+        pytest.skip("CAFE CLI entry is not installed in this test environment")
+    shebang = Path(cli).read_text(encoding="utf-8").splitlines()[0]
+    if not shebang.startswith("#!/") or " " in shebang:
+        pytest.skip("CLI does not declare a direct Python interpreter")
+    scripts, env = installed_helper
+    env.pop("PYTHONPATH", None)
+    script = (scripts if bundled else SCRIPT_ROOT) / "native_delegation_accounting.py"
+    result = subprocess.run(
+        [shebang[2:], str(script), "--project-root", str(PROJECT_ROOT), "--help"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "--correlation" in result.stdout

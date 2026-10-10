@@ -215,7 +215,7 @@ class TimelineBuilder:
         # Extract token usage data from stats
         cli = iteration_status.get("cli")
         model = iteration_status.get("model")
-        stats = iteration_status.get("stats", {})
+        stats = iteration_status.get("stats") or {}
         input_tokens = stats.get("input_tokens") if stats else None
         output_tokens = stats.get("output_tokens") if stats else None
         cache_write_tokens = stats.get("cache_write_input_tokens") if stats else None

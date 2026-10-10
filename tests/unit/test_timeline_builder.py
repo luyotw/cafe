@@ -590,3 +590,41 @@ class TestSortChronologicallyWithEndTime:
         # Completed (end 10:15) should come after in_progress (start 10:10, treated as 10:10)
         assert sorted_entries[0].name == "In Progress"
         assert sorted_entries[1].name == "Completed"
+
+
+@pytest.mark.parametrize("status", ["pending", "in_progress", "completed"])
+@pytest.mark.parametrize("stats", [None, {}])
+def test_public_timeline_unknown_stats_remain_displayable(status, stats):
+    iteration = dict(timestamp="2026-10-10T15:50:00+00:00", iteration=1, status=status)
+    if stats is None:
+        iteration["stats"] = None
+    entries = TimelineBuilder("custom", phase_names=["compose"]).build_timeline_entries(
+        {}, {"compose": [iteration]}
+    )
+    (entry,) = entries
+    assert entry.phase == "compose"
+    assert entry.input_tokens is None and entry.output_tokens is None and entry.cost_usd is None
+    assert entry.native_usage is None
+
+
+def test_public_timeline_preserves_known_native_detail_alongside_unknown_usage():
+    from tests.unit.test_native_accounting import record as native_record
+
+    child = native_record(100, "final")
+    entries = TimelineBuilder("custom", phase_names=["compose"]).build_timeline_entries(
+        {},
+        {
+            "compose": [
+                dict(
+                    iteration=1,
+                    timestamp="2026-10-10T15:50:00+00:00",
+                    status="in_progress",
+                    stats=dict(cost_records=[child]),
+                )
+            ]
+        },
+    )
+    (entry,) = entries
+    assert entry.input_tokens is None and entry.cost_usd is None
+    assert entry.native_usage["children"][0]["session_id"] == "child"
+    assert entry.native_usage["child_tokens"]["input_tokens"] == 100
