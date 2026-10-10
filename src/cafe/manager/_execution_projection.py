@@ -2,6 +2,7 @@
 
 
 def execution_inputs(policy, *, identity, revision, digest, root, review_policy, checkpoint_command):
+    from cafe.agents.cli.native_review import reviewer_type, review_instructions
     scope = policy["file_scope"]
     return {
         "version": 1,
@@ -16,6 +17,7 @@ def execution_inputs(policy, *, identity, revision, digest, root, review_policy,
         "review_policy": review_policy,
         "phase_chains": {phase["name"]: phase["chain"] for phase in policy["phases"]},
         "delivery_endpoint": policy["delivery_contract"],
-        "native_reviewer_type": "cafe_reviewer",
+        "native_reviewer_type": reviewer_type(policy["review_configuration"]),
+        "native_review_instructions": review_instructions(policy["review_configuration"]),
         "checkpoint_command": checkpoint_command,
     }

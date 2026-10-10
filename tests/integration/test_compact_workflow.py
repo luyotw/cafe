@@ -78,7 +78,7 @@ def test_runtime_requires_native_terminal_proof_even_with_status_completion(comp
     assert not result.completed and result.final_status_code == "NATIVE_REVIEW_BLOCKED"
 
 
-def native_context(compact_request, tmp_path, monkeypatch):
+def native_context(compact_request, tmp_path, monkeypatch, cli_name="claude"):
     import os
     import yaml
     from tests.unit._kickoff_test_support import load_kickoff_module
@@ -86,13 +86,13 @@ def native_context(compact_request, tmp_path, monkeypatch):
     root = Path(compact_request["project_root"])
     binary = tmp_path / "provider-bin"
     binary.mkdir()
-    cli = binary / "claude"
+    cli = binary / cli_name
     cli.write_text("#!/bin/sh\nif [ \"$1\" = --version ]; then echo fixture-provider; exit 0; fi\nexit 2\n")
     cli.chmod(0o755)
     monkeypatch.setenv("PATH", str(binary) + os.pathsep + os.environ["PATH"])
-    compact_request["compact_inputs"]["phases"][0]["chain"] = [{"cli": "claude", "model": "test"}]
-    compact_request["compact_inputs"]["review_configuration"].update(cli="claude", provider_version="fixture-provider")
-    compact_request["model_assessments"][0]["provider"] = "claude"
+    compact_request["compact_inputs"]["phases"][0]["chain"] = [{"cli": cli_name, "model": "test"}]
+    compact_request["compact_inputs"]["review_configuration"].update(cli=cli_name, provider_version="fixture-provider")
+    compact_request["model_assessments"][0]["provider"] = cli_name
     playbook_file = root / ".cafe/playbooks/selected.yaml"
     playbook = yaml.safe_load(playbook_file.read_text())
     step = playbook["steps"]["build"]
@@ -325,3 +325,50 @@ def test_native_result_merge_respects_delivery_reader_budget(compact_request, tm
         assert result.completed
         current = load_review_evidence(issue / "execution_review.json")
         require_verified_review(context, current)
+
+
+@pytest.mark.parametrize("cli", ["codex", "gemini", "copilot", "cursor-agent"])
+def test_all_native_adapters_connect_confirmed_kickoff_runtime_and_delivery_gate(cli, compact_request, tmp_path, monkeypatch):
+    from tests.unit.test_native_review_providers import PARENT, CHILD, provider_records
+    from cafe.agents.executor import AgentExecutor
+    from cafe.core.types import AgentCLI, AgentConfig
+    from cafe.core.execution_checkpoints import checkpoint, require_verified_review
+    from cafe.core.workflow_models import StepExecutionResult
+    from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
+
+    home = tmp_path / "native-home"
+    home.mkdir()
+    (home / "config.toml").write_text('sandbox_mode = "read-only"\n')
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    monkeypatch.setenv("CODEX_API_KEY", "fixture-not-a-real-key")
+    root, issue, playbook, context = native_context(compact_request, tmp_path, monkeypatch, cli_name=cli)
+    monkeypatch.chdir(root)
+    assert context["native_reviewer_type"]
+    assert context["native_review_instructions"]
+
+    def provider(step, definition, board, **kwargs):
+        (root / "app.py").write_text("value = 1\n")
+        receipt = checkpoint(context, "before_review", round_id="native", parent_id=PARENT)
+        records, conclusion = provider_records(cli, context["review_configuration"], receipt, journal_home=home)
+        adapter = AgentExecutor(AgentConfig(name="parent", cli=AgentCLI(cli), model="test", native_review_configuration=context["review_configuration"]))._get_cli_strategy()
+        lines = [json.dumps(record) for record in records]
+        observed = adapter.native_review_observations(lines, observed_at={id(line): receipt["observed_at"] for line in lines})
+        assert len(observed) == 1 and observed[0]["terminal"] == "result"
+        evidence = {"version": 1, "round_id": "native", "checkpoint": receipt, "invocations": [{
+            "parent_id": PARENT, "reviewer_id": CHILD, "configuration": context["review_configuration"],
+            "terminal": "result", "exit_status": 0, "result_reference": "native-child", **conclusion}]}
+        iteration = issue / step / "iteration_001"
+        iteration.mkdir(parents=True)
+        (iteration / "native-review.json").write_text(json.dumps(evidence))
+        (iteration / "native_invocations.json").write_text(json.dumps({"version": 1, "parent_id": PARENT, "observations": observed}))
+        (iteration / "output.md").write_text("Independent native result retained\n")
+        (issue / "next_step.txt").write_text(json.dumps({"version": 1, "to_owner": "done", "to_step": "done", "intent": "workflow_complete"}))
+        return StepExecutionResult(response="complete", artifacts={})
+
+    result = BlackboardWorkflowRuntime(issue_dir=issue, playbook=playbook, executor=provider, execution_context=context).run()
+    assert result.completed
+    retained = json.loads((issue / "execution_review.json").read_text())
+    require_verified_review(context, retained)
+    (root / "app.py").write_text("value = 2\n")
+    with pytest.raises(ValueError):
+        require_verified_review(context, retained)

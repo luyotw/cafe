@@ -146,6 +146,8 @@ def require_current_review(context, evidence, *, native_observations=None, sourc
         if (actual.get("findings") != reviewer.get("findings") or
                 actual.get("targeted_tests") != reviewer.get("targeted_tests")):
             raise ValueError("review conclusion differs from the independent native result")
+        if not isinstance(actual.get("observed_at"), str):
+            raise ValueError("native invocation has no trusted observation time")
         if datetime.fromisoformat(actual["observed_at"]) < datetime.fromisoformat(receipt["observed_at"]):
             raise ValueError("native invocation preceded its checkpoint")
     if (
@@ -165,7 +167,10 @@ def require_current_review(context, evidence, *, native_observations=None, sourc
         or reviewer.get("exit_status") != 0
     ):
         raise ValueError("native review requires explicit successful terminal evidence")
-    if not reviewer.get("result_reference") or not reviewer.get("targeted_tests"):
+    tests = reviewer.get("targeted_tests")
+    if (not isinstance(reviewer.get("result_reference"), str) or not reviewer["result_reference"].strip()
+            or not isinstance(tests, list) or not tests
+            or any(not isinstance(test, str) or not test.strip() for test in tests)):
         raise ValueError("native review lacks terminal result or targeted test evidence")
     findings = reviewer.get("findings")
     if not isinstance(findings, list):
@@ -173,8 +178,9 @@ def require_current_review(context, evidence, *, native_observations=None, sourc
     for finding in findings:
         if (
             not isinstance(finding, dict)
-            or finding.get("severity") not in {"blocking", "nonblocking"}
-            or not finding.get("detail")
+            or not isinstance(finding.get("severity"), str)
+            or finding["severity"] not in {"blocking", "nonblocking"}
+            or not isinstance(finding.get("detail"), str) or not finding["detail"].strip()
         ):
             raise ValueError("review finding is invalid")
         if finding["severity"] == "blocking":

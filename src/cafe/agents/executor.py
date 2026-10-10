@@ -288,8 +288,8 @@ class AgentExecutor:
                 )
 
             # Execute with streaming
-            if self.config.cli == AgentCLI.COPILOT:
-                # Copilot doesn't use stream-json (plain text output)
+            if self.config.cli == AgentCLI.COPILOT and not self.config.native_review_configuration:
+                # Ordinary Copilot execution keeps its plain-text transport.
                 parse_stream_json = False
             else:
                 # Gemini, Claude, Cursor use stream-json format
@@ -306,8 +306,16 @@ class AgentExecutor:
                         return item.get("text")
                     return None
 
+                def extract_copilot_content(data: dict) -> Optional[str]:
+                    payload = data.get("data", {})
+                    if (data.get("type") == "assistant.message" and isinstance(payload, dict)
+                            and not payload.get("parentToolCallId")):
+                        return payload.get("content")
+                    return None
+
                 json_content_extractor = (
-                    extract_codex_content if self.config.cli == AgentCLI.CODEX else None
+                    extract_codex_content if self.config.cli == AgentCLI.CODEX
+                    else extract_copilot_content if self.config.cli == AgentCLI.COPILOT else None
                 )
 
                 def create_session():
@@ -375,8 +383,16 @@ class AgentExecutor:
                         return item.get("text")
                     return None
 
+                def extract_copilot_content(data: dict) -> Optional[str]:
+                    payload = data.get("data", {})
+                    if (data.get("type") == "assistant.message" and isinstance(payload, dict)
+                            and not payload.get("parentToolCallId")):
+                        return payload.get("content")
+                    return None
+
                 json_content_extractor = (
-                    extract_codex_content if self.config.cli == AgentCLI.CODEX else None
+                    extract_codex_content if self.config.cli == AgentCLI.CODEX
+                    else extract_copilot_content if self.config.cli == AgentCLI.COPILOT else None
                 )
 
                 agent_response = self._execute_with_streaming(
@@ -620,13 +636,13 @@ class AgentExecutor:
             else cli_strategy.build_command
         )
         cmd = builder(prompt, allowed_tools, allowed_directories)
-        cmd = cli_strategy.project_native_review(cmd)
         process_cwd = None
         if execution_control is not None and execution_control.working_directory is not None:
             process_cwd = execution_control.working_directory.expanduser().resolve()
             process_cwd.mkdir(parents=True, exist_ok=True)
             if self.config.cli == AgentCLI.CODEX:
                 cmd[cmd.index("-C") + 1] = str(process_cwd)
+        cmd = cli_strategy.project_native_review(cmd)
 
         decision_only = allowed_tools == [] and allowed_directories == []
         if not decision_only:
@@ -1248,6 +1264,23 @@ class AgentExecutor:
         return permission_denials
 
     def _execute_with_streaming(self, cmd, cli_name, *args, **kwargs):
+        """Lease provider-native reviewer configuration for this physical attempt."""
+        strategy = self._get_cli_strategy()
+        if self.config.native_review_configuration and self.config.cli != AgentCLI.CLAUDE:
+            from cafe.agents.cli.native_review import invocation
+            supplied = kwargs.get("env", args[0] if args else None)
+            environment = dict(os.environ if supplied is None else supplied)
+            with invocation(self.config, cmd, environment, working_directory=kwargs.get("process_cwd")) as (command, environment):
+                strategy._native_review_environment = environment
+                kwargs["native_review_strategy"] = strategy
+                if args:
+                    args = (environment, *args[1:])
+                else:
+                    kwargs["env"] = environment
+                return self._execute_with_native_activity(command, cli_name, *args, **kwargs)
+        return self._execute_with_native_activity(cmd, cli_name, *args, **kwargs)
+
+    def _execute_with_native_activity(self, cmd, cli_name, *args, **kwargs):
         """Run with optional native activity supplied by the CLI adapter."""
         activity = self._get_cli_strategy().create_stream_activity(cmd)
         if activity is not None:
@@ -1292,6 +1325,7 @@ class AgentExecutor:
         require_terminal_stream_event: bool = False,
         stream_activity: StreamActivity | None = None,
         expected_session_id: str | None = None,
+        native_review_strategy: AbstractCLI | None = None,
     ) -> AgentResponse:
         """Execute command with streaming output.
 
@@ -1685,7 +1719,8 @@ class AgentExecutor:
                             break
 
                         if (self.config.native_review_configuration and len(native_observed_at) < 512
-                                and ('"tool_use"' in line or '"tool_result"' in line)):
+                                and any(kind in line for kind in ('"tool_use"', '"tool_result"',
+                                    '"collab_tool_call"', '"tool.execution_', '"subagent.', '"tool_call"'))):
                             from datetime import datetime, timezone
                             native_observed_at[id(line)] = datetime.now(timezone.utc).isoformat()
                         line_bytes = len(line.encode("utf-8", errors="replace"))
@@ -2232,6 +2267,9 @@ class AgentExecutor:
                     parsed_response.token_usage.duration_ms = token_usage.duration_ms
                 if token_usage.duration_api_ms is not None:
                     parsed_response.token_usage.duration_api_ms = token_usage.duration_api_ms
+                parsed_response.native_review_observations = (
+                    native_review_strategy or self._get_cli_strategy()
+                ).native_review_observations(output_lines, observed_at=native_observed_at)
                 return parsed_response
 
             # Return response (either from stream-json or combined lines)
@@ -2262,7 +2300,7 @@ class AgentExecutor:
                 transport_result=parsed_response.transport_result,
                 permission_denials=permission_denials,
                 streaming_log=final_streaming_log,
-                native_review_observations=self._get_cli_strategy().native_review_observations(
+                native_review_observations=(native_review_strategy or self._get_cli_strategy()).native_review_observations(
                     output_lines, observed_at=native_observed_at),
                 model=model,
                 cli=self.config.cli,
@@ -2332,7 +2370,7 @@ class AgentExecutor:
                     provider_usage.close()
 
 
-def validate_native_review_projection(phase_chains, step_names, configuration):
+def validate_native_review_projection(phase_chains, step_names, configuration, *, working_directory=None):
     """Verify every explicitly selected parent can project the confirmed reviewer."""
     for name in step_names:
         chain = phase_chains.get(name)
@@ -2341,4 +2379,6 @@ def validate_native_review_projection(phase_chains, step_names, configuration):
         for parent in chain:
             AgentExecutor(AgentConfig(name="native-review-probe", cli=AgentCLI(parent["cli"]),
                 model=parent["model"], native_review_configuration=configuration)).preview_cli_command_args(
-                    "configuration projection only", allowed_tools=["Agent"])
+                    "configuration projection only", allowed_tools=["Agent"],
+                    execution_control=(AgentExecutionControl(working_directory=Path(working_directory))
+                                       if working_directory is not None else None))

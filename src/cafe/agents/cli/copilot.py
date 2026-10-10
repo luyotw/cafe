@@ -10,6 +10,15 @@ from cafe.core.types import PermissionDenial, TokenUsage
 class CopilotCLI(AbstractCLI):
     """Concrete implementation of Copilot CLI tool."""
 
+    def project_native_review(self, command: List[str]) -> List[str]:
+        from cafe.agents.cli.native_review import project
+        return project(self.config, command)
+
+    def native_review_observations(self, output_lines: List[str], *, observed_at=None) -> List[dict]:
+        from cafe.agents.cli.native_review import observations
+        return observations(self.config, output_lines, observed_at,
+                            getattr(self, "_native_review_environment", None))
+
     read_only_operations = frozenset({"open_interactive_session", "run_one_shot"})
 
     def apply_read_only(self, command: List[str], operation: str) -> List[str]:
@@ -105,6 +114,21 @@ class CopilotCLI(AbstractCLI):
         
         # Copilot uses plain text output, join all lines from stdout
         full_output = "".join(output_lines)
+        if self.config.native_review_configuration:
+            import json
+            messages = []
+            for line in output_lines:
+                try:
+                    record = json.loads(line)
+                except (ValueError, TypeError):
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                data = record.get("data", {})
+                if (record.get("type") == "assistant.message" and isinstance(data, dict)
+                        and not data.get("parentToolCallId") and isinstance(data.get("content"), str)):
+                    messages.append(data["content"])
+            full_output = "\n".join(messages)
         
         # Copilot may output usage summary to stderr, append it for parsing
         if stderr_output:
@@ -339,6 +363,12 @@ class CopilotCLI(AbstractCLI):
 
     def extract_session_id(self, output_lines: List[str]) -> Optional[str]:
         """Discover the session created by ordinary plain-text Copilot execution."""
+        if self.config.native_review_configuration:
+            import json
+            try:
+                return self._event_driver_terminal_session([json.loads(line) for line in output_lines])
+            except (ValueError, TypeError):
+                return None
         session_dir = Path.home() / ".copilot" / "session-state"
         if not session_dir.exists():
             return None

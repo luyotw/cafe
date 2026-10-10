@@ -1,7 +1,7 @@
 ---
 name: cafe-develop_single_review
 description: Single native reviewer overlay with per-invocation scope checkpoints.
-version: 1.0.1
+version: 1.0.2
 workflow:
   required_tools: [Agent]
   human_tasks:
@@ -38,13 +38,17 @@ Invoke exactly one independent native subagent, configured read-only and with
 the confirmed provider-effective model behavior. Give it the receipt/round ID,
 authoritative request, current implementation and targeted test evidence.
 Use the provider-native reviewer type supplied in the resolved execution
-context (`cafe_reviewer` for the integrated Claude projection). Its available
-tools are Read, Glob and Grep; supply Git diffs and targeted results from the
-parent. Do not substitute a general-purpose agent that inherits write tools.
+context's `native_reviewer_type`) and follow `native_review_instructions` for
+its native tool arguments, identity and completion events. The projected
+reviewer definition restricts its native tools or permissions to inspection;
+supply Git diffs and targeted results from the parent. Do not substitute a
+general-purpose agent that inherits write tools or start another CLI session.
 Include `CAFE_REVIEW_CHECKPOINT:<receipt_id>` in the native reviewer task prompt
-and use the actual parent provider session ID for the checkpoint. Use the
-provider's Agent tool-use ID as `reviewer_id`; the host captures the matching
-synchronous tool result and verifies it against the phase-owned evidence.
+and use the actual parent provider session ID for the checkpoint. Record the
+provider-native child or tool-call identity specified by the execution context
+as `reviewer_id`; the host correlates native delegation and its terminal result.
+Do not add model or permission overrides unless the projected instructions
+explicitly require the confirmed reviewer model.
 Background-only progress cannot establish completion. Never write or fabricate
 the host-owned `native_invocations.json` metadata.
 The reviewer covers correctness, completeness, unnecessary changes,
