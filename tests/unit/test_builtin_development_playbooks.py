@@ -375,8 +375,12 @@ def test_joint_spec_plan_has_one_planning_gate_and_same_phase_revisions(playbook
     if playbook_id == "subagent-flow-qa":
         expected_steps.insert(2, "qa")
     assert list(playbook.steps) == expected_steps
-    assert confirmation_gate_steps(playbook) == ("spec_plan", "pr")
-    assert mandatory_confirmation_gate_steps(playbook) == ("deliver",)
+    if playbook_id == "subagent-flow":
+        assert confirmation_gate_steps(playbook) == ("spec_plan", "pr", "deliver")
+        assert mandatory_confirmation_gate_steps(playbook) == ()
+    else:
+        assert confirmation_gate_steps(playbook) == ("spec_plan", "pr")
+        assert mandatory_confirmation_gate_steps(playbook) == ("deliver",)
     assert planning.output_artifact == "plan"
     assert planning.input_artifacts == ["plan"]
     assert planning.todo_identity_input_artifact == "plan"

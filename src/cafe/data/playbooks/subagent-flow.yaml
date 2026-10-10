@@ -237,6 +237,7 @@ steps:
     human_tasks:
     - trigger: confirm_output
       task_id: delivery-outcome
+      mandatory_confirmation: false
       feedback_delivery: {artifact: workflow_feedback, source_kind: delivery, todo_source: workflow_feedback, todo_id_prefix: DLV}
       outcomes:
         confirm_cleanup: _done

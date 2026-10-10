@@ -204,6 +204,98 @@ def _kickoff_proposal(command: list[str]) -> dict:
     return module.build_confirmed_proposal(module._parser().parse_args(command[2:]))
 
 
+@pytest.mark.parametrize("delegate_result", [False, True])
+def test_subagent_delivery_result_owner_does_not_delegate_action_permission(
+    tmp_path: Path, delegate_result: bool,
+) -> None:
+    from cafe.manager._schema import build_initial_contract
+    from cafe.manager.delivery_comparison import digest, obligations
+    from cafe.manager.task_authority import decide_task_authority
+    from tests.unit.test_driver_task_authority import _task
+
+    command = _kickoff_formatter_command(
+        tmp_path / "strategic_context.yaml",
+        playbook_id="subagent-flow",
+        phase_chains={
+            step: "codex:exact-model"
+            for step in ("spec_plan", "develop", "pr", "deliver")
+        },
+        manager_confirmable=("spec_plan", "deliver") if delegate_result else ("spec_plan",),
+    )
+    if not delegate_result:
+        command.insert(command.index("--manager-confirmable"), "deliver")
+    proposal = _kickoff_proposal(command)
+    contract = build_initial_contract(
+        proposal=proposal,
+        issue_name="issue346",
+        workflow_id="delivery-owner-test",
+        confirmed_by="user",
+        confirmed_at="2026-10-10T00:00:00+00:00",
+    )
+    task = _task("decision", trigger="confirm_output", task_id="delivery-outcome")
+    task.update(issue="issue346", workflow_id="delivery-owner-test")
+    task["provenance"]["step"] = "deliver"
+    required = obligations(contract["delivery_contract"])
+    result_text = "\n".join([*required.values(), "No additional actions authorized."])
+    data = {
+        "boundary": {
+            "step": "deliver", "task_id": task["id"], "iteration": 1,
+            "intent": "confirm_output", "owner": "user", "active": True,
+        },
+        "identity": {"issue_name": "issue346", "workflow_id": "delivery-owner-test"},
+        "contract_sha256": digest(contract),
+        "delivery_contract": contract["delivery_contract"],
+        "obligations": required,
+        "artifacts": {"delivery_result": result_text},
+        "missing_artifacts": [], "scheduled": True, "eligible": delegate_result,
+    }
+    packet = {"data": data, "snapshot_sha256": digest(data)}
+    assessment = {
+        "snapshot_sha256": packet["snapshot_sha256"],
+        "coverage": {
+            name: {
+                "status": "preserved", "source": "delivery_result", "quote": text,
+                "reason": "The complete verified result covers this requirement.",
+                **({"implementation": "src/example.py", "verification": "tests/test_example.py"}
+                   if name.startswith("acceptance_invariants[") else {}),
+            }
+            for name, text in required.items()
+        },
+        "deviation": {
+            "status": "clear", "source": "delivery_result",
+            "quote": "No additional actions authorized.",
+            "reason": "Result confirmation changes no action or permission.",
+        },
+    }
+    result = decide_task_authority(
+        task=task,
+        contract=contract,
+        current_task_id=task["id"],
+        response={"task": "delivery-outcome", "human_task_id": task["id"], "decision": "confirm"},
+        evidence={
+            "basis": "confirmed_exact",
+            "exhaustive": True,
+            "delivery_comparison": {
+                "snapshot_sha256": packet["snapshot_sha256"], "assessment": assessment,
+            },
+        },
+        confirmed_sources={"current_output:delivery_result": result_text},
+        trusted_comparison=packet,
+    )
+    assert result["allowed"] is delegate_result, result
+    assert result["resolution_owner"] == (
+        "manager_confirmable" if delegate_result else "user_required"
+    )
+
+    task["provenance"].update(trigger="need_permission", policy_id="delivery-review")
+    permission = decide_task_authority(
+        task=task, contract=contract, current_task_id=task["id"],
+    )
+    assert permission["allowed"] is False
+    assert permission["resolution_owner"] == "user_required"
+    assert permission["evidence_reason"] == "permission_or_capability"
+
+
 @pytest.fixture
 def run_kickoff_formatter(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
     """Run the real CLI entry point without starting another Python interpreter."""

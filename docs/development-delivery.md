@@ -2,6 +2,14 @@
 
 The twelve adopting development playbooks separate PR preparation from delivery. Their `delivery` declarations bind the action-review step/task, action and outcome artifacts, original Review proposal artifact and implementation correction route. Names are not runtime discriminators. Compact delivery remains a separate contract.
 
+`subagent-flow` makes final delivery-result confirmation assignable at kickoff.
+The user may retain that confirmation or delegate it to Manager, which must
+verify the current complete result and receipts before answering. The separate
+`need_permission` action review remains user-owned: delegating result confirmation
+does not authorize integration, follow-up issue creation, or an unconfirmed
+cleanup action. Other development playbooks retain their mandatory final user
+confirmation, and existing confirmed contracts retain their recorded ownership.
+
 PR publication presents exact repository, PR or local destination, source and target commit identities, strategy, original FUP drafts, and the host capability manifests and material permission boundaries. The host freezes this bundle and the reviewed artifact digest. One correlated user decision authorizes integration and an explicit subset or empty issue selection, including only those displayed host boundaries. Delivery projects that existing decision into separate durable capability approvals with the originating task/result and snapshot identity. Registered `cafe.github.pr.merge`, `cafe.branch.integrate` and `cafe.github.issue.create` still use the existing policy revalidation and one-attempt fence; changed manifests or permissions require fresh review. Legacy proposals without a displayed host review retain their separate capability approval.
 
 The final delivery reply accepts the verified results and selects the displayed exact cleanup plan, archive-only, or leaving external state unchanged. New confirmed contracts select this combined flow through `terminal_selection: delivery_outcome`. Manager publishes only a bounded cleanup projection from that contract; the delivery phase presents it and records the user's choice but performs no cleanup. After verified workflow completion, Manager reads that correlated choice and executes it without another normal confirmation. Changed plans or receipts invalidate the choice. Cleanup execution rejects missing acceptance, archive-only, and leave choices; a missing projection fails closed instead of reverting to legacy authority. It retains its durable non-replayable evidence.
