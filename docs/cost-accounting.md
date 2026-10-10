@@ -355,3 +355,7 @@ If that turn completes or aborts before finalize, descendant observations stop
 at its evidenced ownership cutoff; later work in the same child session belongs
 outside this bracket. Records preserve both that cutoff and the later report
 cutoff. A descendant active at the ownership boundary remains partial.
+
+At an ended host ownership boundary, equal timestamps across journals do not
+prove causal order. Such observations are excluded with
+`ownership_boundary_ambiguous`; the verified earlier counter prefix stays known.

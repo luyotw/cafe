@@ -41,12 +41,12 @@ def host_fixture(tmp_path, monkeypatch, root=None, name="topic"):
     )
 
 
-def append_event(path, kind, **payload):
+def append_event(path, kind, *, observed_at=None, **payload):
     with path.open("a") as stream:
         stream.write(
             json.dumps(
                 dict(
-                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    timestamp=observed_at or datetime.now(timezone.utc).isoformat(),
                     type="event_msg",
                     payload=dict(type=kind, **payload),
                 )
@@ -117,8 +117,9 @@ def test_unfinalized_native_entry_remains_a_durable_gap(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("child_complete", [True, False])
+@pytest.mark.parametrize("same_timestamp", [True, False])
 def test_host_finalize_excludes_reused_child_work_after_selected_owner_turn(
-    tmp_path, monkeypatch, child_complete
+    tmp_path, monkeypatch, child_complete, same_timestamp
 ):
     args = host_fixture(tmp_path, monkeypatch)
     root_journal = native_journal(args["home"], ROOT, complete=False)
@@ -128,15 +129,27 @@ def test_host_finalize_excludes_reused_child_work_after_selected_owner_turn(
     append_event(root_journal, "collab_agent_spawn_end", new_thread_id=CHILD)
     nested_journal = native_journal(args["home"], NESTED, CHILD, n=50)
     append_event(child_journal, "collab_agent_spawn_end", new_thread_id=NESTED)
-    append_event(root_journal, "task_complete", turn_id="owned-turn")
-    append_event(root_journal, "task_started", turn_id="foreign-root-turn")
-    append_event(root_journal, "collab_agent_interaction_end", receiver_thread_id=CHILD)
-    append_event(child_journal, "task_started", turn_id="foreign-child-turn")
-    append_event(child_journal, "token_count", info=dict(total_token_usage=counters(500)))
-    append_event(child_journal, "task_complete", turn_id="foreign-child-turn")
-    append_event(nested_journal, "task_started", turn_id="foreign-nested-turn")
-    append_event(nested_journal, "token_count", info=dict(total_token_usage=counters(700)))
-    append_event(nested_journal, "task_complete", turn_id="foreign-nested-turn")
+    boundary = datetime.now(timezone.utc).isoformat()
+    append_event(root_journal, "task_complete", observed_at=boundary, turn_id="owned-turn")
+    foreign_time = boundary if same_timestamp else None
+    append_event(
+        root_journal, "task_started", observed_at=foreign_time, turn_id="foreign-root-turn"
+    )
+    append_event(
+        root_journal,
+        "collab_agent_interaction_end",
+        observed_at=foreign_time,
+        receiver_thread_id=CHILD,
+    )
+    for path, turn_id, n in (
+        (child_journal, "foreign-child-turn", 500),
+        (nested_journal, "foreign-nested-turn", 700),
+    ):
+        append_event(path, "task_started", observed_at=foreign_time, turn_id=turn_id)
+        append_event(
+            path, "token_count", observed_at=foreign_time, info=dict(total_token_usage=counters(n))
+        )
+        append_event(path, "task_complete", observed_at=foreign_time, turn_id=turn_id)
     helper.account("finalize", correlation="isolated", **args)
     report = inclusive_report(
         args["project_root"], "topic", args["workflow_id"], issue_dir=args["issue_dir"]
@@ -149,6 +162,8 @@ def test_host_finalize_excludes_reused_child_work_after_selected_owner_turn(
     assert child["usage"]["input_tokens"] == 100
     assert native["turn_ids"] == ["owned-turn"]
     assert native["ownership_cutoff"] < native["end"]["at"]
-    assert child["complete"] == child_complete
+    assert child["complete"] == (child_complete and not same_timestamp)
+    if same_timestamp:
+        assert "ownership_boundary_ambiguous" in native["gaps"]
     if not child_complete:
         assert "child_active_at_cutoff" in native["gaps"]

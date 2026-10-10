@@ -381,7 +381,18 @@ class NativeInterval:
             ),
         )
 
-    def _record(self, identity, meta, rows, boundary, cutoff, final, causal, report_cutoff=None):
+    def _record(
+        self,
+        identity,
+        meta,
+        rows,
+        boundary,
+        cutoff,
+        final,
+        causal,
+        report_cutoff=None,
+        exclusive_cutoff=False,
+    ):
         gaps = list(boundary.get("source_gaps", []))
         born = instant(meta["timestamp"])
         baseline = self.baselines.get(identity)
@@ -442,6 +453,10 @@ class NativeInterval:
         last_at = self.started
         prior_counters = start["counters"]
         for row in rows:
+            if exclusive_cutoff and row["at"] == cutoff:
+                # Equal timestamps in separate journals cannot establish causal order.
+                gaps.append("ownership_boundary_ambiguous")
+                continue
             if row["offset"] < baseline["offset"] or row["at"] > cutoff or row["at"] < self.started:
                 continue
             payload = row["payload"]
@@ -618,6 +633,7 @@ class NativeInterval:
             gaps.append("root_inclusion_unavailable")
         # Host admission belongs to the exact entry turn, not its persistent session.
         ownership_cutoff = cutoff
+        exclusive_cutoff = False
         if self.require_causal:
             owner_turn = self.baselines.get(self.root, {}).get("active_turn")
             if owner_turn is None:
@@ -632,6 +648,7 @@ class NativeInterval:
                     or (kind == "task_started" and turn != owner_turn)
                 ):
                     ownership_cutoff = min(ownership_cutoff, row["at"])
+                    exclusive_cutoff = True
                     gaps.append("host_owner_turn_ended")
                     break
         # A resumed old child needs explicit causal submission from owned parent work.
@@ -644,7 +661,9 @@ class NativeInterval:
                 active_turn = self.baselines.get(parent, {}).get("active_turn")
                 owner_turn = active_turn
                 for row in data[parent][1]:
-                    if row["at"] > ownership_cutoff:
+                    if row["at"] > ownership_cutoff or (
+                        exclusive_cutoff and row["at"] == ownership_cutoff
+                    ):
                         continue
                     kind = row["payload"].get("type")
                     if kind == "task_started":
@@ -687,7 +706,13 @@ class NativeInterval:
         for identity in sorted(admitted - {self.root}):
             try:
                 record = self._record(
-                    identity, *data[identity], ownership_cutoff, final, causal, report_cutoff=cutoff
+                    identity,
+                    *data[identity],
+                    ownership_cutoff,
+                    final,
+                    causal,
+                    report_cutoff=cutoff,
+                    exclusive_cutoff=exclusive_cutoff,
                 )
                 if record:
                     records.append(record)
