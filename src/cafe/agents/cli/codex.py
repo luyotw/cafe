@@ -21,6 +21,15 @@ _HOST_SESSION_ENVIRONMENT_KEYS = (
 class CodexCLI(AbstractCLI):
     """Concrete implementation of Codex CLI tool."""
 
+    def project_native_review(self, command: List[str]) -> List[str]:
+        from cafe.agents.cli.native_review import project
+        return project(self.config, command)
+
+    def native_review_observations(self, output_lines: List[str], *, observed_at=None) -> List[dict]:
+        from cafe.agents.cli.native_review import observations
+        return observations(self.config, output_lines, observed_at,
+                            getattr(self, "_native_review_environment", None))
+
     read_only_operations = frozenset({"open_interactive_session", "run_one_shot"})
 
     def apply_read_only(self, command: List[str], operation: str) -> List[str]:
