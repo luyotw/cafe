@@ -231,6 +231,9 @@ class ManagerUsageSink:
             # Repeated provider telemetry is the same evidence, never extra spend.
             if "total_cost_usd" in raw:
                 source["legacy_cost"] = raw["total_cost_usd"]
+            residual = raw.get("accounting_residual", {})
+            if "total_cost_usd" in residual:
+                source["legacy_residual"] = residual["total_cost_usd"]
             source["gap"] = not bool(source["records"])
             data["manager_gaps"].pop(self.current, None)
             self.store._write(data)

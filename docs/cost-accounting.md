@@ -328,6 +328,10 @@ recollection, model roundtrips, phase-result handoffs and chat/phase partitionin
 represented observations. This is projection metadata, not a new execution or
 user configuration parameter. An empty unreliable admitted amount is unknown,
 while a recorded complete zero remains zero.
+The retained Manager sink forwards independently evidenced monetary residuals
+into the existing source's `legacy_residual`. Records-only/checkpoint updates
+preserve that value; explicit monetary residual updates replace it, including
+zero, so repeated publications neither lose nor duplicate independent spend.
 
 Child valuation reuses the rate card pinned at entry, actual model evidence,
 verified categories and the existing context-band rules. A database or configured
