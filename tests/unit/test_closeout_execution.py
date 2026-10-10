@@ -277,3 +277,42 @@ def test_legacy_unbound_merge_keeps_original_authority_and_undispatched_receipt(
     assert contract.read_bytes() == original
     receipt = json.loads(evidence.read_text())
     assert receipt["commands"]["deliver"][0]["status"] == "not_started"
+
+
+def test_cleanup_preservation_failure_leaves_command_unstarted(tmp_path):
+    marker = tmp_path / "should-not-run"
+    root, issue, evidence = _journey(tmp_path, [[sys.executable, "-c",
+        f"from pathlib import Path; Path({str(marker)!r}).touch()"]], stage="cleanup")
+    phase = issue / "custom/iteration_001"
+    phase.mkdir(parents=True)
+    (phase / "iteration.json").write_text("corrupt")
+    assert _run(root, issue, "--initialize").returncode == 0
+    result = _run(root, issue, "--execute", "--stage", "cleanup", "--index", "0")
+    assert result.returncode != 0
+    assert not marker.exists()
+    assert json.loads(evidence.read_text())["commands"]["cleanup"][0]["status"] == "not_started"
+
+
+def test_cleanup_retains_lossless_costs_after_worktree_removal(tmp_path):
+    from cafe.manager.costs import inclusive_report, manager_usage_sink
+    from cafe.core.types import TokenUsage
+    from tests.unit.test_workflow_cost_summary import record
+    worktree = tmp_path / "issue-worktree"
+    root, issue, _ = _journey(tmp_path, [[sys.executable, "-c",
+        f"import shutil; shutil.rmtree({str(worktree)!r})"]], stage="cleanup")
+    phase = issue / "custom/iteration_001"
+    phase.mkdir(parents=True)
+    (phase / "iteration.json").write_text(json.dumps({"stats": {
+        "cost_records": [record("worker", "1", complete=False)], "total_cost_usd": 1.5}}))
+    sink = manager_usage_sink(root, "issue474", "workflow-474", "chat")
+    sink(TokenUsage(cost_records=[record("manager", "2")]))
+    assert _run(root, issue, "--initialize").returncode == 0
+    result = _run(root, issue, "--execute", "--stage", "cleanup", "--index", "0")
+    assert result.returncode == 0, result.stderr
+    assert not worktree.exists()
+    sink.gap("host-after-cleanup")
+    report = inclusive_report(root, "issue474", "workflow-474")
+    assert report["worker"]["known"] == 1.5
+    assert report["manager"]["known"] == 2
+    assert report["combined"]["known"] == 3.5
+    assert report["combined"]["incomplete"]

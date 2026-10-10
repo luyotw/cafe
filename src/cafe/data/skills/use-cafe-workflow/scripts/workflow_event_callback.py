@@ -26,6 +26,7 @@ import yaml
 
 from cafe.agents.executor import AgentExecutionControl, AgentExecutionError, AgentExecutor
 from cafe.agents.transport import ConversationTransport
+from cafe.manager.costs import accounted_call
 from cafe.constraints import execution_context, numeric_limit
 from cafe.core.audit_events import AuditEventStore
 from cafe.core.conversation_locale import DEFAULT_CONVERSATION_LOCALE
@@ -1492,29 +1493,12 @@ def _finish_pending_attempt(
 
 
 def _callback_usage_sink(manager_dir: Path, event: dict[str, Any], repository_root: Path):
-    """Pin the existing event-time iteration; callback attempt is not an iteration."""
-    from cafe.core.usage import iteration_usage_sink
+    """Bind Manager accounting before submission; never blend into worker stats."""
+    from cafe.manager.costs import manager_usage_sink
 
-    step = event.get("step")
-    occurred_at = event.get("occurred_at")
-    if not isinstance(step, str) or Path(step).name != step or not isinstance(occurred_at, str):
-        return None
-    try:
-        cutoff = datetime.fromisoformat(occurred_at)
-        candidates = []
-        for directory in sorted((manager_dir.parent / step).glob("iteration_[0-9]*")):
-            target = directory / "iteration.json"
-            if not target.exists():
-                target = directory / "context.json"
-            if not target.is_file():
-                continue
-            data = json.loads(target.read_text(encoding="utf-8"))
-            started = datetime.fromisoformat(data["timestamp"])
-            if started <= cutoff and data.get("iteration") == int(directory.name.removeprefix("iteration_")):
-                candidates.append(target)
-        return iteration_usage_sink(repository_root, candidates[-1]) if candidates else None
-    except (OSError, ValueError, KeyError, TypeError):
-        return None
+    workflow_id = event.get("workflow_id") or _prepared_workflow_id(manager_dir.parent)
+    return manager_usage_sink(repository_root, manager_dir.parent.name, workflow_id,
+                              f"callback:{event['event_id']}")
 
 
 def _acquire_v3_session(
@@ -1559,8 +1543,9 @@ def _acquire_v3_session(
     )
     try:
         with tempfile.TemporaryDirectory(prefix="cafe-event-bootstrap-") as temporary:
-            result = ConversationTransport(executor).acquire_session(
-                'say "HI"',
+            result = accounted_call(
+                on_usage, f"callback:{event_id}:bootstrap:{len(state['events'][event_id]['attempts'])}",
+                ConversationTransport(executor).acquire_session, 'say "HI"',
                 on_usage=on_usage,
                 allowed_tools=[],
                 allowed_directories=[],
@@ -2396,6 +2381,8 @@ def _deliver_v3_callback(
             and entry["cli"] == AgentCLI.CODEX.value
             and session.get("source") == "host_session"
         ):
+            _callback_usage_sink(manager_dir, event, repository_root).gap(
+                f"callback:{event['event_id']}:host")
             _queue_host_callback(
                 _callback_prompt(event, repository_root=repository_root),
                 thread_id=session_id,
@@ -2416,7 +2403,9 @@ def _deliver_v3_callback(
                 ),
                 stream_output=False,
             )
-            result = ConversationTransport(executor).deliver_to_exact_session(
+            result = accounted_call(
+                on_usage, f"callback:{event_id}:delivery:{len(state['events'][event_id]['attempts'])}",
+                ConversationTransport(executor).deliver_to_exact_session,
                 _callback_prompt(
                     event, repository_root=repository_root,
                     include_instructions=_fallback_needs_instructions(state, index),
@@ -2629,6 +2618,8 @@ def run_callback(event: dict[str, Any], *, repository_root: Path) -> None:
         if host_thread_id is not None:
             if existing is not None and existing.session_id != host_thread_id:
                 raise ValueError("event-driven host session identity cannot be replaced")
+            _callback_usage_sink(manager_dir, event, repository_root).gap(
+                f"callback:{event['event_id']}:host")
             _queue_host_callback(
                 _callback_prompt(event, repository_root=repository_root),
                 thread_id=host_thread_id,
@@ -2646,12 +2637,15 @@ def run_callback(event: dict[str, Any], *, repository_root: Path) -> None:
             stream_output=False,
         )
         responses = []
-        ConversationTransport(executor).run_one_shot(
+        legacy_sink = _callback_usage_sink(manager_dir, event, repository_root)
+        accounted_call(
+            legacy_sink, f"callback:{event['event_id']}:legacy",
+            ConversationTransport(executor).run_one_shot,
             _callback_prompt(event, repository_root=repository_root),
             allowed_tools=["Read", "Grep", "Glob", "Bash"],
             allowed_directories=[str(repository_root)],
             on_response=responses.append,
-            on_usage=_callback_usage_sink(manager_dir, event, repository_root),
+            on_usage=legacy_sink,
         )
         response = responses[-1]
         # Legacy caller persistence remains compatible with ordinary CLI session discovery.

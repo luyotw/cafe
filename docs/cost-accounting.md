@@ -189,3 +189,66 @@ readers. They do not use the subprocess estimator and remain incomplete when
 they cannot certify invocation/model/cost telemetry. This includes native
 session switches, unsupported sub-agent accounting, and paths with no usage
 reader. Merely configuring a model does not establish complete cost coverage.
+
+## Manager progress and retained closeout accounting
+
+Every established Manager progress diagram ends with a worker-only USD summary
+(`已使用成本（不含 Manager）` in zh-TW). Rendering rereads persisted calculations;
+it does not fetch prices, reprice historical usage, write accounting, or calculate
+Manager-inclusive totals. An unestablished workflow retains its short response.
+Initial workflows without execution evidence show unknown coverage. Compact
+contracts have no separate progress diagram; their subsequent shared progress
+renderer uses the same footer.
+
+The neutral `services/cost_summary.py` view reads all custom-named phases,
+iterations and issue/phase chats, prefers `iteration.json` over `context.json`,
+removes chat overlap, and deduplicates invocation IDs across the workflow.
+Source-relative identities preserve each legacy residual once across storage
+copies. Reported zero remains valid. Missing/default-zero, corrupt, unsupported,
+conflicting and partial evidence remains unknown/incomplete; a known subtotal
+is never a claim of complete coverage. Provenance and stale-rate indicators
+remain attached to the recorded amounts.
+
+Manager callback bootstrap, delivery/fallback attempts and explicit Manager
+chat turns use the Manager-owned sink, independently of phase/model names.
+They no longer merge into worker iteration aggregates. Failure costs are retained;
+a pre-attempt gap survives interruption and unavailable telemetry. Native/host
+Manager turns without supported usage telemetry and unattested historical Manager
+coverage remain unknown. No arbitrary session scraping or subscription allocation
+is attempted. Exact tagged/retained invocation identities are excluded from the
+worker view. Historical callback blends without invocation attribution are
+withheld as uncertain, including ambiguous legacy residuals; original evidence
+is preserved rather than rewritten as an attribution migration.
+
+The accounting envelope lives at
+`<git-common-dir>/cafe/costs/<issue>/<workflow-id>.json`, with its own lock.
+It binds the exact Git project, issue and workflow, independently of closeout
+receipts. It stores original persisted invocation calculations, per-source legacy
+aggregates/gaps, Manager sources and a worker snapshot. It never copies session
+transcripts or credentials. Reads reject symlinks/special files and invalid
+identities; atomic publications retain all admitted evidence. The 16 MiB source
+and envelope limits fail visibly, without truncation. Exceeding the bound or
+failing to retain an available source leaves destructive cleanup unstarted;
+missing provider telemetry itself does not block cleanup when its gap is retained.
+
+Immediately before each confirmed cleanup command, the Manager helper holds
+the existing worker advancement lock, captures a fresh identity-validated worker
+snapshot, publishes and verifies it, then dispatches the original argv. Separate
+archive-only closeout uses the preservation helper before the unchanged lifecycle
+command. Accounting cannot authorize actions, change command receipts, stop a
+worker, or replay cleanup. A matching live source or exact lifecycle archive is
+preferred over the equivalent snapshot, never added as extra spend. Retained
+Manager sinks already bound before worktree deletion keep writing; later available
+accounting can be persisted from the retained checkout with the same identity.
+
+After verifying cleanup outcomes and lifecycle effects (or the exact completed
+archive), Manager offers the human yes/no preference. No answer, a timeout,
+leave, failed/pending/unknown cleanup, or an earlier phase confirmation does not
+mean yes. No ends the conversation without reading/aggregating inclusive costs.
+Yes captures one stable source set under the retained accounting lock, with source
+version checks and bounded read-only retries, and displays the worker subtotal,
+Manager amount and combined total/known subtotal in USD. `captured_at` is a real
+UTC read boundary, including for untimestamped legacy records; it is not an
+invented historical invocation completion time. Active/unpersisted usage,
+including the response presenting the report, is outside this as-of cutoff.
+Unknown Manager coverage makes the combined result an incomplete known subtotal.

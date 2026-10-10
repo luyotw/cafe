@@ -50,3 +50,10 @@ manager.kickoff.global_sync_heading: '### 可選的 Global catalog 同步'
 manager.kickoff.global_sync_reminder: 下列既有 Global entries 與 project 內容不同：{entries}。確認 kickoff 不代表同意發布；如需同步請另行提出。
 manager.kickoff.commands_confirmation: 確認後依序執行上述命令；更改命令、順序、目標或影響時另行確認。
 manager.kickoff.no_commands: 無需執行命令（[]）。
+manager.progress.cost_footer: '已使用成本（不含 Manager）: USD {cost}'
+manager.progress.cost.reported: '已回報'
+manager.progress.cost.estimated: '估算'
+manager.progress.cost.legacy: '舊版記錄'
+manager.progress.cost.unknown: '未知'
+manager.progress.cost.partial: '資料不完整'
+manager.progress.cost.stale: '費率已過期'

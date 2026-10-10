@@ -428,7 +428,7 @@ class StatusDisplay:
     @staticmethod
     def _legacy_entry_usage(entry):
         """Retain historical counters not represented by invocation records."""
-        from cafe.core.cost import merge_cost_records
+        from cafe.services.cost_summary import unrecorded_usage
 
         fields = {
             "input_tokens": "input_tokens",
@@ -437,22 +437,10 @@ class StatusDisplay:
             "cache_read_tokens": "cache_read_input_tokens",
             "reasoning_output_tokens": "reasoning_output_tokens",
         }
-        records = merge_cost_records([], entry.cost_records)
-        remaining = {}
-        for field, raw_field in fields.items():
-            total = getattr(entry, field)
-            if total is None:
-                remaining[field] = None
-                continue
-            recorded = 0
-            for record in records:
-                raw = record.get("usage", {})
-                value = raw.get(raw_field)
-                if value is None and field == "cache_write_tokens":
-                    value = raw.get("cache_creation_input_tokens")
-                recorded += value or 0
-            remaining[field] = max(0, total - recorded)
-        return remaining
+        remaining = unrecorded_usage(
+            {raw: getattr(entry, field) for field, raw in fields.items()}, entry.cost_records
+        )
+        return {field: remaining[raw] for field, raw in fields.items()}
 
     @staticmethod
     def _legacy_cost_summary(records, aggregate_cost, *, unknown=False):
@@ -566,10 +554,19 @@ class StatusDisplay:
         """Show step and workflow known subtotals, including chat coverage gaps."""
         from cafe.core.cost import merge_cost_records
 
+        from cafe.services.cost_summary import summarize_sources
+
+        sources = []
         phases = {}
         for entry in entries:
             if entry.entry_type != "iteration":
                 continue
+            sources.append(dict(
+                source_id=f"{entry.phase}/{entry.iteration}/{entry.start_time}",
+                records=entry.cost_records, legacy_cost=entry.cost_usd,
+                gap=bool(entry.cost_records and any(self._legacy_entry_usage(entry).values())
+                         and not summarize_cost(entry.cost_records, legacy_cost=entry.cost_usd)["counts"]["legacy"]),
+            ))
             phase = phases.setdefault(entry.phase, {"records": [], "legacy": []})
             if entry.cost_records:
                 phase["records"] = merge_cost_records(phase["records"], entry.cost_records)
@@ -584,7 +581,10 @@ class StatusDisplay:
                     phase["legacy"].append(legacy)
             else:
                 phase["legacy"].append(summarize_cost([], legacy_cost=entry.cost_usd))
-        for group in groups:
+        for index, group in enumerate(groups):
+            sources.append(dict(source_id=f"chat/{index}", records=group.get("cost_records", []),
+                                legacy_cost=group.get("stats", {}).get("total_cost_usd"),
+                                gap="total_cost_usd" in group.get("unknown_fields", [])))
             phase = phases.setdefault(group.get("phase") or "--", {"records": [], "legacy": []})
             if group.get("cost_records"):
                 phase["records"] = merge_cost_records(phase["records"], group["cost_records"])
@@ -606,7 +606,7 @@ class StatusDisplay:
             summary = combine_cost_summaries(parts)
             summaries.append(summary)
             lines.append(f"{name}: {format_cost(summary)}")
-        lines.append(f"Workflow: {format_cost(combine_cost_summaries(summaries))}")
+        lines.append(f"Workflow: {format_cost(summarize_sources(sources))}")
         text = "\n".join(lines)
         if RICH_AVAILABLE:
             console.print(text, markup=False)

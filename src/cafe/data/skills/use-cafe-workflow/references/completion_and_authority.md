@@ -186,7 +186,8 @@ When the user selects archive, run only `cafe close --archive-only` from the
 issue worktree. This is the sole terminal archive command and requires no
 closeout-plan entry. It archives CAFE issue/workflow state without merging,
 pushing, closing the GitHub issue, or removing the feature branch or worktree.
-Do not add another command before or after it.
+Do not add another delivery or terminal mutation command before or after it.
+Preserve local accounting as described below before the archive command.
 
 Before cleanup can remove a worktree, establish worker quiescence and inspect
 registered worktrees plus dirty/untracked content. The confirmed argv must use
@@ -312,3 +313,53 @@ checks. `separate_task` leaves workflow completion unchanged and uses the
 separately authorized task's execution contract. `user_handoff` leaves the action
 unexecuted. The checker itself performs no external calls, stores no authority,
 and implements no integration executor or state machine.
+
+## Optional cost report after verified closeout
+
+Cost retention is unconditional evidence preservation, never cleanup authority
+or an answer to the later cost preference. `execute_closeout.py` now captures
+and verifies a fresh worker snapshot under the existing advancement lock before
+marking any cleanup command started. Retention errors leave the command
+`not_started`; use the existing recovery route and do not run its argv separately.
+Unsupported telemetry is retained as unknown and does not prevent cleanup.
+
+For the already-authorized archive-only choice, preserve accounting from a
+retained checkout before running the unchanged `cafe close --archive-only`:
+
+```bash
+python3 <skill-dir>/scripts/report_closeout_cost.py --project-root <retained-checkout> --issue-dir <active-issue-dir> --issue-name <issue> --workflow-id <workflow-id> --preserve
+```
+
+This is a local accounting operation, not an extra delivery/cleanup command,
+permission store or external action. The exact lifecycle archive must retain the
+same project/issue/workflow identity. Never replay cleanup/archive to obtain costs.
+
+After durable command outcomes and required external-state checks prove cleanup
+complete, or a selected archive-only operation has actually moved the exact issue,
+use the same helper without `--preserve`. For archive-only include
+`--operation archive --archive-dir <exact-lifecycle-archive>`. Use the original
+active path for `--issue-dir` even after its removal. Use `--locale zh-TW` for
+the required question `是否需要計算包含 Manager 的總成本？` (en-US has its
+paired authored copy). The helper rejects incomplete/failed/unknown outcomes,
+incomplete observable effects, wrong archives, and leave. Supported checks cover
+GitHub issue closure, Git branch/worktree removal and lifecycle archival;
+verified remote-only cleanup does not require worktree removal. Other custom effects that
+cannot be verified by this lifecycle check require the existing human recovery
+route; do not substitute a caller-authored "verified" flag.
+
+Present its yes/no options to the human in the originating conversation. This
+preference remains human-owned even when phase confirmations are delegable.
+Silence, timeout, cleanup approval, and a phase confirmation do not answer it.
+On explicit no, invoke the helper with `--choice no`, end closeout, and do not
+call an inclusive collector or render additional cost totals. On explicit yes,
+invoke it with `--choice yes`; present its localized `text` and retain its
+machine-readable report as conversation evidence. All three USD lines share
+one UTC `captured_at` boundary. Incomplete Manager evidence is a known subtotal,
+never a complete total. Active/unpersisted usage, including the report's response,
+is outside the cutoff. Existing records need no invocation completion timestamp.
+
+After interrupted preference/report presentation, reconcile the existing
+closeout/session evidence and the human answer. Re-offer a still-unanswered
+preference through the normal human conversation, never infer yes and never
+repeat cleanup. A report read may be repeated after a verified yes; it makes no
+terminal mutation. The next read has a new explicit cutoff.

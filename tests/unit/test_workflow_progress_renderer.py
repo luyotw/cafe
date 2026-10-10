@@ -957,7 +957,7 @@ def test_compact_spine_omits_raw_routes_without_inventing_a_return(tmp_path: Pat
     assert "↩ A → A" not in rendered
     assert "↩ C → B" not in rendered
     assert "await_agent →" not in rendered
-    assert rendered.splitlines() == [
+    assert rendered.rsplit("\n\n", 1)[0].splitlines() == [
         "○ A · Pending",
         "│",
         "○ C · Pending",
@@ -1670,7 +1670,7 @@ def test_default_projection_suppresses_superseded_returns_and_shows_active_check
         },
     )
 
-    assert rendered == (
+    assert rendered.rsplit("\n\n", 1)[0] == (
         "✓ develop · 第 6 輪 · 已完成\n│\n"
         "✓ pr · 第 14 輪 · 已完成\n│\n"
         "✓ pr：流程管理員主動審查 · 已完成\n│\n"
@@ -2141,3 +2141,58 @@ def test_iteration_timestamps_work_without_status_codes_or_execution_events(
 
     assert expected in rendered
     assert "○ publish-draft · Pending" in rendered
+
+
+@pytest.mark.parametrize("locale,label", [("zh-TW", "已使用成本（不含 Manager）"),
+                                          ("en-US", "Used cost (excluding Manager)")])
+def test_progress_rereads_worker_accounting_without_writes(tmp_path, locale, label):
+    from tests.unit.test_manager_costs import cost_journey
+    from tests.unit.test_workflow_cost_summary import record
+    from cafe.core.types import TokenUsage
+    from cafe.manager.costs import manager_usage_sink
+    root, issue = cost_journey(tmp_path)
+    manager_usage_sink(root, "topic", "wf", "callback")(
+        TokenUsage(cost_records=[record("manager", "7")]))
+    module = _module()
+    before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    rendered = module.render_progress(playbook=_custom_playbook(), issue_dir=issue, locale=locale, manager_state={"deliver": "pending", "cleanup": "pending"})
+    assert label in rendered.splitlines()[-1]
+    assert "USD" in rendered.splitlines()[-1]
+    assert "1.0000" in rendered.splitlines()[-1]
+    assert "7.0000" not in rendered
+    assert before == {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    path = issue / "custom/iteration_001/iteration.json"
+    path.write_text(json.dumps({"stats": {"cost_records": [record("worker", "2")]}}))
+    assert "2.0000" in module.render_progress(playbook=_custom_playbook(), issue_dir=issue, locale=locale, manager_state={"deliver": "pending", "cleanup": "pending"})
+
+
+def test_established_kickoff_uses_identity_bound_cost_source(tmp_path):
+    import argparse
+    from tests.unit._kickoff_test_support import load_kickoff_module
+    from tests.unit.test_kickoff_prefill import _project
+    from tests.unit.test_driver_contract_application import _proposal
+    from tests.unit.test_manager_costs import cost_journey
+    root, issue = cost_journey(tmp_path)
+    _project(root)
+    formatter = load_kickoff_module("format_kickoff_contract")
+    args = argparse.Namespace(**{a.dest: a.default for a in formatter._parser()._actions})
+    args.project_root, args.playbook_id, args.issue_name = root, "example", "topic"
+    args.issue_dir, args.workflow_id = issue, "wf"
+    args.update_preflight = dict(status="current", checked_at="2026-10-10T00:00:00Z",
+        installed_version="test", latest_version="test", decision="keep",
+        comparison_token="fixture", post_change_evidence={})
+    args.catalog_preflight = dict(status="current", checked_at="2026-10-10T00:00:00Z",
+        effective_digests=dict(playbook="test", phase="test", agent="test"),
+        decision="keep", comparison_token="fixture", post_change_evidence={})
+    proposal = _proposal()
+    proposal["manager"] = proposal.pop("driver")
+    proposal["confirmation_contract"] = {"user_required": [], "manager_confirmable": [], "mandatory_human_stops": []}
+    proposal["phases"][0]["name"] = "outline"
+    proposal["proactive_review"]["phase_decisions"][0]["phase"] = "outline"
+    proposal["locales"]["conversation"]["value"] = "en-US"
+    output = formatter.render(args, confirmed_proposal=proposal)
+    assert "Used cost (excluding Manager): USD $1.0000 reported" in output
+    args.workflow_id = "other"
+    output = formatter.render(args, confirmed_proposal=proposal)
+    assert "Used cost (excluding Manager): USD unknown" in output
+    assert "$1.0000" not in output

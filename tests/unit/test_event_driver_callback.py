@@ -3765,3 +3765,10 @@ def test_external_writer_lost_ack_stays_ambiguous_without_replay(tmp_path, monke
     assert delivery["attempts"][0]["outcome"] == "ambiguous"
     assert launch.call_count == 1
     assert state["entries"][1]["session"] is None
+
+
+@pytest.fixture(autouse=True)
+def retained_accounting_repository(tmp_path, monkeypatch):
+    """Callback accounting now requires the real project Git identity boundary."""
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, capture_output=True)
+    monkeypatch.setattr("cafe.manager.costs.common_dir", lambda root: tmp_path / ".git")
