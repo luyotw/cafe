@@ -381,11 +381,34 @@ language. Keep purpose, scope, and implementation direction separate:
 | --- | --- |
 | `schema_version` | `3` |
 | `outcome` | Purpose: the intended result and why it matters |
-| `in_scope`, `out_of_scope` | Explicit lists; include required edge cases and integrations |
+| `in_scope` | Intended changes, required edge cases and integrations, plus the adjustment footprint described below |
+| `out_of_scope` | Explicit list of excluded behavior |
 | `acceptance_invariants` | Concrete completion criteria, without a second evidence checklist |
 | `implementation_direction` | Recommended approach; advisory, not a binding method |
 | `permissions` | Task-specific action and target authorizations; no implied side effects |
 | `constraints` | A flat list of actual fixed limits, not generic quality or architecture boilerplate |
+
+Before writing `in_scope`, inspect the relevant repository areas and estimate
+the distinct files that need adjustment, excluding test files. Count planned
+additions, modifications and deletions once per file; do not count every file
+in an affected directory. Use this total across the whole change to choose the
+scope presentation:
+
+- For at most three non-test files, list each filename with its
+  repository-relative path and a concise description of the intended change.
+- For more than three non-test files, list the affected module names and their
+  intended changes, then state the approximate total as, for example,
+  `約 6 個檔案（不含測試）` or `about 6 files (excluding tests)`. A bounded range
+  is appropriate when the exact footprint is still uncertain. Use recognizable
+  repository module or directory names instead of an exhaustive file list.
+
+For example, three implementation files plus two test files still use the
+filename form. Four implementation files use the module form even if they all
+belong to one module. A test-only change states that zero non-test files need
+adjustment and describes the test scope. Excluding tests from this count does
+not exclude required testing from the work or acceptance criteria. Keep this
+footprint in `in_scope`, alongside the required behavior; the estimate is not a
+fixed file-count constraint.
 
 Use explicit empty lists for `out_of_scope`, `permissions`, and `constraints`
 when none apply. Purpose, in-scope behavior, completion criteria and recommended
