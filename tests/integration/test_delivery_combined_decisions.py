@@ -30,7 +30,22 @@ def fake_github(local_action, tmp_path, monkeypatch):
 
 
 def activate_closeout(context, command):
+    # Freeze the original combined declaration as a project-level compatibility fixture.
+    import shutil
+    from cafe.skills.loader import SkillLoader
     root, _, issue, state = context[:4]
+    delivery = context[-1]
+    skill = context[5]["steps"][delivery]["skill"]
+    target = root / ".cafe/skills" / skill
+    if not target.exists():
+        shutil.copytree(SkillLoader(project_root=root).get_skill_dir(skill), target)
+    path = target / "SKILL.md"
+    content = path.read_text()
+    content = content.replace("    - id: confirm\n", "    - id: confirm_cleanup\n      label: Run displayed cleanup\n    - id: confirm_archive\n      label: Archive only\n    - id: confirm\n", 1)
+    path.write_text(content)
+    for binding in context[5]["steps"][delivery]["human_tasks"]:
+        if binding["task_id"] == "delivery-outcome":
+            binding["outcomes"].update(confirm_cleanup="_done", confirm_archive="_done")
     proposal = _manager_proposal()
     proposal["delivery_contract"]["schema_version"] = 5
     proposal["delivery_contract"]["terminal_selection"] = "delivery_outcome"
@@ -52,10 +67,17 @@ def activate_closeout(context, command):
     )
 
 
-def terminal_reply(context, decision):
+def terminal_reply(context, decision, *, completion_authority=None):
     _, _, issue, state, phase, data, engine, kwargs, _, delivery = context
     journey.hook(engine, "publish_output", "DevelopmentDeliveryOutcome", kwargs)
-    task = HumanTaskRecordStore(issue).tasks()[-1]
+    from cafe.delivery.closeout import read_plan, plan_text
+    records = HumanTaskRecordStore(issue)
+    task = records.tasks()[-1]
+    task = records.refresh_pending_contract(
+        workflow_id=state.workflow_id, task_id=task.id,
+        prompt=task.prompt + "\n\n" + plan_text(read_plan(issue, state.workflow_id)),
+        expected_result=task.expected_result, continuations=task.continuations,
+    )
     assert "Closeout plan SHA256:" in task.prompt
     journey.pause(issue, state, delivery)
     reply = apply_human_task_payload(
@@ -66,6 +88,7 @@ def terminal_reply(context, decision):
         trigger="confirm_output",
         raw_payload={"task": task.policy_id, "human_task_id": task.id, "decision": decision},
         source="test",
+        completion_authority=completion_authority,
     )
     return reply
 
@@ -105,7 +128,7 @@ def test_two_actual_replies_authorize_delivery_and_terminal_selection(
     assert records.get_result(host_tasks[0].id).payload["authority"]["task_id"] == task.id
     assert not marker.exists()
 
-    reply = terminal_reply(context, decision)  # Second user reply also selects terminal work.
+    reply = terminal_reply(context, decision, completion_authority={"kind": "user_submission"})  # Second user reply also selects terminal work.
     assert reply.target == "done", reply.rejection
     store = BlackboardStore(issue)
     store.set_current_step(state, reply.target)  # Apply the declared terminal runtime transition.
@@ -208,6 +231,13 @@ def test_changed_terminal_plan_rejects_acceptance_without_cleanup_effect(local_a
     journey.hook(context[6], "publish_output", "DevelopmentDeliveryOutcome", context[7])
     issue, state = context[2:4]
     task = HumanTaskRecordStore(issue).tasks()[-1]
+    from cafe.delivery.closeout import read_plan, plan_text
+    records = HumanTaskRecordStore(issue)
+    task = records.refresh_pending_contract(
+        workflow_id=state.workflow_id, task_id=task.id,
+        prompt=task.prompt + "\n\n" + plan_text(read_plan(issue, state.workflow_id)),
+        expected_result=task.expected_result, continuations=task.continuations,
+    )
     path = issue / "delivery" / "closeout.json"
     plan = json.loads(path.read_text())
     plan["cleanup"] = [["gh", "issue", "close", "999", "--repo", "owner/repo"]]
@@ -225,6 +255,7 @@ def test_changed_terminal_plan_rejects_acceptance_without_cleanup_effect(local_a
             "decision": "confirm_cleanup",
         },
         source="test",
+        completion_authority={"kind": "user_submission"},
     )
     assert rejected.rejection is not None and rejected.target is None
     assert HumanTaskRecordStore(issue).get_result(task.id) is None

@@ -167,12 +167,24 @@ def verify_closeout(project_root, issue_name, workflow_id, issue_dir, operation,
         contract = archive / "manager/contract.json"
         if contract.exists():
             policy = read_accounting_file(contract)
-            if policy.get("delivery_contract", {}).get("terminal_selection") == "delivery_outcome":
+            if ("closeout_contract" in policy or
+                    policy.get("delivery_contract", {}).get("terminal_selection") == "delivery_outcome"):
                 from inspect_delivery_closeout import inspect
 
                 result = inspect(archive, workflow_id, project_root=project_root)
                 if result["status"] != "accepted" or result["selection"]["choice"] != operation:
                     raise ValueError("closeout differs from accepted terminal selection")
+                if "closeout_contract" in policy:
+                    from cafe.manager.closeout import execution_plan
+                    path, lock = _paths(project_root, issue_name, workflow_id)
+                    with _read_locked(lock):
+                        evidence = _read(path, issue_name=issue_name, workflow_id=workflow_id)
+                    if (evidence is None or evidence["contract_sha256"] != result["selection"]["contract_sha256"]
+                            or [c["argv"] for c in evidence["commands"]["cleanup"]]
+                            != [c["argv"] for c in execution_plan(policy)["cleanup"]]
+                            or any(c["status"] != "succeeded" or c["returncode"] != 0
+                                   for c in evidence["commands"]["cleanup"])):
+                        raise ValueError("Manager closeout receipt differs from its confirmed selection")
         return archive
     return Path(issue_dir) if Path(issue_dir).exists() else None
 

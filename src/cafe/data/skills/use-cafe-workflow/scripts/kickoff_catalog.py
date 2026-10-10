@@ -15,10 +15,11 @@ from cafe.catalogs.resolver import CatalogKind, CatalogResolver, content_digest
 from cafe.core.capabilities import default_capability_definition_dirs, load_capability_registry
 from cafe.core.playbook import (
     PlaybookDefinition,
+    PlaybookMeta,
+    ContractForm,
     confirmation_gate_steps,
     iter_declared_playbook_skills,
     mandatory_confirmation_gate_steps,
-    normalize_playbook_yaml,
     resolve_playbook_skills,
 )
 from cafe.playbooks.loader import PlaybookLoader
@@ -221,12 +222,12 @@ def discover_index(
         for candidate_id in names:
             try:
                 entry = resolver.resolve(CatalogKind.PLAYBOOK, candidate_id)
-                model = PlaybookDefinition.model_validate(normalize_playbook_yaml(
-                    safe_load(entry.path.read_text(encoding="utf-8"))))
-                applicability = model.playbook.applicability
+                raw = safe_load(entry.path.read_text(encoding="utf-8"))
+                metadata = PlaybookMeta.model_validate(raw["playbook"])
+                applicability = metadata.applicability
                 candidates.append({
                     "id": candidate_id, "source": entry.source, "path": str(entry.path),
-                    "contract_mode": model.contract.mode,
+                    "contract_mode": ContractForm.model_validate(raw.get("contract", {})).mode,
                     "applicability": applicability.model_dump() if applicability else None,
                     "eligible": applicability is not None, "fingerprint": entry.digest,
                 })
@@ -279,7 +280,10 @@ def discover_index(
         try:
             entry = resolver.resolve(CatalogKind.PLAYBOOK, candidate_id)
             raw = safe_load(entry.path.read_text(encoding="utf-8"))
-            model = PlaybookDefinition.model_validate(normalize_playbook_yaml(raw))
+            # Phase defaults must be assembled before validating inter-field
+            # invariants; raw YAML may intentionally omit inherited fields.
+            loaded = loader.load_model(candidate_id, strict=False)
+            model = loaded.model
             dependencies = _dependency_closure(model, skill_loader, skill_dependencies)
             fingerprint = _digest(
                 [("entry", entry.digest), ("source", entry.source), *dependencies, *dependency_code]
@@ -297,7 +301,6 @@ def discover_index(
                     skill_discovered = True
                 if skill_discovery_error is not None:
                     raise skill_discovery_error
-                loaded = loader.load_model(candidate_id, strict=False)
                 candidate = _candidate_details(
                     candidate_id, entry.path, entry.source, project_root,
                     loaded.model, skill_loader,

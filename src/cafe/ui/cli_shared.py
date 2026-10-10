@@ -931,6 +931,7 @@ def _handle_declared_human_task_handoff(
             trigger=trigger,
             raw_payload={},
             source="interactive",
+            completion_authority={"kind": "user_submission"},
         )
         console.print(f"[red]{result.rejection.message}[/red]")
         return None
@@ -1050,6 +1051,7 @@ def _handle_declared_human_task_handoff(
         trigger=trigger,
         raw_payload=payload or {},
         source="interactive",
+        completion_authority={"kind": "user_submission"},
     )
     if result.rejection is not None:
         console.print(f"[yellow]{result.rejection.message}[/yellow]")

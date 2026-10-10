@@ -386,7 +386,10 @@ def _validate_policy(proposal: Mapping[str, Any]) -> dict[str, Any]:
     if _RUNTIME_KEYS & set(raw):
         raise ValueError("mutable runtime state does not belong in the confirmed contract")
     new = "task_contract" in raw
-    if set(raw) != (_NEW_PROPOSAL_KEYS if new else _PROPOSAL_KEYS):
+    expected = (_NEW_PROPOSAL_KEYS if new else _PROPOSAL_KEYS)
+    if "closeout_contract" in raw:
+        expected = expected | {"closeout_contract"}
+    if set(raw) != expected:
         raise ValueError("confirmed proposal is incomplete")
     phases = _validate_phases(raw["phases"])
     reactive = _mapping(raw["reactive_user_handoffs"], "reactive_user_handoffs")
@@ -407,9 +410,17 @@ def _validate_policy(proposal: Mapping[str, Any]) -> dict[str, Any]:
         "checkout": _validate_checkout(raw["checkout"]),
     }
     delivery = normalize_delivery_contract(raw["delivery_contract"])
-    if delivery["schema_version"] not in {3, 5}:
+    if delivery["schema_version"] not in {3, 5, 6}:
         raise ValueError("Manager v8 requires legacy or phase-owned Delivery Contract facts")
-    validate_closeout_plan_policy(delivery["closeout_plan"], allow_squash=None)
+    if delivery["schema_version"] == 6:
+        from .closeout import normalize_closeout_contract
+        if "closeout_contract" not in raw:
+            raise ValueError("phase-owned delivery requires a Manager closeout contract")
+        result["closeout_contract"] = normalize_closeout_contract(raw["closeout_contract"])
+    elif "closeout_contract" in raw:
+        raise ValueError("separate Manager closeout requires Delivery Contract v6")
+    else:
+        validate_closeout_plan_policy(delivery["closeout_plan"], allow_squash=None)
     result["delivery_contract"] = delivery
     for field in result["reactive_user_handoffs"]:
         result["reactive_user_handoffs"][field] = _string(
@@ -496,6 +507,8 @@ def _semantic_projection_from_validated(contract: Mapping[str, Any]) -> dict[str
         else _NEW_POLICY_SEMANTIC_FIELDS if version == SCHEMA_VERSION else _POLICY_SEMANTIC_FIELDS
     )
     projection = {name: deepcopy(contract[name]) for name in fields if name in contract}
+    if "closeout_contract" in contract:
+        projection["closeout_contract"] = deepcopy(contract["closeout_contract"])
     if legacy:
         projection["material_assumptions"] = deepcopy(contract["preflight"]["material_assumptions"])
     return projection
@@ -510,7 +523,10 @@ def freshness_semantic_facts(contract: Mapping[str, Any]) -> dict[str, Any]:
         if current["schema_version"] == SCHEMA_VERSION
         else _POLICY_SEMANTIC_FIELDS
     )
-    return {"effective_policy": {name: deepcopy(current[name]) for name in fields}}
+    facts = {name: deepcopy(current[name]) for name in fields}
+    if "closeout_contract" in current:
+        facts["closeout_contract"] = deepcopy(current["closeout_contract"])
+    return {"effective_policy": facts}
 
 
 def semantic_projection(contract: Mapping[str, Any]) -> dict[str, Any]:
@@ -563,6 +579,8 @@ def build_initial_contract(
     policy = _validate_policy(proposal)
     if policy.get("contract_mode") == "compact" and confirmed_by != "user":
         raise ValueError("compact activation requires explicit user confirmation")
+    if "closeout_contract" in policy and confirmed_by != "user":
+        raise ValueError("Manager closeout selection requires explicit user confirmation")
     document: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "identity": {
@@ -608,6 +626,8 @@ def validate_contract(
     )
     if raw.get("contract_mode") == "compact":
         keys = _COMPACT_CONTRACT_KEYS
+    if "closeout_contract" in raw:
+        keys = keys | {"closeout_contract"}
     if set(raw) != keys:
         raise ValueError("contract has unsupported or missing fields")
     schema_version = raw["schema_version"]
@@ -648,6 +668,8 @@ def validate_contract(
     if kind not in {"initial", "user_reconfirmation"}:
         raise ValueError("contract provenance kind is invalid")
     provenance["confirmed_by"] = _string(provenance["confirmed_by"], "provenance.confirmed_by")
+    if "closeout_contract" in raw and provenance["confirmed_by"] != "user":
+        raise ValueError("Manager closeout selection requires user provenance")
     provenance["confirmed_at"] = _aware_time(provenance["confirmed_at"], "provenance.confirmed_at")
     digest = _string(provenance["proposal_digest"], "provenance.proposal_digest")
     if len(digest) != 64:

@@ -153,7 +153,7 @@ For graphs declaring `delivery`, integration and selected follow-up issue creati
 
 Repository delivery discovery retains descriptive conventions, source coverage, freshness and gaps. Resolve exact PR/source/target/strategy or local destination when the PR action review presents actual immutable artifacts. The user selects an explicit subset of original Review drafts or an empty selection. The displayed PR decision covers action selection and its host capability boundaries together, while preserving distinct durable approvals. Final result acceptance remains a separate user decision; only user confirmation authorizes execution of the shown action bundle. Legacy proposals without displayed host boundaries retain separate capability approval.
 
-The formatter produces a version-5 nested `delivery_contract` for adopting graphs with `closeout_plan.cleanup` only. Keep exact literal cleanup argv and one description per action. The default is full cleanup: close a verified bound GitHub issue, then use `scripts/cleanup_worktree.py` to archive CAFE state and remove the exact feature worktree, local branch, and bound remote branch. This is a Manager skill default; explicit current decisions and repository preferences retain precedence. The preparation helper fills literal interpreter, script, repository, worktree, issue, and remote arguments. Explain all deletion effects before kickoff confirmation. Never remove the canonical checkout; when no separate feature worktree exists, propose archive-only and explain that limitation. Ordinary `cafe close` can integrate a local branch and is not a fresh phase-owned cleanup fallback. The PR decision explicitly covers the displayed action and host capability boundaries together. Delivery acceptance also selects full cleanup, archive-only, or leaving external state unchanged in the same reply; Manager executes the recorded selection after completion without a second terminal question.
+The formatter produces version-6 product `delivery_contract` facts and a separate version-1 Manager `closeout_contract` for adopting graphs. Keep exact literal cleanup argv and one description per action. The default is full cleanup: close a verified bound GitHub issue, then use `scripts/cleanup_worktree.py` to archive CAFE state and remove the exact feature worktree, local branch, and bound remote branch. This is a Manager skill default; explicit current decisions and repository preferences retain precedence. The preparation helper fills literal interpreter, script, repository, worktree, issue, and remote arguments. Explain all deletion effects before kickoff confirmation. Never remove the canonical checkout; when no separate feature worktree exists, propose archive-only and explain that limitation. Ordinary `cafe close` can integrate a local branch and is not a fresh phase-owned cleanup fallback. The PR decision explicitly covers the displayed action and host capability boundaries together. Kickoff confirmation selects the displayed Manager closeout action. Delivery acceptance only confirms results; Manager executes the already-confirmed choice after completion without a second terminal question.
 
 For a verified repository and issue, a literal cleanup proposal is:
 
@@ -319,7 +319,10 @@ confirmation before preparation or workflow execution.
    steps remain user-owned and never enter the kickoff partition. Both classes
    come from `steps.<step>."on".confirm_output`.
 3. Present each candidate by step and purpose. Default every candidate to
-   `manager_confirmable` with proactive review `required`, then allow the user to
+   `manager_confirmable`; proactive review defaults to `required` except for
+   a declared delivery result owner, which defaults to `not_required` even when
+   action permission lives in that same phase. Preserve the formatter defaults
+   and add an override only for an explicit user request. Allow the user to
    override any candidate into exactly one of:
    - `user_required`: stop for the real user;
    - `manager_confirmable`: the manager may verify and continue.
@@ -423,7 +426,7 @@ approval from scope or technical advice. The Manager's standing rule remains:
 > integrations.
 
 The formatter adds separately supplied `--cleanup` commands
-to the version-3 product core as a version-5 cleanup-only `closeout_plan` for adopting graphs; do not put that field in
+to a separate Manager `closeout_contract.plan` for adopting graphs; do not put that field in
 `--delivery-contract` as well:
 
 | Field | Content |
@@ -543,3 +546,14 @@ Continue with `kickoff_execution.md` for the direct formatter CLI example,
 preparation checklist, durable activation and attached execution polling. Read
 the applicable section before that operation. Preparing a proposal through the
 consolidated helper requires none of those execution examples.
+
+### Manager closeout selection
+
+For phase-owned development delivery, propose `closeout_choice: cleanup` for a
+non-empty cleanup plan and `leave` for an empty plan unless the user requests
+archive or a later decision (`pending`). The formatter displays this selection
+and persists a separate Manager `closeout_contract`; kickoff confirmation
+authorizes execution after workflow completion and delivery acceptance. Do not
+move cleanup selection into deliver or add a second terminal prompt for an
+already-confirmed choice. Changed commands, targets, effects or selections need
+explicit user reconfirmation through the existing Manager contract API.

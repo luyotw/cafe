@@ -187,7 +187,12 @@ def validate_response(issue_dir, binding, task, payload):
             or f"Delivery result SHA256: {digest(report)}" not in task.prompt
         ):
             raise ValueError("current complete result does not match the shown outcome")
-        validate_choice(issue_dir, snapshot, task, payload["decision"])
+        # Only a retained combined task validates its historical terminal plan.
+        # Pure result confirmation never reads or changes Manager closeout.
+        if "Closeout plan SHA256:" in task.prompt:
+            validate_choice(issue_dir, snapshot, task, payload["decision"])
+        elif payload["decision"] != "confirm":
+            raise ValueError("delivery result acceptance has no terminal action selection")
 
 
 def validate_complete_report(issue_dir, snapshot, report):

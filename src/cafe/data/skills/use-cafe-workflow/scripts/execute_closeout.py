@@ -170,7 +170,8 @@ def _confirmed(
     else:
         from cafe.manager._store import load_contract
     contract, digest = load_contract(issue, issue_name=issue_name, workflow_id=workflow_id)
-    return contract["delivery_contract"]["closeout_plan"], digest, worktree
+    from cafe.manager.closeout import execution_plan
+    return execution_plan(contract), digest, worktree
 
 
 def _closeout_evidence_builder(issue_dir: Path):
@@ -282,18 +283,28 @@ def main() -> int:
                 from cafe.manager.delivery import validate_legacy_delivery_binding
                 validate_legacy_delivery_binding(command["argv"])
             elif (
-                authority.get("delivery_contract", {}).get("terminal_selection") == "delivery_outcome"
+                "closeout_contract" in authority
+                or authority.get("delivery_contract", {}).get("terminal_selection") == "delivery_outcome"
                 or (args.issue_dir / "delivery" / "closeout.json").exists()
             ):
                 from inspect_delivery_closeout import inspect
 
                 selected = inspect(args.issue_dir, args.workflow_id)
-                if selected["status"] != "accepted" or selected["selection"]["choice"] != "cleanup":
-                    raise ValueError("cleanup requires the recorded delivery terminal choice")
+                expected_choice = authority.get("closeout_contract", {}).get("choice", "cleanup")
+                if (selected["status"] != "accepted" or expected_choice not in {"cleanup", "archive"}
+                        or selected["selection"]["choice"] != expected_choice):
+                    raise ValueError("closeout requires an authorized Manager selection and accepted delivery")
             from cafe.manager.costs import quiescent_worker, preserve_worker_cost
             guard = quiescent_worker(args.issue_dir) if args.stage == "cleanup" else nullcontext()
             with guard:
                 if args.stage == "cleanup":
+                    if authority.get("closeout_contract", {}).get("choice") == "cleanup":
+                        dirty = subprocess.run(
+                            ["git", "-C", record["worktree"], "status", "--porcelain", "--untracked-files=all"],
+                            check=True, text=True, capture_output=True,
+                        )
+                        if dirty.stdout.strip():
+                            raise ValueError("cleanup worktree has uncommitted or untracked changes")
                     preserve_worker_cost(args.project_root, args.issue_dir, args.issue_name, args.workflow_id)
                 command["status"] = "unknown"
                 _write(path, record)

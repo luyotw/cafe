@@ -228,7 +228,9 @@ def build_offer(args, proposal, model, *, store=None, templates=None, issue_id="
         unavailable.append("worktree.convention")
 
     for stage, key in (("cleanup", "cleanup.convention"),):
-        commands = [c["argv"] for c in proposal["delivery_contract"]["closeout_plan"][stage]]
+        plan = (proposal["closeout_contract"]["plan"] if "closeout_contract" in proposal
+                else proposal["delivery_contract"]["closeout_plan"])
+        commands = [c["argv"] for c in plan[stage]]
         descriptions = getattr(args, stage + "_description")
         defaults = [{stage: [], stage + "_description": []}] if not commands else []
         # This exact built-in closeout has no issue-specific arguments to infer.

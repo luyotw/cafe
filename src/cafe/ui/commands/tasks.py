@@ -45,6 +45,7 @@ def apply_structured_task(
     project_root: Path,
     source: str,
     supervisor_handoff_to: str | None = None,
+    completion_authority: Mapping[str, Any] | None = None,
 ) -> tuple[CompletionPreflight, HumanTaskApplication]:
     """Use the same neutral validator and durable transition for both callers."""
     preflight = service.preflight_completion(task_id)
@@ -61,6 +62,7 @@ def apply_structured_task(
         raw_payload=raw_payload,
         source=source,
         supervisor_handoff_to=supervisor_handoff_to,
+        completion_authority=completion_authority,
     )
     if applied.rejection is not None or applied.target is None:
         message = (
@@ -377,6 +379,7 @@ def complete_task(
                     "command" if result is not None or result_file is not None else "interactive"
                 ),
                 supervisor_handoff_to=handoff_to,
+                completion_authority={"kind": "user_submission"},
             )
         if not no_resume:
             try:

@@ -17,7 +17,7 @@ from _kickoff_store import VersionedJsonStore, repository_identity
 
 _ALLOWED_FIELDS = {
     "playbook_id", "project_root", "issue_name", "delivery_contract", "cleanup",
-    "cleanup_description", "update_preflight", "catalog_preflight",
+    "cleanup_description", "closeout_choice", "update_preflight", "catalog_preflight",
     "manager_mode", "poll_interval_seconds", "event_manager", "phase_chain", "phase_config",
     "effective_locale", "locale_source", "repository_content_locale", "capability_choice",
     "user_required", "manager_confirmable", "worktree", "current_checkout",
@@ -50,6 +50,7 @@ _SCALAR_FLAGS = {
     "locale_source": "--locale-source", "repository_content_locale": "--repository-content-locale",
     "need_permission": "--need-permission", "need_clarification": "--need-clarification",
     "alignment_checkpoint": "--alignment-checkpoint",
+    "closeout_choice": "--closeout-choice",
 }
 
 def formatter_field_schema() -> dict[str, Any]:
@@ -130,7 +131,7 @@ def request_schema() -> dict[str, Any]:
         "preflight_example_use": "These are field shapes, not valid evidence or defaults. Retain the full original report including optional diagnostics/mismatch IDs. Supply the actual check timestamp and current decision; copy source tokens/digests without invention. Explicit null can record an actually unavailable source value, not a successful check. Existing formatter validation remains authoritative.",
         "template_rules": {
             "null": "Unresolved: replace with a deliberate value; never rendered as a default.",
-            "delivery_contract": "Fill all product decisions, including intentionally empty lists. closeout_plan is added by the formatter.",
+            "delivery_contract": "Fill all product decisions, including intentionally empty lists. The formatter adds the separate Manager closeout contract for phase-owned delivery.",
             "actions": "cleanup contains literal argv arrays, not command objects or shell strings. Empty arrays require an explicit current decision.",
             "action_descriptions": "cleanup_description contains strings with exactly one nonempty explanation per command. An empty action array requires an empty description array; put resource-retention rationale in delivery_contract.constraints instead. Action examples describe shapes, never permission.",
             "closeout": "Examples validate syntax only, never recommend or authorize an action. cafe close must be last cleanup; adopting graphs require archive-only to avoid another integration.",
@@ -828,6 +829,7 @@ def _prefill_configured_inputs(values: dict[str, Any], *, project_root: Path, so
             fill("locale_source", snapshot["source"], "conversation locale owner")
 
     from cafe.manager.delivery import phase_owned_graph
+    phase_owned = phase_owned_graph(model)
     default_descriptions = {"Archive this CAFE issue without repeating integration; retain its worktree and branch.", "Archive this CAFE issue and remove its managed worktree and branch."}
     generated_cleanup = values.get("cleanup", [])
     generated_description = values.get("cleanup_description", [])
@@ -847,6 +849,8 @@ def _prefill_configured_inputs(values: dict[str, Any], *, project_root: Path, so
         fill("user_required", user, "formatter confirmation default")
         fill("manager_confirmable", manager, "formatter confirmation default")
     phases = {name: step for name, step in model.steps.items() if step.assignee_type in {"agent", "hybrid"}}
+    if phase_owned and "closeout_choice" not in values:
+        fill("closeout_choice", "cleanup" if values.get("cleanup") else "leave", "default Manager closeout selection")
     if "proactive_review_decision" not in values:
         reviews = owner._proactive_review_decisions(
             [], agent_phases=list(phases),

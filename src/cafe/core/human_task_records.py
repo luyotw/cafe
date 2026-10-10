@@ -691,7 +691,18 @@ class HumanTaskRecordStore:
         task_id: str,
         payload: Mapping[str, Any],
         source: str,
+        completion_authority: Mapping[str, Any] | None = None,
     ) -> TaskResult:
+        if completion_authority is not None:
+            authority = dict(completion_authority)
+            if authority != {"kind": "user_submission"}:
+                import re
+                if (set(authority) != {"kind", "contract_sha256", "sources_sha256"}
+                        or authority.get("kind") != "manager_proxy"
+                        or any(not isinstance(authority.get(key), str)
+                               or not re.fullmatch(r"[0-9a-f]{64}", authority[key])
+                               for key in ("contract_sha256", "sources_sha256"))):
+                    raise HumanTaskRecordSchemaError("invalid host completion authority")
         with self.transaction():
             envelope = self._load_for_workflow(workflow_id, create=False)
             task = self._task(envelope, task_id)
@@ -717,9 +728,10 @@ class HumanTaskRecordStore:
                 task, status=HumanTaskStatus.COMPLETED, completed_at=now
             )
             envelope.wait_states[task.id] = replace(wait_state, released_at=now)
-            self._append_event(
-                envelope, "completed", task_id=task.id, context={"result_id": result.id}
-            )
+            context = {"result_id": result.id}
+            if completion_authority is not None:
+                context["completion_authority"] = dict(completion_authority)
+            self._append_event(envelope, "completed", task_id=task.id, context=context)
             self._save(envelope)
             return result
 

@@ -111,7 +111,7 @@ does not repair stale evidence. Supplied false and empty values are preserved.
 An empty `phase_chain` requests no per-phase overrides; assembly fills configured
 chains for the selected graph. Product fields use the existing `DeliveryContractV3`
 schema. `implementation_direction` is a string; list fields are arrays.
-`closeout_plan` is built by the formatter. The adopting graph owns exact integration review later; kickoff accepts cleanup only. A null cleanup slot may receive a valid default; explicit `[]` excludes cleanup. Deliberate `cleanup` choices are literal
+The formatter builds the separate Manager `closeout_contract` for phase-owned graphs. `closeout_choice` selects cleanup, archive, leave, or pending; confirmation authorizes the displayed choice. The adopting graph owns exact integration review later; kickoff accepts cleanup only. A null cleanup slot may receive a valid default; explicit `[]` excludes cleanup. Deliberate `cleanup` choices are literal
 argv arrays, with one description per action. `schema` exposes all field types
 and the existing parser's allowed values without conditional filtering.
 An unknown or invalid field blocks rendering but preserves the editable values

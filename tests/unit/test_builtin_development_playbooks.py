@@ -55,8 +55,7 @@ def test_adopting_graphs_have_separate_action_review_and_result_acceptance():
         assert set(review.outcomes.values()) == {"deliver"}
         outcome = next(t for t in delivery.human_tasks if t.trigger == "confirm_output")
         assert outcome.outcomes == {
-            "confirm": "_done", "confirm_cleanup": "_done",
-            "confirm_archive": "_done", "revise": "deliver",
+            "confirm": "_done", "revise": "deliver",
         }
         assert delivery.delivery.publication_artifact in delivery.input_artifacts
         assert delivery.delivery.correction_step in delivery.allowed_goto

@@ -9,7 +9,7 @@ human_task.delivery.runtime_evidence: '呈現交付結果前，請先讀取以�
   - delivery_receipts_file: {receipts}
 
   - delivery_complete: {complete}'
-human_task.delivery.confirm: 驗收結果，保留外部狀態
+human_task.delivery.confirm: 確認顯示的交付結果
 human_task.delivery.confirm_cleanup: 驗收結果，執行顯示的收尾計畫
 human_task.delivery.confirm_archive: 驗收結果，僅封存並保留 worktree 與分支
 human_task.delivery.revise: 恢復或修訂交付

@@ -2,21 +2,21 @@
   "origin_head": "178e3e1c031860b9eb5ec2eacea5c52fade30226",
   "contract": "SHA-256 of sorted compact JSON containing complete normalized model, effective behavior and static simulation (sets sorted); captured before defaults implementation",
   "playbooks": {
-    "bug": "c3078d89c31a633528572403476e172c81304bdb282ba4d76978842588798177",
-    "direct-qa": "5a62e495407f7e966474f8f3636323c33e75d4c895ff999fdbb23e369b72bbe2",
-    "direct-subagent-review": "2ab1e62093bd40f5e5839618dae579766ac82808dcb2819931862c34aae46c7f",
-    "direct": "ab53d17a51d4eac8930ed15435984e92d88c653960146bf4fb11d8e8587b82c6",
+    "bug": "0a7ce093e996ffb521c3b689a07270412a338785e1e98a195bacfefe22bac13f",
+    "direct-qa": "5f30ff546d38492e37b0047e4900e863e466fe73eef6c546427bd949d8c7ab77",
+    "direct-subagent-review": "96c179d311ee18cd4bad095a63b5dc751378d42697ec3766cd3f1559ec369b93",
+    "direct": "5856b4bc962e524f5fbdb14140a5101035d1ba7dddf93469460c1f2ded2a07ff",
     "editorial": "f30669a3e3092d415af4e14fbc703b0054d15c13b1d77ecfb6b190852184763d",
-    "hotfix": "cd12d7e5e5f0743f45b5cf65923384076aca54b3d7f3ef37d6fd102bb21d7c42",
+    "hotfix": "5d270272163f95651bbfea1e0395eaec845bf03650bee5e3a5df34d2121f07a1",
     "incident": "b7fa2893acbb957253a7de45c63c62bfcfa4a4787a6dd4d3696282194c548730",
     "research": "ed8662f19a692ef89860a9fef65a98793b395e77ea846b3ff4d4bd62bd77d373",
-    "simple": "d1e323155c46666feeb4a499321f74ca53042e2e2fe9b09a71ffb59ca578fc9d",
-    "standard-qa": "9ab98a792a9f70c3a622ddc14c55b74a942758ddaf61e82ff1ffda2511ebca05",
-    "standard": "5b52cb1e7010f830105351efc2fdea87a25894bbcebf45926f7a590e36e4242a",
+    "simple": "1143414091f6669b2700cd4eabc62594a7a239e8d25d2b0366acba4df28d74f0",
+    "standard-qa": "9f59a8d10eddc99dbf4f9fc0ed7b26c10b36c794f095b293e275a0a9a6972ee0",
+    "standard": "19c363c35140d6bb3df8bb53b53a47f3a096cb56aea45aa607ef7c37303216d4",
     "streamlined": "167351055be3d0521b1ff2d76dcded1d8e47d728667c2e840884cdd3f9ef6dee",
-    "subagent-flow-qa": "3eec5a38880bd6ec240551f4224fd46c3ea34b5f4acdfe4ee62c72483518b1c5",
-    "subagent-flow": "f03fa002d3c15235520471f49da830cdf8831d4248aa7249d76ef811fcf0236f",
-    "tdd-qa": "482f71516517e8a26efba055afe052952eb3a85bf8f00a14d4fdcf990bcf9ce2",
-    "tdd": "16759f99781dd2ac352a4edabe4c1f0eab646a8152ead34cecfa21eba90b6d91"
+    "subagent-flow-qa": "fad2d53b9f229b88551142c81382db2706205038457bb371687abd0455b7e8b2",
+    "subagent-flow": "673bd08f305afaa6367b36480a1f21f5f2af2fd1ad2a7797e968cd722778f9e6",
+    "tdd-qa": "673e11db345720a627b9faa6ce9a1d724f9379faa41cd34aca088c9f577b7a62",
+    "tdd": "a6b0946ecfe86bdb3e62dbec1e40a55b2571e3160261a5939c8095b8d6fd021f"
   }
 }
