@@ -316,6 +316,19 @@ proof remains incomplete. Unsupported overlapping physical ranges are excluded
 from combined totals. Compatibility scalars are known subtotals; records and
 coverage distinguish unknown from an attested zero.
 
+Token and money reducers share one provider-neutral admission result after merging
+physical evidence. Combined worker/Manager reports recompute admitted amounts
+jointly; distinct overlapping segment IDs cannot retain locally admitted money.
+Represented but excluded observations are subtracted before identifying genuine
+historical residuals, so overlap, conflicts and unreconciled inclusion cannot be
+recast as legacy spend. Exactly reconciled inclusive child detail remains
+non-additive beneath the authoritative parent. The additive `accounting_residual`
+map in iteration/chat stats retains independent legacy counters and money across
+recollection and chat/phase partitioning; older stats derive residuals from all
+represented observations. This is projection metadata, not a new execution or
+user configuration parameter. An empty unreliable admitted amount is unknown,
+while a recorded complete zero remains zero.
+
 Child valuation reuses the rate card pinned at entry, actual model evidence,
 verified categories and the existing context-band rules. A database or configured
 parent model cannot price a child. Mixed models without aligned counter boundaries,

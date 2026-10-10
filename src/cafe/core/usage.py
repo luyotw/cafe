@@ -75,41 +75,17 @@ def merge_token_usage_stats(existing: Any, incoming: TokenUsage) -> Dict[str, An
 
 def _merge_native_usage(existing, incoming):
     """Replace represented native endpoints while retaining historical residuals."""
-    from decimal import Decimal
-
-    from cafe.core.native_accounting import native_projection
+    from cafe.core.native_accounting import accounting_admission, unrepresented_totals
 
     old_records = existing.get("cost_records", [])
-    records = merge_cost_records(old_records, incoming.cost_records)
-
-    def represented(rows):
-        view = native_projection(rows)
-        result = dict(view["tokens"])
-        excluded = set(view["excluded_ids"])
-        result["total_cost_usd"] = float(
-            sum(
-                (
-                    Decimal(r["amount_usd"])
-                    for r in rows
-                    if r.get("amount_usd") is not None
-                    and r["invocation_id"] not in excluded
-                    and r.get("native_usage", {}).get("kind") != "scope"
-                ),
-                Decimal(0),
-            )
-        )
-        if not any(
-            r.get("amount_usd") is not None
-            and r["invocation_id"] not in excluded
-            and r.get("native_usage", {}).get("kind") != "scope"
-            for r in rows
-        ):
-            result.pop("total_cost_usd", None)
-        return result
-
-    old, new, added = map(represented, (old_records, records, incoming.cost_records))
+    old = accounting_admission(old_records)
+    added = accounting_admission(incoming.cost_records)
+    admission = accounting_admission([*old_records, *incoming.cost_records])
+    records = admission["records"]
     merged = dict(existing)
     raw = incoming.model_dump(exclude_unset=True)
+    residuals = unrepresented_totals(existing, old)
+    incoming_residuals = unrepresented_totals(raw, added)
     for key in (
         "input_tokens",
         "output_tokens",
@@ -119,16 +95,30 @@ def _merge_native_usage(existing, incoming):
         "reasoning_output_tokens",
         "total_cost_usd",
     ):
-        residual = max(0, existing.get(key, 0) - old.get(key, 0))
-        # Only unrepresented data can be a new residual; record copies are idempotent.
-        incoming_residual = max(0, raw.get(key, 0) - added.get(key, 0))
+        canonical = "cache_write_input_tokens" if key == "cache_creation_input_tokens" else key
+        residual = residuals.get(key, 0)
+        incoming_residual = incoming_residuals.get(key, 0)
         if incoming.cost_records and all(
             r["invocation_id"] in {r["invocation_id"] for r in old_records}
             for r in incoming.cost_records
         ):
             incoming_residual = 0
-        if key in existing or key in raw or key in new:
-            merged[key] = residual + incoming_residual + new.get(key, 0)
+        residuals[key] = residual + incoming_residual
+        if canonical == "total_cost_usd":
+            admitted = sum(
+                float(r["amount_usd"])
+                for r in admission["admitted"]
+                if r.get("amount_usd") is not None
+            )
+        else:
+            admitted = admission["native_usage"]["tokens"].get(canonical, 0)
+        if key in existing or key in raw or admitted or residuals[key]:
+            merged[key] = residuals[key] + admitted
+    # Durable independent residuals must not be re-derived from admitted scalars.
+    if any(residuals.values()):
+        merged["accounting_residual"] = residuals
+    else:
+        merged.pop("accounting_residual", None)
     seen = {r["invocation_id"] for r in old_records}
     new_call = not incoming.cost_records or any(
         r["invocation_id"] not in seen for r in incoming.cost_records
@@ -385,6 +375,11 @@ def _validate_chat_usage(metadata):
         ):
             raise ValueError("invalid chat accounting coverage")
         for field, value in stats.items():
+            if field == "accounting_residual":
+                from cafe.core.native_accounting import validate_accounting_residual
+
+                validate_accounting_residual(value)
+                continue
             if (
                 field not in CHAT_USAGE_FIELDS
                 or isinstance(value, bool)
@@ -490,7 +485,11 @@ def chat_usage_sink(
                     )
                     previous = dict(group["stats"], cost_records=group.get("cost_records", []))
                     merged = merge_token_usage_stats(previous, usage)
-                    group["stats"] = {k: v for k, v in merged.items() if k in CHAT_USAGE_FIELDS}
+                    group["stats"] = {
+                        k: v
+                        for k, v in merged.items()
+                        if k in CHAT_USAGE_FIELDS or k == "accounting_residual"
+                    }
                     group["cost_records"] = merged["cost_records"]
                     if not issue_metadata:
                         current["stats"] = merge_token_usage_stats(current.get("stats"), usage)
@@ -548,14 +547,19 @@ def chat_usage_sink(
                 absent = set(CHAT_USAGE_FIELDS) - known.keys()
                 missing.update(absent)
                 incomplete = incomplete or bool(absent) or bool(record.failure_code)
-                merged = merge_token_usage_stats(group["stats"], TokenUsage(**known))
+                previous = dict(group["stats"], cost_records=group.get("cost_records", []))
+                merged = merge_token_usage_stats(
+                    previous, TokenUsage(**known, cost_records=usage.cost_records if usage else [])
+                )
                 # The shared merge defaults are legacy iteration compatibility,
                 # not evidence that a provider reported missing counters as zero.
                 group["stats"] = {
                     field: merged[field]
                     for field in set(group["stats"]) | known.keys()
-                    if field in CHAT_USAGE_FIELDS
+                    if field in CHAT_USAGE_FIELDS or field == "accounting_residual"
                 }
+                if "accounting_residual" in merged:
+                    group["stats"]["accounting_residual"] = merged["accounting_residual"]
                 if not issue_metadata and usage is not None:
                     current["stats"] = merge_token_usage_stats(current.get("stats"), usage)
                 if usage is not None and usage.cost_records:
@@ -573,6 +577,19 @@ def chat_usage_sink(
 def phase_stats_without_chat(stats, groups):
     """Accounting consumers must not also bill chat under phase/model metadata."""
     remaining = dict(stats) if isinstance(stats, dict) else {}
+    native = any("native_usage" in r for r in remaining.get("cost_records", []))
+    if native:
+        from cafe.core.native_accounting import accounting_admission, unrepresented_totals
+
+        def residuals(values, records):
+            return unrepresented_totals(values, accounting_admission(records))
+
+        independent = residuals(remaining, remaining.get("cost_records", []))
+        for group in groups or ():
+            for key, value in residuals(
+                group.get("stats", {}), group.get("cost_records", [])
+            ).items():
+                independent[key] = max(0, independent.get(key, 0) - value)
     money = [remaining["total_cost_usd"]] if "total_cost_usd" in remaining else []
     cost_count = len(remaining.get("cost_records", []))
     for group in groups or ():
@@ -593,4 +610,20 @@ def phase_stats_without_chat(stats, groups):
         # preserve meaningful legacy amounts and genuinely invalid negatives.
         tolerance = sum(math.ulp(value) for value in money) * max(2, cost_count)
         remaining["total_cost_usd"] = 0.0 if abs(amount) <= tolerance else amount
+    if native:
+        admission = accounting_admission(remaining.get("cost_records", []))
+        remaining["accounting_residual"] = independent
+        for key in CHAT_USAGE_FIELDS:
+            if key not in remaining and key not in independent:
+                continue
+            canonical = "cache_write_input_tokens" if key == "cache_creation_input_tokens" else key
+            if key == "total_cost_usd":
+                admitted = math.fsum(
+                    float(r["amount_usd"])
+                    for r in admission["admitted"]
+                    if r.get("amount_usd") is not None
+                )
+            else:
+                admitted = admission["native_usage"]["tokens"].get(canonical, 0)
+            remaining[key] = independent.get(key, 0) + admitted
     return remaining

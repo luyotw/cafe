@@ -44,22 +44,13 @@ def unrecorded_usage(stats, records):
         "reasoning_output_tokens",
     )
     remaining = {}
-    records = merge_cost_records([], records)
+    from cafe.core.native_accounting import accounting_admission, unrepresented_totals
+
+    residual = unrepresented_totals(stats, accounting_admission(records))
     for field in fields:
-        total = stats.get(field)
-        if total is None and field == "cache_write_input_tokens":
-            total = stats.get("cache_creation_input_tokens")
-        if total is None:
-            remaining[field] = None
-            continue
-        recorded = 0
-        for record in records:
-            usage = record.get("usage", {})
-            value = usage.get(field)
-            if value is None and field == "cache_write_input_tokens":
-                value = usage.get("cache_creation_input_tokens")
-            recorded += value or 0
-        remaining[field] = max(0, total - recorded)
+        remaining[field] = residual.get(field)
+        if remaining[field] is None and field == "cache_write_input_tokens":
+            remaining[field] = residual.get("cache_creation_input_tokens")
     return remaining
 
 
@@ -67,9 +58,11 @@ def _coverage_gap(stats, records):
     try:
         return bool(
             records
-            and not summarize_cost(records, legacy_cost=stats.get("total_cost_usd"))["counts"][
-                "legacy"
-            ]
+            and not summarize_cost(
+                records,
+                legacy_cost=stats.get("total_cost_usd"),
+                legacy_residual=stats.get("accounting_residual", {}).get("total_cost_usd"),
+            )["counts"]["legacy"]
             and any(unrecorded_usage(stats, records).values())
         )
     except (ValueError, TypeError, KeyError, AttributeError, InvalidOperation):
@@ -88,6 +81,7 @@ def collect_cost_sources(issue_dir: Path) -> list[dict]:
                 source_id=identity,
                 records=records,
                 legacy_cost=stats.get("total_cost_usd"),
+                legacy_residual=stats.get("accounting_residual", {}).get("total_cost_usd"),
                 gap=gap or _coverage_gap(stats, records),
             )
         )
@@ -164,7 +158,11 @@ def summarize_sources(sources, *, exclude_ids=(), ambiguous_sources=()):
                     valid.append(record)
                 except (ValueError, TypeError, KeyError, InvalidOperation):
                     parts.append(summarize_cost([]))
-            full = summarize_cost(valid, legacy_cost=source.get("legacy_cost"))
+            full = summarize_cost(
+                valid,
+                legacy_cost=source.get("legacy_cost"),
+                legacy_residual=source.get("legacy_residual"),
+            )
             for record in valid:
                 key = record["invocation_id"]
                 if key in excluded or key in conflicting:

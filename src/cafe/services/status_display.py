@@ -79,7 +79,9 @@ class StatusDisplay:
                         text += " (partial)"
                 values.append(text)
             cost_summary = summarize_cost(
-                group.get("cost_records", []), legacy_cost=stats.get("total_cost_usd")
+                group.get("cost_records", []),
+                legacy_cost=stats.get("total_cost_usd"),
+                legacy_residual=stats.get("accounting_residual", {}).get("total_cost_usd"),
             )
             if "total_cost_usd" in unknown:
                 cost_summary["incomplete"] = True
@@ -438,13 +440,19 @@ class StatusDisplay:
             "reasoning_output_tokens": "reasoning_output_tokens",
         }
         remaining = unrecorded_usage(
-            {raw: getattr(entry, field) for field, raw in fields.items()}, entry.cost_records
+            {
+                **{raw: getattr(entry, field) for field, raw in fields.items()},
+                "accounting_residual": entry.accounting_residual,
+            },
+            entry.cost_records,
         )
         return {field: remaining[raw] for field, raw in fields.items()}
 
     @staticmethod
-    def _legacy_cost_summary(records, aggregate_cost, *, unknown=False):
-        summary = summarize_cost(records, legacy_cost=aggregate_cost)
+    def _legacy_cost_summary(records, aggregate_cost, *, unknown=False, legacy_residual=None):
+        summary = summarize_cost(
+            records, legacy_cost=aggregate_cost, legacy_residual=legacy_residual
+        )
         if records:
             if not summary["counts"]["legacy"] and not unknown:
                 return None
@@ -454,7 +462,11 @@ class StatusDisplay:
         return summary
 
     def _entry_cost_summary(self, entry):
-        summary = summarize_cost(entry.cost_records, legacy_cost=entry.cost_usd)
+        summary = summarize_cost(
+            entry.cost_records,
+            legacy_cost=entry.cost_usd,
+            legacy_residual=entry.accounting_residual.get("total_cost_usd"),
+        )
         if (
             entry.cost_records
             and not summary["counts"]["legacy"]
@@ -492,10 +504,15 @@ class StatusDisplay:
                         )
                     )
                 legacy_usage = self._legacy_entry_usage(entry)
-                combined = summarize_cost(entry.cost_records, legacy_cost=entry.cost_usd)
+                combined = summarize_cost(
+                    entry.cost_records,
+                    legacy_cost=entry.cost_usd,
+                    legacy_residual=entry.accounting_residual.get("total_cost_usd"),
+                )
                 legacy_summary = self._legacy_cost_summary(
                     entry.cost_records,
                     entry.cost_usd,
+                    legacy_residual=entry.accounting_residual.get("total_cost_usd"),
                     unknown=bool(any(legacy_usage.values()) and not combined["counts"]["legacy"]),
                 )
                 legacy_id = (entry.phase, entry.iteration, entry.start_time)
@@ -561,36 +578,65 @@ class StatusDisplay:
         for entry in entries:
             if entry.entry_type != "iteration":
                 continue
-            sources.append(dict(
-                source_id=f"{entry.phase}/{entry.iteration}/{entry.start_time}",
-                records=entry.cost_records, legacy_cost=entry.cost_usd,
-                gap=bool(entry.cost_records and any(self._legacy_entry_usage(entry).values())
-                         and not summarize_cost(entry.cost_records, legacy_cost=entry.cost_usd)["counts"]["legacy"]),
-            ))
+            sources.append(
+                dict(
+                    source_id=f"{entry.phase}/{entry.iteration}/{entry.start_time}",
+                    records=entry.cost_records,
+                    legacy_cost=entry.cost_usd,
+                    legacy_residual=entry.accounting_residual.get("total_cost_usd"),
+                    gap=bool(
+                        entry.cost_records
+                        and any(self._legacy_entry_usage(entry).values())
+                        and not summarize_cost(
+                            entry.cost_records,
+                            legacy_cost=entry.cost_usd,
+                            legacy_residual=entry.accounting_residual.get("total_cost_usd"),
+                        )["counts"]["legacy"]
+                    ),
+                )
+            )
             phase = phases.setdefault(entry.phase, {"records": [], "legacy": []})
             if entry.cost_records:
                 phase["records"] = merge_cost_records(phase["records"], entry.cost_records)
-                combined = summarize_cost(entry.cost_records, legacy_cost=entry.cost_usd)
+                combined = summarize_cost(
+                    entry.cost_records,
+                    legacy_cost=entry.cost_usd,
+                    legacy_residual=entry.accounting_residual.get("total_cost_usd"),
+                )
                 legacy = self._legacy_cost_summary(
                     entry.cost_records,
                     entry.cost_usd,
-                    unknown=bool(any(self._legacy_entry_usage(entry).values())
-                                 and not combined["counts"]["legacy"]),
+                    legacy_residual=entry.accounting_residual.get("total_cost_usd"),
+                    unknown=bool(
+                        any(self._legacy_entry_usage(entry).values())
+                        and not combined["counts"]["legacy"]
+                    ),
                 )
                 if legacy is not None:
                     phase["legacy"].append(legacy)
             else:
                 phase["legacy"].append(summarize_cost([], legacy_cost=entry.cost_usd))
         for index, group in enumerate(groups):
-            sources.append(dict(source_id=f"chat/{index}", records=group.get("cost_records", []),
-                                legacy_cost=group.get("stats", {}).get("total_cost_usd"),
-                                gap="total_cost_usd" in group.get("unknown_fields", [])))
+            sources.append(
+                dict(
+                    source_id=f"chat/{index}",
+                    records=group.get("cost_records", []),
+                    legacy_cost=group.get("stats", {}).get("total_cost_usd"),
+                    legacy_residual=group.get("stats", {})
+                    .get("accounting_residual", {})
+                    .get("total_cost_usd"),
+                    gap="total_cost_usd" in group.get("unknown_fields", []),
+                )
+            )
             phase = phases.setdefault(group.get("phase") or "--", {"records": [], "legacy": []})
             if group.get("cost_records"):
                 phase["records"] = merge_cost_records(phase["records"], group["cost_records"])
             summary = self._legacy_cost_summary(
                 group.get("cost_records", []),
                 group.get("stats", {}).get("total_cost_usd"),
+                legacy_residual=group.get("stats", {})
+                .get("accounting_residual", {})
+                .get("total_cost_usd"),
                 unknown="total_cost_usd" in group.get("unknown_fields", []),
             )
             if summary is not None:

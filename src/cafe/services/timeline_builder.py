@@ -39,6 +39,7 @@ class TimelineEntry:
     cost_usd: Optional[float] = None
     cost_records: List[Dict[str, Any]] = field(default_factory=list)
     native_usage: Optional[Dict[str, Any]] = None
+    accounting_residual: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         """Validate and normalize the entry."""
@@ -242,6 +243,7 @@ class TimelineBuilder:
             reasoning_output_tokens=reasoning_output_tokens,
             cost_usd=cost_usd,
             cost_records=stats.get("cost_records", []) if stats else [],
+            accounting_residual=stats.get("accounting_residual", {}),
             native_usage=(
                 native_projection(stats["cost_records"])
                 if any("native_usage" in r for r in stats.get("cost_records", []))

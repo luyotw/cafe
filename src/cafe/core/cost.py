@@ -321,18 +321,21 @@ def merge_cost_records(existing, incoming):
     return merge_native_records(existing, incoming)
 
 
-def summarize_cost(records, *, legacy_cost=None):
+def summarize_cost(records, *, legacy_cost=None, legacy_residual=None):
     """Read persisted calculations; never consult a mutable rate source."""
     totals = {"reported": Decimal(0), "estimated": Decimal(0), "legacy": Decimal(0)}
     counts = dict.fromkeys(totals, 0)
     unknown = 0
     incomplete = False
     stale = False
-    from cafe.core.native_accounting import native_projection
+    from cafe.core.native_accounting import accounting_admission
 
-    records = merge_cost_records([], records)
-    native = native_projection(records) if any("native_usage" in r for r in records) else None
-    excluded = set(native["excluded_ids"]) if native else set()
+    admission = accounting_admission(records)
+    records = admission["records"]
+    native = admission["native_usage"] if any("native_usage" in r for r in records) else None
+    excluded = {r["invocation_id"] for r in records} - {
+        r["invocation_id"] for r in admission["admitted"]
+    }
     incomplete = bool(native and not native["complete"])
     seen = set()
     for record in records or []:
@@ -358,14 +361,21 @@ def summarize_cost(records, *, legacy_cost=None):
             counts[kind] += 1
         incomplete = incomplete or not record.get("complete", True)
         stale = stale or bool(record.get("pricing_stale"))
-    if records and legacy_cost is not None:
+    if legacy_residual is not None:
+        remainder = Decimal(str(legacy_residual))
+        if not remainder.is_finite() or remainder < 0:
+            raise ValueError("Invalid legacy residual")
+        if remainder:
+            totals["legacy"] = remainder
+            counts["legacy"] += 1
+    elif records and legacy_cost is not None:
         # Older iterations/chat groups can be updated in place. Their numeric
         # subtotal includes both old spend and the new records; retain only the
         # unrepresented remainder, without counting new invocations twice.
         aggregate = Decimal(str(legacy_cost))
         if not aggregate.is_finite() or aggregate < 0:
             raise ValueError("Invalid legacy cost")
-        remainder = aggregate - sum(totals.values())
+        remainder = aggregate - admission["represented"].get("total_cost_usd", Decimal(0))
         rounding = Decimal(0)
         if isinstance(legacy_cost, float):
             rounding = Decimal(str(math.ulp(legacy_cost))) * max(1, sum(counts.values())) * 2
@@ -381,7 +391,8 @@ def summarize_cost(records, *, legacy_cost=None):
         else:
             unknown += 1
     return {
-        **({"native_usage": native, "_native_records": records} if native is not None else {}),
+        "_cost_records": records,
+        **({"native_usage": native} if native is not None else {}),
         **totals,
         "known": sum(totals.values()),
         "unknown": unknown,
@@ -394,10 +405,12 @@ def summarize_cost(records, *, legacy_cost=None):
 def format_cost(summary):
     parts = []
     for kind in ("reported", "estimated", "legacy"):
-        if summary["counts"][kind]:
+        if summary["counts"][kind] and (summary["known"] or not summary["incomplete"]):
             parts.append(f"${summary[kind]:.4f} {kind}")
     if not parts:
-        return "unknown" if summary["unknown"] else "$0.0000 estimated"
+        return (
+            "unknown (partial)" if summary["incomplete"] and not summary["unknown"] else "unknown"
+        )
     text = " + ".join(parts)
     if summary["incomplete"]:
         text += " (partial)"
@@ -414,18 +427,28 @@ def combine_cost_summaries(summaries):
         stale=False,
         counts=dict.fromkeys(("reported", "estimated", "legacy"), 0),
     )
-    native_records = []
+    records = []
     for summary in summaries:
-        native_records = merge_cost_records(native_records, summary.get("_native_records", []))
+        rows = summary.get("_cost_records", summary.get("_native_records", []))
+        # Strip each local represented contribution, then admit the merged evidence.
+        local = summarize_cost(rows) if rows else None
+        records.extend(rows)
         for key in ("reported", "estimated", "legacy", "known", "unknown"):
-            result[key] += summary[key]
-        for key in ("incomplete", "stale"):
-            result[key] = result[key] or summary[key]
+            result[key] += summary[key] - (local[key] if local else 0)
         for key in result["counts"]:
-            result["counts"][key] += summary["counts"][key]
-    if native_records:
-        from cafe.core.native_accounting import native_projection
-
-        result["native_usage"] = native_projection(native_records)
-        result["_native_records"] = native_records
+            result["counts"][key] += summary["counts"][key] - (local["counts"][key] if local else 0)
+        result["incomplete"] |= bool(summary["incomplete"] and not (local and local["incomplete"]))
+        result["stale"] |= bool(summary["stale"] and not (local and local["stale"]))
+    if records:
+        joint = summarize_cost(records)
+        for key in ("reported", "estimated", "legacy", "known", "unknown"):
+            result[key] += joint[key]
+        for key in result["counts"]:
+            result["counts"][key] += joint["counts"][key]
+        result["incomplete"] |= joint["incomplete"]
+        result["stale"] |= joint["stale"]
+        result["_cost_records"] = joint["_cost_records"]
+        if "native_usage" in joint:
+            result["native_usage"] = joint["native_usage"]
+    result["incomplete"] |= bool(result["unknown"])
     return result

@@ -182,7 +182,11 @@ class CostStore:
                     or not record["invocation_id"]
                 ):
                     raise ValueError("invalid retained invocation")
-            summarize_cost(source["records"], legacy_cost=source.get("legacy_cost"))
+            summarize_cost(
+                source["records"],
+                legacy_cost=source.get("legacy_cost"),
+                legacy_residual=source.get("legacy_residual"),
+            )
 
     def read(self):
         with self.locked():
@@ -525,7 +529,7 @@ def format_summary(summary, locale="en-US"):
 
     parts = []
     for kind in ("reported", "estimated", "legacy"):
-        if summary["counts"][kind]:
+        if summary["counts"][kind] and (summary["known"] or not summary["incomplete"]):
             label = render_text(f"manager.progress.cost.{kind}", locale=locale)
             parts.append(f"${summary[kind]:.4f} {label}")
     if not parts:
