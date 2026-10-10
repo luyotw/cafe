@@ -12,8 +12,9 @@ The first complete proposal contains three decision groups:
    rename endpoints. For example, `src/example.py` and `tests/test_example.py`.
 2. **Execution:** selected CLI/model chains and the effective native review
    configuration. Native reviewer definitions are projected per invocation for
-   Claude, Gemini, Copilot and Cursor; Codex also has a native observer but requires
-   a read-only parent. Unsupported permissions or model behavior are explicit
+   Claude, Gemini, Copilot and Cursor. Codex uses a writable development thread
+   and an independently read-only native fork. Unsupported permissions or model
+   behavior are explicit
    readiness gaps, never another standalone CLI reviewer.
 3. **Delivery:** PR source/target branches and remote, or commit/push to the exact
    designated remote branch. Direct delivery includes literal commit/push argv;
@@ -69,28 +70,52 @@ independent conclusions must match; parent text cannot establish child success.
 | Gemini 0.58.0 | Temporary user agent, read_file/list_directory/glob/grep_search | Inherited or explicit override | Matching native agent progress, completed with GOAL and child result |
 | Copilot 1.0.83 | Temporary plugin, view/glob/grep | Inherited or explicit override | Matching native start/completion/tool result and actual model; cancellation rejected |
 | Cursor 2026.10.01-e373342 | Temporary plugin with native readonly permissions | Inherited only; plugin overrides rejected | Synchronous Task success and final child assistant message |
-| Codex 0.159.3 | Temporary role config and native spawn/wait observer | Inherited or explicit override, **verified read-only API-key parent only** | Parent spawn journal, completed child and verified child model/read-only turn context |
+| Codex 0.159.3 | One app-server with writable parent and read-only native fork | Inherited or explicit override; ChatGPT login or API key | Actual fork identity, effective sandbox/model, matching child turn and independent final result |
 
-Codex 0.159.3 deliberately inherits live parent permissions after applying role
-configuration. A role's `sandbox_mode` cannot make a writable parent's child
-read-only; disabling shell also leaves `apply_patch` available. CAFE rejects
-writable parents and unsupported permission profiles before launch, and requires
-actual read-only child journal evidence before accepting a review. Unverified
-ChatGPT/cloud permission requirements are rejected; the bounded local path
-requires explicit `CODEX_API_KEY` execution and rejects managed requirements,
-permission profiles and extra unverified command options. This limitation
-means a writable Codex development parent cannot currently use streamlined's
-read-only native review contract. No separate CLI session is substituted.
+Codex uses its authenticated native app-server for the entire reviewed invocation.
+After implementation, targeted checks and the scope checkpoint, the development
+thread ends a turn with the projected structured review request. CAFE forks one
+native thread, verifies its distinct ID and exact parent, approved model, read-only
+sandbox and never-approval policy, then starts its read-only review turn. Its
+independent conclusion returns to the same parent thread for evidence and handoff.
+These are internal turns in one process, not extra workflow steps or iterations.
+The parent cannot edit reviewed content or request a second review in that
+continuation; corrections use the declared workflow self-loop and attempt budget.
 
-These versions were checked through installed native metadata loaders without
-model calls; automated tests use provider-schema transport fixtures to exercise
-review and delivery validation. A provider upgrade with incompatible or missing
-native evidence remains blocked rather than being assumed compatible.
+ChatGPT CLI login and API-key authentication both use native Codex authentication;
+CAFE neither reads credential contents nor requires an API key for this path.
+Existing exact Codex sessions resume without replacing their identity. Ordinary
+Codex execution and callback transports retain their existing CLI paths. Read-only
+chat, empty capability scope and callback-only execution cannot activate this
+writable development-review transport.
+
+Reviewer apps, plugins, MCP servers, hooks, browser/computer tools and further
+delegation are disabled. Managed requirements that force these features on are
+rejected before development starts. Missing native permissions, model rerouting,
+changed thread settings, cancelled/failed turns and contradictory replay remain
+blocked. Only the matching child turn's final answer and explicit completion can
+establish review evidence; parent prose cannot. The existing delivery gate checks
+that current content still matches the scope receipt and independent conclusion.
+
+Per-turn native counters are attributed separately to development and reviewer
+models. Resumed and forked history is subtracted; absent counters remain unavailable.
+CAFE does not change saved Codex configuration, authentication or installed agent
+roles. Older CLI versions without the required RPCs report a readiness failure.
+
+Automated tests use native-schema fixtures over actual stdio pipes for permissions,
+continuation, replay, failure, accounting and delivery validation. Native CLI
+metadata and three actual model turns verify ChatGPT-authenticated writable-parent,
+read-only-fork and same-parent continuation on the installed 0.159.3 CLI. This
+tool-free smoke does not establish a complete workflow run. Running development
+and review commands also requires
+a working native OS sandbox; a container that denies bubblewrap network setup
+reports its real failure. Compatibility with future versions still requires native evidence.
 
 See the native [Claude](https://code.claude.com/docs/en/sub-agents),
 [Gemini](https://geminicli.com/docs/core/subagents/),
 [Copilot](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/create-custom-agents-for-cli)
-and [Cursor](https://cursor.com/docs/subagents) definitions. Codex's exact
-[role projection](https://github.com/openai/codex/blob/rust-v0.159.3/codex-rs/core/src/agent/role.rs)
-and [child permission inheritance](https://github.com/openai/codex/blob/rust-v0.159.3/codex-rs/core/src/agent/child_config.rs)
-explain its current limitation.
+and [Cursor](https://cursor.com/docs/subagents) definitions. Codex's native
+[app-server API](https://developers.openai.com/codex/app-server) supplies explicit
+thread fork and turn permission overrides; ordinary
+[subagent inheritance](https://developers.openai.com/codex/subagents) does not
+provide that writable-parent/read-only-child separation.

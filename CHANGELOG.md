@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Fixed
+
+- Run Codex streamlined development and independent read-only review with ChatGPT
+  CLI login or API-key authentication. Use one native app-server with a writable
+  parent, a verified read-only fork and continuation in the original session.
+- Reject reviewer model/permission changes, managed feature overrides, extra native
+  delegation and contradictory completion. Preserve scope-bound delivery gates,
+  declared review retry budgets and separate per-model token accounting.
+
 ## [0.9.2] - 2026-10-11
 
 ### Fixed
