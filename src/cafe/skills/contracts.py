@@ -437,6 +437,54 @@ class SkillNotificationCopy(BaseModel):
     task_labels: dict[str, NotificationMessageReference] = Field(default_factory=dict)
 
 
+class StepDefaultsDeclaration(BaseModel):
+    """Versioned phase-local defaults; orchestration remains in Playbooks."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal[1]
+    values: dict[str, Any]
+
+    @field_validator("version", mode="before")
+    @classmethod
+    def _validate_version(cls, value: Any) -> Any:
+        if type(value) is not int or value != 1:
+            raise ValueError("step_defaults.version must be integer 1")
+        return value
+
+    @field_validator("values", mode="before")
+    @classmethod
+    def _validate_values(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            raise ValueError("step_defaults.values must be a mapping")
+        allowed = {
+            "assignee_type", "output_artifact", "allowed_tools",
+            "hooks", "behavior", "max_iterations",
+        }
+        unsupported = set(value) - allowed
+        if unsupported:
+            raise ValueError(f"unsupported step_defaults fields: {sorted(unsupported, key=str)}")
+        for name, item in value.items():
+            if item is None:
+                continue  # The owning step field decides whether null is valid.
+            if name in {"assignee_type", "output_artifact"} and not isinstance(item, str):
+                raise ValueError(f"step_defaults.{name} must be a string")
+            if name == "allowed_tools" and (
+                not isinstance(item, list) or any(not isinstance(tool, str) for tool in item)
+            ):
+                raise ValueError("step_defaults.allowed_tools must be a list of strings")
+            if name in {"hooks", "behavior"} and not isinstance(item, dict):
+                raise ValueError(f"step_defaults.{name} must be a mapping")
+            if name == "max_iterations" and (type(item) is not int or item < 1):
+                raise ValueError("step_defaults.max_iterations must be a positive integer")
+        behavior = value.get("behavior")
+        if isinstance(behavior, dict):
+            routing = {"feedback_target", "feedback_artifact", "feedback_routes"} & set(behavior)
+            if routing:
+                raise ValueError(f"step_defaults.behavior cannot own routing: {sorted(routing)}")
+        return value
+
+
 class SkillWorkflowDeclaration(BaseModel):
     """All optional workflow metadata carried in a skill frontmatter block."""
 
@@ -451,6 +499,14 @@ class SkillWorkflowDeclaration(BaseModel):
     human_tasks: Tuple[HumanTaskPolicy, ...] = ()
     notification: Optional[SkillNotificationCopy] = None
     execution_profile: Optional[ExecutionProfile] = None
+    step_defaults: Optional[StepDefaultsDeclaration] = None
+
+    @field_validator("step_defaults", mode="before")
+    @classmethod
+    def _reject_null_step_defaults(cls, value: Any) -> Any:
+        if value is None:
+            raise ValueError("step_defaults must be a versioned mapping when specified")
+        return value
 
     @field_validator("required_tools")
     @classmethod

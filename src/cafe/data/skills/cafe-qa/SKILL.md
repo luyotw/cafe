@@ -3,6 +3,20 @@ name: cafe-qa
 description: Use this skill when a workflow needs independent black-box acceptance before PR publication.
 version: 1.4.0
 workflow:
+  step_defaults:
+    version: 1
+    values:
+      assignee_type: agent
+      output_artifact: qa_feedback
+      allowed_tools:
+      - Read
+      - Grep
+      - Glob
+      - Bash
+      hooks:
+        prepare_input:
+        - UserInputCollector
+      max_iterations: 5
   notification:
     task_labels:
       clarification-feedback:

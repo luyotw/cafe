@@ -3,6 +3,22 @@ name: cafe-review
 description: "Review code quality, behavior, and risk"
 version: 1.15.0
 workflow:
+  step_defaults:
+    version: 1
+    values:
+      assignee_type: agent
+      output_artifact: review_feedback
+      allowed_tools:
+      - Read
+      - Grep
+      - Glob
+      - Bash(git:*)
+      hooks:
+        prepare_input:
+        - UserInputCollector
+        before_execute:
+        - NewChangesGate
+      max_iterations: 5
   notification:
     step_label:
       message_key: notification.step_labels.review

@@ -753,3 +753,31 @@ def test_feedback_gate_mandatory_flag_rejects_ambiguous_strings():
 
     with pytest.raises(ValidationError):
         HumanTaskBinding(trigger="confirm_output", task_id="content", mandatory_confirmation="false")
+
+
+def test_phase_defaults_preserve_pre_change_complete_semantic_contracts(tmp_path: Path) -> None:
+    """U8/U9: assembly preserves all bundled graphs and effective phase contracts."""
+    import dataclasses
+    import hashlib
+    import json
+
+    fixture = json.loads(
+        (Path(__file__).parents[1] / "fixtures" / "phase_step_defaults_baseline.json").read_text()
+    )
+    loader = PlaybookLoader(
+        project_root=tmp_path, global_root=tmp_path / "global",
+        builtin_root=Path(__file__).parents[2] / "src" / "cafe" / "data",
+        resolve_presentation=False, read_only=True,
+    )
+    for name, expected in fixture["playbooks"].items():
+        model = loader.load_model(name, strict=True).model
+        contract = {
+            "model": model.model_dump(mode="json"),
+            "behavior": {step: resolve_step_behavior(model, step).model_dump(mode="json")
+                         for step in model.steps},
+            "simulation": dataclasses.asdict(analyze_playbook(model)),
+        }
+        actual = hashlib.sha256(
+            json.dumps(contract, sort_keys=True, separators=(",", ":"), default=sorted).encode()
+        ).hexdigest()
+        assert actual == expected, name
