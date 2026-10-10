@@ -1,4 +1,5 @@
 """Read-only persisted accounting views, independent of caller identity or policy."""
+
 from __future__ import annotations
 
 import json
@@ -10,22 +11,21 @@ from pathlib import Path
 import yaml
 
 from cafe.core.cost import combine_cost_summaries, summarize_cost
-from cafe.core.usage import phase_stats_without_chat
+from cafe.core.usage import _usage_parent, phase_stats_without_chat
 
 MAX_SOURCE_BYTES = 16 * 1024 * 1024
 
 
 def read_accounting_file(path: Path):
     """Bounded no-follow read; reject unsafe ancestors and special files."""
-    for parent in (path, *path.parents):
-        if parent.is_symlink():
-            raise ValueError("accounting source traverses a symlink")
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    with os.fdopen(fd, "rb") as stream:
-        info = os.fstat(stream.fileno())
-        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_SOURCE_BYTES:
-            raise ValueError("accounting source is unsafe or oversized")
-        data = stream.read(MAX_SOURCE_BYTES + 1)
+    path = Path(os.path.abspath(path))
+    with _usage_parent(path) as (parent_fd, _):
+        fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
+        with os.fdopen(fd, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_SOURCE_BYTES:
+                raise ValueError("accounting source is unsafe or oversized")
+            data = stream.read(MAX_SOURCE_BYTES + 1)
     if len(data) > MAX_SOURCE_BYTES:
         raise ValueError("accounting source is oversized")
     value = yaml.safe_load(data) if path.suffix == ".yaml" else json.loads(data)
@@ -40,17 +40,28 @@ def collect_cost_sources(issue_dir: Path) -> list[dict]:
 
     def add(identity, stats, records=None, gap=False):
         stats = stats if isinstance(stats, dict) else {}
-        sources.append(dict(source_id=identity, records=records if records is not None
-                            else stats.get("cost_records", []),
-                            legacy_cost=stats.get("total_cost_usd"), gap=gap))
+        sources.append(
+            dict(
+                source_id=identity,
+                records=records if records is not None else stats.get("cost_records", []),
+                legacy_cost=stats.get("total_cost_usd"),
+                gap=gap,
+            )
+        )
 
     def chats(identity, groups):
         if not isinstance(groups, list):
             raise ValueError("invalid chat accounting")
         for index, group in enumerate(groups):
-            add(f"{identity}/chat/{index}", group.get("stats"), group.get("cost_records", []),
-                bool(group.get("incomplete_calls") or
-                     "total_cost_usd" in group.get("unknown_fields", [])))
+            add(
+                f"{identity}/chat/{index}",
+                group.get("stats"),
+                group.get("cost_records", []),
+                bool(
+                    group.get("incomplete_calls")
+                    or "total_cost_usd" in group.get("unknown_fields", [])
+                ),
+            )
 
     candidates = sorted(issue_dir.glob("*/iteration_*"))
     for directory in candidates:
@@ -68,18 +79,20 @@ def collect_cost_sources(issue_dir: Path) -> list[dict]:
             chats(identity, groups)
         except (OSError, ValueError, TypeError, AttributeError, yaml.YAMLError):
             add(identity, {}, gap=True)
+            sources[-1]["read_error"] = path.exists() or path.is_symlink()
     path = issue_dir / "issue.yaml"
     if path.exists() or path.is_symlink():
         try:
             chats("issue", read_accounting_file(path).get("chat_usage", []))
         except (OSError, ValueError, TypeError, AttributeError, yaml.YAMLError):
             add("issue", {}, gap=True)
+            sources[-1]["read_error"] = path.exists() or path.is_symlink()
     return sources
 
 
 def summarize_sources(sources, *, exclude_ids=(), ambiguous_sources=()):
     """Deduplicate globally, retaining each source's non-overlapping legacy remainder."""
-    seen_sources, records, parts = set(), {}, []
+    seen_sources, records, parts, conflicting = set(), {}, [], set()
     excluded, ambiguous = set(exclude_ids), set(ambiguous_sources)
     for source in sources:
         identity = source["source_id"]
@@ -88,18 +101,30 @@ def summarize_sources(sources, *, exclude_ids=(), ambiguous_sources=()):
         seen_sources.add(identity)
         raw = source.get("records", [])
         try:
-            if not isinstance(raw, list) or any(
-                not isinstance(r, dict) or not isinstance(r.get("invocation_id"), str)
-                or not r["invocation_id"] for r in raw
-            ):
-                raise ValueError("invalid invocation identity")
-            full = summarize_cost(raw, legacy_cost=source.get("legacy_cost"))
+            if not isinstance(raw, list):
+                raise ValueError("invalid accounting records")
+            valid = []
             for record in raw:
+                try:
+                    if (
+                        not isinstance(record, dict)
+                        or not isinstance(record.get("invocation_id"), str)
+                        or not record["invocation_id"]
+                    ):
+                        raise ValueError("invalid invocation identity")
+                    summarize_cost([record])
+                    valid.append(record)
+                except (ValueError, TypeError, KeyError, InvalidOperation):
+                    parts.append(summarize_cost([]))
+            full = summarize_cost(valid, legacy_cost=source.get("legacy_cost"))
+            for record in valid:
                 key = record["invocation_id"]
-                if key in excluded:
+                if key in excluded or key in conflicting:
                     continue
                 if key in records and records[key] != record:
                     parts.append(summarize_cost([]))
+                    conflicting.add(key)
+                    records.pop(key)
                 else:
                     records[key] = record
             residual = full["legacy"]
@@ -107,8 +132,7 @@ def summarize_sources(sources, *, exclude_ids=(), ambiguous_sources=()):
                 residual = Decimal(0)
             if residual:
                 parts.append(summarize_cost([], legacy_cost=residual))
-            if (source.get("gap") or identity in ambiguous or
-                    (not raw and not residual)):
+            if source.get("gap") or identity in ambiguous or (not raw and not residual):
                 parts.append(summarize_cost([]))
         except (ValueError, TypeError, KeyError, InvalidOperation):
             parts.append(summarize_cost([]))
@@ -116,3 +140,18 @@ def summarize_sources(sources, *, exclude_ids=(), ambiguous_sources=()):
         # Each source has already been validated before being admitted here.
         parts.append(summarize_cost(list(records.values())))
     return combine_cost_summaries(parts or [summarize_cost([])])
+
+
+def accounting_source_versions(issue_dir, *, extra_paths=()):
+    """Observe source identities/versions around a read without creating locks."""
+    paths = [issue_dir / "issue.yaml", *extra_paths]
+    paths.extend(issue_dir.glob("*/iteration_*/iteration.json"))
+    paths.extend(issue_dir.glob("*/iteration_*/context.json"))
+    versions = {}
+    for path in paths:
+        try:
+            info = path.lstat()
+            versions[str(path)] = (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_size)
+        except FileNotFoundError:
+            versions[str(path)] = None
+    return versions

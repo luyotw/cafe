@@ -14,7 +14,7 @@ import os
 import re
 import stat
 import subprocess
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -290,22 +290,27 @@ def main() -> int:
                 selected = inspect(args.issue_dir, args.workflow_id)
                 if selected["status"] != "accepted" or selected["selection"]["choice"] != "cleanup":
                     raise ValueError("cleanup requires the recorded delivery terminal choice")
-            command["status"] = "unknown"
-            _write(path, record)
-            try:
-                if authority.get("contract_mode") == "compact":
-                    from cafe.manager.delivery import run_compact_closeout_command
-                    result = run_compact_closeout_command(args.issue_dir, Path(record["worktree"]), command["argv"])
-                else:
-                    result = subprocess.run(command["argv"], cwd=record["worktree"], check=False)
-            except OSError as exc:
-                raise ValueError("closeout command outcome is unknown; inspect read-only") from exc
-            command["status"] = "succeeded" if result.returncode == 0 else "failed"
-            command["returncode"] = result.returncode
-            _write(path, record)
-            print(json.dumps(record))
-            return 0 if result.returncode == 0 else 1
-    except (ValueError, subprocess.CalledProcessError, FileNotFoundError) as exc:
+            from cafe.manager.costs import quiescent_worker, preserve_worker_cost
+            guard = quiescent_worker(args.issue_dir) if args.stage == "cleanup" else nullcontext()
+            with guard:
+                if args.stage == "cleanup":
+                    preserve_worker_cost(args.project_root, args.issue_dir, args.issue_name, args.workflow_id)
+                command["status"] = "unknown"
+                _write(path, record)
+                try:
+                    if authority.get("contract_mode") == "compact":
+                        from cafe.manager.delivery import run_compact_closeout_command
+                        result = run_compact_closeout_command(args.issue_dir, Path(record["worktree"]), command["argv"])
+                    else:
+                        result = subprocess.run(command["argv"], cwd=record["worktree"], check=False)
+                except OSError as exc:
+                    raise ValueError("closeout command outcome is unknown; inspect read-only") from exc
+                command["status"] = "succeeded" if result.returncode == 0 else "failed"
+                command["returncode"] = result.returncode
+                _write(path, record)
+                print(json.dumps(record))
+                return 0 if result.returncode == 0 else 1
+    except (ValueError, OSError, subprocess.CalledProcessError) as exc:
         parser.error(str(exc))
     return 2
 

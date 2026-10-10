@@ -941,7 +941,17 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
         else:
             action = "user confirmation remains required"
         proactive_rows.append([phase, decision["decision"], action])
+    cost_issue = args.issue_dir or project_root / ".cafe/issues" / args.issue_name
+    established_issue = None
+    if args.workflow_id:
+        from cafe.manager.costs import validate_issue_identity
+        try:
+            validate_issue_identity(cost_issue, args.issue_name, args.workflow_id)
+            established_issue = cost_issue
+        except (OSError, ValueError):
+            pass
     progress = render_progress(
+        issue_dir=established_issue, project_root=project_root,
         playbook=model,
         contract=proposal,
         locale=effective_locale,

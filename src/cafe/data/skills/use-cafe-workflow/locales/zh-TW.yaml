@@ -26,3 +26,13 @@ chat.delivery_uncertain: 訊息可能已送達 Manager。請先檢查原始對�
 chat.delivery_failed: Manager 訊息在接受前傳送失敗。請恢復既有對話或 provider 存取，再明確重試 cafe manager chat；identity
   已保留。
 chat.cancelled: 對話回合已取消。重試已提交訊息前，請先檢查原始對話；worker 與 workflow 狀態已保留。
+cost.question: '是否需要計算包含 Manager 的總成本？'
+cost.yes: '需要'
+cost.no: '不需要'
+cost.declined: '已選擇不計算成本報告，收尾已完成。'
+cost.cutoff: '統計截至點（UTC）: {captured_at}'
+cost.worker: '不含 Manager 的小計: USD {cost}'
+cost.manager: 'Manager 成本: USD {cost}'
+cost.combined: '含 Manager 的總成本: USD {cost}'
+cost.limitations: '此報告僅包含截至點前已持久化的記錄，不含進行中或尚未保存的 Manager 用量（包含呈現此報告的回覆）。資料不完整時為已知小計，不能視為完整總成本。'
+cost.combined_known: '含 Manager 的已知小計（資料不完整）: USD {cost}'

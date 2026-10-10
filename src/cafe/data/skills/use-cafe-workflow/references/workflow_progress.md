@@ -154,3 +154,24 @@ An explicit archive path is read exactly like an active issue path. If neither
 an effective playbook nor workflow contract can be found, preserve the
 renderer’s short “workflow not established” output; never substitute a success
 diagram.
+
+## Persisted cost footer
+
+Every established diagram produced by the shared renderer ends with the current
+worker-only USD cost, localized to the conversation locale. In zh-TW its label
+is `已使用成本（不含 Manager）`. It includes recorded phase/issue chats,
+iterations, retry and fallback attempts once per invocation, while excluding
+attributable Manager callbacks/chats. Unknown or partial coverage and stale-rate
+provenance remain visible. Missing execution evidence at kickoff is unknown.
+An existing full kickoff with a matching `--workflow-id` uses its validated
+issue source; an unbound/new proposal cannot inherit another workflow's money.
+Compact contracts do not have an independent diagram; their shared progress
+surface uses this footer too.
+
+Rendering is read-only and never requests a price refresh, cleanup, a cost
+preference, or a Manager-inclusive calculation. Ephemeral progress state cannot
+supply or override cost evidence. After archive, pass the exact archive issue
+path and the retained project's `--project-root`; the workflow identity must
+match. The retained worker snapshot protects accounting if the original sources
+are removed. The post-closeout optional report is described in
+`completion_and_authority.md` and `docs/cost-accounting.md`.
