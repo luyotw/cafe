@@ -48,7 +48,7 @@ class NativeEvidence(BaseModel):
 
 
 def normalized_counters(raw):
-    values, gaps = {}, []
+    values, gaps, rejected = {}, [], set()
     if not isinstance(raw, dict):
         return values, ["counters_unavailable"]
     for key, value in raw.items():
@@ -57,11 +57,13 @@ def normalized_counters(raw):
             continue
         if type(value) is not int or value < 0:
             gaps.append(f"invalid_{key}")
+            rejected.add(key)
             values.pop(key, None)
         elif key in values and values[key] != value:
             gaps.append(f"conflicting_{key}")
+            rejected.add(key)
             values.pop(key, None)
-        elif not any(key in gap for gap in gaps):
+        elif key not in rejected:
             values[key] = value
     for subset, whole in (
         ("cache_read_input_tokens", "input_tokens"),
@@ -361,7 +363,7 @@ def format_native_usage(view, *, templates=None):
                 provenance=child["provenance"],
                 source=native["source"]["kind"],
                 start=native["start"].get("at", templates["unknown"]),
-                end=native["end"].get("at", templates["unknown"]),
+                end=native.get("ownership_cutoff", native["end"].get("at", templates["unknown"])),
                 inclusion=native["inclusion"],
                 coverage=templates["complete"] if child["complete"] else templates["partial"],
             )

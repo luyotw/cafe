@@ -10,7 +10,7 @@ from cafe.manager._store import load_contract
 from cafe.manager.costs import CostStore, inclusive_report
 from tests.fixtures.manager_chat import adapter, issue, repository
 from tests.integration.test_codex_descendant_accounting import native_journal
-from tests.unit.test_codex_subagent_usage import CHILD, ROOT
+from tests.unit.test_codex_subagent_usage import CHILD, NESTED, ROOT, counters
 
 
 def host_fixture(tmp_path, monkeypatch, root=None, name="topic"):
@@ -114,3 +114,41 @@ def test_unfinalized_native_entry_remains_a_durable_gap(tmp_path, monkeypatch):
     )
     assert report["manager"]["incomplete"]
     assert report["manager"]["native_usage"]["gaps"]
+
+
+@pytest.mark.parametrize("child_complete", [True, False])
+def test_host_finalize_excludes_reused_child_work_after_selected_owner_turn(
+    tmp_path, monkeypatch, child_complete
+):
+    args = host_fixture(tmp_path, monkeypatch)
+    root_journal = native_journal(args["home"], ROOT, complete=False)
+    helper = adapter("native_delegation_accounting")
+    helper.account("begin", correlation="isolated", **args)
+    child_journal = native_journal(args["home"], CHILD, ROOT, complete=child_complete)
+    append_event(root_journal, "collab_agent_spawn_end", new_thread_id=CHILD)
+    nested_journal = native_journal(args["home"], NESTED, CHILD, n=50)
+    append_event(child_journal, "collab_agent_spawn_end", new_thread_id=NESTED)
+    append_event(root_journal, "task_complete", turn_id="owned-turn")
+    append_event(root_journal, "task_started", turn_id="foreign-root-turn")
+    append_event(root_journal, "collab_agent_interaction_end", receiver_thread_id=CHILD)
+    append_event(child_journal, "task_started", turn_id="foreign-child-turn")
+    append_event(child_journal, "token_count", info=dict(total_token_usage=counters(500)))
+    append_event(child_journal, "task_complete", turn_id="foreign-child-turn")
+    append_event(nested_journal, "task_started", turn_id="foreign-nested-turn")
+    append_event(nested_journal, "token_count", info=dict(total_token_usage=counters(700)))
+    append_event(nested_journal, "task_complete", turn_id="foreign-nested-turn")
+    helper.account("finalize", correlation="isolated", **args)
+    report = inclusive_report(
+        args["project_root"], "topic", args["workflow_id"], issue_dir=args["issue_dir"]
+    )
+    children = {r["session_id"]: r for r in report["manager"]["native_usage"]["children"]}
+    child = children[CHILD]
+    assert children[NESTED]["usage"]["input_tokens"] == 50
+    assert children[NESTED]["native_usage"]["turn_ids"] == ["owned-turn"]
+    native = child["native_usage"]
+    assert child["usage"]["input_tokens"] == 100
+    assert native["turn_ids"] == ["owned-turn"]
+    assert native["ownership_cutoff"] < native["end"]["at"]
+    assert child["complete"] == child_complete
+    if not child_complete:
+        assert "child_active_at_cutoff" in native["gaps"]

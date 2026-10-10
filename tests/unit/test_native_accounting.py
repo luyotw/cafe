@@ -181,3 +181,16 @@ def test_exact_inclusive_parent_preserves_authoritative_amount_and_child_detail(
     assert not summary["incomplete"]
     parent["native_inclusion"]["segments"][0] = dict(native["start"])
     assert not native_projection([parent, child])["complete"]
+
+
+@pytest.mark.parametrize("invalid", ["cached_input_tokens", "reasoning_output_tokens"])
+def test_invalid_subset_never_discards_independent_categories_regardless_of_order(invalid):
+    from itertools import permutations
+
+    from cafe.core.native_accounting import normalized_counters
+
+    entries = [(invalid, -1), ("input_tokens", 10), ("output_tokens", 2)]
+    for order in permutations(entries):
+        values, gaps = normalized_counters(dict(order))
+        assert values == dict(input_tokens=10, output_tokens=2)
+        assert len(gaps) == 1

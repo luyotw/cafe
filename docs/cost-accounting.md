@@ -349,3 +349,9 @@ attestation naming the included child segment and its exact start/end evidence.
 It preserves the parent's recorded amount and treats that child's detail as
 non-additive. Current Codex collection emits exclusive evidence only; numerical
 similarity or an unsupported inclusive flag cannot establish this attestation.
+
+Native host delegation is restricted to the exact root turn captured at entry.
+If that turn completes or aborts before finalize, descendant observations stop
+at its evidenced ownership cutoff; later work in the same child session belongs
+outside this bracket. Records preserve both that cutoff and the later report
+cutoff. A descendant active at the ownership boundary remains partial.
