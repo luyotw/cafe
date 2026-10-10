@@ -67,9 +67,8 @@ def _task(kwargs, prompt, *, trigger="confirm_output"):
     superseded = []
     if existing:
         if existing[-1].prompt != shown_prompt:
-            from cafe.manager._store import load_contract
-            contract, _ = load_contract(phase.issue_dir, workflow_id=state.workflow_id)
-            reference = contract.get("closeout_contract", {}).get("delivery_result")
+            from cafe.delivery.closeout import read_result_contract
+            reference = read_result_contract(phase.issue_dir, state.workflow_id)
             # A user-reconfirmed split contract can supersede the old combined
             # acceptance while retaining its prompt and all integration receipts.
             prior = existing[-1]

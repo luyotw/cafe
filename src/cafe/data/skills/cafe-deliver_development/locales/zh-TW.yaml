@@ -10,8 +10,6 @@ human_task.delivery.runtime_evidence: '呈現交付結果前，請先讀取以�
 
   - delivery_complete: {complete}'
 human_task.delivery.confirm: 確認顯示的交付結果
-human_task.delivery.confirm_cleanup: 驗收結果，執行顯示的收尾計畫
-human_task.delivery.confirm_archive: 驗收結果，僅封存並保留 worktree 與分支
 human_task.delivery.revise: 恢復或修訂交付
 
 human_task.delivery.delivery_review.prompt: 請審查下方精確的整合動作與議題草稿。批准會在同一次決策中授權顯示的動作與 host

@@ -152,6 +152,8 @@ steps:
     handoff_label: Revise PR content
     type: skill
     skill: cafe-pr
+    hooks:
+      prepare_input: [GitHubPRCreator, GitHubPRFeedbackSource, UserInputCollector]
     role: developer
     handoff_label: Refresh PR output
     chat_role: developer
@@ -164,6 +166,8 @@ steps:
     - workflow_feedback
     workspace_input_artifact: workspace
     behavior:
+      completion: baton
+      publish_confirmation: true
       feedback_target: pr
       feedback_artifact: workflow_feedback
       feedback_source_kind: github_pr

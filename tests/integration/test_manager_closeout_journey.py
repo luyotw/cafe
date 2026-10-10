@@ -477,3 +477,12 @@ def test_reconfirmed_split_contract_supersedes_pending_combined_task_without_rei
     assert old.superseded_by_task_id == replacement.id
     assert old.prompt == original.prompt and old.expected_result == original.expected_result
     assert report_path.read_bytes() == original_report
+
+    journey.pause(issue, state, context[-1])
+    result = apply_human_task_payload(
+        issue_dir=issue, blackboard=state, playbook_data=context[5],
+        raw_payload={"task": replacement.policy_id, "human_task_id": replacement.id, "decision": "confirm"},
+        from_step=context[-1], trigger="confirm_output", source="test",
+    )
+    assert result.target == "done", result.rejection
+    assert report_path.read_bytes() == original_report

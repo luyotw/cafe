@@ -16,6 +16,11 @@ All notable changes to this project will be documented in this file.
 - Clarify kickoff scope, delivery versus cleanup ownership and saved preference
   changes; preserve delegated result confirmation when proposing preferences.
 
+- Keep graph-dependent PR feedback hooks and publication authority explicit in
+  playbooks so reusable defaults do not break existing custom publication steps.
+- Project delivery task bindings through bounded evidence instead of importing
+  Manager private contracts into delivery.
+
 ### Changed
 
 - Compose development playbooks from validated phase-owned step defaults,

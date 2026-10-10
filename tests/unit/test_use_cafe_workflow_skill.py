@@ -1297,7 +1297,8 @@ mandate:
     assert "#### cleanup" in result.stdout
     assert result.stdout.count("[]") == 1
     assert _rendered_closeout_commands(result.stdout) == {"cleanup": []}
-    assert not any(token.info == "bash" for token in MarkdownIt().parse(result.stdout))
+    cleanup_section = result.stdout.split("#### cleanup", 1)[1].split("### ", 1)[0]
+    assert not any(token.info == "bash" for token in MarkdownIt().parse(cleanup_section))
 
 
 @pytest.mark.parametrize("stage", ["cleanup"])
@@ -4164,7 +4165,8 @@ def test_manager_keeps_completion_separate_from_external_authority() -> None:
         assert "cafe.branch.integrate" not in text
         assert "pr.auto_create" not in text
     assert "integration and selected follow-up issue creation belong to the development delivery phase" in kickoff
-    assert "only user confirmation authorizes execution" in " ".join(kickoff.split())
+    assert "kickoff confirmation authorizes execution after workflow completion and delivery acceptance" in " ".join(kickoff.split())
+    assert "explicit user reconfirmation through the existing Manager contract API" in " ".join(kickoff.split())
     assert '[gh, issue, close, "123", --repo, owner/repo]' in kickoff
     assert "[cafe, close, --archive-only]" in kickoff
 
