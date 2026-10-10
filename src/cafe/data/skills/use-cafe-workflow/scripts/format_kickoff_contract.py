@@ -382,7 +382,19 @@ def _scheduled_task_declarations(
                 {"phase": phase, "task_id": task.id}
                 for task in composition.human_tasks
                 if task.pattern == "confirm_output"
+                and (
+                    not any(binding.trigger == "confirm_output" for binding in step.human_tasks)
+                    or any(binding.trigger == "confirm_output" and binding.task_id == task.id
+                           for binding in step.human_tasks)
+                )
             )
+            if owner == "user_required" and step.delivery is not None:
+                result[owner].extend(
+                    {"phase": phase, "task_id": binding.task_id}
+                    for binding in step.human_tasks
+                    if binding.trigger == "need_permission"
+                    and binding.task_id == step.delivery.approval_task
+                )
     return result
 
 

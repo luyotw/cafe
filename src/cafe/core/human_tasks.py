@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Literal, Mapping, Optional, Sequence
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationInfo, field_validator, model_validator
 
 from cafe.core.conversation_locale import normalize_locale_tag
 from cafe.core.restart_policy import (
@@ -313,6 +313,7 @@ class HumanTaskBinding(BaseModel):
     prompt: Optional[str] = None
     correction_guidance: Optional[str] = None
     feedback_delivery: Optional["HumanTaskFeedbackDelivery"] = None
+    mandatory_confirmation: StrictBool = True
 
     @field_validator("trigger", "task_id")
     @classmethod

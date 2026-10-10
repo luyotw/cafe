@@ -202,7 +202,8 @@ def test_builtin_playbooks_publish_pr_through_sync_hook() -> None:
 
         hooks = yaml.safe_load(content)["steps"]["pr"]["hooks"]["publish_output"]
         assert hooks[:3] == ["GitHubPRCreator", "LocalReviewContextProvider", "PRLinkOpener"]
-        assert "DevelopmentActionContext" in hooks
+        assert "DevelopmentActionContext" not in hooks
+        assert "DevelopmentActionContext" in yaml.safe_load(content)["steps"]["deliver"]["hooks"]["publish_output"]
 
 
 def test_sync_pr_rejects_uncommitted_changes(tmp_path: Path) -> None:

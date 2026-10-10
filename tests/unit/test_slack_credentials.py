@@ -358,7 +358,9 @@ def test_unsafe_store_never_reads_legacy(home, monkeypatch, kind):
             os.mkfifo(path, 0o600)
         elif kind == "socket":
             with socket.socket(socket.AF_UNIX) as sock:
-                sock.bind(str(path))
+                with monkeypatch.context() as context:
+                    context.chdir(path.parent)
+                    sock.bind(path.name)
         else:
             path.symlink_to(home / (".slack-webhook" if kind == "symlink" else "missing"))
     assert_error("slack_credentials_unsafe")
