@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.9.2] - 2026-10-11
+
 ### Fixed
 
 - Project invocation-local native reviewers and verify independent completion for
