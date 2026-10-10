@@ -133,6 +133,23 @@ groups identical model chains without losing fallback order, and shows saved
 values beside current values. Identical project preferences are omitted. User
 preferences may supply proposal values but do not count as saved project choices.
 
+Compare behavior, not command syntax. For a changed action convention, explain
+what the saved rule does, what the proposal does, and why the change is useful.
+Use short action descriptions in the comparison; keep shell commands, machine
+paths and reusable placeholders in the formatter's expandable technical details.
+Read the owning command/help or verified repository evidence when a description
+omits a material effect. Do not infer behavior from an executable's name, treat
+different argv as proof of different behavior, or rewrite stored preferences to
+improve their wording. If the descriptions alone leave the difference unclear,
+add a brief evidence-backed explanation beside the rendered comparison while
+preserving all formatter content, exact commands and the pinned offer values.
+
+For example: "Saved: merge during cleanup, then archive and remove local work
+resources. Proposed: delivery handles the approved merge; cleanup only archives
+and removes local work resources. Reason: this workflow has a separate delivery
+step." State remote-branch retention or deletion explicitly when applicable.
+This is a presentation example, not a default or action authorization.
+
 The final replies have separate meanings:
 
 - "Confirm" / "確認": approve this kickoff only; do not save preferences.

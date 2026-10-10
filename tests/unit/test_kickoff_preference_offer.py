@@ -191,3 +191,84 @@ def test_default_cleanup_does_not_save_literal_issue_description(case):
     assert "暫不可儲存" not in section
     result["entries"] = []
     assert module.render_offer(result, zh=True, table=lambda *_: "unused") == ("", None)
+
+
+@pytest.mark.parametrize("zh", [True, False])
+def test_action_comparison_explains_behavior_and_preserves_exact_commands(case, zh):
+    module, store, args, proposal, _ = case
+    saved = {"cleanup": [["custom-close", "--integrate", "{issue_name}"]],
+             "cleanup_description": ["Merge, archive and remove local resources for {issue_name}."]}
+    proposed = {"cleanup": [["python3", "/a long path/cleanup.py", "{issue_name}"]],
+                "cleanup_description": ["Archive {issue_name} and remove local resources; retain the remote branch."]}
+    store.set("cleanup.convention", saved, scope="repository", origin="explicit")
+    args.cleanup_description = [proposed["cleanup_description"][0].replace("{issue_name}", args.issue_name)]
+    proposal["delivery_contract"]["closeout_plan"]["cleanup"] = [
+        {"argv": ["python3", "/a long path/cleanup.py", args.issue_name]}]
+    result = build(case, templates={"cleanup.convention": proposed})
+    snapshot = copy.deepcopy(result)
+    formatter = load_kickoff_module("format_kickoff_contract")
+    rows = []
+
+    def table(headers, values):
+        rows.extend(values)
+        return formatter._table(headers, values)
+
+    section, prompt = module.render_offer(result, zh=zh, table=table)
+    action_row = next(row for row in rows if row[0] == ("清理規則" if zh else "Cleanup convention"))
+    assert "archive and remove local resources" in action_row[1]
+    assert "retain the remote branch" in action_row[2]
+    assert "{issue_name}" not in " ".join(action_row)
+    assert "custom-close" not in " ".join(action_row)
+    assert "/a long path/cleanup.py" not in " ".join(action_row)
+    assert "<details>" in section and "</details>" in section
+    details = section.split("<details>", 1)[1]
+    assert "custom-close --integrate '{issue_name}'" in details
+    assert "python3 '/a long path/cleanup.py' '{issue_name}'" in details
+    assert ("**確認**" if zh else "**Confirm**") in prompt
+    assert result == snapshot
+    module.remember_offer(store, result, selections=["cleanup.convention"], reuse=True)
+    assert store.inspect(scope="repository")["cleanup.convention"]["value"] == proposed
+
+
+def test_action_command_details_round_trip_unusual_literal_arguments(case):
+    import re
+    import shlex
+
+    module, _, args, proposal, _ = case
+    command = ["custom-tool", "literal ```\nsecond line", "$(do-not-execute)", "a'b"]
+    description = "Keep records; delete no branches."
+    args.cleanup_description = [description]
+    proposal["delivery_contract"]["closeout_plan"]["cleanup"] = [{"argv": command}]
+    result = build(case, templates={"cleanup.convention": {
+        "cleanup": [command], "cleanup_description": [description]}})
+    formatter = load_kickoff_module("format_kickoff_contract")
+    section, _ = module.render_offer(result, zh=False, table=formatter._table)
+    details = section.split("<details>", 1)[1]
+    match = re.search(r"(`{4,})bash\n(.*?)\n\1", details, re.DOTALL)
+    assert match is not None
+    assert shlex.split(match[2]) == command
+    comparison = section.split("<details>", 1)[0]
+    assert "Keep records" in comparison and "delete no branches" in comparison
+
+
+def test_action_description_preserves_literal_braces_and_table_separators(case):
+    module, _, args, proposal, _ = case
+    description = "Archive {issue_name}; preserve literal {{issue_name}} and {{a: b}}. Keep A | B."
+    template = {"cleanup": [["custom-tool", "{issue_name}"]],
+                "cleanup_description": [description]}
+    expanded = module.render_delivery_template(
+        {"deliver": template["cleanup"], "deliver_description": [description]},
+        {"issue_name": args.issue_name},
+    )
+    args.cleanup_description = expanded["deliver_description"]
+    proposal["delivery_contract"]["closeout_plan"]["cleanup"] = [
+        {"argv": expanded["deliver"][0]}]
+    result = build(case, templates={"cleanup.convention": template})
+    formatter = load_kickoff_module("format_kickoff_contract")
+    section, _ = module.render_offer(result, zh=False, table=formatter._table)
+    comparison = section.split("<details>", 1)[0]
+    assert "Archive work item" in comparison
+    assert r"preserve literal \{issue\_name\}" in comparison
+    assert r"\{a\: b\}" in comparison
+    assert r"A \| B" in comparison
+    assert r"A \\| B" not in comparison
