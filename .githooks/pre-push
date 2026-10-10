@@ -9,9 +9,13 @@ echo "🧪 Running bounded pre-push contract smoke suite..."
 echo ""
 
 PROJECT_PYTHON=".venv/bin/python"
+TEST_WORKERS="${CAFE_TEST_WORKERS:-4}"
+case "$TEST_WORKERS" in
+    ''|*[!0-9]*) echo "CAFE_TEST_WORKERS must be a non-negative integer" >&2; exit 2 ;;
+esac
 
 ensure_test_env() {
-    if [ ! -x "$PROJECT_PYTHON" ] || ! "$PROJECT_PYTHON" -c "import pytest" >/dev/null 2>&1; then
+    if [ ! -x "$PROJECT_PYTHON" ] || ! "$PROJECT_PYTHON" -c "import pytest, xdist" >/dev/null 2>&1; then
         echo "🔧 Syncing project test environment..."
         uv sync --extra dev --frozen
     fi
@@ -45,7 +49,8 @@ TEST_FILES=(
 
 echo "Running ${#TEST_FILES[@]} bounded contract smoke files..."
 ensure_test_env
-"$PROJECT_PYTHON" -m pytest "${TEST_FILES[@]}" -q --tb=short --no-cov -m "not slow"
+"$PROJECT_PYTHON" -m pytest "${TEST_FILES[@]}" -q --tb=short --no-cov -m "not slow" \
+    -n "$TEST_WORKERS" --dist=worksteal --durations=10
 
 echo ""
 echo "✅ Pre-push contract smoke suite passed! Proceeding with push..."

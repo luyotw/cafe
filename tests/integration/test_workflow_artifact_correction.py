@@ -47,7 +47,7 @@ def _assert_correction_context_preserved(manager):
 @pytest.fixture
 def journey(tmp_path, monkeypatch):
     def build(submissions, *, mode="baton", completed_checklist=False, human=None,
-              reverse=False, unchecked=False, mutate=None, provider_mutation=None, capability=None, publication_mutation=False, workspace=None, workspace_action=None, effect_action=None, extra_publication=False, projected=False, post_submission=None, declared_input=False, provider_usage=None):
+              reverse=False, unchecked=False, mutate=None, provider_mutation=None, capability=None, publication_mutation=False, workspace=None, workspace_action=None, effect_action=None, extra_publication=False, projected=False, post_submission=None, declared_input=False, provider_usage=None, base_branch="main"):
         repo = tmp_path / "repo"
         repo.mkdir()
         subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
@@ -87,6 +87,9 @@ def journey(tmp_path, monkeypatch):
             "name": "custom-report", "description": "Write evidence", "workflow": workflow,
         }) + "---\n\nWrite {output_file} and submit {next_step_file}.\n")
         issue = config / "issues" / "correction"
+        if base_branch is not None:
+            issue.mkdir(parents=True, exist_ok=True)
+            (issue / "issue.yaml").write_text(yaml.safe_dump({"base_branch": base_branch}))
         iteration = issue / "inspect_custom" / "iteration_001"
         effects = []
 
