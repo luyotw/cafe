@@ -2,7 +2,7 @@
 
 For an adopting graph, the declared delivery phase owns exact integration and selected issue effects, durable receipts, recovery and mandatory final user acceptance. Manager observes this phase once and retains coordination and separately confirmed cleanup. Unknown, partial or approval-pending actions remain nonterminal. Manager must never replay an action through closeout or a Git conflict repair fallback. Send implementation conflicts and changed code to the declared Develop correction route; revised action selection returns to the declared PR review.
 
-Fresh nested contract version 5 has cleanup only. Use archive-only CAFE cleanup to avoid implicit local integration. Existing legacy versions and compact routes keep their original authority and receipts; legacy merge commands lacking an exact target/source binding pause rather than guessing or migrating.
+Fresh nested contract version 5 has cleanup only. Default a separate feature worktree to full cleanup through `scripts/cleanup_worktree.py`, which archives before removing its exact local and remote resources without repeating integration. Retain archive-only as the explicit preservation choice. Existing contracts and compact routes keep their original authority and receipts; a new default never broadens their approved commands.
 
 # Completion And Action Authority
 
@@ -194,7 +194,7 @@ registered worktrees plus dirty/untracked content. The confirmed argv must use
 explicit targets. When a command needs another Git context, make that context
 an exact argument (for example `git -C <retained-checkout> worktree remove
 <target>`), rather than changing the Manager's working directory. Never add force
-flags. If `cafe close` is confirmed, it must be the exact final cleanup command,
+flags. A remote branch deletion lease is a compare-and-delete guard, never permission to overwrite a changed tip. For full cleanup, use the confirmed `cleanup_worktree.py` command as the final action through `execute_closeout.py`. It checks completed acceptance, exact integrated source and remote tip, and a clean worktree; archives first; then removes only that worktree and its local/remote branch. It performs no integration or base-branch update and stops on failure. Inspect its archive plus the absence of all named resources before offering the optional inclusive-cost calculation. If `cafe close` is confirmed, it must be the exact final cleanup command,
 after any `gh issue close` command. It may archive the issue and remove its
 worktree; render final progress from the archive path it reports.
 `cafe close --squash` and its optional message are valid only in confirmed
@@ -214,7 +214,7 @@ For an older contract or a useful follow-up outside the confirmed arrays:
    workflow may end with an editable document and guidance for its intended use.
    None of these outcomes implies a standard publication or merge. New confirmed
    kickoff contracts instead use the default cleanup proposal from `kickoff.md`:
-   close a verified bound GitHub issue, then run `cafe close`, unless the user
+   close a verified bound GitHub issue, then archive and remove its exact feature resources through `cleanup_worktree.py`, unless the user
    explicitly excludes either action.
 3. Complete useful read-only or reversible preparation already within scope.
    For an applicable follow-up action with existing explicit authority, check

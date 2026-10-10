@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 import re
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -620,6 +621,23 @@ def _delivery_dependency(discovery: dict[str, Any] | None, values: dict[str, Any
     })
 
 
+def _default_cleanup(project_root: Path, values: dict[str, Any], phase_owned: bool):
+    worktree = values.get("worktree")
+    if phase_owned and worktree and Path(worktree).resolve() != project_root.resolve():
+        command = [sys.executable, str(Path(__file__).with_name("cleanup_worktree.py").resolve()),
+                   "--project-root", str(project_root.resolve()), "--worktree", str(Path(worktree).resolve()),
+                   "--issue-name", values["issue_name"]]
+        remote = subprocess.run(["git", "-C", str(project_root), "remote", "get-url", "origin"],
+                                capture_output=True, text=True, check=False)
+        if remote.returncode == 0:
+            command.extend(["--remote", "origin"])
+        return command, "Archive this CAFE issue, then remove its managed worktree and local branch" + (
+            " and its origin branch." if remote.returncode == 0 else ".")
+    return (["cafe", "close", "--archive-only"],
+            "Archive this CAFE issue; retain the current checkout because it is not a separate feature worktree.") if phase_owned else (
+                ["cafe", "close"], "Archive this CAFE issue and remove its managed worktree and branch.")
+
+
 def _prefill_checkout(values: dict[str, Any], *, project_root: Path, sources: dict[str, str],
                       blocked: frozenset[str] | set[str] = frozenset()) -> None:
     from cafe.utils.git_utils import get_repo_root
@@ -782,8 +800,9 @@ def _prefill_configured_inputs(values: dict[str, Any], *, project_root: Path, so
         from cafe.manager.delivery import phase_owned_graph
         selected_graph = values.get("playbook_id")
         phase_owned = bool(selected_graph) and phase_owned_graph(owner.PlaybookLoader(project_root=project_root).load_model(selected_graph).model)
-        commands.append(["cafe", "close", "--archive-only"] if phase_owned else ["cafe", "close"])
-        descriptions.append("Archive this CAFE issue without repeating integration; retain its worktree and branch." if phase_owned else "Archive this CAFE issue and remove its managed worktree and branch.")
+        cleanup, description = _default_cleanup(project_root, values, phase_owned)
+        commands.append(cleanup)
+        descriptions.append(description)
         fill("cleanup", commands, "default issue cleanup proposal")
         fill("cleanup_description", descriptions, "default issue cleanup proposal")
     for key in ("need_permission", "need_clarification", "alignment_checkpoint"):
@@ -810,10 +829,17 @@ def _prefill_configured_inputs(values: dict[str, Any], *, project_root: Path, so
 
     from cafe.manager.delivery import phase_owned_graph
     default_descriptions = {"Archive this CAFE issue without repeating integration; retain its worktree and branch.", "Archive this CAFE issue and remove its managed worktree and branch."}
-    if ("cleanup" not in request.get("current_explicit_inputs", {}) and values.get("cleanup_description") and values["cleanup_description"][-1] in default_descriptions and values.get("cleanup") and values["cleanup"][-1] in (["cafe", "close"], ["cafe", "close", "--archive-only"])):
+    generated_cleanup = values.get("cleanup", [])
+    generated_description = values.get("cleanup_description", [])
+    is_default = bool(generated_cleanup and generated_description) and (
+        generated_description[-1] in default_descriptions
+        or (len(generated_cleanup[-1]) > 1 and Path(generated_cleanup[-1][1]).name == "cleanup_worktree.py"
+            and generated_description[-1].startswith("Archive this CAFE issue, then remove"))
+        or generated_description[-1] == "Archive this CAFE issue; retain the current checkout because it is not a separate feature worktree."
+    )
+    if "cleanup" not in request.get("current_explicit_inputs", {}) and is_default:
         phase_owned = phase_owned_graph(model)
-        values["cleanup"][-1] = ["cafe", "close", "--archive-only"] if phase_owned else ["cafe", "close"]
-        values["cleanup_description"][-1] = "Archive this CAFE issue without repeating integration; retain its worktree and branch." if phase_owned else "Archive this CAFE issue and remove its managed worktree and branch."
+        values["cleanup"][-1], values["cleanup_description"][-1] = _default_cleanup(project_root, values, phase_owned)
         sources["cleanup"] = "default issue cleanup proposal"
     gates = owner.confirmation_gate_steps(model)
     if "user_required" not in values and "manager_confirmable" not in values:

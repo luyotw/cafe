@@ -27,6 +27,37 @@ def _text(key, locale, **fields):
 
 
 def _effect_complete(argv, project_root, worktree, issue_dir, archive):
+    if len(argv) > 1 and Path(argv[1]).name == "cleanup_worktree.py":
+        script = Path(argv[1])
+        bundled = Path(__file__).with_name("cleanup_worktree.py")
+        if not script.is_file() or script.read_bytes() != bundled.read_bytes():
+            return False
+        parser = argparse.ArgumentParser(add_help=False)
+        parser.add_argument("--project-root", type=Path, required=True)
+        parser.add_argument("--worktree", type=Path, required=True)
+        parser.add_argument("--issue-name", required=True)
+        parser.add_argument("--remote")
+        try:
+            args = parser.parse_args(argv[2:])
+        except SystemExit:
+            return False
+        if (args.project_root.resolve() != Path(project_root).resolve()
+                or args.worktree.absolute() != Path(worktree).absolute()
+                or args.issue_name != Path(issue_dir).name
+                or not archive.is_dir() or Path(issue_dir).exists() or args.worktree.exists()):
+            return False
+        listing = subprocess.run(["git", "-C", str(project_root), "worktree", "list", "--porcelain"],
+                                 check=True, capture_output=True, text=True).stdout
+        local = subprocess.run(["git", "-C", str(project_root), "branch", "--list", args.issue_name],
+                               check=True, capture_output=True, text=True).stdout
+        if f"worktree {args.worktree}\n" in listing or local.strip():
+            return False
+        if args.remote:
+            refs = subprocess.run(["git", "-C", str(project_root), "ls-remote", "--heads", args.remote,
+                                   f"refs/heads/{args.issue_name}"], check=True, capture_output=True, text=True)
+            if refs.stdout.strip():
+                return False
+        return True
     if argv[:3] == ["gh", "issue", "close"]:
         if len(argv) < 4 or argv[3].startswith("-"):
             raise ValueError("cleanup issue target is not explicit")
@@ -139,7 +170,7 @@ def verify_closeout(project_root, issue_name, workflow_id, issue_dir, operation,
             if policy.get("delivery_contract", {}).get("terminal_selection") == "delivery_outcome":
                 from inspect_delivery_closeout import inspect
 
-                result = inspect(archive, workflow_id)
+                result = inspect(archive, workflow_id, project_root=project_root)
                 if result["status"] != "accepted" or result["selection"]["choice"] != operation:
                     raise ValueError("closeout differs from accepted terminal selection")
         return archive
