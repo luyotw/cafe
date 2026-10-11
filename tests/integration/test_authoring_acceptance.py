@@ -260,3 +260,29 @@ def test_omitted_inputs_reject_an_unreachable_producer(tmp_path):
         d["code"] == "missing_producer" and d["step"] == "observe" for d in result.diagnostics
     )
     assert not (tmp_path / ".cafe").exists()
+
+
+@pytest.mark.parametrize("visibility", ["available", "missing", "empty"])
+def test_optional_input_reports_follow_runtime_visibility_without_blocking(tmp_path, visibility):
+    request = producer_pair()
+    mapping = request["companions"][0]["declaration"]["workflow"]["prompt_inputs"][0]
+    mapping["required"] = False
+    observe = request["declaration"]["steps"]["observe"]
+    if visibility != "empty":
+        observe.pop("input_artifacts")
+    if visibility == "missing":
+        request["declaration"]["steps"]["collect"]["output_artifact"] = "other"
+    preview = prepare(request, root=tmp_path)
+    assert preview.status == "ready", preview.to_dict()
+    consumers = preview.artifact_summary[request["target"]]["consumers"]
+    if visibility == "available":
+        assert consumers["record"] == ["observe"]
+        assert not any(
+            d["code"] == "terminal_report" and d["field"] == "record" for d in preview.diagnostics
+        )
+    else:
+        assert "record" not in consumers
+    assert not any(d["code"] == "missing_producer" for d in preview.diagnostics)
+    result = apply(request, root=tmp_path, expect_change=preview.change_digest)
+    assert result.status == "applied", result.to_dict()
+    assert result.artifact_summary == preview.artifact_summary

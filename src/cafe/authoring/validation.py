@@ -385,8 +385,6 @@ def _bindings(model, loader, result, target, graph):
                             }
                         )
                 for mapping in contributor.declaration.prompt_inputs:
-                    if not mapping.required:
-                        continue
                     candidates = set(mapping.artifacts)
                     if "input_artifacts" in step.model_fields_set:
                         candidates &= set(step.input_artifacts or ())
@@ -404,7 +402,7 @@ def _bindings(model, loader, result, target, graph):
                             if name not in consumers[artifact]:
                                 consumers[artifact].append(name)
                     available = bool(available_candidates)
-                    if not available:
+                    if mapping.required and not available:
                         field = f"workflow.prompt_inputs.{mapping.placeholder}"
                         result.diagnose(
                             "missing_producer",
