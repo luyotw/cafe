@@ -4,6 +4,35 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.10.0] - 2026-10-11
+
+### Added
+
+- Author phase skills and playbooks through versioned YAML/JSON requests, a
+  shared library API, `cafe skill author phase` and `cafe playbook author`.
+  Preview strict validation, routing and confirmation gates before applying
+  reviewed, digest-bound source transactions (#551, #638).
+- Collect scoped Codex native descendant usage in worker, chat and Manager
+  cost reports. Preserve actual model and ownership evidence, nested and
+  resumed sessions, partial coverage and independent historical amounts;
+  reject overlapping or duplicate spend (#630).
+
+### Changed
+
+- Validate authoring changes against effective dependencies and affected
+  consumers, preserving untouched source bytes and rejecting stale apply.
+- Keep compatibility usage scalars caller-only while retaining native child
+  evidence in cost records. Existing historical evidence remains readable;
+  unavailable counters and pricing remain explicitly incomplete.
+
+See [the v0.10.0 release notes](docs/releases/v0.10.0.md) for authoring examples,
+cost coverage and upgrade guidance.
+
+### Fixed
+
+- Preserve existing negative historical cost diagnostics when reconciling
+  caller and child evidence.
+
 ## [0.9.3] - 2026-10-11
 
 ### Fixed

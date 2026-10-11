@@ -10,7 +10,13 @@ from pathlib import Path
 
 import yaml
 
-from cafe.core.cost import combine_cost_summaries, merge_cost_records, summarize_cost
+from cafe.core.cost import (
+    COUNTERS,
+    combine_cost_summaries,
+    merge_cost_records,
+    source_remainder,
+    summarize_cost,
+)
 from cafe.core.usage import _usage_parent, phase_stats_without_chat
 
 MAX_SOURCE_BYTES = 16 * 1024 * 1024
@@ -44,22 +50,11 @@ def unrecorded_usage(stats, records):
         "reasoning_output_tokens",
     )
     remaining = {}
-    records = merge_cost_records([], records)
+    residual = source_remainder(stats, records)
     for field in fields:
-        total = stats.get(field)
-        if total is None and field == "cache_write_input_tokens":
-            total = stats.get("cache_creation_input_tokens")
-        if total is None:
-            remaining[field] = None
-            continue
-        recorded = 0
-        for record in records:
-            usage = record.get("usage", {})
-            value = usage.get(field)
-            if value is None and field == "cache_write_input_tokens":
-                value = usage.get("cache_creation_input_tokens")
-            recorded += value or 0
-        remaining[field] = max(0, total - recorded)
+        remaining[field] = residual.get(field)
+        if remaining[field] is None and field == "cache_write_input_tokens":
+            remaining[field] = residual.get("cache_creation_input_tokens")
     return remaining
 
 
@@ -67,9 +62,11 @@ def _coverage_gap(stats, records):
     try:
         return bool(
             records
-            and not summarize_cost(records, legacy_cost=stats.get("total_cost_usd"))["counts"][
-                "legacy"
-            ]
+            and not summarize_cost(
+                records,
+                legacy_cost=stats.get("total_cost_usd"),
+                legacy_residual=float(source_remainder(stats, records).get("total_cost_usd", 0)),
+            )["counts"]["legacy"]
             and any(unrecorded_usage(stats, records).values())
         )
     except (ValueError, TypeError, KeyError, AttributeError, InvalidOperation):
@@ -88,9 +85,11 @@ def collect_cost_sources(issue_dir: Path) -> list[dict]:
                 source_id=identity,
                 records=records,
                 legacy_cost=stats.get("total_cost_usd"),
+                legacy_residual=float(source_remainder(stats, records).get("total_cost_usd", 0)),
                 gap=gap or _coverage_gap(stats, records),
             )
         )
+        return sources[-1]
 
     def chats(identity, groups):
         if not isinstance(groups, list):
@@ -112,6 +111,7 @@ def collect_cost_sources(issue_dir: Path) -> list[dict]:
         path = directory / "iteration.json"
         if not path.exists() and not path.is_symlink():
             path = directory / "context.json"
+        phase_source = None
         try:
             data = read_accounting_file(path)
             groups = data.get("chat_usage", [])
@@ -123,16 +123,17 @@ def collect_cost_sources(issue_dir: Path) -> list[dict]:
                 or stats.get("total_cost_usd")
                 or any(unrecorded_usage(stats, []).values())
             ):
-                add(identity, stats)
+                phase_source = add(identity, stats)
             chats(identity, groups)
-        except (OSError, ValueError, TypeError, AttributeError, yaml.YAMLError):
-            add(identity, {}, gap=True)
-            sources[-1]["read_error"] = path.exists() or path.is_symlink()
+        except (OSError, ValueError, TypeError, AttributeError, InvalidOperation, yaml.YAMLError):
+            if phase_source is None:
+                phase_source = add(identity, {}, gap=True)
+            phase_source.update(gap=True, read_error=path.exists() or path.is_symlink())
     path = issue_dir / "issue.yaml"
     if path.exists() or path.is_symlink():
         try:
             chats("issue", read_accounting_file(path).get("chat_usage", []))
-        except (OSError, ValueError, TypeError, AttributeError, yaml.YAMLError):
+        except (OSError, ValueError, TypeError, AttributeError, InvalidOperation, yaml.YAMLError):
             add("issue", {}, gap=True)
             sources[-1]["read_error"] = path.exists() or path.is_symlink()
     return sources
@@ -164,12 +165,30 @@ def summarize_sources(sources, *, exclude_ids=(), ambiguous_sources=()):
                     valid.append(record)
                 except (ValueError, TypeError, KeyError, InvalidOperation):
                     parts.append(summarize_cost([]))
-            full = summarize_cost(valid, legacy_cost=source.get("legacy_cost"))
+            full = summarize_cost(
+                valid,
+                legacy_cost=source.get("legacy_cost"),
+                legacy_residual=(
+                    source.get("legacy_residual")
+                    if source.get("legacy_residual") is not None
+                    else source_remainder(
+                        dict(
+                            total_cost_usd=source.get("legacy_cost"),
+                            scalar_coverage=source.get("scalar_coverage"),
+                        ),
+                        valid,
+                    ).get("total_cost_usd")
+                ),
+            )
             for record in valid:
+                # Source scalar coverage is not part of the physical invocation identity.
+                record = {k: v for k, v in record.items() if k != "scalar_coverage"}
                 key = record["invocation_id"]
                 if key in excluded or key in conflicting:
                     continue
-                if key in records and records[key] != record:
+                if key in records and "native_usage" in record and "native_usage" in records[key]:
+                    records[key] = merge_cost_records([records[key]], [record])[0]
+                elif key in records and records[key] != record:
                     parts.append(summarize_cost([]))
                     conflicting.add(key)
                     records.pop(key)
@@ -203,3 +222,49 @@ def accounting_source_versions(issue_dir, *, extra_paths=()):
         except FileNotFoundError:
             versions[str(path)] = None
     return versions
+
+
+def format_native_usage(view, *, templates=None):
+    """Neutral persisted report lines; callers own localized presentation."""
+    templates = templates or {
+        "child": (
+            "Child {session} (parent {parent}, model {model}): {categories}; "
+            "{provenance}; {source}; {start}..{end}; inclusion={inclusion}; coverage={coverage}"
+        ),
+        "child_subtotal": "Child known subtotal: {tokens}",
+        "caller_subtotal": "Caller known subtotal: {tokens}; {coverage}",
+        "unknown": "unknown",
+        "complete": "complete",
+        "partial": "partial",
+        "combined_unavailable": "combined total unavailable",
+    }
+    lines = []
+    for child in view["children"]:
+        native = child["native_usage"]
+        usage = child["usage"]
+        categories = ", ".join(f"{key}={usage.get(key, templates['unknown'])}" for key in COUNTERS)
+        lines.append(
+            templates["child"].format(
+                session=child["session_id"],
+                parent=native["parent_session_id"],
+                model=child.get("model") or templates["unknown"],
+                categories=categories,
+                provenance=child["provenance"],
+                source=native["source"]["kind"],
+                start=native["start"].get("at", templates["unknown"]),
+                end=native.get("ownership_cutoff", native["end"].get("at", templates["unknown"])),
+                inclusion=native["inclusion"],
+                coverage=templates["complete"] if child["complete"] else templates["partial"],
+            )
+        )
+    if view["children"] or view["gaps"]:
+        lines.append(templates["child_subtotal"].format(tokens=view["child_tokens"]))
+        lines.append(
+            templates["caller_subtotal"].format(
+                tokens=view["caller_tokens"],
+                coverage=(
+                    templates["complete"] if view["complete"] else templates["combined_unavailable"]
+                ),
+            )
+        )
+    return lines
