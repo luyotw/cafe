@@ -9,63 +9,101 @@ from .requests import decode_request
 from .source_edits import dump, edit_section, edit_yaml
 
 
+class PhaseError(ValueError):
+    """A phase source rejection with an exact authoring field."""
+
+    def __init__(self, message, field):
+        super().__init__(message)
+        self.field = field
+
+
 def frontmatter(text):
     match = re.match(r"\A---\r?\n(.*?)^---\s*\n", text, re.S | re.M)
     if not match:
-        raise ValueError("Phase requires complete YAML frontmatter")
+        raise PhaseError("Phase requires complete YAML frontmatter", "metadata")
     return match, decode_request(match.group(1))
 
 
 def guard(text, name, resources):
     match, metadata = frontmatter(text)
     if set(metadata) - {"name", "description", "version", "workflow"}:
-        raise ValueError("Unsupported phase frontmatter metadata")
+        key = sorted(set(metadata) - {"name", "description", "version", "workflow"})[0]
+        raise PhaseError("Unsupported phase frontmatter metadata", f"metadata.{key}")
     if metadata.get("name") != name or not name.startswith("cafe-"):
-        raise ValueError("Phase name must match its canonical cafe- directory")
+        raise PhaseError("Phase name must match its canonical cafe- directory", "metadata.name")
     if not metadata.get("description") or not metadata.get("version"):
-        raise ValueError("Phase requires nonempty description and version")
+        key = "description" if not metadata.get("description") else "version"
+        raise PhaseError("Phase requires nonempty description and version", f"metadata.{key}")
     declaration = SkillWorkflowDeclaration.model_validate(metadata.get("workflow", {}))
     if declaration.execution_profile is None:
-        raise ValueError("Authoring requires explicit workflow.execution_profile")
+        raise PhaseError(
+            "Authoring requires explicit workflow.execution_profile", "workflow.execution_profile"
+        )
     body = text[match.end() :]
     for section in ("Role", "Instructions", "Output", "Handoff"):
         headings = re.findall(rf"^## {section}\s*$", body, re.M)
         if len(headings) != 1:
-            raise ValueError(f"Phase requires one canonical {section} section")
+            raise PhaseError(
+                f"Phase requires one canonical {section} section", f"sections.{section}"
+            )
         content = re.search(rf"^## {section}\n(.*?)(?=^## |\Z)", body, re.S | re.M)
         if content is None or not content.group(1).strip():
-            raise ValueError(f"Phase requires author-owned {section} content")
+            raise PhaseError(
+                f"Phase requires author-owned {section} content", f"sections.{section}"
+            )
     if "Read your agent file: {agent_file}" not in body or "{output_file}" not in body:
-        raise ValueError("Canonical role and output path instructions are required")
+        section = "Role" if "Read your agent file: {agent_file}" not in body else "Output"
+        raise PhaseError(
+            "Canonical role and output path instructions are required", f"sections.{section}"
+        )
     allowed = set(RUNTIME_OWNED_PROMPT_PLACEHOLDERS)
     allowed.update(i.placeholder for i in declaration.prompt_inputs)
     allowed.update(declaration.prompt_references)
     for checklist in (declaration.checklist, declaration.checklist_overlay):
         if checklist:
             allowed.update(checklist.context_references)
-    for content in (body, *resources.values()):
-        unknown = set(re.findall(r"(?<!\{)\{([a-z][a-z0-9_]*)\}(?!\})", content)) - allowed
-        if unknown:
-            raise ValueError(f"Undeclared placeholders: {sorted(unknown)}")
+    for origin, content in [(None, body), *resources.items()]:
+        for token in re.finditer(r"(?<!\{)\{([a-z][a-z0-9_]*)\}(?!\})", content):
+            placeholder = token.group(1)
+            if placeholder in allowed:
+                continue
+            if origin is None:
+                headings = list(re.finditer(r"^## ([^\n]+)\n", content[: token.start()], re.M))
+                origin_field = f"sections.{headings[-1].group(1)}" if headings else "sections.Title"
+            else:
+                origin_field = f"references.{origin}"
+            raise PhaseError(
+                f"Undeclared placeholder: {placeholder}", f"{origin_field}.{placeholder}"
+            )
     for checklist in (declaration.checklist, declaration.checklist_overlay):
         if checklist:
             for variant in checklist.variants:
                 for section in variant.sections:
                     if section.todo_projection and not declaration.prompt_inputs:
-                        raise ValueError("Todo projection requires declared artifact prompt inputs")
+                        field = (
+                            "checklist"
+                            if checklist is declaration.checklist
+                            else "checklist_overlay"
+                        )
+                        raise PhaseError(
+                            "Todo projection requires declared artifact prompt inputs",
+                            f"workflow.{field}",
+                        )
     return declaration
 
 
 def scaffold(request):
     unknown = set(request.sections) - {"Title", "Context", "Instructions", "Output", "Handoff"}
     if unknown:
-        raise ValueError(f"Unsupported phase sections: {sorted(unknown)}")
+        raise PhaseError(
+            f"Unsupported phase sections: {sorted(unknown)}", f"sections.{sorted(unknown)[0]}"
+        )
     for section in ("Instructions", "Output", "Handoff"):
         if not request.sections.get(section, "").strip():
-            raise ValueError(f"Supply author-owned {section} prose")
+            raise PhaseError(f"Supply author-owned {section} prose", f"sections.{section}")
     metadata = request.declaration
     body = (
-        f"# {request.sections.get('Title', metadata['name'])}\n\n## Role\n"
+        f"# {request.sections.get('Title', metadata.get('name', ''))}\n\n## Role\n"
         "Read your agent file: {agent_file}\n"
     )
     for section in ("Context", "Instructions", "Output", "Handoff"):
@@ -102,5 +140,7 @@ def resource_path(name):
         or path.suffix != ".md"
         or "\\" in name
     ):
-        raise ValueError("Resources must be explicitly declared references/*.md paths")
+        raise PhaseError(
+            "Resources must be explicitly declared references/*.md paths", f"references.{name}"
+        )
     return path

@@ -14,6 +14,20 @@ def dump(value):
     return yaml.safe_dump(value, sort_keys=False, allow_unicode=True, width=1000)
 
 
+def source_text(path):
+    """Decode source bytes without universal-newline translation."""
+    return path.read_bytes().decode("utf-8")
+
+
+def source_newlines(text):
+    """Use a reversible LF editing view; ambiguous newline shapes fail closed."""
+    stripped = text.replace("\r\n", "")
+    if "\r" in stripped or "\r\n" in text and "\n" in stripped:
+        raise ValueError("Mixed or bare-CR source newlines require a manual edit")
+    newline = "\r\n" if "\r\n" in text else "\n"
+    return text.replace("\r\n", "\n"), newline
+
+
 def _line_end(text, index):
     end = text.find("\n", index)
     return len(text) if end < 0 else end + 1

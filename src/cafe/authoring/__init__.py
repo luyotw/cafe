@@ -7,10 +7,10 @@ import hashlib
 import json
 from pathlib import Path
 
-from .phase import patch, resource_path, scaffold
+from .phase import PhaseError, patch, resource_path, scaffold
 from .requests import Request, decode_request
 from .results import Result
-from .source_edits import dump, edit_yaml
+from .source_edits import dump, edit_yaml, source_newlines, source_text
 from .transaction import commit, confined, locked, recover, storage
 from .validation import digest, validate
 
@@ -53,7 +53,7 @@ def prepare(request, *, root=None, _allow_pending=False):
                     raise ValueError("Phase target must be skills/<name>/SKILL.md")
             elif target.parent.name != "playbooks" or target.suffix != ".yaml":
                 raise ValueError("Playbook target must be playbooks/<id>.yaml")
-            before = target.read_text() if target.exists() else None
+            before = source_text(target) if target.exists() else None
             if item.mode == "create":
                 content = scaffold(item) if phase else dump(item.declaration)
                 if before is not None and before != content:
@@ -61,7 +61,7 @@ def prepare(request, *, root=None, _allow_pending=False):
             else:
                 if before is None:
                     raise ValueError(f"Patch source does not exist: {item.target}")
-                content = before
+                content, newline = source_newlines(before)
                 seen = set()
                 prior = []
                 for operation in item.operations:
@@ -100,28 +100,48 @@ def prepare(request, *, root=None, _allow_pending=False):
                             target.parent.relative_to(root) / resource_path(operation.path[1])
                         )
                         source = confined(root, relative)
-                        old = source.read_text() if source.exists() else None
+                        old = source_text(source) if source.exists() else None
+                        if old is not None:
+                            source_newlines(old)
                         if old != operation.value and old != operation.expected:
-                            raise ValueError("Reference expected content does not match")
+                            raise PhaseError(
+                                "Reference expected content does not match",
+                                f"references.{operation.path[1]}",
+                            )
                         result.files[relative] = operation.value
                     else:
+                        if phase and operation.path[0] == "sections":
+                            operation = operation.model_copy(
+                                update={
+                                    "value": operation.value.replace("\r\n", "\n"),
+                                    "expected": (
+                                        operation.expected.replace("\r\n", "\n")
+                                        if isinstance(operation.expected, str)
+                                        else operation.expected
+                                    ),
+                                }
+                            )
                         content = (
                             patch(content, operation) if phase else edit_yaml(content, operation)
                         )
+                content = content.replace("\n", newline)
             result.files[item.target] = content
             for reference, text in item.references.items():
                 if not phase:
                     raise ValueError("Only phases can declare reference resources")
                 relative = str(target.parent.relative_to(root) / resource_path(reference))
                 source = confined(root, relative)
-                if source.exists() and source.read_text() != text:
-                    raise ValueError("Create would replace an existing reference")
+                if source.exists() and source_text(source) != text:
+                    raise PhaseError(
+                        "Create would replace an existing reference", f"references.{reference}"
+                    )
                 result.files[relative] = text
         if len(result.files) > 64:
             raise ValueError("Transaction write set exceeds 64 files")
         for relative, after in sorted(result.files.items()):
+            source_newlines(after)
             target = confined(root, relative)
-            before = target.read_text() if target.exists() else None
+            before = source_text(target) if target.exists() else None
             result.dependencies[str(target)] = digest(target)
             if before != after:
                 result.changes.append(
@@ -149,6 +169,14 @@ def prepare(request, *, root=None, _allow_pending=False):
                     )
                 )
         validate(root, result, requests)
+    except PhaseError as error:
+        result.diagnose(
+            "invalid_phase",
+            str(error),
+            target=item.target,
+            skill=Path(item.target).parent.name,
+            field=error.field,
+        )
     except Exception as error:
         result.diagnose("invalid_request", str(error))
     result.diagnostics.sort(key=lambda d: json.dumps(d, sort_keys=True))

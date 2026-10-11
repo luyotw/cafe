@@ -115,6 +115,9 @@ unsupported shapes, then run strict skill/playbook validation, gate inspection
 and simulation. Preview diagnostics identify the rejected operation; do not
 retry with an unrestricted replacement or whole-document formatter. Unrelated
 phase Instructions/Output prose and other resources remain author-owned.
+Focused edits retain uniform LF or CRLF line endings. Mixed line endings and
+bare CR sources are rejected before writes. Resource replacements compare
+and publish the exact explicitly supplied content, including its line endings.
 
 ## Reports and authority
 
@@ -127,8 +130,9 @@ temporary locations. Proposals are advisory: copy an accepted operation into
 an explicit request and preview it again.
 
 All primary iteration candidates and resolved workflow shared/role/step
-contributors participate. Required inputs need explicit artifact bindings and
-reachable declared producers or entry input. Serial artifact bridges are
+contributors participate. Required inputs need reachable declared producers or
+entry input. An omitted `input_artifacts` retains runtime full-source visibility;
+an explicit list restricts candidates, and `[]` exposes none. Serial artifact bridges are
 allowed; terminal unconsumed reports are informational. Missing tools,
 conflicting bindings/policies, invalid HumanTask outcomes, incomplete Todo
 contracts, unreachable/dead-end steps and missing declared intent handlers block

@@ -9,6 +9,8 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from cafe.catalogs.resolver import CatalogKind, CatalogResolver
 from cafe.core.playbook import (
     PlaybookDefinition,
@@ -27,7 +29,7 @@ from cafe.skills.selectors import skill_selector_names
 from cafe.skills.workflow_composition import resolve_step_workflow_composition
 from cafe.utils.yaml_utils import safe_load
 
-from .phase import guard
+from .phase import PhaseError, guard
 from .requests import decode_request
 
 
@@ -90,6 +92,7 @@ def validate(root, result, requests):
                 pass
             candidates[relative or str(path)] = path.read_text()
         changed_names = set()
+        phase_targets = {}
         reset_sources = set()
         books_by_key = {entry.key: entry.path for entry in playbook_entries}
         for relative, content in result.files.items():
@@ -98,6 +101,7 @@ def validate(root, result, requests):
                 index = path.parts.index("skills")
                 name = path.parts[index + 1]
                 changed_names.add(name)
+                phase_targets[name] = str(Path(*path.parts[: index + 2]) / "SKILL.md")
                 selected = source_by_name.get(name)
                 actual = root / Path(*path.parts[: index + 2])
                 if selected and selected.resolve() != actual.resolve():
@@ -156,16 +160,47 @@ def validate(root, result, requests):
             read_only=True,
             resolve_presentation=False,
         )
-        loader.discover(strict=True)
         for name in sorted(changed_names):
-            skill_dir = loader.get_skill_dir(name)
+            skill_dir = staged / ".cafe/skills" / name
+            relative = phase_targets[name]
             resources = {
                 str(p.relative_to(skill_dir)): p.read_text()
                 for p in skill_dir.rglob("*.md")
                 if p.name != "SKILL.md"
             }
-            declaration = guard((skill_dir / "SKILL.md").read_text(), name, resources)
-            loader.validate_workflow_declaration_resources(skill_dir, declaration)
+            try:
+                declaration = guard((skill_dir / "SKILL.md").read_text(), name, resources)
+                for field, message in loader.workflow_declaration_resource_diagnostics(
+                    skill_dir, declaration
+                ):
+                    result.diagnose(
+                        "missing_resource",
+                        message,
+                        target=relative,
+                        skill=name,
+                        field=f"workflow.{field}",
+                    )
+            except ValidationError as error:
+                for detail in error.errors():
+                    field = ".".join(str(part) for part in detail["loc"])
+                    result.diagnose(
+                        "invalid_phase",
+                        detail["msg"],
+                        target=relative,
+                        skill=name,
+                        field=f"workflow.{field}" if field else "workflow",
+                    )
+            except PhaseError as error:
+                result.diagnose(
+                    "invalid_phase", str(error), target=relative, skill=name, field=error.field
+                )
+            except (ValueError, OSError) as error:
+                result.diagnose(
+                    "invalid_phase", str(error), target=relative, skill=name, field="metadata"
+                )
+        if result.status == "rejected":
+            return
+        loader.discover(strict=True)
         changed_books = {r.target for r in requests if "playbooks" in Path(r.target).parts}
         for relative, content in sorted(candidates.items()):
             # Existing unaffected playbooks need not revalidate legacy warning contracts.
@@ -352,14 +387,23 @@ def _bindings(model, loader, result, target, graph):
                 for mapping in contributor.declaration.prompt_inputs:
                     if not mapping.required:
                         continue
-                    candidates = set(mapping.artifacts) & set(step.input_artifacts or ())
-                    available = any(
-                        any(
+                    candidates = set(mapping.artifacts)
+                    if "input_artifacts" in step.model_fields_set:
+                        candidates &= set(step.input_artifacts or ())
+                    available_candidates = {
+                        a
+                        for a in candidates
+                        if any(
                             owner != name and reaches(owner, name) for owner in producers.get(a, ())
                         )
-                        or (step.initial_input and a in {step.initial_input.bind.artifact})
-                        for a in candidates
-                    )
+                        or (step.initial_input and a == step.initial_input.bind.artifact)
+                    }
+                    if "input_artifacts" not in step.model_fields_set:
+                        for artifact in sorted(available_candidates):
+                            consumers.setdefault(artifact, [])
+                            if name not in consumers[artifact]:
+                                consumers[artifact].append(name)
+                    available = bool(available_candidates)
                     if not available:
                         field = f"workflow.prompt_inputs.{mapping.placeholder}"
                         result.diagnose(

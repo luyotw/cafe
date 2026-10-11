@@ -23,9 +23,7 @@ from cafe.utils.yaml_utils import safe_load
 _logger = logging.getLogger(__name__)
 
 
-def workflow_locale_context(
-    skill_root: Path, *, resolve_presentation: bool
-) -> dict[str, object]:
+def workflow_locale_context(skill_root: Path, *, resolve_presentation: bool) -> dict[str, object]:
     """Give one declaration operation its own lazy owner-local renderer."""
     root = skill_root.resolve() / "locales"
     return {
@@ -281,9 +279,7 @@ class SkillLoader:
                 self.validate_workflow_declaration_resources(entry.directory, declaration)
             return entry, declaration
 
-    def get_workflow_declaration_data(
-        self, name: str
-    ) -> tuple[SkillCatalogEntry, object]:
+    def get_workflow_declaration_data(self, name: str) -> tuple[SkillCatalogEntry, object]:
         """Return resolved provenance and raw workflow metadata without validating it."""
         with global_catalog_lock(self.global_root, read_only=self.read_only):
             entry = self._resolve_entry(name)
@@ -307,23 +303,27 @@ class SkillLoader:
             ) from exc
 
     @staticmethod
-    def workflow_declaration_resource_errors(
+    def workflow_declaration_resource_diagnostics(
         skill_dir: Path,
         declaration: SkillWorkflowDeclaration,
         *,
         fields: Optional[set[str]] = None,
-    ) -> tuple[str, ...]:
-        """Return bounded resource errors for selected declaration fields."""
+    ) -> tuple[tuple[str, str], ...]:
+        """Return exact model fields alongside bounded resource errors."""
         selected = fields or {
             "prompt_references",
             "checklist",
             "checklist_overlay",
             "output_templates",
         }
-        errors: list[str] = []
-        references: list[str] = []
+        errors: list[tuple[str, str]] = []
+        references: list[tuple[str, str]] = []
         if "prompt_references" in selected:
-            references.extend(declaration.prompt_references.values())
+            for key, reference in declaration.prompt_references.items():
+                if not (skill_dir / "references" / reference).is_file():
+                    references.append(
+                        (f"prompt_references.{key}", f"workflow reference not found: {reference}")
+                    )
         for field in ("checklist", "checklist_overlay"):
             checklist = getattr(declaration, field)
             if field not in selected or checklist is None:
@@ -331,8 +331,11 @@ class SkillLoader:
             for key, reference in checklist.context_references.items():
                 if not (skill_dir / "references" / reference).is_file():
                     errors.append(
-                        f"{field}.context_references.{key}: "
-                        f"workflow reference not found: {reference}"
+                        (
+                            f"{field}.context_references.{key}",
+                            f"{field}.context_references.{key}: "
+                            f"workflow reference not found: {reference}",
+                        )
                     )
             for index, variant in enumerate(checklist.variants):
                 for position, section in enumerate(variant.sections):
@@ -341,23 +344,41 @@ class SkillLoader:
                         and not (skill_dir / "references" / section.reference).is_file()
                     ):
                         errors.append(
-                            f"{field}.variants[{index}].sections[{position}].reference: "
-                            f"workflow reference not found: {section.reference}"
+                            (
+                                f"{field}.variants[{index}].sections[{position}].reference",
+                                f"{field}.variants[{index}].sections[{position}].reference: "
+                                f"workflow reference not found: {section.reference}",
+                            )
                         )
-        errors.extend(
-            f"workflow reference not found: {reference}"
-            for reference in references
-            if not (skill_dir / "references" / reference).is_file()
-        )
+        errors.extend(references)
         if (
             "output_templates" in selected
             and declaration.output_templates is not None
             and not (skill_dir / "assets" / "templates").is_dir()
         ):
             errors.append(
-                f"template catalog {declaration.output_templates.catalog!r} is unavailable"
+                (
+                    "output_templates.catalog",
+                    f"template catalog {declaration.output_templates.catalog!r} is unavailable",
+                )
             )
         return tuple(errors)
+
+    @classmethod
+    def workflow_declaration_resource_errors(
+        cls,
+        skill_dir: Path,
+        declaration: SkillWorkflowDeclaration,
+        *,
+        fields: Optional[set[str]] = None,
+    ) -> tuple[str, ...]:
+        """Preserve the runtime's existing message-only validation API."""
+        return tuple(
+            message
+            for _, message in cls.workflow_declaration_resource_diagnostics(
+                skill_dir, declaration, fields=fields
+            )
+        )
 
     @classmethod
     def validate_workflow_declaration_resources(
