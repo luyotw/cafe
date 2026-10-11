@@ -10,7 +10,13 @@ from pathlib import Path
 
 import yaml
 
-from cafe.core.cost import combine_cost_summaries, merge_cost_records, summarize_cost
+from cafe.core.cost import (
+    COUNTERS,
+    combine_cost_summaries,
+    merge_cost_records,
+    source_remainder,
+    summarize_cost,
+)
 from cafe.core.usage import _usage_parent, phase_stats_without_chat
 
 MAX_SOURCE_BYTES = 16 * 1024 * 1024
@@ -44,9 +50,7 @@ def unrecorded_usage(stats, records):
         "reasoning_output_tokens",
     )
     remaining = {}
-    from cafe.core.native_accounting import accounting_admission, unrepresented_totals
-
-    residual = unrepresented_totals(stats, accounting_admission(records))
+    residual = source_remainder(stats, records)
     for field in fields:
         remaining[field] = residual.get(field)
         if remaining[field] is None and field == "cache_write_input_tokens":
@@ -61,7 +65,7 @@ def _coverage_gap(stats, records):
             and not summarize_cost(
                 records,
                 legacy_cost=stats.get("total_cost_usd"),
-                legacy_residual=stats.get("accounting_residual", {}).get("total_cost_usd"),
+                legacy_residual=float(source_remainder(stats, records).get("total_cost_usd", 0)),
             )["counts"]["legacy"]
             and any(unrecorded_usage(stats, records).values())
         )
@@ -81,7 +85,7 @@ def collect_cost_sources(issue_dir: Path) -> list[dict]:
                 source_id=identity,
                 records=records,
                 legacy_cost=stats.get("total_cost_usd"),
-                legacy_residual=stats.get("accounting_residual", {}).get("total_cost_usd"),
+                legacy_residual=float(source_remainder(stats, records).get("total_cost_usd", 0)),
                 gap=gap or _coverage_gap(stats, records),
             )
         )
@@ -161,7 +165,17 @@ def summarize_sources(sources, *, exclude_ids=(), ambiguous_sources=()):
             full = summarize_cost(
                 valid,
                 legacy_cost=source.get("legacy_cost"),
-                legacy_residual=source.get("legacy_residual"),
+                legacy_residual=(
+                    source.get("legacy_residual")
+                    if source.get("legacy_residual") is not None
+                    else source_remainder(
+                        dict(
+                            total_cost_usd=source.get("legacy_cost"),
+                            scalar_coverage=source.get("scalar_coverage"),
+                        ),
+                        valid,
+                    ).get("total_cost_usd")
+                ),
             )
             for record in valid:
                 key = record["invocation_id"]
@@ -203,3 +217,49 @@ def accounting_source_versions(issue_dir, *, extra_paths=()):
         except FileNotFoundError:
             versions[str(path)] = None
     return versions
+
+
+def format_native_usage(view, *, templates=None):
+    """Neutral persisted report lines; callers own localized presentation."""
+    templates = templates or {
+        "child": (
+            "Child {session} (parent {parent}, model {model}): {categories}; "
+            "{provenance}; {source}; {start}..{end}; inclusion={inclusion}; coverage={coverage}"
+        ),
+        "child_subtotal": "Child known subtotal: {tokens}",
+        "caller_subtotal": "Caller known subtotal: {tokens}; {coverage}",
+        "unknown": "unknown",
+        "complete": "complete",
+        "partial": "partial",
+        "combined_unavailable": "combined total unavailable",
+    }
+    lines = []
+    for child in view["children"]:
+        native = child["native_usage"]
+        usage = child["usage"]
+        categories = ", ".join(f"{key}={usage.get(key, templates['unknown'])}" for key in COUNTERS)
+        lines.append(
+            templates["child"].format(
+                session=child["session_id"],
+                parent=native["parent_session_id"],
+                model=child.get("model") or templates["unknown"],
+                categories=categories,
+                provenance=child["provenance"],
+                source=native["source"]["kind"],
+                start=native["start"].get("at", templates["unknown"]),
+                end=native.get("ownership_cutoff", native["end"].get("at", templates["unknown"])),
+                inclusion=native["inclusion"],
+                coverage=templates["complete"] if child["complete"] else templates["partial"],
+            )
+        )
+    if view["children"] or view["gaps"]:
+        lines.append(templates["child_subtotal"].format(tokens=view["child_tokens"]))
+        lines.append(
+            templates["caller_subtotal"].format(
+                tokens=view["caller_tokens"],
+                coverage=(
+                    templates["complete"] if view["complete"] else templates["combined_unavailable"]
+                ),
+            )
+        )
+    return lines

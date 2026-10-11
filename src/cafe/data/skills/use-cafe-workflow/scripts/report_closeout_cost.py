@@ -222,7 +222,7 @@ def closeout_cost(
         label = "combined_known" if key == "combined" and report[key]["incomplete"] else key
         lines.append(_text(label, locale, cost=format_summary(report[key], locale)))
     if "native_usage" in report["combined"]:
-        from cafe.core.native_accounting import format_native_usage
+        from cafe.services.cost_summary import format_native_usage
         from cafe.core.runtime_locales import load_catalogs, select_text_locale
 
         catalog = load_catalogs(CATALOG)[select_text_locale(locale)]

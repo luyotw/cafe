@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 
 class AgentCLI(str, Enum):
@@ -107,14 +107,6 @@ class TokenUsage(BaseModel):
     duration_api_ms: Optional[int] = None
     turn_usages: List[Dict[str, Any]] = Field(default_factory=list)
     cost_records: List[Dict[str, Any]] = Field(default_factory=list)
-    accounting_residual: Dict[str, Any] = Field(default_factory=dict)
-
-    @field_validator("accounting_residual", mode="before")
-    @classmethod
-    def validate_residual(cls, value):
-        from cafe.core.native_accounting import validate_accounting_residual
-
-        return validate_accounting_residual(value)
 
 
 class AgentResponse(BaseModel):

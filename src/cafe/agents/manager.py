@@ -464,7 +464,6 @@ class AgentManager:
         execution_control: AgentExecutionControl | None = None,
         constraint_context: Context | None = None,
         native_review_configuration: Optional[Dict[str, Any]] = None,
-        accounting_scope=None,
     ) -> Tuple[str, TokenUsage, List, Optional[List[str]], List[str], Optional[str]]:
         """Execute prompt with specified agent.
 
@@ -553,27 +552,19 @@ class AgentManager:
                 agent_response = self._execute_with_session_persistence(
                     executor,
                     lambda: executor.execute(
-                        self._constraint_prompt(
-                            attempt_prompt,
-                            executor,
-                            constraint_context,
-                            allowed_tools,
-                            streaming_output_file,
-                        ),
+                        self._constraint_prompt(attempt_prompt, executor, constraint_context, allowed_tools, streaming_output_file),
                         allowed_tools,
                         allowed_directories,
                         streaming_output_file,
                         **control_kwargs,
                         **exact_session_kwargs,
-                        **({"accounting_scope": accounting_scope} if accounting_scope else {}),
                     ),
                     agent_name=agent_name,
                     phase_name=phase_name,
                     saved_sessions=saved_sessions,
                     expected_session_id=(
                         effective_continuation.session_id
-                        if effective_continuation.is_exact
-                        else None
+                        if effective_continuation.is_exact else None
                     ),
                 )
                 break  # Success, exit loop
@@ -635,7 +626,6 @@ class AgentManager:
                         continuation=effective_continuation,
                         backup_context_callback=backup_context_callback,
                         execution_control=execution_control,
-                        accounting_scope=accounting_scope,
                         saved_sessions=saved_sessions,
                         constraint_context=constraint_context,
                     )
@@ -672,13 +662,34 @@ class AgentManager:
                 phase_name,
             )
 
-        from cafe.core.usage import merge_token_usage_stats
-
-        self._total_token_usage = TokenUsage(
-            **merge_token_usage_stats(
-                self._total_token_usage.model_dump(exclude_unset=True), token_usage
-            )
+        # Accumulate token usage
+        self._total_token_usage.input_tokens += token_usage.input_tokens
+        self._total_token_usage.output_tokens += token_usage.output_tokens
+        self._total_token_usage.cache_creation_input_tokens += (
+            token_usage.cache_creation_input_tokens
         )
+        self._total_token_usage.cache_write_input_tokens += token_usage.cache_write_input_tokens
+        self._total_token_usage.cache_read_input_tokens += token_usage.cache_read_input_tokens
+        self._total_token_usage.reasoning_output_tokens += token_usage.reasoning_output_tokens
+        self._total_token_usage.total_cost_usd += token_usage.total_cost_usd
+        self._total_token_usage.cost_records = [
+            *self._total_token_usage.cost_records,
+            *token_usage.cost_records,
+        ]
+        if token_usage.turn_usages:
+            self._total_token_usage.turn_usages.extend(token_usage.turn_usages)
+
+        # For duration, accumulate the values
+        if token_usage.duration_ms is not None:
+            if self._total_token_usage.duration_ms is None:
+                self._total_token_usage.duration_ms = token_usage.duration_ms
+            else:
+                self._total_token_usage.duration_ms += token_usage.duration_ms
+        if token_usage.duration_api_ms is not None:
+            if self._total_token_usage.duration_api_ms is None:
+                self._total_token_usage.duration_api_ms = token_usage.duration_api_ms
+            else:
+                self._total_token_usage.duration_api_ms += token_usage.duration_api_ms
 
         if self._failed_cost_usage.cost_records:
             from cafe.core.usage import merge_token_usage_stats
@@ -802,7 +813,6 @@ class AgentManager:
         execution_control: AgentExecutionControl | None = None,
         constraint_context: Context | None = None,
         saved_sessions: Dict[AgentCLI, str] | None = None,
-        accounting_scope=None,
     ) -> "AgentResponse":
         """Try backup agents in order until one succeeds or all fail.
 
@@ -939,18 +949,11 @@ class AgentManager:
                     agent_response = self._execute_with_session_persistence(
                         backup_executor,
                         lambda: backup_executor.execute(
-                            self._constraint_prompt(
-                                backup_prompt,
-                                backup_executor,
-                                constraint_context,
-                                allowed_tools,
-                                streaming_output_file,
-                            ),
+                            self._constraint_prompt(backup_prompt, backup_executor, constraint_context, allowed_tools, streaming_output_file),
                             allowed_tools,
                             allowed_directories,
                             streaming_output_file,
                             **control_kwargs,
-                            **({"accounting_scope": accounting_scope} if accounting_scope else {}),
                         ),
                         agent_name=config.name,
                         phase_name=phase_name,
@@ -1145,13 +1148,29 @@ class AgentManager:
                 self.issue_name,
             )
 
-        from cafe.core.usage import merge_token_usage_stats
-
-        self._total_token_usage = TokenUsage(
-            **merge_token_usage_stats(
-                self._total_token_usage.model_dump(exclude_unset=True), token_usage
-            )
+        # Accumulate token usage
+        self._total_token_usage.input_tokens += token_usage.input_tokens
+        self._total_token_usage.output_tokens += token_usage.output_tokens
+        self._total_token_usage.cache_creation_input_tokens += (
+            token_usage.cache_creation_input_tokens
         )
+        self._total_token_usage.cache_write_input_tokens += token_usage.cache_write_input_tokens
+        self._total_token_usage.cache_read_input_tokens += token_usage.cache_read_input_tokens
+        self._total_token_usage.reasoning_output_tokens += token_usage.reasoning_output_tokens
+        self._total_token_usage.total_cost_usd += token_usage.total_cost_usd
+        self._total_token_usage.cost_records = [*self._total_token_usage.cost_records, *token_usage.cost_records]
+
+        # For duration, accumulate the values
+        if token_usage.duration_ms is not None:
+            if self._total_token_usage.duration_ms is None:
+                self._total_token_usage.duration_ms = token_usage.duration_ms
+            else:
+                self._total_token_usage.duration_ms += token_usage.duration_ms
+        if token_usage.duration_api_ms is not None:
+            if self._total_token_usage.duration_api_ms is None:
+                self._total_token_usage.duration_api_ms = token_usage.duration_api_ms
+            else:
+                self._total_token_usage.duration_api_ms += token_usage.duration_api_ms
 
         return response
 

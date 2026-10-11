@@ -50,7 +50,7 @@ class MockAgentExecutor:
         json_content_extractor: Optional[Callable] = None,
         streaming_output_file: Optional[str] = None,
         environment_overrides: Optional[dict[str, str]] = None,
-        accounting_scope=None,
+        execution_control=None,
     ) -> AgentResponse:
         """Execute with predefined response.
 

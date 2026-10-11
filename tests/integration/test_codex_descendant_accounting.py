@@ -6,10 +6,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from cafe.agents.executor import AgentExecutionError
-from cafe.agents.transport_types import AccountingScope
-from cafe.core.native_accounting import native_projection
-from cafe.core.types import AgentCLI
+from cafe.agents.executor import AgentExecutionControl, AgentExecutionError
+from cafe.core.types import AgentCLI, TokenUsage
 from cafe.core.usage import iteration_usage_sink
 from cafe.manager.costs import (
     CostStore,
@@ -24,6 +22,15 @@ from tests.unit.test_codex_subagent_usage import CHILD, NESTED, ROOT, counters
 from tests.unit.test_conversation_transport import provider_process as replay_process_fixture
 from tests.unit.test_conversation_transport import transport
 from tests.unit.test_manager_costs import cost_journey
+from tests.unit.test_native_accounting import native_projection
+
+
+def accounting_control(workflow, caller, publish):
+    return AgentExecutionControl(
+        workflow_id=workflow,
+        caller_id=caller,
+        publish_records=lambda records: publish(TokenUsage(cost_records=records)),
+    )
 
 
 @pytest.fixture
@@ -98,6 +105,57 @@ def supply_native(
     return launch
 
 
+def test_manager_binding_preserves_process_control_and_prelaunch_open(
+    tmp_path, monkeypatch, provider_process
+):
+    root, issue = cost_journey(tmp_path)
+    sink = manager_usage_sink(root, "topic", "wf", "manager-control")
+    launch = supply_native(
+        provider_process,
+        monkeypatch,
+        tmp_path / "native",
+        publication=lambda: bool(CostStore(root, "topic", "wf").read()["manager_sources"]),
+    )
+    started = []
+    control = AgentExecutionControl(
+        working_directory=root,
+        max_duration_seconds=10,
+        max_output_bytes=100_000,
+        max_output_lines=20,
+        on_process_started=lambda: started.append(True),
+    )
+
+    def control_only_call(prompt, *, execution_control, on_usage):
+        return transport(AgentCLI.CODEX).run_one_shot(
+            prompt, execution_control=execution_control, on_usage=on_usage
+        )
+
+    result = accounted_call(
+        sink,
+        "owned-control",
+        control_only_call,
+        "work",
+        execution_control=control,
+        on_usage=sink,
+    )
+    assert result.completed and result.returncode == 0
+    assert started == [True]
+    assert launch.call_args.kwargs["cwd"] == str(root)
+    source = CostStore(root, "topic", "wf").read()["manager_sources"][0]
+    scope = next(
+        r["native_usage"] for r in source["records"] if r.get("reason") == "native_coverage"
+    )
+    assert scope["caller_id"] == "owned-control" and scope["status"] == "final"
+    assert (
+        len(
+            inclusive_report(root, "topic", "wf", issue_dir=issue)["manager"]["native_usage"][
+                "children"
+            ]
+        )
+        == 2
+    )
+
+
 @pytest.mark.parametrize("operation", ["run_one_shot", "acquire_session"])
 def test_custom_worker_public_caller_keeps_child_identity_and_owns_cutoff(
     tmp_path, monkeypatch, provider_process, operation
@@ -108,7 +166,7 @@ def test_custom_worker_public_caller_keeps_child_identity_and_owns_cutoff(
     metadata.parent.mkdir(parents=True)
     metadata.write_text(json.dumps(dict(iteration=1, workflow_id="flow", preserved=True)))
     sink = iteration_usage_sink(tmp_path, metadata)
-    scope = AccountingScope("flow", "custom-build", sink)
+    scope = accounting_control("flow", "custom-build", sink)
     launch = supply_native(
         provider_process,
         monkeypatch,
@@ -116,12 +174,12 @@ def test_custom_worker_public_caller_keeps_child_identity_and_owns_cutoff(
         publication=lambda: bool(json.loads(metadata.read_text()).get("stats")),
     )
     result = getattr(transport(AgentCLI.CODEX), operation)(
-        "work", accounting_scope=scope, on_usage=sink
+        "work", execution_control=scope, on_usage=sink
     )
     assert result.returncode == 0 and result.completed is True
     assert launch.call_count == 1
     stats = json.loads(metadata.read_text())["stats"]
-    assert stats["input_tokens"] == 160
+    assert stats["input_tokens"] == 10
     view = native_projection(stats["cost_records"])
     assert {r["session_id"] for r in view["children"]} == {CHILD, NESTED}
     assert {r["model"] for r in view["children"]} == {"actual-child-model"}
@@ -163,13 +221,13 @@ def test_partial_or_unsupported_native_accounting_preserves_provider_result(
     if failure:
         with pytest.raises(AgentExecutionError) as caught:
             caller.acquire_session(
-                "work", accounting_scope=AccountingScope("f", "custom", published.append)
+                "work", execution_control=accounting_control("f", "custom", published.append)
             )
         result = caught.value.transport_result
         assert result.returncode == 1 and result.completed is None
     else:
         result = caller.acquire_session(
-            "work", accounting_scope=AccountingScope("f", "custom", published.append)
+            "work", execution_control=accounting_control("f", "custom", published.append)
         )
         assert result.returncode == 0 and result.completed is True
     assert len(published) >= 2
@@ -191,7 +249,7 @@ def test_accounting_publication_failure_does_not_change_terminal_or_exit(
         raise OSError("unavailable sink")
 
     result = transport(AgentCLI.CODEX).acquire_session(
-        "work", accounting_scope=AccountingScope("f", "custom", fail)
+        "work", execution_control=accounting_control("f", "custom", fail)
     )
     assert result.returncode == 0 and result.completed is True
     assert len(native_projection(result.usage.cost_records)["children"]) == 2
@@ -328,14 +386,18 @@ def test_worker_attempt_chain_forwarding_retains_native_usage(
         "custom-worker",
         "work",
         phase_name="custom-worker",
-        accounting_scope=AccountingScope("flow", "custom-worker", sink),
+        execution_control=accounting_control("flow", "custom-worker", sink),
     )
     sink(usage)
     stats = json.loads(metadata.read_text())["stats"]
     children = native_projection(stats["cost_records"])["children"]
     assert len(attempts) == (1 if chain_kind == "single" else 2)
     assert len(children) == (2 if chain_kind == "retry" else 1)
-    expected = {"single": 110, "retry": 210, "fallback": 103}[chain_kind]
+    expected = {"single": 10, "retry": 10, "fallback": 3}[chain_kind]
+    assert (
+        native_projection(stats["cost_records"])["tokens"]["input_tokens"]
+        == {"single": 110, "retry": 210, "fallback": 103}[chain_kind]
+    )
     assert stats["input_tokens"] == expected
     sink(usage)
     assert json.loads(metadata.read_text())["stats"]["input_tokens"] == expected
@@ -433,5 +495,5 @@ def test_custom_workflow_phase_admits_and_persists_native_accounting_before_laun
     result = engine.execute_step("compose", step, board)
     assert result.response == "confirmed"
     stats = json.loads((phase / "iteration.json").read_text())["stats"]
-    assert stats["input_tokens"] == 110
+    assert stats["input_tokens"] == 10
     assert native_projection(stats["cost_records"])["children"][0]["session_id"] == CHILD

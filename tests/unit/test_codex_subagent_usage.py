@@ -1,7 +1,6 @@
 """Plan U1/U2/U5/U6/U7: owned native intervals and contained discovery gaps."""
 
 import json
-import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -148,24 +147,46 @@ def test_degraded_native_evidence_is_unknown_or_partial(tmp_path, mode):
         assert record["model"] is None
 
 
-def test_read_only_sqlite_discovery_and_fallback_agree(tmp_path):
+def test_journal_discovery_is_independent_of_optional_index(tmp_path):
     journal(tmp_path, ROOT, second=-30)
     scope = interval(tmp_path)
     child = journal(tmp_path, CHILD, ROOT)
     turn(child)
     fallback = collect(scope)
     db = tmp_path / "state_unstable.sqlite"
-    with sqlite3.connect(db) as conn:
-        conn.executescript(
-            "CREATE TABLE thread_spawn_edges(parent_thread_id TEXT, child_thread_id TEXT);"
-            "CREATE TABLE threads(id TEXT, rollout_path TEXT);"
-        )
-        conn.execute("INSERT INTO thread_spawn_edges VALUES (?, ?)", (ROOT, CHILD))
-        conn.execute("INSERT INTO threads VALUES (?, ?)", (CHILD, str(child)))
+    db.write_bytes(b"inaccessible or unsupported index")
     before = db.read_bytes()
     indexed = collect(scope)
     assert [r["usage"] for r in fallback] == [r["usage"] for r in indexed]
+    assert indexed[0]["native_usage"]["gaps"] == fallback[0]["native_usage"]["gaps"]
     assert db.read_bytes() == before
+
+
+def test_large_journal_home_keeps_archived_nested_coverage_within_bounds(tmp_path):
+    import time
+    import uuid
+
+    journal(tmp_path, ROOT, second=-30)
+    scope = interval(tmp_path)
+    child = journal(tmp_path, CHILD, ROOT)
+    turn(child)
+    nested = journal(tmp_path, NESTED, CHILD)
+    turn(nested, 50)
+    archived = tmp_path / "archived_sessions/2026/10"
+    archived.mkdir(parents=True)
+    nested.rename(archived / nested.name)
+    for number in range(5000):
+        journal(tmp_path, str(uuid.UUID(int=number + 100)), second=-100)
+    began = time.monotonic()
+    records = collect(scope)
+    elapsed = time.monotonic() - began
+    children = [r for r in records if r["native_usage"]["kind"] == "child"]
+    assert {r["session_id"] for r in children} == {CHILD, NESTED}
+    assert sum(r["usage"]["input_tokens"] for r in children) == 150
+    assert not records[0]["native_usage"]["gaps"]
+    print(
+        f"5003-journal discovery: {elapsed:.3f}s; header bytes={scope.header_bytes}; journal bytes={scope.read_bytes}"
+    )
 
 
 def test_unsafe_and_over_bound_sources_stay_contained(tmp_path):

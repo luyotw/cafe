@@ -1962,17 +1962,14 @@ class GenericWorkflowStepExecutor(Phase):
                 authority_kwargs["denied_tools"] = observed["denied_tools"]
             elif observed["denied_tools"]:
                 raise RuntimeError("Exact workspace continuation cannot preserve denied tools")
-            if self._call_accepts_keyword(self.agent_manager.execute, "accounting_scope"):
-                from cafe.agents.transport_types import AccountingScope
-                from cafe.core.usage import iteration_usage_sink
-
-                sink = iteration_usage_sink(Path.cwd(), path, workspace_locked=True)
-                if sink is not None:
-                    authority_kwargs["accounting_scope"] = AccountingScope(
-                        blackboard_state.workflow_id,
-                        f"{step_name}/{self.iteration}/{agent_name}",
-                        sink,
-                    )
+            if self._call_accepts_keyword(self.agent_manager.execute, "execution_control"):
+                authority_kwargs["execution_control"] = self._accounting_execution_control(
+                    path,
+                    blackboard_state.workflow_id,
+                    f"{step_name}/{self.iteration}/{agent_name}",
+                    control=authority_kwargs.get("execution_control"),
+                    workspace_locked=True,
+                )
             response, usage, _, _, streaming_log, model = self.agent_manager.execute(
                 agent_name,
                 prompt,
@@ -2122,17 +2119,13 @@ class GenericWorkflowStepExecutor(Phase):
             # Do not use the phase executor's broad failure recovery or cold
             # takeover callback: a failed exact continuation remains a failure.
             accounting_kwargs = {}
-            if self._call_accepts_keyword(self.agent_manager.execute, "accounting_scope"):
-                from cafe.agents.transport_types import AccountingScope
-                from cafe.core.usage import iteration_usage_sink
-
-                sink = iteration_usage_sink(Path.cwd(), context_file, workspace_locked=True)
-                if sink is not None:
-                    accounting_kwargs["accounting_scope"] = AccountingScope(
-                        blackboard_state.workflow_id,
-                        f"{step_name}/{self.iteration}/{agent_name}",
-                        sink,
-                    )
+            if self._call_accepts_keyword(self.agent_manager.execute, "execution_control"):
+                accounting_kwargs["execution_control"] = self._accounting_execution_control(
+                    context_file,
+                    blackboard_state.workflow_id,
+                    f"{step_name}/{self.iteration}/{agent_name}",
+                    workspace_locked=True,
+                )
             response, usage, _, _, streaming_log, _ = self.agent_manager.execute(
                 agent_name,
                 error.correction_prompt(remaining=MAX_ARTIFACT_CORRECTIONS - budget.consumed),

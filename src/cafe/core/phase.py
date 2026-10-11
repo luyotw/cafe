@@ -803,6 +803,27 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
 
         return None
 
+    @staticmethod
+    def _accounting_execution_control(
+        context_file, workflow_id, caller_id, *, control=None, workspace_locked=False
+    ):
+        from dataclasses import replace
+
+        from cafe.agents.executor import AgentExecutionControl
+        from cafe.core.usage import iteration_usage_sink
+
+        sink = iteration_usage_sink(Path.cwd(), context_file, workspace_locked=workspace_locked)
+        return (
+            replace(
+                control or AgentExecutionControl(),
+                workflow_id=workflow_id,
+                caller_id=caller_id,
+                publish_records=lambda records: sink(TokenUsage(cost_records=records)),
+            )
+            if sink is not None
+            else control
+        )
+
     def _execute_agent_iteration(
         self,
         agent_name: str,
@@ -1030,21 +1051,16 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             }
             execute_signature = inspect.signature(self.agent_manager.execute)
             workflow_id = (phase_specific_data or {}).get("workflow_id")
-            if workflow_id and "accounting_scope" in execute_signature.parameters:
-                from cafe.agents.transport_types import AccountingScope
-                from cafe.core.usage import iteration_usage_sink
-
-                sink = iteration_usage_sink(
-                    Path.cwd(),
+            if workflow_id and "execution_control" in execute_signature.parameters:
+                execute_kwargs["execution_control"] = self._accounting_execution_control(
                     context_file,
+                    workflow_id,
+                    f"{execution_phase_name}/{self.iteration}/{agent_name}",
+                    control=execute_kwargs.get("execution_control"),
                     workspace_locked=bool(
                         (phase_specific_data or {}).get("accounting_workspace_locked")
                     ),
                 )
-                if sink is not None:
-                    execute_kwargs["accounting_scope"] = AccountingScope(
-                        workflow_id, f"{execution_phase_name}/{self.iteration}/{agent_name}", sink
-                    )
             native_review_configuration = (phase_specific_data or {}).get("native_review_configuration")
             if native_review_configuration is not None:
                 execute_kwargs["native_review_configuration"] = native_review_configuration
@@ -1951,11 +1967,6 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                             ),
                             "total_cost_usd": token_usage.total_cost_usd,
                             "cost_records": getattr(token_usage, "cost_records", []),
-                            **(
-                                {"accounting_residual": token_usage.accounting_residual}
-                                if getattr(token_usage, "accounting_residual", None)
-                                else {}
-                            ),
                         },
                     },
                 )
@@ -2199,11 +2210,6 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                     ),
                     "total_cost_usd": token_usage.total_cost_usd,
                     "cost_records": getattr(token_usage, "cost_records", []),
-                    **(
-                        {"accounting_residual": token_usage.accounting_residual}
-                        if getattr(token_usage, "accounting_residual", None)
-                        else {}
-                    ),
                 },
             }
 
@@ -2247,11 +2253,6 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                     ),
                     "total_cost_usd": token_usage.total_cost_usd,
                     "cost_records": getattr(token_usage, "cost_records", []),
-                    **(
-                        {"accounting_residual": token_usage.accounting_residual}
-                        if getattr(token_usage, "accounting_residual", None)
-                        else {}
-                    ),
                 },
             }
             if hasattr(self, "_get_completion_data"):
@@ -2292,11 +2293,6 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                     ),
                     "total_cost_usd": token_usage.total_cost_usd,
                     "cost_records": getattr(token_usage, "cost_records", []),
-                    **(
-                        {"accounting_residual": token_usage.accounting_residual}
-                        if getattr(token_usage, "accounting_residual", None)
-                        else {}
-                    ),
                 },
             }
             if hasattr(self, "_get_completion_data"):

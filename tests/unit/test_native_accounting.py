@@ -4,12 +4,18 @@ from copy import deepcopy
 
 import pytest
 
-from cafe.core.native_accounting import interval_delta, merge_native_records, native_projection
+from cafe.agents.cli.codex_subagent_usage import interval_delta
+from cafe.core.cost import accounting_admission
+from cafe.core.cost import merge_cost_records as merge_native_records
 from cafe.core.types import TokenUsage
 from cafe.core.usage import merge_token_usage_stats
 
 
-def record(end=100, status="progress", model="gpt-5.4", inclusion="exclusive", kind="child"):
+def native_projection(records):
+    return accounting_admission(records)["native_usage"]
+
+
+def record(end=100, status="partial", model="gpt-5.4", inclusion="exclusive", kind="child"):
     return dict(
         invocation_id="native:one",
         session_id="child",
@@ -61,32 +67,62 @@ def test_partial_categories_and_subsets_remain_known():
     assert gaps
 
 
-def test_refinement_replay_freeze_and_conflict():
-    old, final = record(), record(150, "final")
-    merged = merge_native_records([old], [final, final])
-    assert len(merged) == 1 and merged[0]["usage"]["input_tokens"] == 150
-    assert merge_native_records(merged, [old]) == merged
-    conflict = merge_native_records(merged, [record(160, "final")])[0]
+def test_scope_binding_refines_but_child_cutoffs_are_immutable():
+    from datetime import datetime, timezone
+
+    from cafe.agents.cli.codex_subagent_usage import NativeInterval
+    from tests.unit.test_codex_subagent_usage import ROOT
+
+    scope = NativeInterval(
+        "/nonexistent",
+        workflow_id="flow",
+        caller_id="caller",
+        attempt_id="a",
+        started_at=datetime(2026, 10, 10, tzinfo=timezone.utc),
+    )
+    opened = scope.open_record()
+    scope.bind(ROOT)
+    final = scope.open_record(final=True)
+    merged = merge_native_records([opened], [scope.open_record(), final, final])
+    assert len(merged) == 1 and merged[0]["native_usage"]["status"] == "final"
+    assert merge_native_records(merged, [opened]) == merged
+    child = record(150, "final")
+    assert merge_native_records([child], [child]) == [child]
+    conflict = merge_native_records([child], [record(160, "final")])[0]
     assert conflict["native_usage"]["gaps"] and not conflict["complete"]
     assert conflict["amount_usd"] is None
 
 
-def test_usage_refinement_replaces_tokens_and_money_once():
-    a, b = record(), record(150, "final")
+def test_records_only_child_replay_never_changes_caller_scalars():
+    child = record(150, "final")
     old = merge_token_usage_stats(
-        {}, TokenUsage(input_tokens=100, output_tokens=10, total_cost_usd=1, cost_records=[a])
+        dict(input_tokens=7, total_cost_usd=0.25), TokenUsage(cost_records=[child])
     )
-    refined = merge_token_usage_stats(
-        old, TokenUsage(input_tokens=150, output_tokens=15, total_cost_usd=1.5, cost_records=[b])
-    )
-    assert refined["input_tokens"] == 150 and refined["total_cost_usd"] == 1.5
-    assert (
-        merge_token_usage_stats(
-            refined,
-            TokenUsage(input_tokens=150, output_tokens=15, total_cost_usd=1.5, cost_records=[b]),
-        )
-        == refined
-    )
+    assert old["input_tokens"] == 7 and old["total_cost_usd"] == 0.25
+    assert merge_token_usage_stats(old, TokenUsage(cost_records=[child])) == old
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("version", True), ("version", 2), ("kind", "other"), ("caller_id", "")],
+)
+def test_public_cost_reader_rejects_invalid_native_contract(field, value):
+    from cafe.core.cost import summarize_cost
+
+    child = record(100, "final")
+    child["native_usage"][field] = value
+    with pytest.raises(ValueError):
+        summarize_cost([child])
+
+
+def test_historical_progress_is_readable_but_never_refines_child_evidence():
+    from cafe.core.cost import summarize_cost
+
+    old = record(100, "progress")
+    summary = summarize_cost([old], legacy_cost=1.25)
+    assert summary["legacy"] == 0.25 and summary["incomplete"]
+    conflict = summarize_cost([old, record(150, "final")], legacy_residual=0.25)
+    assert conflict["known"] == 0.25 and conflict["incomplete"]
 
 
 @pytest.mark.parametrize("inclusion", ["exclusive", "inclusive", "unknown"])
@@ -121,35 +157,24 @@ def test_overlapping_physical_ranges_are_not_additive():
     assert not view["complete"] and view["combined_tokens"] is None
 
 
-def test_chat_native_refinement_counts_one_attempt_and_retains_latest_endpoint(tmp_path):
+def test_chat_child_replay_counts_one_attempt_without_child_scalar_projection(tmp_path):
     import json
 
     from cafe.agents.transport_types import TransportResult
     from cafe.core.usage import chat_usage_sink
-
     metadata = tmp_path / "iteration.json"
     metadata.write_text(json.dumps(dict(iteration=1)))
     sink = chat_usage_sink(
         tmp_path, metadata, cli="codex", requested_model="parent", mode="one_shot", phase="custom"
     )
-    for row in [record(), record(150, "final"), record(150, "final")]:
-        sink(
-            (
-                TransportResult(
-                    usage=TokenUsage(
-                        input_tokens=row["usage"]["input_tokens"],
-                        output_tokens=row["usage"]["output_tokens"],
-                        total_cost_usd=float(row["amount_usd"]),
-                        cost_records=[row],
-                    )
-                ),
-            )
-        )
+    child = record(150, "final")
+    for _ in range(2):
+        sink((TransportResult(usage=TokenUsage(cost_records=[child])),))
     data = json.loads(metadata.read_text())
     (group,) = data["chat_usage"]
     assert group["calls"] == 1
-    assert group["stats"]["input_tokens"] == data["stats"]["input_tokens"] == 150
-    assert group["stats"]["total_cost_usd"] == 1.5
+    assert "input_tokens" not in group["stats"]
+    assert data["stats"]["input_tokens"] == 0
     assert len(group["cost_records"]) == 1
 
 
@@ -187,7 +212,7 @@ def test_exact_inclusive_parent_preserves_authoritative_amount_and_child_detail(
 def test_invalid_subset_never_discards_independent_categories_regardless_of_order(invalid):
     from itertools import permutations
 
-    from cafe.core.native_accounting import normalized_counters
+    from cafe.core.cost import normalized_counters
 
     entries = [(invalid, -1), ("input_tokens", 10), ("output_tokens", 2)]
     for order in permutations(entries):

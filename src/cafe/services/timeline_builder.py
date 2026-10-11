@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any, Union
 
 from cafe.core.types import PhaseStatus
-from cafe.core.native_accounting import native_projection
 from cafe.services.time_formatter import calculate_elapsed_time
 
 
@@ -38,8 +37,6 @@ class TimelineEntry:
     reasoning_output_tokens: Optional[int] = None
     cost_usd: Optional[float] = None
     cost_records: List[Dict[str, Any]] = field(default_factory=list)
-    native_usage: Optional[Dict[str, Any]] = None
-    accounting_residual: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         """Validate and normalize the entry."""
@@ -216,7 +213,7 @@ class TimelineBuilder:
         # Extract token usage data from stats
         cli = iteration_status.get("cli")
         model = iteration_status.get("model")
-        stats = iteration_status.get("stats") or {}
+        stats = iteration_status.get("stats", {})
         input_tokens = stats.get("input_tokens") if stats else None
         output_tokens = stats.get("output_tokens") if stats else None
         cache_write_tokens = stats.get("cache_write_input_tokens") if stats else None
@@ -243,12 +240,6 @@ class TimelineBuilder:
             reasoning_output_tokens=reasoning_output_tokens,
             cost_usd=cost_usd,
             cost_records=stats.get("cost_records", []) if stats else [],
-            accounting_residual=stats.get("accounting_residual", {}),
-            native_usage=(
-                native_projection(stats["cost_records"])
-                if any("native_usage" in r for r in stats.get("cost_records", []))
-                else None
-            ),
         )
 
     def _parse_timestamp(self, timestamp_str: str) -> Optional[datetime]:

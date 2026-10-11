@@ -12,32 +12,70 @@ from typing import Any, Dict
 
 import yaml
 
+from cafe.core.cost import accounting_admission, merge_cost_records, source_remainder
 from cafe.core.types import TokenUsage
-from cafe.core.cost import merge_cost_records
 from cafe.core.workspace_lock import workspace_execution_lock
 from cafe.utils.issue_config import issue_config_lock
 from cafe.utils.yaml_utils import safe_load
+
+
+def _caller_stats(values, records):
+    """Normalize old local source evidence without a public residual schema."""
+    merged = dict(values) if isinstance(values, dict) else {}
+    native = any("native_usage" in r for r in records)
+    if native and merged.get("scalar_coverage") != "caller" and records:
+        # Read old child-inclusive aggregates once; preserve their proven remainder.
+        remainder = source_remainder(merged, records)
+        callers = [r for r in records if "native_usage" not in r]
+        caller_tokens = accounting_admission(callers)["native_usage"]["tokens"]
+        for key, value in remainder.items():
+            represented = sum(
+                float(r.get("amount_usd") or 0) if key == "total_cost_usd" else 0 for r in callers
+            )
+            merged[key] = (
+                float(value) + represented
+                if key == "total_cost_usd"
+                else value
+                + caller_tokens.get(
+                    "cache_write_input_tokens" if key == "cache_creation_input_tokens" else key, 0
+                )
+            )
+    merged.pop("accounting_residual", None)
+    if native:
+        merged["scalar_coverage"] = "caller"
+    return merged
 
 
 def merge_token_usage_stats(existing: Any, incoming: TokenUsage) -> Dict[str, Any]:
     """Merge one raw attempt into the existing iteration stats shape."""
     merged = dict(existing) if isinstance(existing, dict) else {}
     prior_records = merged.get("cost_records", [])
+    native = any("native_usage" in r for r in [*prior_records, *incoming.cost_records])
+    merged = _caller_stats(merged, prior_records)
+    merged.pop("accounting_residual", None)
+    incoming_records = [
+        dict(r, scalar_coverage="caller") if native and "native_usage" in r else r
+        for r in incoming.cost_records
+    ]
+    merged["cost_records"] = merge_cost_records(prior_records, incoming_records)
+    if native:
+        merged["scalar_coverage"] = "caller"
+    duplicate_ids = {r.get("invocation_id") for r in prior_records if "native_usage" not in r}
+    callers = [r for r in incoming.cost_records if "native_usage" not in r]
+    if callers and all(r.get("invocation_id") in duplicate_ids for r in callers):
+        return merged  # Evidence was already merged, including newly observed children.
     if (
-        any("native_usage" in r for r in [*prior_records, *incoming.cost_records])
-        or merged.get("accounting_residual")
-        or incoming.accounting_residual
-    ):
-        return _merge_native_usage(merged, incoming)
-    if incoming.cost_records and all(
-        record.get("invocation_id") in {prior.get("invocation_id") for prior in prior_records}
-        for record in incoming.cost_records
+        incoming.cost_records
+        and not callers
+        and all(
+            r.get("invocation_id") in {p.get("invocation_id") for p in prior_records}
+            for r in incoming.cost_records
+        )
     ):
         return merged
     incoming_data = incoming.model_dump()
-    duplicate_ids = {record.get("invocation_id") for record in prior_records}
     for record in incoming.cost_records:
-        if record.get("invocation_id") not in duplicate_ids:
+        if "native_usage" in record or record.get("invocation_id") not in duplicate_ids:
             continue
         for key, value in record.get("usage", {}).items():
             if isinstance(incoming_data.get(key), (int, float)) and isinstance(value, (int, float)):
@@ -73,66 +111,6 @@ def merge_token_usage_stats(existing: Any, incoming: TokenUsage) -> Dict[str, An
     merged["turn_usages"] = (list(prior_turns) if isinstance(prior_turns, list) else []) + (
         list(incoming_turns) if isinstance(incoming_turns, list) else []
     )
-    merged["cost_records"] = merge_cost_records(prior_records, incoming.cost_records)
-    return merged
-
-
-def _merge_native_usage(existing, incoming):
-    """Replace represented native endpoints while retaining historical residuals."""
-    from cafe.core.native_accounting import accounting_admission, unrepresented_totals
-
-    old_records = existing.get("cost_records", [])
-    old = accounting_admission(old_records)
-    added = accounting_admission(incoming.cost_records)
-    admission = accounting_admission([*old_records, *incoming.cost_records])
-    records = admission["records"]
-    merged = dict(existing)
-    raw = incoming.model_dump(exclude_unset=True)
-    residuals = unrepresented_totals(existing, old)
-    incoming_residuals = unrepresented_totals(raw, added)
-    for key in (
-        "input_tokens",
-        "output_tokens",
-        "cache_read_input_tokens",
-        "cache_write_input_tokens",
-        "cache_creation_input_tokens",
-        "reasoning_output_tokens",
-        "total_cost_usd",
-    ):
-        canonical = "cache_write_input_tokens" if key == "cache_creation_input_tokens" else key
-        residual = residuals.get(key, 0)
-        incoming_residual = incoming_residuals.get(key, 0)
-        if incoming.cost_records and all(
-            r["invocation_id"] in {r["invocation_id"] for r in old_records}
-            for r in incoming.cost_records
-        ):
-            incoming_residual = 0
-        residuals[key] = residual + incoming_residual
-        if canonical == "total_cost_usd":
-            admitted = sum(
-                float(r["amount_usd"])
-                for r in admission["admitted"]
-                if r.get("amount_usd") is not None
-            )
-        else:
-            admitted = admission["native_usage"]["tokens"].get(canonical, 0)
-        if key in existing or key in raw or admitted or residuals[key]:
-            merged[key] = residuals[key] + admitted
-    # Durable independent residuals must not be re-derived from admitted scalars.
-    if any(residuals.values()):
-        merged["accounting_residual"] = residuals
-    else:
-        merged.pop("accounting_residual", None)
-    seen = {r["invocation_id"] for r in old_records}
-    new_call = not incoming.cost_records or any(
-        r["invocation_id"] not in seen for r in incoming.cost_records
-    )
-    if new_call:
-        for key in ("duration_ms", "duration_api_ms"):
-            if raw.get(key) is not None:
-                merged[key] = (merged.get(key) or 0) + raw[key]
-        merged["turn_usages"] = [*existing.get("turn_usages", []), *incoming.turn_usages]
-    merged["cost_records"] = records
     return merged
 
 
@@ -366,8 +344,11 @@ def _validate_chat_usage(metadata):
         stats, unknown = group.get("stats"), group.get("unknown_fields")
         if "cost_records" in group:
             from cafe.core.cost import summarize_cost
+
             records = group["cost_records"]
-            if not isinstance(records, list) or any(not isinstance(record, dict) for record in records):
+            if not isinstance(records, list) or any(
+                not isinstance(record, dict) for record in records
+            ):
                 raise ValueError("invalid chat cost records")
             summarize_cost(records)
         if (
@@ -379,11 +360,11 @@ def _validate_chat_usage(metadata):
         ):
             raise ValueError("invalid chat accounting coverage")
         for field, value in stats.items():
-            if field == "accounting_residual":
-                from cafe.core.native_accounting import validate_accounting_residual
-
-                validate_accounting_residual(value)
+            if field == "scalar_coverage" and value == "caller":
                 continue
+            if field == "accounting_residual":
+                source_remainder(stats, group.get("cost_records", []))
+                continue  # Bounded read-only compatibility for existing local proof.
             if (
                 field not in CHAT_USAGE_FIELDS
                 or isinstance(value, bool)
@@ -492,14 +473,17 @@ def chat_usage_sink(
                     group["stats"] = {
                         k: v
                         for k, v in merged.items()
-                        if k in CHAT_USAGE_FIELDS or k == "accounting_residual"
+                        if k in CHAT_USAGE_FIELDS
+                        and k in (group["stats"].keys() | usage.model_fields_set)
                     }
                     group["cost_records"] = merged["cost_records"]
                     if not issue_metadata:
                         current["stats"] = merge_token_usage_stats(current.get("stats"), usage)
                 group["calls"] += len(attempts - prior_attempts)
                 group["native_attempts"] = sorted(attempts)
-                missing = set(group["legacy_unknown_fields"])
+                missing = set(group["legacy_unknown_fields"]) | (
+                    set(CHAT_USAGE_FIELDS) - group["stats"].keys()
+                )
                 physical = [
                     c
                     for c in group["cost_records"]
@@ -513,9 +497,7 @@ def chat_usage_sink(
                             or not physical
                         ):
                             missing.add(field)
-                from cafe.core.native_accounting import native_projection
-
-                view = native_projection(group["cost_records"])
+                view = accounting_admission(group["cost_records"])["native_usage"]
                 incomplete = bool(missing) or not view["complete"] or model is None
                 group["incomplete_calls"] = group["legacy_incomplete_calls"] + (
                     len(attempts) if incomplete else 0
@@ -523,10 +505,18 @@ def chat_usage_sink(
                 group["unknown_fields"] = sorted(missing)
                 records = [r for r in records if r not in native_results]
             existing_ids = {record.get("invocation_id") for record in group.get("cost_records", [])}
-            records = [record for record in records if not (
-                record.usage is not None and record.usage.cost_records
-                and all(cost.get("invocation_id") in existing_ids for cost in record.usage.cost_records)
-            )]
+            records = [
+                record
+                for record in records
+                if not (
+                    record.usage is not None
+                    and record.usage.cost_records
+                    and all(
+                        cost.get("invocation_id") in existing_ids
+                        for cost in record.usage.cost_records
+                    )
+                )
+            ]
             if not records:
                 continue
             missing = set(group["unknown_fields"])
@@ -560,74 +550,50 @@ def chat_usage_sink(
                 group["stats"] = {
                     field: merged[field]
                     for field in set(group["stats"]) | known.keys()
-                    if field in CHAT_USAGE_FIELDS or field == "accounting_residual"
+                    if field in CHAT_USAGE_FIELDS or field == "scalar_coverage"
                 }
-                if "accounting_residual" in merged:
-                    group["stats"]["accounting_residual"] = merged["accounting_residual"]
+                if "scalar_coverage" in merged:
+                    group["stats"]["scalar_coverage"] = merged["scalar_coverage"]
                 if not issue_metadata and usage is not None:
                     current["stats"] = merge_token_usage_stats(current.get("stats"), usage)
                 if usage is not None and usage.cost_records:
-                    group["cost_records"] = merge_cost_records(group.get("cost_records"), usage.cost_records)
+                    group["cost_records"] = merge_cost_records(
+                        group.get("cost_records"), usage.cost_records
+                    )
             group["calls"] += 1
             group["incomplete_calls"] += int(incomplete)
             group["unknown_fields"] = sorted(missing)
 
     return _metadata_usage_sink(
-        repository_root, metadata_file, issue_metadata=issue_metadata, update=update,
+        repository_root,
+        metadata_file,
+        issue_metadata=issue_metadata,
+        update=update,
         validate=_validate_chat_usage,
     )
 
 
 def phase_stats_without_chat(stats, groups):
-    """Accounting consumers must not also bill chat under phase/model metadata."""
-    remaining = dict(stats) if isinstance(stats, dict) else {}
-    native = any("native_usage" in r for r in remaining.get("cost_records", []))
-    if native:
-        from cafe.core.native_accounting import accounting_admission, unrepresented_totals
+    """Partition caller scalars and records independently, before joint admission."""
 
-        def residuals(values, records):
-            return unrepresented_totals(values, accounting_admission(records))
-
-        independent = residuals(remaining, remaining.get("cost_records", []))
-        for group in groups or ():
-            for key, value in residuals(
-                group.get("stats", {}), group.get("cost_records", [])
-            ).items():
-                independent[key] = max(0, independent.get(key, 0) - value)
+    records = stats.get("cost_records", []) if isinstance(stats, dict) else []
+    remaining = _caller_stats(stats, records)
+    remaining["cost_records"] = records
     money = [remaining["total_cost_usd"]] if "total_cost_usd" in remaining else []
-    cost_count = len(remaining.get("cost_records", []))
     for group in groups or ():
-        for key, value in group.get("stats", {}).items():
+        group_records = group.get("cost_records", [])
+        for key, value in _caller_stats(group.get("stats", {}), group_records).items():
             if key in CHAT_USAGE_FIELDS and isinstance(value, (int, float)) and key in remaining:
                 if key == "total_cost_usd":
                     money.append(-value)
                 else:
                     remaining[key] -= value
-        if group.get("cost_records") and remaining.get("cost_records"):
-            chat_ids = {record.get("invocation_id") for record in group["cost_records"]}
-            remaining["cost_records"] = [record for record in remaining["cost_records"]
-                                         if record.get("invocation_id") not in chat_ids]
+        chat_ids = {r.get("invocation_id") for r in group_records}
+        remaining["cost_records"] = [
+            r for r in remaining["cost_records"] if r.get("invocation_id") not in chat_ids
+        ]
     if len(money) > 1:
         amount = math.fsum(money)
-        # Grouped float totals can differ from the phase's accumulation order.
-        # Judge zero against the original operands, not the tiny residual;
-        # preserve meaningful legacy amounts and genuinely invalid negatives.
-        tolerance = sum(math.ulp(value) for value in money) * max(2, cost_count)
+        tolerance = sum(math.ulp(value) for value in money) * max(2, len(records))
         remaining["total_cost_usd"] = 0.0 if abs(amount) <= tolerance else amount
-    if native:
-        admission = accounting_admission(remaining.get("cost_records", []))
-        remaining["accounting_residual"] = independent
-        for key in CHAT_USAGE_FIELDS:
-            if key not in remaining and key not in independent:
-                continue
-            canonical = "cache_write_input_tokens" if key == "cache_creation_input_tokens" else key
-            if key == "total_cost_usd":
-                admitted = math.fsum(
-                    float(r["amount_usd"])
-                    for r in admission["admitted"]
-                    if r.get("amount_usd") is not None
-                )
-            else:
-                admitted = admission["native_usage"]["tokens"].get(canonical, 0)
-            remaining[key] = independent.get(key, 0) + admitted
     return remaining

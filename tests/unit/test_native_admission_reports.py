@@ -58,9 +58,7 @@ def test_retained_inclusive_report_jointly_admits_distinct_segments(tmp_path, ov
 @pytest.mark.parametrize("legacy", [0, 0.25])
 def test_persisted_overlap_is_not_recast_as_legacy_and_recollection_is_stable(tmp_path, legacy):
     one, two = segments()
-    incoming = TokenUsage(
-        input_tokens=180, output_tokens=18, total_cost_usd=1.8, cost_records=[one, two]
-    )
+    incoming = TokenUsage(cost_records=[one, two])
     stats = merge_token_usage_stats(dict(input_tokens=7, total_cost_usd=legacy), incoming)
     assert stats["input_tokens"] == 7
     assert stats["output_tokens"] == 0
@@ -101,7 +99,7 @@ def test_conflicting_final_evidence_cannot_reappear_as_legacy():
     two = record(160, "final")
     stats = merge_token_usage_stats(
         {},
-        TokenUsage(input_tokens=260, output_tokens=26, total_cost_usd=2.6, cost_records=[one, two]),
+        TokenUsage(cost_records=[one, two]),
     )
     assert stats["input_tokens"] == 0
     assert stats["total_cost_usd"] == 0
@@ -110,10 +108,9 @@ def test_conflicting_final_evidence_cannot_reappear_as_legacy():
     assert format_cost(summary).startswith("unknown")
 
 
-def test_admitted_non_native_categories_survive_and_refine_once():
-    child = record()
+def test_caller_categories_survive_immutable_child_conflict():
     parent = dict(
-        invocation_id="provider-neutral",
+        invocation_id="neutral",
         usage=dict(
             input_tokens=10, output_tokens=2, total_tokens=12, cache_creation_input_tokens=3
         ),
@@ -124,30 +121,18 @@ def test_admitted_non_native_categories_survive_and_refine_once():
     stats = merge_token_usage_stats(
         {},
         TokenUsage(
-            input_tokens=110,
-            output_tokens=12,
+            input_tokens=10,
+            output_tokens=2,
             cache_creation_input_tokens=3,
-            total_cost_usd=1.2,
-            cost_records=[parent, child],
+            total_cost_usd=0.2,
+            cost_records=[parent, record(100, "final")],
         ),
     )
-    final = record(150, "final")
-    stats = merge_token_usage_stats(
-        stats,
-        TokenUsage(input_tokens=150, output_tokens=15, total_cost_usd=1.5, cost_records=[final]),
-    )
-    assert stats["input_tokens"] == 160 and stats["output_tokens"] == 17
-    assert stats["cache_write_input_tokens"] == stats["cache_creation_input_tokens"] == 3
-    assert stats["total_cost_usd"] == pytest.approx(1.7)
-    assert (
-        merge_token_usage_stats(
-            stats,
-            TokenUsage(
-                input_tokens=150, output_tokens=15, total_cost_usd=1.5, cost_records=[final]
-            ),
-        )
-        == stats
-    )
+    stats = merge_token_usage_stats(stats, TokenUsage(cost_records=[record(150, "final")]))
+    assert stats["input_tokens"] == 10 and stats["output_tokens"] == 2
+    assert stats["cache_creation_input_tokens"] == 3 and stats["total_cost_usd"] == 0.2
+    summary = summarize_cost(stats["cost_records"], legacy_cost=stats["total_cost_usd"])
+    assert summary["known"] == Decimal(".2") and summary["incomplete"]
 
 
 def test_combined_nested_summaries_preserve_independent_records_and_true_legacy_once():
@@ -210,7 +195,7 @@ def test_persisted_residual_reaches_public_timeline_and_chat_partition(
     initial = dict(input_tokens=7, total_cost_usd=0.25)
     stats = merge_token_usage_stats(
         initial,
-        TokenUsage(input_tokens=180, output_tokens=18, total_cost_usd=1.8, cost_records=rows),
+        TokenUsage(cost_records=rows),
     )
     status = dict(
         timestamp="2026-10-11T00:00:00+00:00", iteration=1, status="completed", stats=stats
@@ -228,7 +213,7 @@ def test_persisted_residual_reaches_public_timeline_and_chat_partition(
     sink = chat_usage_sink(
         tmp_path, metadata, cli="codex", requested_model="parent", mode="one_shot", phase="compose"
     )
-    usage = TokenUsage(input_tokens=180, output_tokens=18, total_cost_usd=2.3, cost_records=rows)
+    usage = TokenUsage(total_cost_usd=0.5, cost_records=rows)
     sink((TransportResult(usage=usage),))
     sink((TransportResult(usage=usage),))
     data = json.loads(metadata.read_text())
@@ -263,33 +248,32 @@ def test_exact_inclusive_combination_preserves_parent_and_true_residual():
     assert summarize_cost([parent, child], legacy_cost=2.25)["legacy"] == Decimal("0.25")
 
 
-def test_refined_summaries_jointly_admit_only_latest_physical_endpoint():
-    old, final = record(), record(150, "final")
+def test_differing_child_cutoffs_are_unknown_across_sources():
+    old, final = record(100, "partial"), record(150, "final")
     combined = combine_cost_summaries([summarize_cost([old]), summarize_cost([final])])
-    assert combined["known"] == Decimal("1.5")
-    assert not combined["incomplete"]
-    assert combined["native_usage"]["tokens"]["total_tokens"] == 165
+    assert combined["known"] == 0 and combined["incomplete"]
+    assert combined["native_usage"]["combined_tokens"] is None
 
 
-def test_native_float_rounding_does_not_create_a_legacy_component():
-    row = record(30, "final")
-    row["amount_usd"] = "0.3"
+def test_caller_float_rounding_does_not_create_a_legacy_component():
+    from cafe.core.cost import source_remainder
+
+    parent = dict(
+        invocation_id="parent",
+        usage=dict(input_tokens=30, output_tokens=3),
+        amount_usd=".3",
+        provenance="reported",
+        complete=True,
+    )
+    rows = [parent, record(0, "final")]
     stats = merge_token_usage_stats(
         {},
-        TokenUsage(input_tokens=30, output_tokens=3, total_cost_usd=0.1 + 0.2, cost_records=[row]),
+        TokenUsage(input_tokens=30, output_tokens=3, total_cost_usd=0.1 + 0.2, cost_records=rows),
     )
-    assert stats.get("accounting_residual", {}).get("total_cost_usd", 0) == 0
-    summary = summarize_sources(
-        [
-            dict(
-                source_id="native",
-                records=stats["cost_records"],
-                legacy_cost=stats["total_cost_usd"],
-                legacy_residual=stats.get("accounting_residual", {}).get("total_cost_usd"),
-            )
-        ]
-    )
-    assert summary["known"] == Decimal("0.3") and summary["counts"]["legacy"] == 0
+    assert source_remainder(stats, stats["cost_records"])["total_cost_usd"] == 0
+    assert summarize_cost(stats["cost_records"], legacy_cost=stats["total_cost_usd"])[
+        "known"
+    ] == Decimal(".3")
 
 
 @pytest.mark.parametrize(
@@ -329,7 +313,7 @@ def test_incomplete_zero_known_amount_is_unknown_in_public_renderers(monkeypatch
     from cafe.services.status_display import StatusDisplay
     from cafe.services.timeline_builder import TimelineEntry
 
-    row = record(0, "progress")
+    row = record(0, "partial")
     summary = summarize_cost([row])
     assert summary["known"] == 0 and summary["incomplete"]
     assert "unknown" in format_cost(summary)
@@ -349,16 +333,13 @@ def test_incomplete_zero_known_amount_is_unknown_in_public_renderers(monkeypatch
     assert "unknown" in output and "$0.0000" not in output
 
 
-def test_token_usage_roundtrip_preserves_residual_through_public_iteration_sink(tmp_path):
+def test_caller_legacy_roundtrip_needs_no_public_residual_field(tmp_path):
     from cafe.core.usage import iteration_usage_sink
-
-    incoming = TokenUsage(
-        input_tokens=180, output_tokens=18, total_cost_usd=1.8, cost_records=list(segments())
-    )
+    incoming = TokenUsage(cost_records=list(segments()))
     projected = TokenUsage.model_validate(
         merge_token_usage_stats(dict(input_tokens=7, total_cost_usd=0.25), incoming)
     )
-    assert projected.model_dump(exclude_unset=True)["accounting_residual"]["total_cost_usd"] == 0.25
+    assert "accounting_residual" not in projected.model_dump()
     path = tmp_path / "iteration.json"
     path.write_text(json.dumps(dict(iteration=1)))
     sink = iteration_usage_sink(tmp_path, path)
@@ -432,9 +413,7 @@ def test_public_sink_does_not_recast_rejected_represented_cache_as_legacy(tmp_pa
         sink(TokenUsage(cost_records=[child]))
         stats = json.loads(path.read_text())["stats"]
         assert stats["cache_read_input_tokens"] == legacy_cache
-        assert (
-            stats.get("accounting_residual", {}).get("cache_read_input_tokens", 0) == legacy_cache
-        )
+        assert "accounting_residual" not in stats
         summary = summarize_cost(stats["cost_records"], legacy_cost=stats["total_cost_usd"])
         assert "cache_read_input_tokens" not in summary["native_usage"]["tokens"]
         assert summary["incomplete"]
@@ -486,7 +465,7 @@ def test_public_persisted_source_withholds_conflicted_alias_residual_without_ind
         stats = json.loads(path.read_text())["stats"]
         for key in residual_keys:
             assert stats[key] == (7 if independent else 0)
-            assert stats.get("accounting_residual", {}).get(key, 0) == (7 if independent else 0)
+            assert "accounting_residual" not in stats
         summary = summarize_sources(collect_cost_sources(tmp_path))
         assert canonical not in summary["native_usage"]["tokens"]
         assert summary["incomplete"]
@@ -514,11 +493,11 @@ def test_public_source_keeps_non_native_exclusive_cache_categories(tmp_path, pro
     stats = merge_token_usage_stats(
         {},
         TokenUsage(
-            input_tokens=110,
-            output_tokens=12,
+            input_tokens=10,
+            output_tokens=2,
             cache_read_input_tokens=20,
             cache_creation_input_tokens=30,
-            total_cost_usd=1.2,
+            total_cost_usd=0.2,
             cost_records=[parent, record(100, "final")],
         ),
     )
@@ -528,71 +507,6 @@ def test_public_source_keeps_non_native_exclusive_cache_categories(tmp_path, pro
     assert result["native_usage"]["tokens"]["cache_write_input_tokens"] == 30
     assert not any(stats.get("accounting_residual", {}).values())
     assert result["known"] == Decimal("1.2")
-
-
-@pytest.mark.parametrize(
-    "residual",
-    [
-        {"input_tokens": -1},
-        {"input_tokens": 0.5},
-        {"total_cost_usd": True},
-        {"total_cost_usd": float("nan")},
-        {"unsupported": 1},
-    ],
-)
-def test_token_usage_validates_residual_before_roundtrip(residual):
-    with pytest.raises(ValueError):
-        TokenUsage(accounting_residual=residual)
-
-
-@pytest.mark.parametrize("route", ["confirmed", "complete", "clarification", "already_completed"])
-def test_phase_result_keeps_residual_for_following_persisted_consumer(tmp_path, route):
-    from cafe.agents.manager import AgentManager
-    from cafe.core.session import SessionManager
-    from cafe.core.status_codes import PhaseStatusCode
-    from tests.unit.test_phase_progress import ConcretePhase
-
-    projected = TokenUsage.model_validate(
-        merge_token_usage_stats(
-            dict(input_tokens=7, total_cost_usd=0.25),
-            TokenUsage(
-                input_tokens=180,
-                output_tokens=18,
-                total_cost_usd=1.8,
-                cost_records=list(segments()),
-            ),
-        )
-    )
-    phase_dir = tmp_path / "compose"
-    phase_dir.mkdir()
-    phase = ConcretePhase(phase_dir, interactive=False)
-    phase.agent_manager = AgentManager(
-        session_manager=SessionManager(sessions_dir=str(tmp_path / "sessions"))
-    )
-    phase.agent_manager._total_token_usage = projected
-    if route == "already_completed":
-        (phase_dir / "status.json").write_text(
-            json.dumps(
-                dict(status="completed", status_code=PhaseStatusCode.CONFIRMED.value, iteration=1)
-            )
-        )
-        result = phase._check_if_already_completed([PhaseStatusCode.CONFIRMED])
-    else:
-        code = {
-            "confirmed": PhaseStatusCode.CONFIRMED,
-            "complete": PhaseStatusCode.READY_FOR_REVIEW,
-            "clarification": PhaseStatusCode.NEED_CLARIFICATION,
-        }[route]
-        result = phase._handle_standard_status_codes(
-            code,
-            "evidence",
-            complete_codes=[PhaseStatusCode.READY_FOR_REVIEW],
-            continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
-        )
-    assert result is not None
-    roundtrip = TokenUsage.model_validate(result.data["token_usage"])
-    replay = merge_token_usage_stats(roundtrip.model_dump(exclude_unset=True), projected)
-    assert replay["input_tokens"] == 7 and replay["total_cost_usd"] == 0.25
 
 
 @pytest.mark.parametrize("consumer", ["executor", "manager"])
@@ -611,9 +525,6 @@ def test_public_execution_retains_residual_across_repeated_usage_roundtrips(
         merge_token_usage_stats(
             dict(input_tokens=7, total_cost_usd=0.25),
             TokenUsage(
-                input_tokens=180,
-                output_tokens=18,
-                total_cost_usd=1.8,
                 cost_records=list(segments()),
             ),
         )
@@ -648,5 +559,4 @@ def test_public_execution_retains_residual_across_repeated_usage_roundtrips(
         observed = caller.get_total_token_usage()
         assert observed.input_tokens == 7
         assert observed.total_cost_usd == 0.25
-        assert observed.accounting_residual["input_tokens"] == 7
-        assert observed.accounting_residual["total_cost_usd"] == 0.25
+        assert "accounting_residual" not in observed.model_dump()

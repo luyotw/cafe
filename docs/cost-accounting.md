@@ -255,26 +255,37 @@ Unknown Manager coverage makes the combined result an incomplete known subtotal.
 
 ## Codex native descendants
 
-An admitted caller can pass an `AccountingScope` (workflow ID, caller correlation,
-existing durable usage sink) through AgentManager, executor and conversation
-transport. Codex records an open checkpoint before process submission, observes
-bounded native progress when stdout delivers activity, and freezes a real cutoff
-on success or recoverable failure. Accounting failures do not change exit status,
-explicit terminal requirements, authorization or the configured retry/fallback
-chain. Abrupt process death can leave only the open checkpoint; it is incomplete.
+Admitted worker/Phase, correction, chat and Manager `accounted_call` owners
+compose the existing `AgentExecutionControl` with optional `workflow_id`,
+`caller_id` and a pinned `publish_records` callback using `dataclasses.replace`.
+Existing working directory, execution bounds and process-start callbacks survive.
+The callback receives records only; it grants no execution or delegation authority.
+The iteration writer reuses the owner's existing workspace lease, or normal locks
+when no lease is held. No ownership is inferred from cwd, environment or callback
+identity. Existing Manager primary/retry/configured backup forwarding is unchanged.
+
+Codex durably publishes an open scope before Popen, binds its root on
+`thread.started`, then collects at success or recoverable-failure cutoff. Child
+final/partial records are immutable; only an open scope can bind/finalize. There
+is no periodic child collection or live scalar refinement. Accounting errors do
+not change provider result, terminal requirements, retry selection or exit status.
+A hard kill can leave only the durable open incomplete checkpoint (R7); it does
+not guarantee child totals unavailable before the final collection. Native-host
+explicit begin/finalize brackets use the same evidence and preserve their entry
+checkpoint after interruption.
 
 Local discovery supports the inspected `codex-cli 0.159.3` journal format.
-SQLite is an optional read-only index, selected by `thread_spawn_edges` and
-`threads` schema capabilities, including `rollout_path` or `session_path`.
-Its mutable model metadata is never execution-model proof. Candidates are
-validated against native `session_meta` identities/ancestry. Missing or
-incompatible indexes use bounded header discovery in `sessions` and
-`archived_sessions`. Symlinks, special files, conflicting identities and
-read/depth/node/time bounds leave coverage gaps. Limits are 256 tree nodes,
-16 levels, 8,192 directory entries, 256 KiB per line, a 4 MiB tail per journal,
-16 MiB per collection and three seconds for native observation; skipped owned
-ranges remain incomplete, while the entry snapshot can use a verified tail; no collector
-waits for, terminates or creates an agent.
+Bounded read-only `session_meta` discovery in `sessions` and `archived_sessions`
+is the sole ancestry source, including nested descendants. Mutable SQLite index
+metadata is neither a discovery requirement nor execution-model proof. A fixture
+with 5,003 journals, including archived nested descendants, took 0.490 seconds
+and read 851,480 header bytes and 2,356 selected journal bytes; this measurement
+provided no need for an index optimization. Symlinks, special files, conflicting
+identities and read/depth/node/time bounds leave coverage gaps. Limits are 256
+tree nodes, 16 levels, 8,192 directory entries, 256 KiB per line, a 4 MiB tail per
+journal, 16 MiB per collection and three seconds per collection. Skipped owned
+ranges remain incomplete; a verified tail can establish an entry snapshot. The
+collector never waits for, terminates or creates an agent.
 
 The implementation interpretation is grounded in the version-matched
 [protocol](https://github.com/openai/codex/blob/rust-v0.159.3/codex-rs/protocol/src/protocol.rs),
@@ -310,82 +321,36 @@ known categories and gaps in the existing `cost_records` envelope. Transcript
 bodies are not retained. Missing cached or reasoning counters stay unknown;
 cached input is included in input, and reasoning in output. Totals use valid
 provider totals or verified input plus output, never the sum of all categories.
-Cache-write aliases are reconciled once. Monotonic open endpoint refinements
-replace earlier projections; finalized replay is idempotent and conflicting final
-proof remains incomplete. Unsupported overlapping physical ranges are excluded
-from combined totals. Compatibility scalars are known subtotals; records and
-coverage distinguish unknown from an attested zero.
+Cache-write aliases are reconciled once. Scope binding/finalization is monotonic;
+replay is idempotent and differing immutable child observations remain unknown.
+Unsupported overlapping physical ranges are excluded from combined totals.
 
-Token and money reducers share one provider-neutral admission result after merging
-physical evidence. Combined worker/Manager reports recompute admitted amounts
-jointly; distinct overlapping segment IDs cannot retain locally admitted money.
-Represented but excluded observations are subtracted before identifying genuine
-historical residuals, so overlap, conflicts and unreconciled inclusion cannot be
-recast as legacy spend. Exactly reconciled inclusive child detail remains
-non-additive beneath the authoritative parent. The additive `accounting_residual`
-map in `TokenUsage` and iteration/chat stats retains independent legacy counters and money across
-recollection, model roundtrips, phase-result handoffs and chat/phase partitioning; older stats derive residuals from all
-represented observations. This is projection metadata, not a new execution or
-user configuration parameter. An empty unreliable admitted amount is unknown,
-while a recorded complete zero remains zero.
-The retained Manager sink forwards independently evidenced monetary residuals
-into the existing source's `legacy_residual`. Records-only/checkpoint updates
-preserve that value; explicit monetary residual updates replace it, including
-zero, so repeated publications neither lose nor duplicate independent spend.
+Compatibility token/money scalars cover the caller only. Children contribute
+only records, never scalar projection. The additive persisted
+`scalar_coverage="caller"` marker distinguishes this interpretation from older
+child-inclusive aggregates; it is also carried on native records so existing
+Timeline entries need only `cost_records`. There is no public residual field or
+derived Timeline native-usage field. Record merge precedes the caller replay
+check; scalar duplicate subtraction applies only to caller records.
 
-Child valuation reuses the rate card pinned at entry, actual model evidence,
-verified categories and the existing context-band rules. A database or configured
-parent model cannot price a child. Mixed models without aligned counter boundaries,
-unknown categories, unknown context bands and missing rates retain token evidence
-with unavailable USD. Historical reports never fetch rates or reprice. Existing
-status/timeline and the affirmative inclusive closeout report show child detail,
-child/caller known subtotals and incomplete coverage. Worker-only progress excludes
-Manager descendants; the existing closeout preference remains human-owned.
+Each source's one neutral reducer computes genuine legacy remainder from caller
+scalar minus represented caller evidence. Physical caller/child records are then
+jointly admitted across sources, so locally admitted overlapping child money is
+withheld. Exact attested inclusive child ranges remain visible but non-additive
+beneath their parent. Bounded read-only interpretation of older child-inclusive
+sources subtracts all represented observations, including rejected amounts;
+validated old local residual proof remains readable. Updating old aggregate
+stats preserves that proof as caller scalars and never writes a public residual
+schema. Independently proven legacy amounts such as `$0.25` survive replay,
+retention, chat partition and transient-source removal.
 
-### Native Manager delegation bracket
+Manager records-only/checkpoint updates preserve the existing caller subtotal or
+historical source proof. An explicit caller amount replaces that source subtotal,
+including zero, without duplicate spend. An empty unreliable admitted amount
+remains unknown, while a complete recorded zero is displayed as zero. Shared
+validation/merge/admission lives in existing `core/cost.py`; shared report detail
+formatting lives in `services/cost_summary.py`. Reports never reprice history.
 
-The owning helper `native_delegation_accounting.py begin|finalize` validates the
-current confirmed Manager contract, supplied fresh facts, persisted host binding,
-workflow identity and actual `CODEX_THREAD_ID` on both boundaries. Use one explicit
-correlation, begin before authorized native delegation, and finalize in cleanup at
-the as-of cutoff. It writes the existing retained Manager envelope under the
-accounting locks, with a shared root claim lock preventing overlapping workflow
-claims. Only causal spawn/resume work within the selected host turn is admitted;
-unbracketed history and unrelated turns stay outside that scope. Entry snapshots,
-pinned rates, partial child records and open coverage survive archive and cleanup.
-A missing entry or changed binding is rejected; accounting grants no authority.
-
-The separate proposed **Codex App Server live subagent usage ingestion** issue
-would ingest `thread/tokenUsage/updated` through an already authorized connection,
-with reconnect/replay and turn correlation. It depends on this normalized interval
-contract and an authorized observable App Server transport. This issue introduces
-no transport, daemon or external issue mutation.
-
-The neutral projection also accepts an explicit `exact_inclusive` parent
-attestation naming the included child segment and its exact start/end evidence.
-It preserves the parent's recorded amount and treats that child's detail as
-non-additive. Current Codex collection emits exclusive evidence only; numerical
-similarity or an unsupported inclusive flag cannot establish this attestation.
-
-Native host delegation is restricted to the exact root turn captured at entry.
-If that turn completes or aborts before finalize, descendant observations stop
-at its evidenced ownership cutoff; later work in the same child session belongs
-outside this bracket. Records preserve both that cutoff and the later report
-cutoff. A descendant active at the ownership boundary remains partial.
-
-At an ended host ownership boundary, equal timestamps across journals do not
-prove causal order. Such observations are excluded with
-`ownership_boundary_ambiguous`; the verified earlier counter prefix stays known.
-
-Generic native reports consume explicit normalized `total_tokens`; they never
-choose arithmetic from a provider name. For the supported native version, the
-Codex adapter attests caller input-plus-output totals before saving records,
-alongside `token_total_evidence`. Historical records without a known normalized
-total retain their known categories and incomplete total coverage. Timeline
-entries with absent or null statistics remain displayable with unknown usage.
-
-The standalone native delegation helper selects the requested checkout runtime
-through the existing bounded bootstrap before importing CAFE. Run it with the
 CLI's Python interpreter and `--project-root`; source and installed helper bundles
 require no manually configured `PYTHONPATH`. Ordinary projects keep their current
 installed runtime.
@@ -401,4 +366,4 @@ attested subset or total relationships fail admission. Such rejected observation
 cannot become legacy residuals; the admitted view keeps its validation gaps.
 Conflicting aliases or invalid numeric observations make their represented
 category ambiguous, so scalar-derived residuals for that category are withheld.
-Already validated independent `accounting_residual` evidence remains preserved.
+Validated historical independent residual proof remains readable; new writes use caller-only scalars.

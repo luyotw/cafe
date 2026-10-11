@@ -6,9 +6,9 @@ from cafe.core.context_packet import (
     format_context_packet_diagnostic,
     validate_context_packet_diagnostic,
 )
+from cafe.core.cost import combine_cost_summaries, format_cost, source_remainder, summarize_cost
 from cafe.core.types import PhaseStatus
 from cafe.core.usage import CHAT_USAGE_FIELDS
-from cafe.core.cost import combine_cost_summaries, format_cost, summarize_cost
 from cafe.services.time_formatter import (
     calculate_elapsed_time,
     format_duration,
@@ -81,7 +81,9 @@ class StatusDisplay:
             cost_summary = summarize_cost(
                 group.get("cost_records", []),
                 legacy_cost=stats.get("total_cost_usd"),
-                legacy_residual=stats.get("accounting_residual", {}).get("total_cost_usd"),
+                legacy_residual=source_remainder(stats, stats.get("cost_records", [])).get(
+                    "total_cost_usd"
+                ),
             )
             if "total_cost_usd" in unknown:
                 cost_summary["incomplete"] = True
@@ -442,7 +444,6 @@ class StatusDisplay:
         remaining = unrecorded_usage(
             {
                 **{raw: getattr(entry, field) for field, raw in fields.items()},
-                "accounting_residual": entry.accounting_residual,
             },
             entry.cost_records,
         )
@@ -465,7 +466,6 @@ class StatusDisplay:
         summary = summarize_cost(
             entry.cost_records,
             legacy_cost=entry.cost_usd,
-            legacy_residual=entry.accounting_residual.get("total_cost_usd"),
         )
         if (
             entry.cost_records
@@ -507,12 +507,10 @@ class StatusDisplay:
                 combined = summarize_cost(
                     entry.cost_records,
                     legacy_cost=entry.cost_usd,
-                    legacy_residual=entry.accounting_residual.get("total_cost_usd"),
                 )
                 legacy_summary = self._legacy_cost_summary(
                     entry.cost_records,
                     entry.cost_usd,
-                    legacy_residual=entry.accounting_residual.get("total_cost_usd"),
                     unknown=bool(any(legacy_usage.values()) and not combined["counts"]["legacy"]),
                 )
                 legacy_id = (entry.phase, entry.iteration, entry.start_time)
@@ -570,7 +568,6 @@ class StatusDisplay:
     def render_cost_summary(self, entries: List[TimelineEntry], groups: List[dict]) -> None:
         """Show step and workflow known subtotals, including chat coverage gaps."""
         from cafe.core.cost import merge_cost_records
-
         from cafe.services.cost_summary import summarize_sources
 
         sources = []
@@ -583,14 +580,12 @@ class StatusDisplay:
                     source_id=f"{entry.phase}/{entry.iteration}/{entry.start_time}",
                     records=entry.cost_records,
                     legacy_cost=entry.cost_usd,
-                    legacy_residual=entry.accounting_residual.get("total_cost_usd"),
                     gap=bool(
                         entry.cost_records
                         and any(self._legacy_entry_usage(entry).values())
                         and not summarize_cost(
                             entry.cost_records,
                             legacy_cost=entry.cost_usd,
-                            legacy_residual=entry.accounting_residual.get("total_cost_usd"),
                         )["counts"]["legacy"]
                     ),
                 )
@@ -601,12 +596,10 @@ class StatusDisplay:
                 combined = summarize_cost(
                     entry.cost_records,
                     legacy_cost=entry.cost_usd,
-                    legacy_residual=entry.accounting_residual.get("total_cost_usd"),
                 )
                 legacy = self._legacy_cost_summary(
                     entry.cost_records,
                     entry.cost_usd,
-                    legacy_residual=entry.accounting_residual.get("total_cost_usd"),
                     unknown=bool(
                         any(self._legacy_entry_usage(entry).values())
                         and not combined["counts"]["legacy"]
@@ -622,9 +615,9 @@ class StatusDisplay:
                     source_id=f"chat/{index}",
                     records=group.get("cost_records", []),
                     legacy_cost=group.get("stats", {}).get("total_cost_usd"),
-                    legacy_residual=group.get("stats", {})
-                    .get("accounting_residual", {})
-                    .get("total_cost_usd"),
+                    legacy_residual=source_remainder(
+                        group.get("stats", {}), group.get("cost_records", [])
+                    ).get("total_cost_usd"),
                     gap="total_cost_usd" in group.get("unknown_fields", []),
                 )
             )
@@ -634,9 +627,9 @@ class StatusDisplay:
             summary = self._legacy_cost_summary(
                 group.get("cost_records", []),
                 group.get("stats", {}).get("total_cost_usd"),
-                legacy_residual=group.get("stats", {})
-                .get("accounting_residual", {})
-                .get("total_cost_usd"),
+                legacy_residual=source_remainder(
+                    group.get("stats", {}), group.get("cost_records", [])
+                ).get("total_cost_usd"),
                 unknown="total_cost_usd" in group.get("unknown_fields", []),
             )
             if summary is not None:
@@ -655,7 +648,7 @@ class StatusDisplay:
         workflow_summary = summarize_sources(sources)
         lines.append(f"Workflow: {format_cost(workflow_summary)}")
         if "native_usage" in workflow_summary:
-            from cafe.core.native_accounting import format_native_usage
+            from cafe.services.cost_summary import format_native_usage
 
             lines.extend(format_native_usage(workflow_summary["native_usage"]))
         text = "\n".join(lines)

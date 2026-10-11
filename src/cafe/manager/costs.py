@@ -231,17 +231,12 @@ class ManagerUsageSink:
             # Repeated provider telemetry is the same evidence, never extra spend.
             if "total_cost_usd" in raw:
                 source["legacy_cost"] = raw["total_cost_usd"]
-            residual = raw.get("accounting_residual", {})
-            if "total_cost_usd" in residual:
-                source["legacy_residual"] = residual["total_cost_usd"]
+                source["scalar_coverage"] = "caller"
+                # New caller scalar replaces prior scalar proof; record-only updates preserve it.
+                source.pop("legacy_residual", None)
             source["gap"] = not bool(source["records"])
             data["manager_gaps"].pop(self.current, None)
             self.store._write(data)
-
-    def accounting_scope(self):
-        from cafe.agents.transport_types import AccountingScope
-
-        return AccountingScope(self.store.identity["workflow_id"], self.current, self)
 
     def gap(self, identity=None):
         with self.store.locked(write=True):
@@ -520,9 +515,21 @@ def accounted_call(sink, identity, operation, *args, **kwargs):
         return operation(*args, **kwargs)
     with sink.attempt(identity):
         import inspect
+        from dataclasses import replace
 
-        if "accounting_scope" in inspect.signature(operation).parameters:
-            kwargs.setdefault("accounting_scope", sink.accounting_scope())
+        from cafe.agents.executor import AgentExecutionControl
+        from cafe.core.types import TokenUsage
+
+        parameters = inspect.signature(operation).parameters
+        if "execution_control" in parameters or any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()
+        ):
+            kwargs["execution_control"] = replace(
+                kwargs.get("execution_control") or AgentExecutionControl(),
+                workflow_id=sink.store.identity["workflow_id"],
+                caller_id=sink.current,
+                publish_records=lambda records: sink(TokenUsage(cost_records=records)),
+            )
         return operation(*args, **kwargs)
 
 

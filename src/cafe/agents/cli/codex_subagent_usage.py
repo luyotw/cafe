@@ -1,22 +1,54 @@
 """Bounded, read-only Codex descendant collection for caller-admitted work.
 
-The native index is discovery only. Each child identity, turn, cumulative
-endpoint and model is validated against its journal before accounting.
+Journal metadata is the sole discovery source. Each child identity, turn,
+cumulative endpoint and model is validated before accounting.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import sqlite3
 import time
 import uuid
 from datetime import datetime, timezone
 from hashlib import sha256
 from pathlib import Path
 
-from cafe.agents.cli.codex_usage import _find_journal, _open_journal
-from cafe.core.native_accounting import COUNTERS, interval_delta, normalized_counters, physical_id
+from cafe.agents.cli.codex_usage import _open_journal
+from cafe.core.cost import COUNTERS, normalized_counters
+
+
+def interval_delta(start, end):
+    """Subtract independently valid endpoints; cached/reasoning remain subsets."""
+    baseline, gaps = normalized_counters(start)
+    current, more = normalized_counters(end)
+    gaps += more
+    result = {}
+    for key in COUNTERS:
+        if key not in baseline or key not in current:
+            gaps.append(f"unknown_{key}")
+        elif current[key] < baseline[key]:
+            gaps.append(f"reset_{key}")
+        else:
+            result[key] = current[key] - baseline[key]
+    result, more = normalized_counters(result)
+    gaps += more
+    if "total_tokens" not in result and {"input_tokens", "output_tokens"} <= result.keys():
+        if not any("reset_" in gap or "invalid_total" in gap for gap in gaps):
+            result["total_tokens"] = result["input_tokens"] + result["output_tokens"]
+    return result, sorted(set(gaps))
+
+
+def physical_id(session, start):
+    """Caller attribution is separate from one verified physical counter range."""
+    boundary = (
+        start
+        if str(session).startswith("scope:")
+        else {k: v for k, v in start.items() if k != "at"}
+    )
+    payload = dict(session=session, start=boundary)
+    return sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
 
 SUPPORTED_VERSION = "0.159.3"
 MAX_NODES = 256
@@ -102,7 +134,7 @@ class NativeInterval:
                     self.baselines[identity] = dict(
                         boundary, counters=latest, active_turn=active, counter_source=counter_source
                     )
-            except (OSError, ValueError, TypeError, KeyError, sqlite3.Error):
+            except (OSError, ValueError, TypeError, KeyError):
                 self.entry_gaps.append("entry_unavailable")
 
     def checkpoint(self):
@@ -135,6 +167,12 @@ class NativeInterval:
         if self.root is not None and self.root != root:
             raise ValueError("native root mismatch")
         self.root = root
+
+    def observe(self, data):
+        if isinstance(data, dict) and data.get("type") == "thread.started":
+            self.bind(data.get("thread_id"))
+            return True
+        return False
 
     def _safe_path(self, path):
         path = Path(os.path.abspath(path))
@@ -177,73 +215,10 @@ class NativeInterval:
             raise ValueError("native ancestry conflict")
         return parent
 
-    def _indexed(self):
-        """Schema capabilities, parameterized reads, no migrations or writes."""
-        databases = sorted(self.home.glob("state*.sqlite"))
-        if len(databases) > 8:
-            raise ValueError("native index discovery exceeds bound")
-        for path in reversed(databases):
-            self._safe_path(path)
-            with sqlite3.connect(
-                path.as_uri() + "?mode=ro&immutable=1", uri=True, timeout=0.05
-            ) as db:
-                db.set_progress_handler(lambda: int(time.monotonic() > self.deadline), 1000)
-                edges = {r[1] for r in db.execute("PRAGMA table_info(thread_spawn_edges)")}
-                columns = {r[1] for r in db.execute("PRAGMA table_info(threads)")}
-                if not {"parent_thread_id", "child_thread_id"} <= edges or "id" not in columns:
-                    continue
-                locator = next((v for v in ("rollout_path", "session_path") if v in columns), None)
-                if locator is None:
-                    continue
-                found, parents, pending = {}, {}, [(self.root, 0)]
-                while pending:
-                    parent, depth = pending.pop()
-                    if depth >= MAX_DEPTH:
-                        raise ValueError("native tree depth exceeds bound")
-                    rows = db.execute(
-                        "SELECT child_thread_id FROM thread_spawn_edges "
-                        "WHERE parent_thread_id = ? LIMIT ?",
-                        (parent, MAX_NODES + 1),
-                    ).fetchall()
-                    for (child,) in rows:
-                        session_id(child)
-                        if child in parents or child == self.root:
-                            raise ValueError("native index cycle or conflicting edge")
-                        parents[child] = parent
-                        if len(parents) > MAX_NODES:
-                            raise ValueError("native tree nodes exceed bound")
-                        row = db.execute(
-                            f"SELECT {locator} FROM threads WHERE id = ? LIMIT 2", (child,)
-                        ).fetchall()
-                        if len(row) != 1:
-                            raise ValueError("native index identity unavailable")
-                        candidate = self._safe_path(row[0][0])
-                        meta = self._header(candidate)
-                        if meta["id"] != child or self._parent(meta) != parent:
-                            raise ValueError("native index ancestry mismatch")
-                        found[child] = candidate
-                        pending.append((child, depth + 1))
-                return found
-        return None
-
     def _discover(self):
         self.deadline = time.monotonic() + MAX_SECONDS
         self.header_bytes = 0
-        gaps, indexed = [], None
-        try:
-            indexed = self._indexed() if self.root else None
-        except (OSError, ValueError, TypeError, sqlite3.Error):
-            gaps.append("native_index_unavailable")
-        # Header fallback also finds the root and validates coverage/index omission.
-        metadata, visited = {}, 0
-        if indexed is not None:
-            for identity, path in indexed.items():
-                metadata[identity] = (path, self._header(path))
-            try:
-                path = _find_journal(self.home, self.root)
-                metadata[self.root] = (path, self._header(path))
-            except (OSError, ValueError):
-                gaps.append("root_native_source_unavailable")
+        gaps, metadata, visited = [], {}, 0
         pending = [self.home / "sessions", self.home / "archived_sessions"]
         while pending:
             directory = pending.pop()
@@ -261,18 +236,6 @@ class NativeInterval:
                         if entry.is_dir(follow_symlinks=False):
                             pending.append(Path(entry.path))
                         elif entry.name.endswith(".jsonl"):
-                            if indexed is not None:
-                                if any(
-                                    Path(entry.path) == value[0]
-                                    for value in metadata.values()
-                                    if value
-                                ):
-                                    continue
-                                if (
-                                    entry.stat(follow_symlinks=False).st_mtime
-                                    < self.started.timestamp()
-                                ):
-                                    continue
                             try:
                                 meta = self._header(Path(entry.path))
                                 identity = meta["id"]
@@ -315,8 +278,6 @@ class NativeInterval:
             if len(found) > MAX_NODES:
                 gaps.append("native_tree_node_bound")
                 found.pop(identity)
-        if indexed is not None and set(indexed) != set(found) - {self.root}:
-            gaps.append("native_index_coverage_disagreement")
         return found, sorted(set(gaps))
 
     def _read(self, path):
@@ -621,7 +582,7 @@ class NativeInterval:
             try:
                 sources, more = self._discover()
                 gaps.extend(more)
-            except (OSError, ValueError, TypeError, KeyError, sqlite3.Error):
+            except (OSError, ValueError, TypeError, KeyError):
                 sources = {}
                 gaps.append("native_discovery_unavailable")
         data, causal = {}, {}
@@ -754,6 +715,7 @@ class NativeInterval:
             amount_usd=None,
             complete=final and not gaps,
             reason="native_coverage",
+            scalar_coverage="caller",
             usage={},
             native_usage=dict(
                 version=1,

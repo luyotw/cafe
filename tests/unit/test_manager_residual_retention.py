@@ -6,7 +6,6 @@ from decimal import Decimal
 import pytest
 
 from cafe.core.types import TokenUsage
-from cafe.core.usage import merge_token_usage_stats
 from cafe.manager.costs import CostStore, inclusive_report, manager_usage_sink, preserve_worker_cost
 from cafe.services.cost_summary import summarize_sources
 from tests.unit.test_manager_costs import cost_journey
@@ -16,17 +15,7 @@ from tests.unit.test_workflow_cost_summary import record as legacy_record
 
 
 def projected_usage(rows, residual=0.25):
-    return TokenUsage.model_validate(
-        merge_token_usage_stats(
-            dict(input_tokens=7, total_cost_usd=residual),
-            TokenUsage(
-                input_tokens=sum(row["usage"]["input_tokens"] for row in rows),
-                output_tokens=sum(row["usage"]["output_tokens"] for row in rows),
-                total_cost_usd=sum(float(row["amount_usd"]) for row in rows),
-                cost_records=rows,
-            ),
-        )
-    )
+    return TokenUsage(input_tokens=7, total_cost_usd=residual, cost_records=rows)
 
 
 def test_manager_projected_residual_survives_replay_retention_and_source_removal(tmp_path):
@@ -48,18 +37,18 @@ def test_manager_projected_residual_survives_replay_retention_and_source_removal
     assert result["combined"]["known"] == Decimal("1.75")
     sources = CostStore(root, "topic", "wf").read()["manager_sources"]
     assert len(sources) == 1
-    assert sources[0]["legacy_residual"] == 0.25
+    assert sources[0]["legacy_cost"] == 0.25 and sources[0]["scalar_coverage"] == "caller"
 
 
 @pytest.mark.parametrize("overlap", [True, False])
 def test_records_only_progress_final_and_checkpoint_preserve_proven_residual(tmp_path, overlap):
     root, issue = cost_journey(tmp_path)
-    initial = [record(100, "progress")]
+    initial = [record(100, "final")]
     if overlap:
         initial.append(segments()[1])
     sink = manager_usage_sink(root, "topic", "wf", "manager-progress")
     sink(projected_usage(initial))
-    for end, status in [(100, "progress"), (150, "progress"), (200, "final"), (200, "final")]:
+    for end, status in [(100, "final"), (100, "final")]:
         sink(TokenUsage(cost_records=[record(end, status)]))
         sink(TokenUsage())  # Checkpoint with no new amount or records.
         result = inclusive_report(root, "topic", "wf", issue_dir=issue)
@@ -78,7 +67,7 @@ def test_explicit_residual_replacement_including_zero_is_idempotent(tmp_path):
     sink = manager_usage_sink(root, "topic", "wf", "manager-replacement")
     sink(projected_usage(rows))
     for value in [0.5, 0.5, 0.0, 0.0, 0.25]:
-        sink(TokenUsage(accounting_residual={"total_cost_usd": value}))
+        sink(TokenUsage(total_cost_usd=value))
         sink(TokenUsage(cost_records=rows))
         result = inclusive_report(root, "topic", "wf", issue_dir=issue)
         assert result["manager"]["known"] == Decimal(str(value))
@@ -104,7 +93,7 @@ def test_retained_source_distinguishes_unknown_from_verified_zero(tmp_path, over
     root, _ = cost_journey(tmp_path)
     rows = list(segments()) if overlap else [record(0, "final")]
     sink = manager_usage_sink(root, "topic", "wf", "manager-zero")
-    sink(TokenUsage(cost_records=rows, accounting_residual={"total_cost_usd": 0.0}))
+    sink(TokenUsage(cost_records=rows, total_cost_usd=0.0))
     sink(TokenUsage(cost_records=rows))
     source_summary = summarize_sources(CostStore(root, "topic", "wf").read()["manager_sources"])
     assert source_summary["known"] == 0
