@@ -4,6 +4,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import pytest
+import yaml
 
 from cafe.authoring import apply, decode_request, prepare
 
@@ -129,8 +130,6 @@ def test_missing_neighbor_skill_does_not_hide_an_affected_consumer(tmp_path):
         "neighbor": {"skill": "cafe-missing", "role": "observer", "on": {"await_agent": "observe"}},
         **raw["steps"],
     }
-    import yaml
-
     book.write_text(yaml.safe_dump(raw, sort_keys=False))
     before = (tmp_path / PHASE).read_bytes()
     patch = {
@@ -145,6 +144,42 @@ def test_missing_neighbor_skill_does_not_hide_an_affected_consumer(tmp_path):
     assert result.status == "rejected", result.to_dict()
     assert any(d["target"] == request["target"] for d in result.diagnostics)
     assert (tmp_path / PHASE).read_bytes() == before
+
+
+@pytest.mark.parametrize("malformed", ["primary_variant", "workflow_overlay"])
+def test_malformed_neighbor_does_not_hide_known_affected_references(tmp_path, malformed):
+    request = pair()
+    if malformed == "workflow_overlay":
+        primary = deepcopy(request["companions"][0])
+        primary["target"] = ".cafe/skills/cafe-primary/SKILL.md"
+        primary["declaration"]["name"] = "cafe-primary"
+        request["companions"].append(primary)
+        request["declaration"]["steps"]["observe"]["skill"] = "cafe-primary"
+        request["declaration"]["skills"]["workflow"]["shared"] = ["cafe-observe"]
+    assert apply(request, root=tmp_path).status == "applied"
+    raw = deepcopy(request["declaration"])
+    if malformed == "primary_variant":
+        raw["steps"]["observe"]["skill"] = {"1": "cafe-observe", "default": ""}
+    else:
+        raw["skills"]["workflow"]["roles"] = {"observer": {"mode": "extend"}}
+    book = tmp_path / request["target"]
+    book.write_text(yaml.safe_dump(raw, sort_keys=False))
+    before = {path: path.read_bytes() for path in (tmp_path / PHASE, book)}
+    patch = {
+        "version": 1,
+        "target": PHASE,
+        "mode": "patch",
+        "operations": [
+            {"op": "upsert", "path": ["metadata", "workflow", "required_tools"], "value": []}
+        ],
+    }
+    preview = prepare(patch, root=tmp_path)
+    assert preview.status == "rejected", preview.to_dict()
+    assert any(d["target"] == request["target"] for d in preview.diagnostics)
+    assert {path: path.read_bytes() for path in before} == before
+    result = apply(patch, root=tmp_path)
+    assert result.status == "rejected", result.to_dict()
+    assert {path: path.read_bytes() for path in before} == before
 
 
 def test_todo_producer_corpus_remains_a_used_dependency(tmp_path):

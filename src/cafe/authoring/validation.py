@@ -557,8 +557,13 @@ def _affected(content, changed_names, view):
         try:
             primary = skill_selector_names(step["skill"])
         except (ValueError, TypeError):
-            primary = ()
+            # Inventory keeps known references beside invalid selector values;
+            # the candidate's runtime validators still reject the malformed selector.
+            selector = step["skill"]
+            primary = selector.values() if isinstance(selector, dict) else ()
         for requested in primary:
+            if not isinstance(requested, str) or not requested:
+                continue
             try:
                 if view.identity(requested) in changed_names:
                     return True
@@ -568,8 +573,9 @@ def _affected(content, changed_names, view):
             workflow = resolve_playbook_skills(
                 raw, channel="workflow", role=step.get("role"), step_name=name
             )
-        except (ValueError, TypeError, KeyError):
-            workflow = ()
+        except (ValueError, TypeError, KeyError, AttributeError):
+            # A broken overlay cannot erase a known shared/role/step dependency.
+            workflow = _known_workflow_references(raw, step.get("role"), name)
         for requested in workflow:
             try:
                 if view.identity(requested) in changed_names:
@@ -577,3 +583,22 @@ def _affected(content, changed_names, view):
             except FileNotFoundError:
                 continue
     return False
+
+
+def _known_workflow_references(raw, role, step_name):
+    """Conservative inventory only when effective runtime selection cannot resolve."""
+    skills = raw.get("skills")
+    environment = skills.get("workflow") if isinstance(skills, dict) else None
+    if not isinstance(environment, dict):
+        return ()
+    references = []
+    groups = [environment.get("shared")]
+    for scope, key in (("roles", role), ("steps", step_name)):
+        overlays = environment.get(scope)
+        overlay = overlays.get(key) if isinstance(overlays, dict) else None
+        if isinstance(overlay, dict):
+            groups.append(overlay.get("skills"))
+    for group in groups:
+        if isinstance(group, list):
+            references.extend(name for name in group if isinstance(name, str) and name)
+    return references
