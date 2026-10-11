@@ -463,6 +463,32 @@ def test_public_source_keeps_unknown_partition_money_contained(
     assert json.loads(path.read_text()) == persisted
 
 
+@pytest.mark.parametrize("location", ["scalar", "proof", "record"])
+@pytest.mark.parametrize("source_kind", ["iteration", "issue"])
+def test_public_source_contains_malformed_decimal_evidence(tmp_path, location, source_kind):
+    directory = tmp_path / "compose/iteration_001"
+    if source_kind == "iteration":
+        directory.mkdir(parents=True)
+    child = record(100, "final")
+    stats = dict(total_cost_usd=1.25, cost_records=[child])
+    if location == "scalar":
+        stats["total_cost_usd"] = "malformed"
+    elif location == "proof":
+        stats["accounting_residual"] = dict(total_cost_usd="malformed")
+    else:
+        child["amount_usd"] = "malformed"
+    path = directory / "iteration.json" if source_kind == "iteration" else tmp_path / "issue.yaml"
+    persisted = (
+        dict(stats=stats) if source_kind == "iteration"
+        else dict(chat_usage=[dict(stats=stats, cost_records=[child])])
+    )
+    path.write_text(json.dumps(persisted))
+    sources = collect_cost_sources(tmp_path)
+    assert len(sources) == 1 and sources[0].get("read_error")
+    assert summarize_sources(sources)["incomplete"]
+    assert json.loads(path.read_text()) == persisted
+
+
 @pytest.mark.parametrize(
     "usage",
     [

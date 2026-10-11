@@ -123,14 +123,14 @@ def collect_cost_sources(issue_dir: Path) -> list[dict]:
             ):
                 add(identity, stats)
             chats(identity, groups)
-        except (OSError, ValueError, TypeError, AttributeError, yaml.YAMLError):
+        except (OSError, ValueError, TypeError, AttributeError, InvalidOperation, yaml.YAMLError):
             add(identity, {}, gap=True)
             sources[-1]["read_error"] = path.exists() or path.is_symlink()
     path = issue_dir / "issue.yaml"
     if path.exists() or path.is_symlink():
         try:
             chats("issue", read_accounting_file(path).get("chat_usage", []))
-        except (OSError, ValueError, TypeError, AttributeError, yaml.YAMLError):
+        except (OSError, ValueError, TypeError, AttributeError, InvalidOperation, yaml.YAMLError):
             add("issue", {}, gap=True)
             sources[-1]["read_error"] = path.exists() or path.is_symlink()
     return sources
