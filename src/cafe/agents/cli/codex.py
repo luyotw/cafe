@@ -52,6 +52,26 @@ class CodexCLI(AbstractCLI):
     def prepare_response_accounting(self, command, environment):
         return prepare_resumed_usage(command, environment, selected_session=self.config.session_id)
 
+    def prepare_descendant_accounting(self, environment, scope, *, attempt_id):
+        from cafe.agents.cli.codex_subagent_usage import NativeInterval, session_id
+
+        root, gaps = self.config.session_id, []
+        if root:
+            try:
+                session_id(root)
+            except (ValueError, TypeError):
+                root = None
+                gaps.append("configured_root_identity_invalid")
+        interval = NativeInterval(
+            Path(environment.get("CODEX_HOME") or Path.home() / ".codex"),
+            workflow_id=scope.workflow_id,
+            caller_id=scope.caller_id,
+            attempt_id=attempt_id,
+            root_session_id=root,
+        )
+        interval.entry_gaps.extend(gaps)
+        return interval
+
     def build_environment(self) -> dict[str, str]:
         """Build an isolated child environment while preserving provider configuration.
 

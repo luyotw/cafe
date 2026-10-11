@@ -252,3 +252,126 @@ UTC read boundary, including for untimestamped legacy records; it is not an
 invented historical invocation completion time. Active/unpersisted usage,
 including the response presenting the report, is outside this as-of cutoff.
 Unknown Manager coverage makes the combined result an incomplete known subtotal.
+
+## Codex native descendants
+
+Admitted worker/Phase, correction, chat and Manager `accounted_call` owners
+compose the existing `AgentExecutionControl` with optional `workflow_id`,
+`caller_id` and a pinned `publish_records` callback using `dataclasses.replace`.
+Existing working directory, execution bounds and process-start callbacks survive.
+The callback receives records only; it grants no execution or delegation authority.
+The iteration writer reuses the owner's existing workspace lease, or normal locks
+when no lease is held. No ownership is inferred from cwd, environment or callback
+identity. Existing Manager primary/retry/configured backup forwarding is unchanged.
+
+Codex durably publishes an open scope before Popen, binds its root on
+`thread.started`, then collects at success or recoverable-failure cutoff. Child
+final/partial records are immutable; only an open scope can bind/finalize. There
+is no periodic child collection or live scalar refinement. Accounting errors do
+not change provider result, terminal requirements, retry selection or exit status.
+A hard kill can leave only the durable open incomplete checkpoint (R7); it does
+not guarantee child totals unavailable before the final collection. Native-host
+explicit begin/finalize brackets use the same evidence and preserve their entry
+checkpoint after interruption.
+
+Local discovery supports the inspected `codex-cli 0.159.3` journal format.
+Bounded read-only `session_meta` discovery in `sessions` and `archived_sessions`
+is the sole ancestry source, including nested descendants. Mutable SQLite index
+metadata is neither a discovery requirement nor execution-model proof. A fixture
+with 5,003 journals, including archived nested descendants, took 0.490 seconds
+and read 851,480 header bytes and 2,356 selected journal bytes; this measurement
+provided no need for an index optimization. Symlinks, special files, conflicting
+identities and read/depth/node/time bounds leave coverage gaps. Limits are 256
+tree nodes, 16 levels, 8,192 directory entries, 256 KiB per line, a 4 MiB tail per
+journal, 16 MiB per collection and three seconds per collection. Skipped owned
+ranges remain incomplete; a verified tail can establish an entry snapshot. The
+collector never waits for, terminates or creates an agent.
+
+The implementation interpretation is grounded in the version-matched
+[protocol](https://github.com/openai/codex/blob/rust-v0.159.3/codex-rs/protocol/src/protocol.rs),
+[session usage update](https://github.com/openai/codex/blob/rust-v0.159.3/codex-rs/core/src/session/mod.rs),
+[session state](https://github.com/openai/codex/blob/rust-v0.159.3/codex-rs/core/src/state/session.rs),
+[context history](https://github.com/openai/codex/blob/rust-v0.159.3/codex-rs/core/src/context_manager/history.rs)
+and [spawn history filtering](https://github.com/openai/codex/blob/rust-v0.159.3/codex-rs/core/src/agent/control/spawn.rs).
+`TokenUsageInfo::append_last_usage` advances one session's cumulative counters;
+response accounting updates that session's state, while child execution uses a
+separate thread/session state. Shared rollout-budget consumption is a separate
+operation, not parent `token_count` accumulation. Supported parent/child native
+counters are therefore exclusive. Other versions remain unknown and child detail
+is non-additive when parent inclusion cannot be verified. Inclusive or overlapping
+observations without exact reconciliation retain detail but withhold a complete
+combined total; comparing equal numbers is never proof of overlap.
+
+Resume and fork reconstruction can seed prior `token_count` information. Spawn
+filtering removes `TokenUsageRecord` inheritance but can retain older `EventMsg`
+usage depending on history mode. A fresh timestamp alone therefore cannot prove
+a generic fork's zero baseline. An existing child requires an entry snapshot and
+an owned causal resubmission; historical ancestry alone never admits continuation.
+An inherited fork can use its evidenced pre-birth cumulative baseline; a new
+per-thread `token_usage_record` counter uses the verified fresh thread state.
+A new non-fork/non-referenced child born during exclusively admitted work can use
+the verified initial-zero semantics. Missing or reset baseline categories stay
+unknown. Sanitized replay tests use these protocol shapes and never issue paid
+model calls.
+
+Each child record preserves workflow/caller/attempt identity, root/immediate
+parent/session identity, agent path, owned turns, start/end offsets and cumulative
+counters, cutoff, source locator/digest/version, actual `turn_context` model,
+known categories and gaps in the existing `cost_records` envelope. Transcript
+bodies are not retained. Missing cached or reasoning counters stay unknown;
+cached input is included in input, and reasoning in output. Totals use valid
+provider totals or verified input plus output, never the sum of all categories.
+Cache-write aliases are reconciled once. Scope binding/finalization is monotonic;
+replay is idempotent and differing immutable child observations remain unknown.
+Unsupported overlapping physical ranges are excluded from combined totals.
+
+Compatibility token/money scalars cover the caller only. Children contribute
+only records, never scalar projection. The additive persisted
+`scalar_coverage="caller"` marker distinguishes this interpretation from older
+child-inclusive aggregates; it is also carried on native records so existing
+Timeline entries need only `cost_records`. For migrated caller records, bounded
+`scalar_coverage` flags list excluded counter categories without storing residual
+amounts. These preserve independent legacy categories after projection and after
+new caller evidence is appended; they are not physical invocation identity. There is no public residual field or
+derived Timeline native-usage field. Record merge precedes the caller replay
+check; scalar duplicate subtraction applies only to caller records.
+
+Each source's one neutral reducer computes genuine legacy remainder from caller
+scalar minus represented caller evidence. Physical caller/child records are then
+jointly admitted across sources, so locally admitted overlapping child money is
+withheld. Exact attested inclusive child ranges remain visible but non-additive
+beneath their parent. Bounded read-only interpretation of older child-inclusive
+sources subtracts all represented observations, including rejected amounts;
+validated old local residual proof remains readable. Updating old aggregate
+stats preserves caller scalars and copies already validated historical source
+proof unchanged. Writers do not create new residual maps; readers interpret the
+old maps only as independent source evidence. Read-only chat partitions subtract
+only the corresponding historical chat proof, using validated decimal values for
+monetary strings as well as numeric values. Historical proof supplies an
+independent lower bound; later scalar-only usage remains part of the source's
+known legacy remainder. Persisted proof stays unchanged. No public residual schema returns. Independently proven legacy amounts such as `$0.25` survive replay,
+retention, chat partition and transient-source removal.
+
+Manager records-only/checkpoint updates preserve the existing caller subtotal or
+historical source proof. An explicit caller amount replaces that source subtotal,
+including zero, without duplicate spend. An empty unreliable admitted amount
+remains unknown, while a complete recorded zero is displayed as zero. Shared
+validation/merge/admission lives in existing `core/cost.py`; shared report detail
+formatting lives in `services/cost_summary.py`. Reports never reprice history.
+
+CLI's Python interpreter and `--project-root`; source and installed helper bundles
+require no manually configured `PYTHONPATH`. Ordinary projects keep their current
+installed runtime.
+
+Counter admission preserves the adapter's declared semantics. Native-normalized
+records and caller `token_total_evidence` with `kind=input_plus_output` use the
+normalized subset/total checks and retain validation gaps. Other admitted caller
+records keep valid provider counters and cache aliases without assuming that
+input includes cache. Generic reducers neither choose semantics from provider
+names nor derive totals for a provider whose semantics were not attested.
+Represented subtotals retain numerically valid observed counters even when their
+attested subset or total relationships fail admission. Such rejected observations
+cannot become legacy residuals; the admitted view keeps its validation gaps.
+Conflicting aliases or invalid numeric observations make their represented
+category ambiguous, so scalar-derived residuals for that category are withheld.
+Validated historical independent residual proof remains readable; new writes use caller-only scalars.

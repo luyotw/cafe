@@ -65,7 +65,10 @@ def test_codex_chat_persists_official_rate_estimate_once(phase_chat, provider_pr
     ])
     assert chat.launch_chat_session("developer", "x", phase_name="implementation", prompt="hello") == 0
     group, = groups(target)
-    record, = group["cost_records"]
+    (record,) = [
+        r for r in group["cost_records"] if r.get("native_usage", {}).get("kind") != "scope"
+    ]
+    assert any(r.get("native_usage", {}).get("gaps") for r in group["cost_records"])
     assert record["provenance"] == "estimated"
     assert Decimal(record["amount_usd"]) == Decimal("0.00040775")
     assert group["stats"]["total_cost_usd"] == float(record["amount_usd"])
@@ -113,7 +116,9 @@ def test_pricing_refresh_failure_does_not_stop_workflow_call(
     assert workers and not any(worker.is_alive() for worker in workers)
     assert launch.call_count == 1
     group, = groups(target)
-    record, = group["cost_records"]
+    (record,) = [
+        r for r in group["cost_records"] if r.get("native_usage", {}).get("kind") != "scope"
+    ]
     assert record["provenance"] == "estimated" and record["pricing_stale"]
     assert group["stats"]["input_tokens"] == 100
 
@@ -162,7 +167,11 @@ def test_workflow_finishes_while_pricing_response_is_stalled(
         assert chat.launch_chat_session("developer", "x", phase_name="implementation", prompt="hello") == 0
         assert entered.wait(3)
         assert launch.call_count == 1 and workers[0].is_alive()
-        record, = groups(target)[0]["cost_records"]
+        (record,) = [
+            r
+            for r in groups(target)[0]["cost_records"]
+            if r.get("native_usage", {}).get("kind") != "scope"
+        ]
         assert record["provenance"] == "estimated"
         assert record["pricing"]["version"] == pinned
     finally:
@@ -201,7 +210,9 @@ def test_unusable_pricing_store_keeps_workflow_and_tokens(
     assert chat.launch_chat_session("developer", "x", phase_name="implementation", prompt="hello") == 0
     assert launch.call_count == 1 and failures
     group, = groups(target)
-    record, = group["cost_records"]
+    (record,) = [
+        r for r in group["cost_records"] if r.get("native_usage", {}).get("kind") != "scope"
+    ]
     assert record["provenance"] == "unavailable" and record["reason"] == "pricing_unavailable"
     assert group["stats"]["input_tokens"] == 100
 
@@ -228,7 +239,9 @@ def test_resumed_codex_estimates_native_model_and_only_new_tokens(phase_chat, mo
     launch.side_effect = run
     assert chat.launch_chat_session("developer", "x", phase_name="implementation", prompt="hello") == 0
     group, = groups(target)
-    record, = group["cost_records"]
+    (record,) = [
+        r for r in group["cost_records"] if r.get("native_usage", {}).get("kind") != "scope"
+    ]
     assert record["model"] == "gpt-5.3-codex"
     assert record["model_source"] == "native_journal"
     assert Decimal(record["amount_usd"]) == Decimal("0.00013125")

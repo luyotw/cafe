@@ -47,6 +47,9 @@ class AgentExecutionControl:
     max_output_bytes: int | None = None
     max_output_lines: int | None = None
     on_process_started: Callable[[], None] | None = None
+    workflow_id: str | None = None
+    caller_id: str | None = None
+    publish_records: Callable[[list[dict[str, Any]]], None] | None = None
 
     def __post_init__(self) -> None:
         for name in ("max_duration_seconds", "max_output_bytes", "max_output_lines"):
@@ -463,15 +466,11 @@ class AgentExecutor:
 
     def _accumulate_usage(self, usage: TokenUsage) -> None:
         """One accounting primitive for ordinary and callback subprocesses."""
-        for name in TokenUsage.model_fields:
-            value = getattr(usage, name)
-            if name in {"turn_usages", "cost_records"}:
-                setattr(
-                    self._total_token_usage, name, [*getattr(self._total_token_usage, name), *value]
-                )
-            elif value is not None:
-                prior = getattr(self._total_token_usage, name)
-                setattr(self._total_token_usage, name, (prior or 0) + value)
+        from cafe.core.usage import merge_token_usage_stats
+
+        self._total_token_usage = TokenUsage(
+            **merge_token_usage_stats(self._total_token_usage.model_dump(exclude_unset=True), usage)
+        )
 
     def execute_event_driver(
         self,
@@ -1397,6 +1396,43 @@ class AgentExecutor:
             cmd, accounting_environment
         )
         cost_accounting = prepare_cost_accounting(self.config.cli.value, accounting_environment)
+        native_descendants = None
+
+        def publish_native(records):
+            if execution_control is not None and execution_control.publish_records is not None:
+                try:
+                    execution_control.publish_records(records)
+                except Exception:
+                    print("⚠️ Accounting publication unavailable; retained coverage may be partial")
+
+        def observe_native(data):
+            if native_descendants is not None:
+                try:
+                    if native_descendants.observe(data):
+                        publish_native([native_descendants.open_record()])
+                except Exception:
+                    publish_native(
+                        [native_descendants.open_record(gaps=["root_binding_unavailable"])]
+                    )
+
+        if execution_control is not None and all(
+            (
+                execution_control.workflow_id,
+                execution_control.caller_id,
+                execution_control.publish_records,
+            )
+        ):
+            try:
+                native_descendants = self._get_cli_strategy().prepare_descendant_accounting(
+                    accounting_environment,
+                    execution_control,
+                    attempt_id=cost_accounting.invocation_id,
+                )
+                if native_descendants is not None:
+                    native_descendants.rate = cost_accounting.native_state
+                    publish_native([native_descendants.open_record()])
+            except Exception:
+                print("⚠️ Native accounting entry unavailable")
         native_model_reader = None
         if self.config.cli == AgentCLI.CODEX:
             from cafe.agents.cli.codex_usage import prepare_model_reader
@@ -1605,10 +1641,30 @@ class AgentExecutor:
                             and observation_evidence.failure_code is None
                         ) if parse_stream_json else returncode == 0,
                     )
+                    if native_descendants is not None:
+                        try:
+                            if observation_evidence.observed_session_id:
+                                native_descendants.bind(observation_evidence.observed_session_id)
+                            native_records = native_descendants.collect(final=True)
+                            parsed.token_usage = native_descendants.attest_caller_usage(
+                                parsed.token_usage
+                            )
+                        except Exception:
+                            native_records = [
+                                native_descendants.open_record(
+                                    final=True, gaps=["collection_failed"]
+                                )
+                            ]
+                        parsed.token_usage.cost_records.extend(native_records)
+                        parsed.usage_available = True
                     for cost_record in parsed.token_usage.cost_records:
-                        cost_record.update(session_id=observation_evidence.observed_session_id)
+                        cost_record.setdefault(
+                            "session_id", observation_evidence.observed_session_id
+                        )
                         cost_record.setdefault("model_source", cost_model_source)
                     parsed.token_usage = TokenUsage(**parsed.token_usage.model_dump(exclude_unset=True))
+                    if native_descendants is not None:
+                        publish_native(native_records)
                     if parsed.usage_available or parsed.token_usage.cost_records:
                         self._accumulate_usage(parsed.token_usage)
                 except (ValueError, TypeError, AttributeError) as cause:
@@ -1891,6 +1947,7 @@ class AgentExecutor:
                                             failure_code="conflicting_session_evidence",
                                         )
                                     legacy_session_id = legacy_session_id or candidate
+                                observe_native(data)
                                 if data.get("type") in terminal_stream_event_types:
                                     received_terminal_stream_event = True
                                 if isinstance(data, dict) and structured_records is not None:
@@ -1995,6 +2052,7 @@ class AgentExecutor:
                                 # that a structured agent stream finished. Do not
                                 # infer completion from an otherwise-successful
                                 # process exit: that loses mid-turn failures.
+                                observe_native(data)
                                 if data.get("type") in terminal_stream_event_types:
                                     received_terminal_stream_event = True
                                     if startup_fatal_error:

@@ -938,7 +938,11 @@ class GenericWorkflowStepExecutor(Phase):
                     require_status_code=False,
                     persist_status=False,
                     allowed_tools=attempt_allowed_tools,
-                    phase_specific_data=phase_specific_data,
+                    phase_specific_data={
+                        **phase_specific_data,
+                        "workflow_id": blackboard_state.workflow_id,
+                        "accounting_workspace_locked": True,
+                    },
                     backup_context_callback=lambda error: self._build_backup_takeover_context(
                         error=error,
                         step_name=step_name,
@@ -1958,6 +1962,14 @@ class GenericWorkflowStepExecutor(Phase):
                 authority_kwargs["denied_tools"] = observed["denied_tools"]
             elif observed["denied_tools"]:
                 raise RuntimeError("Exact workspace continuation cannot preserve denied tools")
+            if self._call_accepts_keyword(self.agent_manager.execute, "execution_control"):
+                authority_kwargs["execution_control"] = self._accounting_execution_control(
+                    path,
+                    blackboard_state.workflow_id,
+                    f"{step_name}/{self.iteration}/{agent_name}",
+                    control=authority_kwargs.get("execution_control"),
+                    workspace_locked=True,
+                )
             response, usage, _, _, streaming_log, model = self.agent_manager.execute(
                 agent_name,
                 prompt,
@@ -2106,11 +2118,20 @@ class GenericWorkflowStepExecutor(Phase):
             )
             # Do not use the phase executor's broad failure recovery or cold
             # takeover callback: a failed exact continuation remains a failure.
+            accounting_kwargs = {}
+            if self._call_accepts_keyword(self.agent_manager.execute, "execution_control"):
+                accounting_kwargs["execution_control"] = self._accounting_execution_control(
+                    context_file,
+                    blackboard_state.workflow_id,
+                    f"{step_name}/{self.iteration}/{agent_name}",
+                    workspace_locked=True,
+                )
             response, usage, _, _, streaming_log, _ = self.agent_manager.execute(
                 agent_name,
                 error.correction_prompt(remaining=MAX_ARTIFACT_CORRECTIONS - budget.consumed),
                 continuation=continuation,
                 phase_name=step_name,
+                **accounting_kwargs,
                 allowed_tools=allowed_tools,
                 allowed_directories=allowed_directories,
                 streaming_output_file=str(iteration_dir / "streaming.jsonl"),

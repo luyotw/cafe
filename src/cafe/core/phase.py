@@ -803,6 +803,27 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
 
         return None
 
+    @staticmethod
+    def _accounting_execution_control(
+        context_file, workflow_id, caller_id, *, control=None, workspace_locked=False
+    ):
+        from dataclasses import replace
+
+        from cafe.agents.executor import AgentExecutionControl
+        from cafe.core.usage import iteration_usage_sink
+
+        sink = iteration_usage_sink(Path.cwd(), context_file, workspace_locked=workspace_locked)
+        return (
+            replace(
+                control or AgentExecutionControl(),
+                workflow_id=workflow_id,
+                caller_id=caller_id,
+                publish_records=lambda records: sink(TokenUsage(cost_records=records)),
+            )
+            if sink is not None
+            else control
+        )
+
     def _execute_agent_iteration(
         self,
         agent_name: str,
@@ -997,26 +1018,11 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
 
         def accumulate_token_usage(target: TokenUsage, source: TokenUsage) -> None:
             """Accumulate token usage from source to target."""
-            target.input_tokens += source.input_tokens
-            target.output_tokens += source.output_tokens
-            target.cache_creation_input_tokens += source.cache_creation_input_tokens
-            target.cache_write_input_tokens += source.cache_write_input_tokens
-            target.cache_read_input_tokens += source.cache_read_input_tokens
-            target.reasoning_output_tokens += source.reasoning_output_tokens
-            target.total_cost_usd += source.total_cost_usd
-            target.cost_records = [*target.cost_records, *source.cost_records]
-            if source.turn_usages:
-                target.turn_usages.extend(source.turn_usages)
-            if source.duration_ms is not None:
-                if target.duration_ms is None:
-                    target.duration_ms = source.duration_ms
-                else:
-                    target.duration_ms += source.duration_ms
-            if source.duration_api_ms is not None:
-                if target.duration_api_ms is None:
-                    target.duration_api_ms = source.duration_api_ms
-                else:
-                    target.duration_api_ms += source.duration_api_ms
+            from cafe.core.usage import merge_token_usage_stats
+
+            merged = merge_token_usage_stats(target.model_dump(exclude_unset=True), source)
+            for key, value in TokenUsage(**merged).model_dump(exclude_unset=True).items():
+                setattr(target, key, value)
 
         # Track model separately (use latest value, don't accumulate)
         model: Optional[str] = None
@@ -1044,6 +1050,17 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                 "streaming_output_file": str(streaming_jsonl_file),
             }
             execute_signature = inspect.signature(self.agent_manager.execute)
+            workflow_id = (phase_specific_data or {}).get("workflow_id")
+            if workflow_id and "execution_control" in execute_signature.parameters:
+                execute_kwargs["execution_control"] = self._accounting_execution_control(
+                    context_file,
+                    workflow_id,
+                    f"{execution_phase_name}/{self.iteration}/{agent_name}",
+                    control=execute_kwargs.get("execution_control"),
+                    workspace_locked=bool(
+                        (phase_specific_data or {}).get("accounting_workspace_locked")
+                    ),
+                )
             native_review_configuration = (phase_specific_data or {}).get("native_review_configuration")
             if native_review_configuration is not None:
                 execute_kwargs["native_review_configuration"] = native_review_configuration
