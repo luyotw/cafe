@@ -340,8 +340,10 @@ withheld. Exact attested inclusive child ranges remain visible but non-additive
 beneath their parent. Bounded read-only interpretation of older child-inclusive
 sources subtracts all represented observations, including rejected amounts;
 validated old local residual proof remains readable. Updating old aggregate
-stats preserves that proof as caller scalars and never writes a public residual
-schema. Independently proven legacy amounts such as `$0.25` survive replay,
+stats preserves caller scalars and copies already validated historical source
+proof unchanged. Writers do not create new residual maps; readers interpret the
+old maps only as independent source evidence. Read-only chat partitions subtract
+only the corresponding historical chat proof. No public residual schema returns. Independently proven legacy amounts such as `$0.25` survive replay,
 retention, chat partition and transient-source removal.
 
 Manager records-only/checkpoint updates preserve the existing caller subtotal or

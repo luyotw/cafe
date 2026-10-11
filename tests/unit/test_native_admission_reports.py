@@ -431,6 +431,7 @@ def test_public_persisted_source_withholds_conflicted_alias_residual_without_ind
     tmp_path, canonical, alias, independent
 ):
     from cafe.core.usage import iteration_usage_sink
+    from cafe.services.cost_summary import unrecorded_usage
 
     parent = dict(
         invocation_id="attested",
@@ -465,11 +466,65 @@ def test_public_persisted_source_withholds_conflicted_alias_residual_without_ind
         stats = json.loads(path.read_text())["stats"]
         for key in residual_keys:
             assert stats[key] == (7 if independent else 0)
-            assert "accounting_residual" not in stats
+            remainder = unrecorded_usage(stats, stats["cost_records"])
+            assert remainder[canonical] == (7 if independent else 0)
         summary = summarize_sources(collect_cost_sources(tmp_path))
         assert canonical not in summary["native_usage"]["tokens"]
         assert summary["incomplete"]
         assert summary["known"] == Decimal("1.2")
+
+    if independent:
+        new_caller = dict(
+            invocation_id="new-caller",
+            provenance="reported",
+            amount_usd="0.1",
+            complete=True,
+            usage=dict(input_tokens=2, output_tokens=1, total_tokens=3, **{canonical: 1}),
+        )
+        for _ in range(2):
+            sink(
+                TokenUsage(
+                    input_tokens=2,
+                    output_tokens=1,
+                    total_cost_usd=0.1,
+                    cost_records=[new_caller],
+                    **{canonical: 1},
+                )
+            )
+            stats = json.loads(path.read_text())["stats"]
+            assert unrecorded_usage(stats, stats["cost_records"])[canonical] == 7
+            assert stats["accounting_residual"] == dict.fromkeys(residual_keys, 7)
+
+
+@pytest.mark.parametrize("legacy", [0, 0.25])
+def test_public_chat_table_uses_group_records_for_source_legacy(legacy, monkeypatch, capsys):
+    from cafe.services.status_display import StatusDisplay
+
+    monkeypatch.setattr("cafe.services.status_display.RICH_AVAILABLE", False)
+    caller = dict(
+        invocation_id="caller",
+        provenance="reported",
+        amount_usd="1",
+        complete=True,
+        usage=dict(input_tokens=10, output_tokens=2),
+    )
+    group = dict(
+        cli="codex",
+        requested_model="parent",
+        reported_model="actual",
+        mode="one_shot",
+        phase="compose",
+        calls=1,
+        incomplete_calls=0,
+        stats=dict(total_cost_usd=1 + legacy, scalar_coverage="caller"),
+        unknown_fields=[],
+        cost_records=[caller, record(80, "final")],
+    )
+    StatusDisplay().render_chat_usage_table([group])
+    text = capsys.readouterr().out
+    assert "$1.0000 reported" in text and "$0.8000 estimated" in text
+    assert "$1.0000 legacy" not in text and "$1.2500 legacy" not in text
+    assert ("$0.2500 legacy" in text) == bool(legacy)
 
 
 @pytest.mark.parametrize("provider", ["cursor-agent", "custom-provider"])

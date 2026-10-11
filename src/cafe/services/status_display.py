@@ -81,7 +81,7 @@ class StatusDisplay:
             cost_summary = summarize_cost(
                 group.get("cost_records", []),
                 legacy_cost=stats.get("total_cost_usd"),
-                legacy_residual=source_remainder(stats, stats.get("cost_records", [])).get(
+                legacy_residual=source_remainder(stats, group.get("cost_records", [])).get(
                     "total_cost_usd"
                 ),
             )

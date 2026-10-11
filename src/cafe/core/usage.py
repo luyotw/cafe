@@ -40,7 +40,8 @@ def _caller_stats(values, records):
                     "cache_write_input_tokens" if key == "cache_creation_input_tokens" else key, 0
                 )
             )
-    merged.pop("accounting_residual", None)
+    if "accounting_residual" in merged:
+        source_remainder(merged, records)  # Validate old proof without creating or changing it.
     if native:
         merged["scalar_coverage"] = "caller"
     return merged
@@ -52,7 +53,6 @@ def merge_token_usage_stats(existing: Any, incoming: TokenUsage) -> Dict[str, An
     prior_records = merged.get("cost_records", [])
     native = any("native_usage" in r for r in [*prior_records, *incoming.cost_records])
     merged = _caller_stats(merged, prior_records)
-    merged.pop("accounting_residual", None)
     incoming_records = [
         dict(r, scalar_coverage="caller") if native and "native_usage" in r else r
         for r in incoming.cost_records
@@ -470,12 +470,15 @@ def chat_usage_sink(
                     )
                     previous = dict(group["stats"], cost_records=group.get("cost_records", []))
                     merged = merge_token_usage_stats(previous, usage)
+                    historical_proof = group["stats"].get("accounting_residual")
                     group["stats"] = {
                         k: v
                         for k, v in merged.items()
                         if k in CHAT_USAGE_FIELDS
                         and k in (group["stats"].keys() | usage.model_fields_set)
                     }
+                    if historical_proof is not None:
+                        group["stats"]["accounting_residual"] = historical_proof
                     group["cost_records"] = merged["cost_records"]
                     if not issue_metadata:
                         current["stats"] = merge_token_usage_stats(current.get("stats"), usage)
@@ -547,11 +550,14 @@ def chat_usage_sink(
                 )
                 # The shared merge defaults are legacy iteration compatibility,
                 # not evidence that a provider reported missing counters as zero.
+                historical_proof = group["stats"].get("accounting_residual")
                 group["stats"] = {
                     field: merged[field]
                     for field in set(group["stats"]) | known.keys()
                     if field in CHAT_USAGE_FIELDS or field == "scalar_coverage"
                 }
+                if historical_proof is not None:
+                    group["stats"]["accounting_residual"] = historical_proof
                 if "scalar_coverage" in merged:
                     group["stats"]["scalar_coverage"] = merged["scalar_coverage"]
                 if not issue_metadata and usage is not None:
@@ -579,10 +585,15 @@ def phase_stats_without_chat(stats, groups):
     records = stats.get("cost_records", []) if isinstance(stats, dict) else []
     remaining = _caller_stats(stats, records)
     remaining["cost_records"] = records
+    historical_proof = dict(remaining.get("accounting_residual", {}))
     money = [remaining["total_cost_usd"]] if "total_cost_usd" in remaining else []
     for group in groups or ():
         group_records = group.get("cost_records", [])
-        for key, value in _caller_stats(group.get("stats", {}), group_records).items():
+        group_stats = _caller_stats(group.get("stats", {}), group_records)
+        for key, value in group_stats.get("accounting_residual", {}).items():
+            if key in historical_proof:
+                historical_proof[key] = max(0, historical_proof[key] - value)
+        for key, value in group_stats.items():
             if key in CHAT_USAGE_FIELDS and isinstance(value, (int, float)) and key in remaining:
                 if key == "total_cost_usd":
                     money.append(-value)
@@ -596,4 +607,7 @@ def phase_stats_without_chat(stats, groups):
         amount = math.fsum(money)
         tolerance = sum(math.ulp(value) for value in money) * max(2, len(records))
         remaining["total_cost_usd"] = 0.0 if abs(amount) <= tolerance else amount
+    if "accounting_residual" in remaining:
+        # Read-only partition of old source proof.
+        remaining["accounting_residual"] = historical_proof
     return remaining
