@@ -552,7 +552,7 @@ def _affected(content, changed_names, view):
     """Inventory selectors without letting one missing neighbor hide an affected consumer."""
     raw = normalize_playbook_yaml(safe_load(content))
     steps = raw.get("steps", {})
-    if not isinstance(steps, dict):
+    if not isinstance(steps, dict) or not steps:
         steps = {None: {}}  # Preserve known shared references beside a broken steps container.
     for name, value in steps.items():
         step = value if isinstance(value, dict) else {}

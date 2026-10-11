@@ -157,6 +157,8 @@ def test_missing_neighbor_skill_does_not_hide_an_affected_consumer(tmp_path):
         "spaced_variant",
         "wrong_step",
         "wrong_steps",
+        "empty_steps",
+        "missing_steps",
     ],
 )
 def test_malformed_neighbor_does_not_hide_known_affected_references(tmp_path, malformed):
@@ -186,6 +188,10 @@ def test_malformed_neighbor_does_not_hide_known_affected_references(tmp_path, ma
         raw["steps"]["observe"] = 42
     elif malformed == "wrong_steps":
         raw["steps"] = []
+    elif malformed == "empty_steps":
+        raw["steps"] = {}
+    elif malformed == "missing_steps":
+        raw.pop("steps")
     book = tmp_path / request["target"]
     book.write_text(yaml.safe_dump(raw, sort_keys=False))
     before = {path: path.read_bytes() for path in (tmp_path / PHASE, book)}
