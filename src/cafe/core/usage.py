@@ -7,31 +7,89 @@ import math
 import os
 import stat
 from contextlib import contextmanager, nullcontext
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict
 
 import yaml
 
+from cafe.core.cost import _row_counters, accounting_admission, merge_cost_records, source_remainder
 from cafe.core.types import TokenUsage
-from cafe.core.cost import merge_cost_records
 from cafe.core.workspace_lock import workspace_execution_lock
 from cafe.utils.issue_config import issue_config_lock
 from cafe.utils.yaml_utils import safe_load
+
+
+def _caller_stats(values, records):
+    """Normalize old local source evidence without a public residual schema."""
+    merged = dict(values) if isinstance(values, dict) else {}
+    native = any("native_usage" in r for r in records)
+    if native and merged.get("scalar_coverage") != "caller" and records:
+        # Read old child-inclusive aggregates once; preserve their proven remainder.
+        remainder = source_remainder(merged, records)
+        records = [dict(r) for r in records]
+        callers = [r for r in records if "native_usage" not in r]
+        for row in callers:
+            admitted, _ = _row_counters(row)
+            observed, invalid = _row_counters(row, observations=True)
+            excluded = set(observed) - admitted.keys()
+            for gap in invalid:
+                if gap.startswith(("invalid_", "conflicting_")):
+                    excluded.add(gap.split("_", 1)[1])
+            if excluded:
+                # Coverage flags carry no remainder amounts and survive BASE Timeline projection.
+                row["scalar_coverage"] = dict(kind="caller", excluded_fields=sorted(excluded))
+        merged["cost_records"] = records
+        caller_tokens = accounting_admission(callers)["native_usage"]["tokens"]
+        for key, value in remainder.items():
+            represented = sum(
+                float(r.get("amount_usd") or 0) if key == "total_cost_usd" else 0 for r in callers
+            )
+            merged[key] = (
+                float(value) + represented
+                if key == "total_cost_usd"
+                else value
+                + caller_tokens.get(
+                    "cache_write_input_tokens" if key == "cache_creation_input_tokens" else key, 0
+                )
+            )
+    if "accounting_residual" in merged:
+        source_remainder(merged, records)  # Validate old proof without creating or changing it.
+    if native:
+        merged["scalar_coverage"] = "caller"
+    return merged
 
 
 def merge_token_usage_stats(existing: Any, incoming: TokenUsage) -> Dict[str, Any]:
     """Merge one raw attempt into the existing iteration stats shape."""
     merged = dict(existing) if isinstance(existing, dict) else {}
     prior_records = merged.get("cost_records", [])
-    if incoming.cost_records and all(
-        record.get("invocation_id") in {prior.get("invocation_id") for prior in prior_records}
-        for record in incoming.cost_records
+    native = any("native_usage" in r for r in [*prior_records, *incoming.cost_records])
+    merged = _caller_stats(merged, prior_records)
+    prior_records = merged.get("cost_records", prior_records)
+    incoming_records = [
+        dict(r, scalar_coverage="caller") if native and "native_usage" in r else r
+        for r in incoming.cost_records
+    ]
+    merged["cost_records"] = merge_cost_records(prior_records, incoming_records)
+    if native:
+        merged["scalar_coverage"] = "caller"
+    duplicate_ids = {r.get("invocation_id") for r in prior_records if "native_usage" not in r}
+    callers = [r for r in incoming.cost_records if "native_usage" not in r]
+    if callers and all(r.get("invocation_id") in duplicate_ids for r in callers):
+        return merged  # Evidence was already merged, including newly observed children.
+    if (
+        incoming.cost_records
+        and not callers
+        and all(
+            r.get("invocation_id") in {p.get("invocation_id") for p in prior_records}
+            for r in incoming.cost_records
+        )
     ):
         return merged
     incoming_data = incoming.model_dump()
-    duplicate_ids = {record.get("invocation_id") for record in prior_records}
     for record in incoming.cost_records:
-        if record.get("invocation_id") not in duplicate_ids:
+        if "native_usage" in record or record.get("invocation_id") not in duplicate_ids:
             continue
         for key, value in record.get("usage", {}).items():
             if isinstance(incoming_data.get(key), (int, float)) and isinstance(value, (int, float)):
@@ -67,7 +125,6 @@ def merge_token_usage_stats(existing: Any, incoming: TokenUsage) -> Dict[str, An
     merged["turn_usages"] = (list(prior_turns) if isinstance(prior_turns, list) else []) + (
         list(incoming_turns) if isinstance(incoming_turns, list) else []
     )
-    merged["cost_records"] = merge_cost_records(prior_records, incoming.cost_records)
     return merged
 
 
@@ -132,9 +189,9 @@ def _exchange_usage_file(parent_fd, source, destination, destination_parent_fd):
         raise OSError(error, os.strerror(error))
 
 
-def iteration_usage_sink(repository_root: Path, context_file: Path):
+def iteration_usage_sink(repository_root: Path, context_file: Path, *, workspace_locked=False):
     """Pin an existing caller-admitted metadata target; never create an iteration."""
-    return _metadata_usage_sink(repository_root, context_file)
+    return _metadata_usage_sink(repository_root, context_file, workspace_locked=workspace_locked)
 
 
 def _metadata_usage_sink(
@@ -142,6 +199,7 @@ def _metadata_usage_sink(
     context_file,
     *,
     issue_metadata=False,
+    workspace_locked=False,
     update=None,
     validate=None,
 ):
@@ -174,7 +232,7 @@ def _metadata_usage_sink(
 
     def persist(usage):
         with (
-            workspace_execution_lock(root),
+            nullcontext() if workspace_locked else workspace_execution_lock(root),
             _usage_parent(target, expected_parents=parents) as (parent_fd, _parents),
             issue_config_lock(target, parent_fd=parent_fd) if issue_metadata else nullcontext(),
         ):
@@ -300,8 +358,11 @@ def _validate_chat_usage(metadata):
         stats, unknown = group.get("stats"), group.get("unknown_fields")
         if "cost_records" in group:
             from cafe.core.cost import summarize_cost
+
             records = group["cost_records"]
-            if not isinstance(records, list) or any(not isinstance(record, dict) for record in records):
+            if not isinstance(records, list) or any(
+                not isinstance(record, dict) for record in records
+            ):
                 raise ValueError("invalid chat cost records")
             summarize_cost(records)
         if (
@@ -313,6 +374,11 @@ def _validate_chat_usage(metadata):
         ):
             raise ValueError("invalid chat accounting coverage")
         for field, value in stats.items():
+            if field == "scalar_coverage" and value == "caller":
+                continue
+            if field == "accounting_residual":
+                source_remainder(stats, group.get("cost_records", []))
+                continue  # Bounded read-only compatibility for existing local proof.
             if (
                 field not in CHAT_USAGE_FIELDS
                 or isinstance(value, bool)
@@ -358,6 +424,28 @@ def chat_usage_sink(
             by_model.setdefault(result.reported_model, []).append(result)
         for model, records in by_model.items():
             key = (cli, requested_model, model, mode, phase)
+            incoming_attempts = {
+                c["native_usage"]["attempt_id"]
+                for r in records
+                if r.usage is not None
+                for c in r.usage.cost_records
+                if "native_usage" in c
+            }
+            # Entry checkpoints precede model observation. Refine their group rather
+            # than leaving a permanently open copy under the unknown model.
+            if model is not None and incoming_attempts:
+                for item in groups:
+                    if (
+                        item.get("reported_model") is None
+                        and tuple(item.get(k) for k in ("cli", "requested_model", "mode", "phase"))
+                        == (cli, requested_model, mode, phase)
+                        and item.get("native_attempts")
+                        and set(item["native_attempts"]) <= incoming_attempts
+                        and item["calls"] == len(item["native_attempts"])
+                        and not item.get("legacy_incomplete_calls")
+                        and not item.get("legacy_unknown_fields")
+                    ):
+                        item["reported_model"] = model
             group = next(
                 (
                     item
@@ -377,11 +465,75 @@ def chat_usage_sink(
                 )
                 group.update(stats={}, calls=0, incomplete_calls=0, unknown_fields=[])
                 groups.append(group)
+            native_results = [
+                r
+                for r in records
+                if r.usage is not None and any("native_usage" in c for c in r.usage.cost_records)
+            ]
+            if native_results:
+                group.setdefault("legacy_unknown_fields", list(group["unknown_fields"]))
+                group.setdefault("legacy_incomplete_calls", group["incomplete_calls"])
+                prior_attempts = set(group.get("native_attempts", []))
+                attempts = set(prior_attempts)
+                for result in native_results:
+                    usage = result.usage
+                    attempts.update(
+                        c["native_usage"]["attempt_id"]
+                        for c in usage.cost_records
+                        if "native_usage" in c
+                    )
+                    previous = dict(group["stats"], cost_records=group.get("cost_records", []))
+                    merged = merge_token_usage_stats(previous, usage)
+                    historical_proof = group["stats"].get("accounting_residual")
+                    group["stats"] = {
+                        k: v
+                        for k, v in merged.items()
+                        if k in CHAT_USAGE_FIELDS
+                        and k in (group["stats"].keys() | usage.model_fields_set)
+                    }
+                    if historical_proof is not None:
+                        group["stats"]["accounting_residual"] = historical_proof
+                    group["cost_records"] = merged["cost_records"]
+                    if not issue_metadata:
+                        current["stats"] = merge_token_usage_stats(current.get("stats"), usage)
+                group["calls"] += len(attempts - prior_attempts)
+                group["native_attempts"] = sorted(attempts)
+                missing = set(group["legacy_unknown_fields"]) | (
+                    set(CHAT_USAGE_FIELDS) - group["stats"].keys()
+                )
+                physical = [
+                    c
+                    for c in group["cost_records"]
+                    if c.get("native_usage", {}).get("kind") != "scope"
+                ]
+                for field in CHAT_USAGE_FIELDS:
+                    if not physical or any(field not in c.get("usage", {}) for c in physical):
+                        if (
+                            field != "total_cost_usd"
+                            or any(c.get("amount_usd") is None for c in physical)
+                            or not physical
+                        ):
+                            missing.add(field)
+                view = accounting_admission(group["cost_records"])["native_usage"]
+                incomplete = bool(missing) or not view["complete"] or model is None
+                group["incomplete_calls"] = group["legacy_incomplete_calls"] + (
+                    len(attempts) if incomplete else 0
+                )
+                group["unknown_fields"] = sorted(missing)
+                records = [r for r in records if r not in native_results]
             existing_ids = {record.get("invocation_id") for record in group.get("cost_records", [])}
-            records = [record for record in records if not (
-                record.usage is not None and record.usage.cost_records
-                and all(cost.get("invocation_id") in existing_ids for cost in record.usage.cost_records)
-            )]
+            records = [
+                record
+                for record in records
+                if not (
+                    record.usage is not None
+                    and record.usage.cost_records
+                    and all(
+                        cost.get("invocation_id") in existing_ids
+                        for cost in record.usage.cost_records
+                    )
+                )
+            ]
             if not records:
                 continue
             missing = set(group["unknown_fields"])
@@ -406,49 +558,82 @@ def chat_usage_sink(
                 absent = set(CHAT_USAGE_FIELDS) - known.keys()
                 missing.update(absent)
                 incomplete = incomplete or bool(absent) or bool(record.failure_code)
-                merged = merge_token_usage_stats(group["stats"], TokenUsage(**known))
+                previous = dict(group["stats"], cost_records=group.get("cost_records", []))
+                merged = merge_token_usage_stats(
+                    previous, TokenUsage(**known, cost_records=usage.cost_records if usage else [])
+                )
                 # The shared merge defaults are legacy iteration compatibility,
                 # not evidence that a provider reported missing counters as zero.
+                historical_proof = group["stats"].get("accounting_residual")
                 group["stats"] = {
                     field: merged[field]
                     for field in set(group["stats"]) | known.keys()
-                    if field in CHAT_USAGE_FIELDS
+                    if field in CHAT_USAGE_FIELDS or field == "scalar_coverage"
                 }
+                if historical_proof is not None:
+                    group["stats"]["accounting_residual"] = historical_proof
+                if "scalar_coverage" in merged:
+                    group["stats"]["scalar_coverage"] = merged["scalar_coverage"]
                 if not issue_metadata and usage is not None:
                     current["stats"] = merge_token_usage_stats(current.get("stats"), usage)
                 if usage is not None and usage.cost_records:
-                    group["cost_records"] = merge_cost_records(group.get("cost_records"), usage.cost_records)
+                    group["cost_records"] = merge_cost_records(
+                        group.get("cost_records"), usage.cost_records
+                    )
             group["calls"] += 1
             group["incomplete_calls"] += int(incomplete)
             group["unknown_fields"] = sorted(missing)
 
     return _metadata_usage_sink(
-        repository_root, metadata_file, issue_metadata=issue_metadata, update=update,
+        repository_root,
+        metadata_file,
+        issue_metadata=issue_metadata,
+        update=update,
         validate=_validate_chat_usage,
     )
 
 
 def phase_stats_without_chat(stats, groups):
-    """Accounting consumers must not also bill chat under phase/model metadata."""
-    remaining = dict(stats) if isinstance(stats, dict) else {}
-    money = [remaining["total_cost_usd"]] if "total_cost_usd" in remaining else []
-    cost_count = len(remaining.get("cost_records", []))
+    """Partition caller scalars and records independently, before joint admission."""
+
+    records = stats.get("cost_records", []) if isinstance(stats, dict) else []
+    remaining = _caller_stats(stats, records)
+    records = remaining.get("cost_records", records)
+    remaining["cost_records"] = records
+    historical_proof = dict(remaining.get("accounting_residual", {}))
+    money = (
+        [(1, remaining["total_cost_usd"])] if remaining.get("total_cost_usd") is not None else []
+    )
     for group in groups or ():
-        for key, value in group.get("stats", {}).items():
-            if key in CHAT_USAGE_FIELDS and isinstance(value, (int, float)) and key in remaining:
+        group_records = group.get("cost_records", [])
+        group_stats = _caller_stats(group.get("stats", {}), group_records)
+        for key, value in group_stats.get("accounting_residual", {}).items():
+            if value is not None and historical_proof.get(key) is not None:
+                phase_value = historical_proof[key]
                 if key == "total_cost_usd":
-                    money.append(-value)
-                else:
+                    phase_value, value = Decimal(str(phase_value)), Decimal(str(value))
+                historical_proof[key] = max(0, phase_value - value)
+        for key, value in group_stats.items():
+            if key in CHAT_USAGE_FIELDS and key in remaining:
+                if key == "total_cost_usd":
+                    if value is not None and remaining[key] is not None:
+                        money.append((-1, value))
+                elif isinstance(value, (int, float)):
                     remaining[key] -= value
-        if group.get("cost_records") and remaining.get("cost_records"):
-            chat_ids = {record.get("invocation_id") for record in group["cost_records"]}
-            remaining["cost_records"] = [record for record in remaining["cost_records"]
-                                         if record.get("invocation_id") not in chat_ids]
+        chat_ids = {r.get("invocation_id") for r in group_records}
+        remaining["cost_records"] = [
+            r for r in remaining["cost_records"] if r.get("invocation_id") not in chat_ids
+        ]
     if len(money) > 1:
-        amount = math.fsum(money)
-        # Grouped float totals can differ from the phase's accumulation order.
-        # Judge zero against the original operands, not the tiny residual;
-        # preserve meaningful legacy amounts and genuinely invalid negatives.
-        tolerance = sum(math.ulp(value) for value in money) * max(2, cost_count)
-        remaining["total_cost_usd"] = 0.0 if abs(amount) <= tolerance else amount
+        amount = sum((
+            sign * source_remainder(dict(total_cost_usd=value), [])["total_cost_usd"]
+            for sign, value in money
+        ), Decimal(0))
+        tolerance = Decimal(str(sum(
+            math.ulp(value) for _, value in money if type(value) is float
+        ))) * max(2, len(records))
+        remaining["total_cost_usd"] = 0.0 if abs(amount) <= tolerance else float(amount)
+    if "accounting_residual" in remaining:
+        # Read-only partition of old source proof.
+        remaining["accounting_residual"] = historical_proof
     return remaining
