@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 from pathlib import Path, PurePosixPath
 
+from cafe.catalogs.transactions import bound_directory, write_json_durable
 from cafe.utils.file_lock import open_lock_file
 
 
@@ -64,50 +65,38 @@ def confined(root, relative):
     return current
 
 
-def _parent(root, relative):
-    """Open every component without links and anchor writes to directory descriptors."""
-    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        for part in Path(relative).parent.parts:
-            next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
-            os.close(fd)
-            fd = next_fd
-        return fd
-    except BaseException:
-        os.close(fd)
-        raise
-
-
 def publish(root, relative, content, mode):
     confined(root, relative)
-    fd = _parent(root, relative)
-    name = Path(relative).name
-    temporary = f".authoring-{secrets.token_hex(16)}"
-    created = False
-    try:
-        _revalidate_parent(root, relative, fd)
-        if content is None:
-            os.unlink(name, dir_fd=fd)
-        else:
-            file_fd = os.open(
-                temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=fd
-            )
-            created = True
-            with os.fdopen(file_fd, "wb") as file:
-                file.write(content)
-                file.flush()
-                os.fchmod(file.fileno(), mode)
-                os.fsync(file.fileno())
-            _revalidate_parent(root, relative, fd)
-            os.replace(temporary, name, src_dir_fd=fd, dst_dir_fd=fd)
-        os.fsync(fd)
-    finally:
+    with bound_directory(root, Path(relative).parent) as directory:
+        fd = directory.descriptor
+        name = Path(relative).name
+        temporary = f".authoring-{secrets.token_hex(16)}"
+        created = False
         try:
-            if created:
-                os.unlink(temporary, dir_fd=fd)
-        except FileNotFoundError:
-            pass
-        os.close(fd)
+            directory.verify()
+            confined(root, relative)
+            if content is None:
+                os.unlink(name, dir_fd=fd)
+            else:
+                file_fd = os.open(
+                    temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=fd
+                )
+                created = True
+                with os.fdopen(file_fd, "wb") as file:
+                    file.write(content)
+                    file.flush()
+                    os.fchmod(file.fileno(), mode)
+                    os.fsync(file.fileno())
+                directory.verify()
+                confined(root, relative)
+                os.replace(temporary, name, src_dir_fd=fd, dst_dir_fd=fd)
+            os.fsync(fd)
+        finally:
+            try:
+                if created:
+                    os.unlink(temporary, dir_fd=fd)
+            except FileNotFoundError:
+                pass
 
 
 def _decode(value):
@@ -147,15 +136,6 @@ def recover(root, journal):
     journal.unlink()
 
 
-def _journal(path, record):
-    temporary = path.with_suffix(".new")
-    with temporary.open("w") as file:
-        json.dump(record, file, sort_keys=True)
-        file.flush()
-        os.fsync(file.fileno())
-    os.replace(temporary, path)
-
-
 def commit(root, result, final_check):
     private = storage(root)
     journal = private / "pending.json"
@@ -178,7 +158,7 @@ def commit(root, result, final_check):
         for directory in reversed(missing):
             if directory not in record["created_directories"]:
                 record["created_directories"].append(directory)
-    _journal(journal, record)
+    write_json_durable(journal, record)
     try:
         for directory in record["created_directories"]:
             path = root / directory
@@ -214,12 +194,3 @@ def locked(root):
     handle = open_lock_file(private / "write.lock")
     fcntl.flock(handle, fcntl.LOCK_EX)
     return handle
-
-
-def _revalidate_parent(root, relative, fd):
-    """Verify the opened directory is still the exact confined publication parent."""
-    path = confined(root, relative)
-    actual = path.parent.stat(follow_symlinks=False)
-    opened = os.fstat(fd)
-    if (actual.st_dev, actual.st_ino) != (opened.st_dev, opened.st_ino):
-        raise ValueError("Publication directory identity changed; preview fresh sources")

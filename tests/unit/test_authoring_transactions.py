@@ -193,28 +193,75 @@ def test_authorized_builtin_patch_and_project_shadow_are_reported(tmp_path):
 
 
 def test_publication_rejects_directory_identity_race_before_writing(tmp_path, monkeypatch):
+    import os
     import tempfile
 
     import cafe.authoring.transaction as transaction
+    from cafe.catalogs.transactions import CatalogRecoveryError
 
     source = tmp_path / ".cafe/skills/cafe-test/SKILL.md"
     source.parent.mkdir(parents=True)
     source.write_bytes(b"original")
-    original_parent = transaction._parent
+    original_open = os.open
     with tempfile.TemporaryDirectory() as outside:
         moved = Path(outside) / "skills"
 
-        def race(root, relative):
-            fd = original_parent(root, relative)
-            (root / ".cafe/skills").rename(moved)
-            (root / ".cafe/skills").symlink_to(moved, target_is_directory=True)
+        def race(path, flags, mode=0o777, *, dir_fd=None):
+            fd = original_open(path, flags, mode, dir_fd=dir_fd)
+            if path == "cafe-test" and flags & os.O_DIRECTORY:
+                (tmp_path / ".cafe/skills").rename(moved)
+                (tmp_path / ".cafe/skills").symlink_to(moved, target_is_directory=True)
             return fd
 
-        monkeypatch.setattr(transaction, "_parent", race)
-        with pytest.raises(ValueError):
+        monkeypatch.setattr(os, "open", race)
+        with pytest.raises((ValueError, CatalogRecoveryError)):
             transaction.publish(tmp_path, ".cafe/skills/cafe-test/SKILL.md", b"published", 0o644)
         assert (moved / "cafe-test/SKILL.md").read_bytes() == b"original"
         assert sorted(p.name for p in (moved / "cafe-test").iterdir()) == ["SKILL.md"]
+
+
+def test_public_apply_refuses_changed_ancestor_with_same_leaf_directory(tmp_path, monkeypatch):
+    """U10/U11, I6: recheck every bound ancestor before descriptor publication."""
+    import os
+
+    request = pair()
+    assert apply(request, root=tmp_path).status == "applied"
+    source = tmp_path / ".cafe/skills/cafe-observe/SKILL.md"
+    before = source.read_bytes()
+    leaf_identity = (source.parent.stat().st_dev, source.parent.stat().st_ino)
+    patch = {
+        "version": 1,
+        "mode": "patch",
+        "target": ".cafe/skills/cafe-observe/SKILL.md",
+        "operations": [
+            {"op": "upsert", "path": ["metadata", "workflow", "required_tools"], "value": []}
+        ],
+    }
+    preview = prepare(patch, root=tmp_path)
+    assert preview.status == "ready", preview.to_dict()
+    original_open = os.open
+    raced = False
+
+    def replace_ancestor(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal raced
+        fd = original_open(path, flags, mode, dir_fd=dir_fd)
+        if str(path).startswith(".authoring-") and not raced:
+            raced = True
+            ancestor = tmp_path / ".cafe/skills"
+            displaced = tmp_path / ".cafe/displaced-skills"
+            ancestor.rename(displaced)
+            ancestor.mkdir()
+            (displaced / "cafe-observe").rename(ancestor / "cafe-observe")
+        return fd
+
+    monkeypatch.setattr(os, "open", replace_ancestor)
+    result = apply(patch, root=tmp_path, expect_change=preview.change_digest)
+    assert raced
+    assert result.status == "rejected", result.to_dict()
+    assert source.read_bytes() == before
+    assert (source.parent.stat().st_dev, source.parent.stat().st_ino) == leaf_identity
+    assert sorted(p.name for p in source.parent.iterdir()) == ["SKILL.md"]
+    assert not (storage(tmp_path) / "pending.json").exists()
 
 
 def test_builtin_playbook_shadow_is_rejected_with_selected_source(tmp_path):
