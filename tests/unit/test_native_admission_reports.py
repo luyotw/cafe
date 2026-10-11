@@ -489,6 +489,38 @@ def test_public_source_contains_malformed_decimal_evidence(tmp_path, location, s
     assert json.loads(path.read_text()) == persisted
 
 
+@pytest.mark.parametrize("prior_valid_chat", [False, True])
+def test_public_source_keeps_error_gap_after_valid_phase_and_chat(tmp_path, prior_valid_chat):
+    directory = tmp_path / "compose/iteration_001"
+    directory.mkdir(parents=True)
+    parent = dict(
+        invocation_id="phase-caller", provenance="reported", amount_usd="1", complete=True,
+        usage=dict(input_tokens=10, output_tokens=2, total_tokens=12),
+    )
+    malformed = dict(
+        parent, invocation_id="malformed-chat", amount_usd="malformed"
+    )
+    groups = [dict(stats=dict(total_cost_usd=0.1), cost_records=[malformed])]
+    if prior_valid_chat:
+        groups.insert(0, dict(
+            stats=dict(total_cost_usd=0.2),
+            cost_records=[dict(parent, invocation_id="valid-chat", amount_usd="0.2")],
+        ))
+    path = directory / "iteration.json"
+    persisted = dict(
+        stats=dict(total_cost_usd=1.3 if prior_valid_chat else 1.1, cost_records=[parent]),
+        chat_usage=groups,
+    )
+    path.write_text(json.dumps(persisted))
+    sources = collect_cost_sources(tmp_path)
+    summary = summarize_sources(sources)
+    assert summary["known"] == Decimal("1.2" if prior_valid_chat else "1")
+    assert summary["incomplete"]
+    assert any(s.get("read_error") for s in sources)
+    assert len({s["source_id"] for s in sources}) == len(sources)
+    assert json.loads(path.read_text()) == persisted
+
+
 @pytest.mark.parametrize(
     "usage",
     [

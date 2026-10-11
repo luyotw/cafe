@@ -89,6 +89,7 @@ def collect_cost_sources(issue_dir: Path) -> list[dict]:
                 gap=gap or _coverage_gap(stats, records),
             )
         )
+        return sources[-1]
 
     def chats(identity, groups):
         if not isinstance(groups, list):
@@ -110,6 +111,7 @@ def collect_cost_sources(issue_dir: Path) -> list[dict]:
         path = directory / "iteration.json"
         if not path.exists() and not path.is_symlink():
             path = directory / "context.json"
+        phase_source = None
         try:
             data = read_accounting_file(path)
             groups = data.get("chat_usage", [])
@@ -121,11 +123,12 @@ def collect_cost_sources(issue_dir: Path) -> list[dict]:
                 or stats.get("total_cost_usd")
                 or any(unrecorded_usage(stats, []).values())
             ):
-                add(identity, stats)
+                phase_source = add(identity, stats)
             chats(identity, groups)
         except (OSError, ValueError, TypeError, AttributeError, InvalidOperation, yaml.YAMLError):
-            add(identity, {}, gap=True)
-            sources[-1]["read_error"] = path.exists() or path.is_symlink()
+            if phase_source is None:
+                phase_source = add(identity, {}, gap=True)
+            phase_source.update(gap=True, read_error=path.exists() or path.is_symlink())
     path = issue_dir / "issue.yaml"
     if path.exists() or path.is_symlink():
         try:
