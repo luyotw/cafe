@@ -23,6 +23,7 @@ def test_codex_chatgpt_native_flow_reaches_confirmed_delivery_readiness(
     root, issue, playbook, context = native_context(
         compact_request, tmp_path, monkeypatch, cli_name="codex"
     )
+    assert context["review_configuration"]["read_only_enforcement"] == "instruction_only"
     # Retain a generic graph: the provider adapter never knows these step names.
     develop = playbook["steps"]["build"]
     develop["on"]["await_agent"] = "publish_ready"

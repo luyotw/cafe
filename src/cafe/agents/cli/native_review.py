@@ -13,6 +13,8 @@ from tempfile import TemporaryDirectory
 
 import yaml
 
+from cafe.core.execution_checkpoints import review_read_only_enforcement
+
 _RESOURCE = "__CAFE_NATIVE_REVIEW_RESOURCE__"
 _MAX_BYTES = 128 * 1024
 _PROMPT = (
@@ -41,9 +43,15 @@ def review_instructions(configuration):
         "codex": "Use the checkpoint_command with your exact parent thread ID, then end "
         "this turn with exactly one JSON object: "
         '\'{"cafe_native_review":{"prompt":"Review instructions and '
-        'CAFE_REVIEW_CHECKPOINT:<receipt_id>"}}\'. '
-        "CAFE forks one native read-only reviewer in this same app-server. "
-        "Do not call spawn_agent or launch another CLI. On the continuation turn, "
+        "CAFE_REVIEW_CHECKPOINT:<receipt_id>\"}}'. "
+        + (
+            "CAFE forks one independent native reviewer without an OS sandbox in this same "
+            "app-server. Its inspection-only role is an instruction constraint, not "
+            "a restriction on its actual filesystem permissions. "
+            if cli == "codex" and review_read_only_enforcement(configuration) == "instruction_only"
+            else "CAFE forks one native read-only reviewer in this same app-server. "
+        )
+        + "Do not call spawn_agent or launch another CLI. On the continuation turn, "
         "copy its independent conclusion and reviewer_id into native_review.json, "
         "then finish the declared handoff. Do not change reviewed content or "
         "request another review in that continuation; use the declared self-loop "
@@ -68,6 +76,9 @@ def review_instructions(configuration):
 
 def validate_configuration(config):
     configuration = config.native_review_configuration
+    enforcement = review_read_only_enforcement(configuration)
+    if enforcement == "instruction_only" and config.cli.value != "codex":
+        raise ValueError("selected provider does not support instruction-only native review")
     if (
         configuration.get("cli") != config.cli.value
         or configuration.get("read_only") is not True
@@ -92,15 +103,23 @@ def validate_configuration(config):
 def project(config, command):
     if config.native_review_configuration is None:
         return command
-    configuration = validate_configuration(config)
-    role = reviewer_type(configuration)
+    validate_configuration(config)
     cli = config.cli.value
     if cli == "codex":
         cwd = command[command.index("-C") + 1]
         return [
-            command[0], "-C", cwd, "-a", "never", "app-server",
-            "--disable", "multi_agent", "--disable", "multi_agent_v2",
-            "-c", "agents.enabled=false",
+            command[0],
+            "-C",
+            cwd,
+            "-a",
+            "never",
+            "app-server",
+            "--disable",
+            "multi_agent",
+            "--disable",
+            "multi_agent_v2",
+            "-c",
+            "agents.enabled=false",
         ]
     if cli == "copilot":
         return [*command, "--plugin-dir", _RESOURCE, "--output-format=json", "--stream=on"]
@@ -365,6 +384,8 @@ def observations(config, lines, observed_at=None, environment=None):
     if cli == "cursor-agent":
         return _cursor_observations(config, role, lines, observed_at)
     if cli == "codex":
+        if review_read_only_enforcement(config.native_review_configuration) == "instruction_only":
+            return []  # Legacy read-only journals cannot prove an unconfined native invocation.
         return _codex_observations(config, role, lines, observed_at, environment or os.environ)
     return []
 

@@ -6,9 +6,12 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- Run Codex streamlined development and independent read-only review with ChatGPT
+- Run Codex streamlined development and independent inspection-only review with ChatGPT
   CLI login or API-key authentication. Use one native app-server with a writable
-  parent, a verified read-only fork and continuation in the original session.
+  parent, an independent native fork and continuation in the original session.
+- Default new Codex compact proposals to execution without an OS sandbox, with
+  explicit instruction-only reviewer permissions. Keep native sandbox enforcement
+  for existing confirmed contracts and record the actual enforcement in review evidence.
 - Reject reviewer model/permission changes, managed feature overrides, extra native
   delegation and contradictory completion. Preserve scope-bound delivery gates,
   declared review retry budgets and separate per-model token accounting.

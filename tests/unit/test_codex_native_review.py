@@ -115,7 +115,10 @@ for line in sys.stdin:
             "cwd": root,
             "approvalPolicy": "never",
             "sandbox": (
-                {"type": "readOnly", "networkAccess": False} if fork else {"type": "workspaceWrite"}
+                {"type": "dangerFullAccess"}
+                if params["sandbox"] == "danger-full-access"
+                else ({"type": "readOnly", "networkAccess": False}
+                      if fork else {"type": "workspaceWrite"})
             ),
         }
         if fork:
@@ -141,6 +144,8 @@ for line in sys.stdin:
                 continue
         elif method == "thread/resume" and case == "wrong_resume":
             result["thread"]["id"] = "other"
+        if not fork and case == "sandboxed_parent":
+            result["sandbox"] = {"type": "workspaceWrite"}
     elif method == "turn/start":
         turns += 1
         thread = params["threadId"]
@@ -311,13 +316,17 @@ def rpc(tmp_path, monkeypatch):
 
     def run(case="ok", *, model="test", session=None, **kwargs):
         selected["case"] = case
+        conf = configuration("codex", "independent_override", model)
+        enforcement = kwargs.pop("enforcement", None)
+        if enforcement is not None:
+            conf["read_only_enforcement"] = enforcement
         executor = AgentExecutor(
             AgentConfig(
                 name="parent",
                 cli=AgentCLI.CODEX,
                 model="test",
                 session_id=session,
-                native_review_configuration=configuration("codex", "independent_override", model),
+                native_review_configuration=conf,
             ),
             stream_output=False,
         )
@@ -561,11 +570,16 @@ def test_rate_limit_preserves_session_and_partial_accounting(rpc):
     assert caught.value.accounting_usage.cost_records[0]["complete"] is False
 
 
-def test_public_manager_native_result_is_required_by_delivery_gate(rpc, execution_context):
+@pytest.mark.parametrize("enforcement", [None, "sandbox", "instruction_only"])
+def test_public_manager_native_result_is_required_by_delivery_gate(
+    rpc, execution_context, enforcement
+):
     from cafe.agents.manager import AgentManager
 
     run, selected, _, commands, _, _ = rpc
     conf = configuration("codex")
+    if enforcement is not None:
+        conf["read_only_enforcement"] = enforcement
     execution_context["review_configuration"] = conf
     receipt = checkpoint(execution_context, "before_review", round_id="round", parent_id=PARENT)
     selected["receipt"] = receipt["receipt_id"]
@@ -598,6 +612,15 @@ def test_public_manager_native_result_is_required_by_delivery_gate(rpc, executio
         "native_observations": {"version": 1, "parent_id": PARENT, "observations": observed},
     }
     require_verified_review(execution_context, evidence)
+    if enforcement == "instruction_only":
+        assert observed[0]["sandbox_enabled"] is False
+        assert observed[0]["parent_sandbox"] == {"type": "dangerFullAccess"}
+        assert observed[0]["reviewer_sandbox"] == {"type": "dangerFullAccess"}
+        for field, value in (("sandbox_enabled", True), ("read_only_enforcement", "sandbox")):
+            false_permission = json.loads(json.dumps(evidence))
+            false_permission["native_observations"]["observations"][0][field] = value
+            with pytest.raises(ValueError, match="permission evidence"):
+                require_verified_review(execution_context, false_permission)
     evidence["invocations"][0]["findings"] = [{"severity": "nonblocking", "detail": "parent guess"}]
     with pytest.raises(ValueError):
         require_verified_review(execution_context, evidence)
@@ -636,3 +659,28 @@ def test_cleanup_kills_descendant_after_server_leader_exits(rpc):
             return
         time.sleep(0.02)
     pytest.fail("Native command descendant survived app-server cleanup")
+
+
+@pytest.mark.parametrize("session", [None, PARENT])
+def test_confirmed_instruction_only_review_disables_sandbox_for_every_native_turn(rpc, session):
+    run, _, transcript, _, _, _ = rpc
+    executor, execute = run(enforcement="instruction_only", session=session)
+    response = execute()
+    assert response.session_id == executor.config.session_id == PARENT
+    requests = _records(transcript)
+    for request in requests:
+        if request["method"] in {"thread/start", "thread/resume", "thread/fork"}:
+            assert request["params"]["sandbox"] == "danger-full-access"
+        if request["method"] == "turn/start":
+            assert request["params"]["sandboxPolicy"] == {"type": "dangerFullAccess"}
+    observation = response.native_review_observations[0]
+    assert observation["read_only_enforcement"] == "instruction_only"
+    assert observation["sandbox_enabled"] is False
+
+
+@pytest.mark.parametrize("case", ["sandboxed_parent", "writable_child", "settings_changed"])
+def test_instruction_only_execution_rejects_unconfirmed_effective_permissions(rpc, case):
+    run, _, _, _, _, _ = rpc
+    _, execute = run(case, enforcement="instruction_only")
+    with pytest.raises(AgentExecutionError):
+        execute()

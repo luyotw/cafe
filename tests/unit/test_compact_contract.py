@@ -49,6 +49,7 @@ def test_compact_initial_confirmation_and_revision_checked_expansion(tmp_path, c
     contract = confirmed_contract_snapshot(tmp_path)
     assert contract["contract_mode"] == "compact"
     assert set(contract["file_scope"]["paths"]) == {"app.py", "tests/test_app.py"}
+    assert contract["review_configuration"]["read_only_enforcement"] == "instruction_only"
     expanded = deepcopy(compact_proposal)
     expanded["file_scope"]["paths"].append("extra.py")
     command = ReplaceConfirmedContract(
@@ -153,3 +154,29 @@ def test_confirmed_review_policy_must_match_resolved_graph(compact_request, comp
     activate(issue, mismatched)
     with pytest.raises(ValueError):
         execution_scope_projection(issue, root)
+
+
+def test_legacy_confirmed_review_permissions_are_not_changed_on_resume(
+    compact_request, compact_proposal, tmp_path
+):
+    legacy = deepcopy(compact_proposal)
+    legacy["review_configuration"].pop("read_only_enforcement")
+    root = Path(compact_request["project_root"])
+    activate(root / ".cafe/issues/sample", legacy)
+    owner = load_kickoff_module("kickoff_inputs")
+    discovery = owner.discover_kickoff(
+        compact_request, config_dir=tmp_path / "resume-config", cache_dir=tmp_path / "resume-cache"
+    )
+    resumed = owner.assemble_kickoff(compact_request, discovery=discovery)
+    assert resumed["status"] == "ready", resumed
+    assert resumed["proposal"]["review_configuration"] == legacy["review_configuration"]
+
+
+@pytest.mark.parametrize("mode", [None, True, "unknown"])
+def test_review_enforcement_rejects_unsupported_values(compact_proposal, mode):
+    from cafe.manager._schema import validate_compact_proposal
+
+    bad = deepcopy(compact_proposal)
+    bad["review_configuration"]["read_only_enforcement"] = mode
+    with pytest.raises(ValueError, match="enforcement"):
+        validate_compact_proposal(bad)

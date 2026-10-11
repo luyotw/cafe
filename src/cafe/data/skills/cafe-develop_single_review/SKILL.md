@@ -1,7 +1,7 @@
 ---
 name: cafe-develop_single_review
 description: Single native reviewer overlay with per-invocation scope checkpoints.
-version: 1.0.2
+version: 1.0.3
 workflow:
   required_tools: [Agent]
   human_tasks:
@@ -34,15 +34,20 @@ actual `--parent-id`, and `--output <iteration>/scope_checkpoint.json`. Check
 the command's exit status and the explicit `passed` result. Start no reviewer
 when scope evidence is unavailable, fails, or belongs to an old authority.
 
-Invoke exactly one independent native subagent, configured read-only and with
-the confirmed provider-effective model behavior. Give it the receipt/round ID,
+Invoke exactly one independent native subagent with an inspection-only role,
+the confirmed read-only enforcement and provider-effective model behavior.
+Give it the receipt/round ID,
 authoritative request, current implementation and targeted test evidence.
 Use the provider-native reviewer type supplied in the resolved execution
 context's `native_reviewer_type`) and follow `native_review_instructions` for
 its native tool arguments, identity and completion events. The projected
-reviewer definition restricts its native tools or permissions to inspection;
-supply Git diffs and targeted results from the parent. Do not substitute a
-general-purpose agent that inherits write tools or start another CLI session.
+reviewer definition applies the confirmed tool/permission restrictions or
+explicit inspection-only instructions; supply Git diffs and targeted results
+from the parent. When `read_only_enforcement` is `instruction_only`, OS sandboxing
+is disabled and the reviewer technically retains write access. Never describe
+this mode as enforced filesystem protection. Content checkpoints still block
+delivery of changed reviewed content. Follow the projected reviewer definition;
+do not substitute a general-purpose agent or start another CLI session.
 Include `CAFE_REVIEW_CHECKPOINT:<receipt_id>` in the native reviewer task prompt
 and use the actual parent provider session ID for the checkpoint. Record the
 provider-native child or tool-call identity specified by the execution context

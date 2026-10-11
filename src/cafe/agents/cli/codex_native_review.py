@@ -1,7 +1,7 @@
 """Codex native fork review in one authenticated app-server process.
 
 A parent turn requests review after its checkpoint. A separate native thread
-performs a read-only turn; its result returns to the same parent for handoff.
+follows the confirmed inspection-only policy and returns its independent result.
 No standalone reviewer process or parent-authored completion is accepted.
 """
 
@@ -23,6 +23,7 @@ from cafe.agents.process_output import ProcessOutput
 from cafe.agents.transport_types import TransportResult
 from cafe.constraints import execution_context, numeric_limit
 from cafe.core.cost import prepare_cost_accounting
+from cafe.core.execution_checkpoints import review_read_only_enforcement
 from cafe.core.types import AgentResponse, TokenUsage
 from cafe.core.usage import merge_token_usage_stats
 
@@ -135,6 +136,7 @@ class _AppServer:
         self.turns = {}
         self.models = {}
         self.children = set()
+        self.sandboxes = {}
         self.messages = {}
         self.active = None
         self.exited_at = None
@@ -286,9 +288,8 @@ class _AppServer:
                 settings.get("model") != self.models[thread]
                 or settings.get("approvalPolicy") != "never"
                 or (
-                    thread in self.children
-                    and settings.get("sandboxPolicy")
-                    != {"type": "readOnly", "networkAccess": False}
+                    thread in self.sandboxes
+                    and settings.get("sandboxPolicy") != self.sandboxes[thread]
                 )
             ):
                 raise _error(
@@ -357,6 +358,8 @@ class _AppServer:
         }
         if read_only:
             params["sandboxPolicy"] = {"type": "readOnly", "networkAccess": False}
+        elif self.sandboxes.get(thread) == {"type": "dangerFullAccess"}:
+            params["sandboxPolicy"] = {"type": "dangerFullAccess"}
         if output_schema:
             params["outputSchema"] = output_schema
         started = time.monotonic()
@@ -499,21 +502,30 @@ def _child_configuration(server, cwd):
     return config
 
 
-def _verified_thread(result, *, model, cwd, parent=None):
+def _verified_thread(result, *, model, cwd, parent=None, enforcement="sandbox"):
     thread = result.get("thread", {})
     identifier = _identity(thread.get("id"))
     if result.get("model") != model or Path(result.get("cwd", "")).resolve() != cwd:
         raise _error("Codex native thread differs from the selected model or workspace.")
     if result.get("approvalPolicy") != "never":
         raise _error("Codex native thread permits interactive escalation.")
-    if parent is None and result.get("sandbox", {}).get("type") != "workspaceWrite":
+    if enforcement == "instruction_only" and result.get("sandbox") != {"type": "dangerFullAccess"}:
+        raise _error("Codex did not establish the confirmed execution without an OS sandbox.")
+    if (
+        enforcement == "sandbox"
+        and parent is None
+        and result.get("sandbox", {}).get("type") != "workspaceWrite"
+    ):
         raise _error("Codex did not establish a writable development parent.")
     if parent is not None and (
         identifier == parent
         or thread.get("forkedFromId") != parent
-        or result.get("sandbox") != {"type": "readOnly", "networkAccess": False}
+        or (
+            enforcement == "sandbox"
+            and result.get("sandbox") != {"type": "readOnly", "networkAccess": False}
+        )
     ):
-        raise _error("Codex did not establish an independent read-only native fork.")
+        raise _error("Codex did not establish the confirmed independent native fork.")
     return identifier
 
 
@@ -550,8 +562,10 @@ def execute_native_review(
     execution_control=None,
     streaming_output_file=None,
 ):
-    """Run writable development, readonly native review and exact parent continuation."""
+    """Run development, confirmed native review and exact parent continuation."""
     configuration = validate_configuration(executor.config)
+    enforcement = review_read_only_enforcement(configuration)
+    unconfined = enforcement == "instruction_only"
     cwd = Path(working_directory or command[command.index("-C") + 1]).resolve()
     baseline = None
     if executor.config.session_id:
@@ -575,7 +589,7 @@ def execute_native_review(
             params = {
                 "cwd": str(cwd),
                 "model": executor.config.model,
-                "sandbox": "workspace-write",
+                "sandbox": "danger-full-access" if unconfined else "workspace-write",
                 "approvalPolicy": "never",
                 "developerInstructions": "This invocation uses CAFE's native fork review protocol. "
                 "After implementation, checks and the scope checkpoint, end the turn with "
@@ -601,13 +615,17 @@ def execute_native_review(
             else:
                 opened = server.request("thread/start", params)
                 baseline = {"input_tokens": 0, "output_tokens": 0}
-            parent = _verified_thread(opened, model=executor.config.model, cwd=cwd)
+            parent = _verified_thread(
+                opened, model=executor.config.model, cwd=cwd, enforcement=enforcement
+            )
             if executor.config.session_id and parent != executor.config.session_id:
                 raise _error("Codex resumed a different native session.", "session_mismatch")
             if params.get("threadId") is None:
                 server.fresh.add(parent)
             server.baselines[parent] = baseline
             server.models[parent] = opened["model"]
+            if unconfined:
+                server.sandboxes[parent] = opened["sandbox"]
             executor.config.session_id = parent
             # Normalized identity comes from the actual RPC response, not model text.
             server.record({"type": "thread.started", "thread_id": parent})
@@ -624,23 +642,36 @@ def execute_native_review(
                         "threadId": parent,
                         "cwd": str(cwd),
                         "model": configuration["model"],
-                        "sandbox": "read-only",
+                        "sandbox": "danger-full-access" if unconfined else "read-only",
                         "approvalPolicy": "never",
                         "ephemeral": True,
                         "excludeTurns": True,
-                        "developerInstructions": _PROMPT,
+                        "developerInstructions": _PROMPT
+                        + (
+                            " OS sandboxing is disabled. Inspection-only is a role instruction; "
+                            "do not describe it as enforced filesystem protection."
+                            if unconfined
+                            else ""
+                        ),
                         "config": child_config,
                     },
                 )
-                child = _verified_thread(fork, model=configuration["model"], cwd=cwd, parent=parent)
+                child = _verified_thread(
+                    fork,
+                    model=configuration["model"],
+                    cwd=cwd,
+                    parent=parent,
+                    enforcement=enforcement,
+                )
                 server.baselines[child] = server.totals.get(parent)
                 server.models[child] = fork["model"]
                 server.children.add(child)
+                server.sandboxes[child] = fork["sandbox"]
                 result = server.turn(
                     child,
                     fork["model"],
                     _PROMPT + "\n" + review_prompt,
-                    read_only=True,
+                    read_only=not unconfined,
                     output_schema=_REVIEW_SCHEMA,
                 )
                 conclusion = _conclusion(result)
@@ -653,6 +684,10 @@ def execute_native_review(
                     "observed_at": observed_at,
                     "terminal": "result",
                     "exit_status": 0,
+                    "read_only_enforcement": enforcement,
+                    "sandbox_enabled": not unconfined,
+                    "parent_sandbox": opened["sandbox"],
+                    "reviewer_sandbox": fork["sandbox"],
                     **conclusion,
                 }
                 observations.append(observation)
@@ -666,7 +701,8 @@ def execute_native_review(
                     }
                 )
                 continuation = (
-                    "CAFE's independent read-only native fork completed. "
+                    "CAFE's independent native fork completed under the confirmed "
+                    "inspection-only policy. "
                     "Preserve reviewed content. "
                     "Record the exact conclusion below and its reviewer_id in native_review.json "
                     "with your checkpoint and then the declared handoff. "

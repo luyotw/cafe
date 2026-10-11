@@ -13,7 +13,7 @@ The first complete proposal contains three decision groups:
 2. **Execution:** selected CLI/model chains and the effective native review
    configuration. Native reviewer definitions are projected per invocation for
    Claude, Gemini, Copilot and Cursor. Codex uses a writable development thread
-   and an independently read-only native fork. Unsupported permissions or model
+   and an independent inspection-only native fork. Unsupported permissions or model
    behavior are explicit
    readiness gaps, never another standalone CLI reviewer.
 3. **Delivery:** PR source/target branches and remote, or commit/push to the exact
@@ -70,17 +70,31 @@ independent conclusions must match; parent text cannot establish child success.
 | Gemini 0.58.0 | Temporary user agent, read_file/list_directory/glob/grep_search | Inherited or explicit override | Matching native agent progress, completed with GOAL and child result |
 | Copilot 1.0.83 | Temporary plugin, view/glob/grep | Inherited or explicit override | Matching native start/completion/tool result and actual model; cancellation rejected |
 | Cursor 2026.10.01-e373342 | Temporary plugin with native readonly permissions | Inherited only; plugin overrides rejected | Synchronous Task success and final child assistant message |
-| Codex 0.159.3 | One app-server with writable parent and read-only native fork | Inherited or explicit override; ChatGPT login or API key | Actual fork identity, effective sandbox/model, matching child turn and independent final result |
+| Codex 0.159.3 | One app-server with independent native fork; new proposals default to no OS sandbox | Inherited or explicit override; ChatGPT login or API key | Actual fork identity, confirmed permission mode/model, matching child turn and independent final result |
 
 Codex uses its authenticated native app-server for the entire reviewed invocation.
 After implementation, targeted checks and the scope checkpoint, the development
 thread ends a turn with the projected structured review request. CAFE forks one
-native thread, verifies its distinct ID and exact parent, approved model, read-only
-sandbox and never-approval policy, then starts its read-only review turn. Its
+native thread, verifies its distinct ID and exact parent, approved model, confirmed
+permission mode and never-approval policy, then starts its inspection-only review. Its
 independent conclusion returns to the same parent thread for evidence and handoff.
 These are internal turns in one process, not extra workflow steps or iterations.
 The parent cannot edit reviewed content or request a second review in that
 continuation; corrections use the declared workflow self-loop and attempt budget.
+
+New Codex compact proposals default explicitly to
+`read_only_enforcement: instruction_only`. All three native turns use
+`danger-full-access`: development, independent review and parent continuation
+run without an OS sandbox. `read_only: true` describes the reviewer's role
+instructions; the reviewer technically retains write access. The host records
+the actual parent and reviewer permissions and that sandboxing is disabled.
+Content checkpoints reject changed reviewed content before delivery, but do not
+prevent writes or undo external side effects.
+
+`read_only_enforcement: sandbox` retains a workspace-write development parent
+and read-only review fork. Already confirmed contracts without this field keep
+that behavior; resume never silently changes their confirmed permissions. New
+proposals display the effective setting before confirmation.
 
 ChatGPT CLI login and API-key authentication both use native Codex authentication;
 CAFE neither reads credential contents nor requires an API key for this path.
@@ -104,12 +118,14 @@ roles. Older CLI versions without the required RPCs report a readiness failure.
 
 Automated tests use native-schema fixtures over actual stdio pipes for permissions,
 continuation, replay, failure, accounting and delivery validation. Native CLI
-metadata and three actual model turns verify ChatGPT-authenticated writable-parent,
-read-only-fork and same-parent continuation on the installed 0.159.3 CLI. This
-tool-free smoke does not establish a complete workflow run. Running development
-and review commands also requires
-a working native OS sandbox; a container that denies bubblewrap network setup
-reports its real failure. Compatibility with future versions still requires native evidence.
+metadata and model calls verify authenticated native fork and same-parent
+continuation on the installed 0.159.3 CLI. A ChatGPT-authenticated,
+instruction-only smoke completed real development commands, tests, independent
+native review, same-parent continuation and delivery-readiness checks in 129
+seconds. That local fixture did not publish a PR or merge remote changes.
+The explicit sandbox mode requires a working native OS sandbox;
+instruction-only execution does not launch that sandbox.
+Compatibility with future versions still requires native evidence.
 
 See the native [Claude](https://code.claude.com/docs/en/sub-agents),
 [Gemini](https://geminicli.com/docs/core/subagents/),
