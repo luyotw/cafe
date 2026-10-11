@@ -78,3 +78,18 @@ def test_append_preserves_unambiguous_member_comments():
     assert "- Read # observe only\n" in changed
     assert changed.endswith("# Owner footer\n")
     assert edit_yaml(changed, operation) == changed
+
+
+@pytest.mark.parametrize("style", ["|", ">"])
+@pytest.mark.parametrize("value", ["New prose.", "New\nprose"])
+def test_block_scalar_replacement_preserves_next_field(style, value):
+    from cafe.authoring import decode_request
+
+    source = f"description: {style}\n  Old prose.\nversion: 1\n"
+    operation = Operation(
+        op="replace", path=["description"], value=value, expected="Old prose.\n", overwrite=True
+    )
+    changed = edit_yaml(source, operation)
+    assert decode_request(changed) == {"description": value, "version": 1}
+    assert changed.endswith("version: 1\n")
+    assert edit_yaml(changed, operation) == changed

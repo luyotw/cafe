@@ -52,6 +52,8 @@ def confined(root, relative):
         )
         if tracked.returncode != 0:
             raise ValueError("Builtin targets require versioned CAFE source markers")
+    if root.is_symlink() or root.resolve() != root:
+        raise ValueError("Selected source root traverses a symlink")
     current = root
     for part in parts:
         current = current / part
@@ -83,6 +85,7 @@ def publish(root, relative, content, mode):
     temporary = f".authoring-{secrets.token_hex(16)}"
     created = False
     try:
+        _revalidate_parent(root, relative, fd)
         if content is None:
             os.unlink(name, dir_fd=fd)
         else:
@@ -95,6 +98,7 @@ def publish(root, relative, content, mode):
                 file.flush()
                 os.fchmod(file.fileno(), mode)
                 os.fsync(file.fileno())
+            _revalidate_parent(root, relative, fd)
             os.replace(temporary, name, src_dir_fd=fd, dst_dir_fd=fd)
         os.fsync(fd)
     finally:
@@ -210,3 +214,12 @@ def locked(root):
     handle = open_lock_file(private / "write.lock")
     fcntl.flock(handle, fcntl.LOCK_EX)
     return handle
+
+
+def _revalidate_parent(root, relative, fd):
+    """Verify the opened directory is still the exact confined publication parent."""
+    path = confined(root, relative)
+    actual = path.parent.stat(follow_symlinks=False)
+    opened = os.fstat(fd)
+    if (actual.st_dev, actual.st_ino) != (opened.st_dev, opened.st_ino):
+        raise ValueError("Publication directory identity changed; preview fresh sources")

@@ -227,3 +227,65 @@ def test_primary_variant_defaults_need_equivalent_effective_contracts(tmp_path):
         result.confirmation_gates[request["target"]]["authority_after"]["observe"]["allowed_tools"]
         == []
     )
+
+
+def test_phase_patch_revalidates_alias_selected_playbook(tmp_path):
+    core = tmp_path / "src/cafe/core/playbook.py"
+    core.parent.mkdir(parents=True)
+    core.write_text("# CAFE source fixture with an isolated builtin catalog\n")
+    request = pair()
+    phase = request["companions"][0]
+    phase["target"] = ".cafe/skills/cafe-develop/SKILL.md"
+    phase["declaration"]["name"] = "cafe-develop"
+    request["declaration"]["steps"]["observe"]["skill"] = "develop"
+    assert apply(request, root=tmp_path).status == "applied"
+    patch = {
+        "version": 1,
+        "target": phase["target"],
+        "mode": "patch",
+        "operations": [
+            {"op": "upsert", "path": ["metadata", "workflow", "required_tools"], "value": "Write"}
+        ],
+    }
+    result = prepare(patch, root=tmp_path)
+    assert result.status == "rejected"
+    assert any(
+        d["code"] == "missing_required_tool" and d["step"] == "observe" for d in result.diagnostics
+    )
+
+
+def test_required_workspace_requires_reachable_workspace_producer(tmp_path):
+    request = pair()
+    step = request["declaration"]["steps"]["observe"]
+    step.update(input_artifacts=["checkout"], workspace_input_artifact="checkout")
+    result = prepare(request, root=tmp_path)
+    assert any(
+        d["code"] == "missing_workspace_producer" and d["field"] == "workspace_input_artifact"
+        for d in result.diagnostics
+    )
+    producer = deepcopy(request["companions"][0])
+    producer["target"] = ".cafe/skills/cafe-checkout/SKILL.md"
+    producer["declaration"]["name"] = "cafe-checkout"
+    request["companions"].append(producer)
+    request["declaration"]["entry_point"] = "checkout"
+    request["declaration"]["steps"]["checkout"] = {
+        "skill": "cafe-checkout",
+        "role": "observer",
+        "input_artifacts": [],
+        "output_artifact": "checkout",
+        "allowed_tools": [],
+        "on": {"await_agent": "observe"},
+    }
+    assert prepare(request, root=tmp_path).status == "rejected"
+    request["declaration"]["steps"]["checkout"]["workspace_artifact"] = "checkout"
+    request["declaration"]["steps"]["checkout"]["output_artifact"] = "checkout_report"
+    assert prepare(request, root=tmp_path).status == "ready"
+
+
+def test_missing_optional_ordinary_artifact_is_reported(tmp_path):
+    request = pair()
+    request["declaration"]["steps"]["observe"]["input_artifacts"] = ["prior_record"]
+    result = prepare(request, root=tmp_path)
+    assert any(
+        d["code"] == "unbound_artifact" and d["severity"] == "info" for d in result.diagnostics
+    )

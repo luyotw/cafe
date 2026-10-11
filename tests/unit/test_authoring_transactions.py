@@ -190,3 +190,63 @@ def test_authorized_builtin_patch_and_project_shadow_are_reported(tmp_path):
     shadow.write_text(source.read_text())
     result = prepare(patch, root=tmp_path)
     assert any(d["code"] == "ineffective_shadow" for d in result.diagnostics)
+
+
+def test_publication_rejects_directory_identity_race_before_writing(tmp_path, monkeypatch):
+    import tempfile
+
+    import cafe.authoring.transaction as transaction
+
+    source = tmp_path / ".cafe/skills/cafe-test/SKILL.md"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"original")
+    original_parent = transaction._parent
+    with tempfile.TemporaryDirectory() as outside:
+        moved = Path(outside) / "skills"
+
+        def race(root, relative):
+            fd = original_parent(root, relative)
+            (root / ".cafe/skills").rename(moved)
+            (root / ".cafe/skills").symlink_to(moved, target_is_directory=True)
+            return fd
+
+        monkeypatch.setattr(transaction, "_parent", race)
+        with pytest.raises(ValueError):
+            transaction.publish(tmp_path, ".cafe/skills/cafe-test/SKILL.md", b"published", 0o644)
+        assert (moved / "cafe-test/SKILL.md").read_bytes() == b"original"
+        assert sorted(p.name for p in (moved / "cafe-test").iterdir()) == ["SKILL.md"]
+
+
+def test_builtin_playbook_shadow_is_rejected_with_selected_source(tmp_path):
+    import subprocess
+
+    core = tmp_path / "src/cafe/core/playbook.py"
+    core.parent.mkdir(parents=True)
+    core.write_text("# CAFE source fixture\n")
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "cafe-engine"\n')
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "add", "pyproject.toml", "src/cafe/core/playbook.py"],
+        check=True,
+    )
+    request = pair()
+    request["target"] = "src/cafe/data/playbooks/fieldwork.yaml"
+    request["companions"][0]["target"] = "src/cafe/data/skills/cafe-observe/SKILL.md"
+    assert apply(request, root=tmp_path).status == "applied"
+    selected = tmp_path / ".cafe/playbooks/fieldwork.yaml"
+    selected.parent.mkdir(parents=True)
+    selected.write_text((tmp_path / request["target"]).read_text())
+    patch = {
+        "version": 1,
+        "target": request["target"],
+        "mode": "patch",
+        "operations": [
+            {"op": "upsert", "path": ["steps", "observe", "allowed_goto"], "value": "observe"}
+        ],
+    }
+    result = prepare(patch, root=tmp_path)
+    assert result.status == "rejected"
+    assert any(
+        d["code"] == "ineffective_shadow" and str(selected) in d["message"]
+        for d in result.diagnostics
+    )

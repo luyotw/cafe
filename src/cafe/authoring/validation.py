@@ -25,6 +25,7 @@ from cafe.playbooks.simulate import analyze_playbook
 from cafe.skills.loader import SkillLoader
 from cafe.skills.selectors import skill_selector_names
 from cafe.skills.workflow_composition import resolve_step_workflow_composition
+from cafe.utils.yaml_utils import safe_load
 
 from .phase import guard
 from .requests import decode_request
@@ -89,6 +90,8 @@ def validate(root, result, requests):
                 pass
             candidates[relative or str(path)] = path.read_text()
         changed_names = set()
+        reset_sources = set()
+        books_by_key = {entry.key: entry.path for entry in playbook_entries}
         for relative, content in result.files.items():
             path = Path(relative)
             if "skills" in path.parts:
@@ -111,8 +114,37 @@ def validate(root, result, requests):
                             ),
                         )
                         continue
+                if (
+                    selected
+                    and selected.resolve() != actual.resolve()
+                    and name not in reset_sources
+                ):
+                    folder = staged / ".cafe/skills" / name
+                    shutil.rmtree(folder)
+                    if actual.exists():
+                        shutil.copytree(actual, folder)
+                    source_by_name[name] = actual
+                    reset_sources.add(name)
                 dest = staged / ".cafe/skills" / name / Path(*path.parts[index + 2 :])
             else:
+                selected = books_by_key.get(path.stem)
+                actual = root / path
+                if selected and selected.resolve() != actual.resolve():
+                    if relative.startswith("src/"):
+                        result.diagnose(
+                            "ineffective_shadow",
+                            f"Selected source is {selected}",
+                            target=relative,
+                            field="target",
+                            remedy="Explicitly target the effective playbook source",
+                        )
+                        continue
+                    # A new active project declaration replaces the lower-precedence candidate.
+                    candidates.pop(str(selected), None)
+                    try:
+                        candidates.pop(str(selected.relative_to(root)), None)
+                    except ValueError:
+                        pass
                 candidates[relative] = content
                 continue
             dest.parent.mkdir(parents=True, exist_ok=True)
@@ -137,7 +169,7 @@ def validate(root, result, requests):
         changed_books = {r.target for r in requests if "playbooks" in Path(r.target).parts}
         for relative, content in sorted(candidates.items()):
             # Existing unaffected playbooks need not revalidate legacy warning contracts.
-            if relative not in changed_books and not any(name in content for name in changed_names):
+            if relative not in changed_books and not _affected(content, changed_names, loader):
                 continue
             candidate = staged / "playbooks" / Path(relative).name
             candidate.parent.mkdir(exist_ok=True)
@@ -207,8 +239,11 @@ def validate(root, result, requests):
 
 def _bindings(model, loader, result, target, graph):
     producers = {}
+    workspaces = {}
     consumers = {}
     for name, step in model.steps.items():
+        if step.workspace_artifact:
+            workspaces.setdefault(step.workspace_artifact, []).append(name)
         for artifact in (step.output_artifact, step.workspace_artifact):
             if artifact:
                 producers.setdefault(artifact, []).append(name)
@@ -249,6 +284,37 @@ def _bindings(model, loader, result, target, graph):
         return False
 
     for name, step in model.steps.items():
+        if step.workspace_input_artifact and not any(
+            owner != name and reaches(owner, name)
+            for owner in workspaces.get(step.workspace_input_artifact, ())
+        ):
+            result.diagnose(
+                "missing_workspace_producer",
+                "Required workspace has no reachable workspace-kind producer",
+                target=target,
+                step=name,
+                field="workspace_input_artifact",
+                remedy=(
+                    "Declare workspace_artifact on a reachable producer; "
+                    "ordinary outputs do not supply workspaces"
+                ),
+            )
+        for artifact in step.input_artifacts or ():
+            if not any(
+                owner != name and reaches(owner, name) for owner in producers.get(artifact, ())
+            ) and not (step.initial_input and step.initial_input.bind.artifact == artifact):
+                result.diagnose(
+                    "unbound_artifact",
+                    f"No reachable declared producer for optional input {artifact}",
+                    target=target,
+                    step=name,
+                    field="input_artifacts",
+                    severity="info",
+                    remedy=(
+                        "Declare a producer or confirm "
+                        "the optional historical input is intentional"
+                    ),
+                )
         workflow = resolve_playbook_skills(
             model, channel="workflow", role=step.role, step_name=name
         )
@@ -364,6 +430,12 @@ def _explicit_authority(model, raw, before, requests, result, target):
                             model, channel="workflow", role=model.steps[name].role, step_name=name
                         )
                     )
+                    for primary in skill_selector_names(model.steps[name].skill):
+                        contributing.update(
+                            result.artifact_summary[target]["contributors"].get(
+                                f"{name}:{primary}", ()
+                            )
+                        )
                     if Path(request.target).parent.name not in contributing:
                         continue
                     if request.mode == "create":
@@ -466,3 +538,21 @@ def _todos(model, loader, step_name, contributor, producers, result, target):
                                     "and Source/Work/Closure/Evidence fields"
                                 ),
                             )
+
+
+def _affected(content, changed_names, loader):
+    """Use effective runtime source identities; aliases and overlays are not raw text matches."""
+    if not changed_names:
+        return False
+    raw = normalize_playbook_yaml(safe_load(content))
+    for name, step in raw.get("steps", {}).items():
+        primary = skill_selector_names(step["skill"])
+        workflow = resolve_playbook_skills(
+            raw, channel="workflow", role=step.get("role"), step_name=name
+        )
+        if any(
+            loader.get_skill_dir(requested).name in changed_names
+            for requested in (*primary, *workflow)
+        ):
+            return True
+    return False

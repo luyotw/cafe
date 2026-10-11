@@ -53,7 +53,8 @@ def _replace(text, node, value):
     if isinstance(node, ScalarNode) and not isinstance(value, (dict, list)):
         encoded = dump(value).removesuffix("...\n").rstrip("\n")
         if "\n" not in encoded:
-            return text[: node.start_mark.index] + encoded + text[node.end_mark.index :]
+            separator = "\n" if node.style in {"|", ">"} else ""
+            return text[: node.start_mark.index] + encoded + separator + text[node.end_mark.index :]
     start = node.start_mark.index
     end = node.end_mark.index
     if isinstance(node, ScalarNode) or node.flow_style:
@@ -64,7 +65,12 @@ def _replace(text, node, value):
         rendered = "\n" + "".join(
             " " * (key_indent + 2) + line for line in dump(value).splitlines(True)
         )
-        return text[:start] + rendered.rstrip("\n") + text[end:]
+        rendered = (
+            rendered
+            if isinstance(node, ScalarNode) and node.style in {"|", ">"}
+            else rendered.rstrip("\n")
+        )
+        return text[:start] + rendered + text[end:]
     indent = node.start_mark.column
     if value in ([], {}):
         indent = max(indent, 2)
