@@ -431,6 +431,38 @@ def test_public_source_partitions_valid_scalar_money_types(tmp_path, phase_money
     assert json.loads(path.read_text()) == persisted
 
 
+@pytest.mark.parametrize("with_proof", [False, True])
+@pytest.mark.parametrize("phase_money,chat_money,known", [
+    (0.25, None, "0.25"), (None, 0.1, "0.1"), (0.25, 0, "0.25"),
+])
+def test_public_source_keeps_unknown_partition_money_contained(
+    tmp_path, phase_money, chat_money, known, with_proof
+):
+    directory = tmp_path / "compose/iteration_001"
+    directory.mkdir(parents=True)
+    path = directory / "iteration.json"
+    phase_stats = dict(total_cost_usd=phase_money)
+    chat_stats = dict(total_cost_usd=chat_money)
+    if with_proof:
+        phase_stats["accounting_residual"] = dict(total_cost_usd=None)
+        chat_stats["accounting_residual"] = dict(total_cost_usd=None)
+    persisted = dict(
+        stats=phase_stats,
+        chat_usage=[dict(
+            cli="mock", model="unknown", mode="interactive", calls=1,
+            incomplete_calls=1, unknown_fields=["total_cost_usd"] if chat_money is None else [],
+            cost_records=[], stats=chat_stats,
+        )],
+    )
+    path.write_text(json.dumps(persisted))
+    sources = collect_cost_sources(tmp_path)
+    assert not any(s.get("read_error") for s in sources)
+    summary = summarize_sources(sources)
+    assert summary["known"] == Decimal(known)
+    assert summary["incomplete"]
+    assert json.loads(path.read_text()) == persisted
+
+
 @pytest.mark.parametrize(
     "usage",
     [

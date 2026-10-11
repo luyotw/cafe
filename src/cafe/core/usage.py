@@ -601,12 +601,14 @@ def phase_stats_without_chat(stats, groups):
     records = remaining.get("cost_records", records)
     remaining["cost_records"] = records
     historical_proof = dict(remaining.get("accounting_residual", {}))
-    money = [(1, remaining["total_cost_usd"])] if "total_cost_usd" in remaining else []
+    money = (
+        [(1, remaining["total_cost_usd"])] if remaining.get("total_cost_usd") is not None else []
+    )
     for group in groups or ():
         group_records = group.get("cost_records", [])
         group_stats = _caller_stats(group.get("stats", {}), group_records)
         for key, value in group_stats.get("accounting_residual", {}).items():
-            if key in historical_proof:
+            if value is not None and historical_proof.get(key) is not None:
                 phase_value = historical_proof[key]
                 if key == "total_cost_usd":
                     phase_value, value = Decimal(str(phase_value)), Decimal(str(value))
@@ -614,7 +616,8 @@ def phase_stats_without_chat(stats, groups):
         for key, value in group_stats.items():
             if key in CHAT_USAGE_FIELDS and key in remaining:
                 if key == "total_cost_usd":
-                    money.append((-1, value))
+                    if value is not None and remaining[key] is not None:
+                        money.append((-1, value))
                 elif isinstance(value, (int, float)):
                     remaining[key] -= value
         chat_ids = {r.get("invocation_id") for r in group_records}
