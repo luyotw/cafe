@@ -115,6 +115,60 @@ esac
 
 "$SMOKE_VENV/bin/cafe" --help >/dev/null
 
+echo "Verifying packaged authoring preview and reviewed source publication..."
+"$SMOKE_VENV/bin/python" - "$SMOKE_VENV/bin/cafe" \
+    "$PROJECT_ROOT/tests/fixtures/authoring/pair.yaml" <<'PYAUTHORING'
+import json
+import subprocess
+import sys
+from pathlib import Path
+from cafe.authoring import decode_request, request_schema
+
+cli, fixture = sys.argv[1:]
+assert {"request", "phase_workflow", "playbook"} <= request_schema().keys()
+request = decode_request(Path(fixture).read_text())
+phase = json.dumps(request["companions"][0])
+phase_preview = subprocess.run(
+    [cli, "skill", "author", "phase", "--spec", "-", "--dry-run", "--format", "json"],
+    input=phase, capture_output=True, text=True, check=True,
+)
+assert json.loads(phase_preview.stdout)["status"] == "ready"
+assert not Path(request["target"]).exists()
+command = [cli, "playbook", "author", "--spec", fixture, "--format", "json"]
+preview = json.loads(subprocess.run(
+    [*command, "--dry-run"], capture_output=True, text=True, check=True,
+).stdout)
+assert preview["status"] == "ready", preview
+assert not Path(request["target"]).exists()
+applied = json.loads(subprocess.run(
+    [*command, "--apply", "--expect-change", preview["change_digest"]],
+    capture_output=True, text=True, check=True,
+).stdout)
+assert applied["status"] == "applied", applied
+assert Path(request["target"]).is_file()
+assert Path(request["companions"][0]["target"]).is_file()
+subprocess.run([cli, "playbook", "validate", "fieldwork", "--strict"],
+               capture_output=True, text=True, check=True)
+PYAUTHORING
+
+echo "Verifying packaged Codex native accounting and standalone helper..."
+"$SMOKE_VENV/bin/python" - <<'PYNATIVEUSAGE'
+import subprocess
+import sys
+from importlib.resources import files
+from cafe.agents.cli.codex_subagent_usage import interval_delta
+
+delta, gaps = interval_delta({"input_tokens": 10, "output_tokens": 1},
+                             {"input_tokens": 30, "output_tokens": 3})
+assert delta["input_tokens"] == 20 and delta["total_tokens"] == 22
+assert "cache_read_input_tokens" not in delta
+helper = files("cafe").joinpath(
+    "data/skills/use-cafe-workflow/scripts/native_delegation_accounting.py")
+result = subprocess.run([sys.executable, str(helper), "--help"],
+                        capture_output=True, text=True, check=True)
+assert "--workflow-id" in result.stdout and "--correlation" in result.stdout
+PYNATIVEUSAGE
+
 echo "Verifying packaged pricing commands and all four offline rate snapshots..."
 CAFE_PRICING_AUTO_UPDATE=0 CAFE_PRICING_CACHE_DIR="$RELEASE_TEMP_DIR/pricing-cache" \
     "$SMOKE_VENV/bin/python" - "$SMOKE_VENV/bin/cafe" <<'PYPRICING'
