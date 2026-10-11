@@ -350,7 +350,10 @@ def test_caller_legacy_roundtrip_needs_no_public_residual_field(tmp_path):
 
 
 @pytest.mark.parametrize("phase_proof,chat_proof", [("0.25", "0.1"), (0.25, "0.1"), ("0.25", 0.1)])
-def test_public_source_partitions_valid_historical_money_types(tmp_path, phase_proof, chat_proof):
+@pytest.mark.parametrize("chat_money", [0.1, "0.1"])
+def test_public_source_partitions_valid_historical_money_types(
+    tmp_path, phase_proof, chat_proof, chat_money
+):
     child = record(100, "final")
     directory = tmp_path / "compose/iteration_001"
     directory.mkdir(parents=True)
@@ -364,7 +367,9 @@ def test_public_source_partitions_valid_historical_money_types(tmp_path, phase_p
         chat_usage=[dict(
             cli="mock", model="unknown", mode="interactive", calls=1,
             incomplete_calls=1, unknown_fields=[], cost_records=[],
-            stats=dict(total_cost_usd=0.1, accounting_residual=dict(total_cost_usd=chat_proof)),
+            stats=dict(
+                total_cost_usd=chat_money, accounting_residual=dict(total_cost_usd=chat_proof)
+            ),
         )],
     )
     path.write_text(json.dumps(persisted))
@@ -404,6 +409,26 @@ def test_public_sink_preserves_scalar_only_increment_after_historical_migration(
     assert unrecorded_usage(stats, stats["cost_records"])["input_tokens"] == (
         12 if with_tokens else 7
     )
+
+
+@pytest.mark.parametrize("phase_money,chat_money", [("0.25", "0.1"), (0.25, "0.1"), ("0.25", 0.1)])
+def test_public_source_partitions_valid_scalar_money_types(tmp_path, phase_money, chat_money):
+    directory = tmp_path / "compose/iteration_001"
+    directory.mkdir(parents=True)
+    path = directory / "iteration.json"
+    persisted = dict(
+        stats=dict(total_cost_usd=phase_money),
+        chat_usage=[dict(
+            cli="mock", model="unknown", mode="interactive", calls=1,
+            incomplete_calls=1, unknown_fields=[], cost_records=[],
+            stats=dict(total_cost_usd=chat_money),
+        )],
+    )
+    path.write_text(json.dumps(persisted))
+    sources = collect_cost_sources(tmp_path)
+    assert len(sources) == 2 and not any(s.get("read_error") for s in sources)
+    assert summarize_sources(sources)["known"] == Decimal("0.25")
+    assert json.loads(path.read_text()) == persisted
 
 
 @pytest.mark.parametrize(

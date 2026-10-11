@@ -601,7 +601,7 @@ def phase_stats_without_chat(stats, groups):
     records = remaining.get("cost_records", records)
     remaining["cost_records"] = records
     historical_proof = dict(remaining.get("accounting_residual", {}))
-    money = [remaining["total_cost_usd"]] if "total_cost_usd" in remaining else []
+    money = [(1, remaining["total_cost_usd"])] if "total_cost_usd" in remaining else []
     for group in groups or ():
         group_records = group.get("cost_records", [])
         group_stats = _caller_stats(group.get("stats", {}), group_records)
@@ -612,19 +612,24 @@ def phase_stats_without_chat(stats, groups):
                     phase_value, value = Decimal(str(phase_value)), Decimal(str(value))
                 historical_proof[key] = max(0, phase_value - value)
         for key, value in group_stats.items():
-            if key in CHAT_USAGE_FIELDS and isinstance(value, (int, float)) and key in remaining:
+            if key in CHAT_USAGE_FIELDS and key in remaining:
                 if key == "total_cost_usd":
-                    money.append(-value)
-                else:
+                    money.append((-1, value))
+                elif isinstance(value, (int, float)):
                     remaining[key] -= value
         chat_ids = {r.get("invocation_id") for r in group_records}
         remaining["cost_records"] = [
             r for r in remaining["cost_records"] if r.get("invocation_id") not in chat_ids
         ]
     if len(money) > 1:
-        amount = math.fsum(money)
-        tolerance = sum(math.ulp(value) for value in money) * max(2, len(records))
-        remaining["total_cost_usd"] = 0.0 if abs(amount) <= tolerance else amount
+        amount = sum((
+            sign * source_remainder(dict(total_cost_usd=value), [])["total_cost_usd"]
+            for sign, value in money
+        ), Decimal(0))
+        tolerance = Decimal(str(sum(
+            math.ulp(value) for _, value in money if type(value) is float
+        ))) * max(2, len(records))
+        remaining["total_cost_usd"] = 0.0 if abs(amount) <= tolerance else float(amount)
     if "accounting_residual" in remaining:
         # Read-only partition of old source proof.
         remaining["accounting_residual"] = historical_proof
