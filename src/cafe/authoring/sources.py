@@ -36,6 +36,7 @@ class SourceView:
         )
 
     def identity(self, requested):
+        requested = requested.strip()
         if requested in self.sources:
             return requested
         canonical = canonical_skill_name(requested)

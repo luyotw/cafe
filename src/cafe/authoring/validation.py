@@ -551,15 +551,17 @@ def _todos(model, loader, step_name, contributor, producers, result, target, vie
 def _affected(content, changed_names, view):
     """Inventory selectors without letting one missing neighbor hide an affected consumer."""
     raw = normalize_playbook_yaml(safe_load(content))
-    for name, step in raw.get("steps", {}).items():
-        if not isinstance(step, dict) or "skill" not in step:
-            continue
+    steps = raw.get("steps", {})
+    if not isinstance(steps, dict):
+        steps = {None: {}}  # Preserve known shared references beside a broken steps container.
+    for name, value in steps.items():
+        step = value if isinstance(value, dict) else {}
+        selector = step.get("skill")
         try:
-            primary = skill_selector_names(step["skill"])
-        except (ValueError, TypeError):
+            primary = skill_selector_names(selector)
+        except (ValueError, TypeError, AttributeError):
             # Inventory keeps known references beside invalid selector values;
             # the candidate's runtime validators still reject the malformed selector.
-            selector = step["skill"]
             primary = selector.values() if isinstance(selector, dict) else ()
         for requested in primary:
             if not isinstance(requested, str) or not requested:
@@ -595,7 +597,7 @@ def _known_workflow_references(raw, role, step_name):
     groups = [environment.get("shared")]
     for scope, key in (("roles", role), ("steps", step_name)):
         overlays = environment.get(scope)
-        overlay = overlays.get(key) if isinstance(overlays, dict) else None
+        overlay = overlays.get(key) if isinstance(overlays, dict) and isinstance(key, str) else None
         if isinstance(overlay, dict):
             groups.append(overlay.get("skills"))
     for group in groups:

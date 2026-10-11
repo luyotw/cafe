@@ -146,10 +146,22 @@ def test_missing_neighbor_skill_does_not_hide_an_affected_consumer(tmp_path):
     assert (tmp_path / PHASE).read_bytes() == before
 
 
-@pytest.mark.parametrize("malformed", ["primary_variant", "workflow_overlay"])
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        "primary_variant",
+        "workflow_overlay",
+        "missing_primary",
+        "wrong_primary",
+        "wrong_role",
+        "spaced_variant",
+        "wrong_step",
+        "wrong_steps",
+    ],
+)
 def test_malformed_neighbor_does_not_hide_known_affected_references(tmp_path, malformed):
     request = pair()
-    if malformed == "workflow_overlay":
+    if malformed not in {"primary_variant", "spaced_variant"}:
         primary = deepcopy(request["companions"][0])
         primary["target"] = ".cafe/skills/cafe-primary/SKILL.md"
         primary["declaration"]["name"] = "cafe-primary"
@@ -158,10 +170,22 @@ def test_malformed_neighbor_does_not_hide_known_affected_references(tmp_path, ma
         request["declaration"]["skills"]["workflow"]["shared"] = ["cafe-observe"]
     assert apply(request, root=tmp_path).status == "applied"
     raw = deepcopy(request["declaration"])
-    if malformed == "primary_variant":
-        raw["steps"]["observe"]["skill"] = {"1": "cafe-observe", "default": ""}
-    else:
+    if malformed in {"primary_variant", "spaced_variant"}:
+        name = " cafe-observe " if malformed == "spaced_variant" else "cafe-observe"
+        raw["steps"]["observe"]["skill"] = {"1": name, "default": ""}
+    elif malformed == "workflow_overlay":
         raw["skills"]["workflow"]["roles"] = {"observer": {"mode": "extend"}}
+    elif malformed == "missing_primary":
+        raw["steps"]["observe"].pop("skill")
+    elif malformed == "wrong_primary":
+        raw["steps"]["observe"]["skill"] = 42
+    elif malformed == "wrong_role":
+        raw["steps"]["observe"]["role"] = ["observer"]
+        raw["skills"]["workflow"]["roles"] = {"observer": {"mode": "extend", "skills": []}}
+    elif malformed == "wrong_step":
+        raw["steps"]["observe"] = 42
+    elif malformed == "wrong_steps":
+        raw["steps"] = []
     book = tmp_path / request["target"]
     book.write_text(yaml.safe_dump(raw, sort_keys=False))
     before = {path: path.read_bytes() for path in (tmp_path / PHASE, book)}
@@ -180,6 +204,24 @@ def test_malformed_neighbor_does_not_hide_known_affected_references(tmp_path, ma
     result = apply(patch, root=tmp_path)
     assert result.status == "rejected", result.to_dict()
     assert {path: path.read_bytes() for path in before} == before
+
+
+@pytest.mark.parametrize("channel", ["workflow", "chat"])
+def test_runtime_normalized_support_names_remain_valid_dependencies(tmp_path, channel):
+    request = pair()
+    assert apply(request, root=tmp_path).status == "applied"
+    raw = deepcopy(request["declaration"])
+    raw["skills"][channel]["shared"] = [" cafe-observe "]
+    book = tmp_path / request["target"]
+    book.write_text(yaml.safe_dump(raw, sort_keys=False))
+    patch = book_patch(request)
+    before = book.read_bytes()
+    preview = prepare(patch, root=tmp_path)
+    assert preview.status == "ready", preview.to_dict()
+    assert book.read_bytes() == before
+    result = apply(patch, root=tmp_path, expect_change=preview.change_digest)
+    assert result.status == "applied", result.to_dict()
+    assert result.diff == preview.diff
 
 
 def test_todo_producer_corpus_remains_a_used_dependency(tmp_path):
