@@ -179,6 +179,7 @@ class ConversationTransport:
             environment.update(
                 {str(key): str(value) for key, value in environment_overrides.items()}
             )
+        environment = strategy.project_reasoning_environment(environment)
         command = strategy.build_interactive_command(initial_prompt)
         if read_only:
             command = strategy.apply_read_only(command, "open_interactive_session")

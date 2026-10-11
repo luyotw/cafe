@@ -117,3 +117,53 @@ def test_chat_sticky_cli_uses_current_configured_tuple(chat_provider, interactiv
     assert command[command.index("--effort") + 1] == "low"
     assert record["effort_env"] == "low"
     assert inventory(repo) == before
+
+
+@pytest.mark.parametrize("interactive", [False, True])
+@pytest.mark.parametrize("explicit", [False, True])
+def test_chat_final_environment_preserves_explicit_effort_and_legacy_default(
+    chat_provider, interactive, explicit
+):
+    repo, _, capture = chat_provider
+    entry = {"cli": "claude", "model": "claude-opus-4-6"}
+    if explicit:
+        entry["reasoning_effort"] = "high"
+    (repo / ".cafe/phases.yaml").write_text(yaml.safe_dump({
+        "inspect": {"role": "analyst", "name": "Ada", "clis": [entry]}
+    }))
+    before = inventory(repo)
+    assert launch_chat_session(
+        "analyst", "issue520", phase_name="inspect", read_only=True,
+        extra_env={"CLAUDE_CODE_EFFORT_LEVEL": "low"},
+        **({"initial_prompt": "inspect"} if interactive else {"prompt": "inspect"}),
+    ) == 0
+    record = json.loads(capture.read_text().splitlines()[-1])
+    assert record["effort_env"] == ("high" if explicit else "low")
+    assert ("--effort" in record["argv"]) == explicit
+    assert inventory(repo) == before
+
+
+@pytest.mark.parametrize("interactive", [False, True])
+@pytest.mark.parametrize("control", ["DISABLE_THINKING", "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING", "cap"])
+def test_chat_rejects_final_environment_control_conflicts_before_launch(
+    chat_provider, interactive, control
+):
+    repo, _, capture = chat_provider
+    (repo / ".cafe/phases.yaml").write_text(yaml.safe_dump({
+        "inspect": {"role": "analyst", "name": "Ada", "clis": [
+            {"cli": "claude", "model": "claude-opus-4-6", "reasoning_effort": "high"}
+        ]}
+    }))
+    overrides = {control: "1"}
+    if control == "cap":
+        settings = repo.parent / "restricted-claude"
+        settings.mkdir()
+        (settings / "settings.json").write_text(json.dumps({"maxEffortLevel": "low"}))
+        overrides = {"CLAUDE_CONFIG_DIR": str(settings)}
+    before = inventory(repo)
+    assert launch_chat_session(
+        "analyst", "issue520", phase_name="inspect", read_only=True, extra_env=overrides,
+        **({"initial_prompt": "inspect"} if interactive else {"prompt": "inspect"}),
+    ) == 1
+    assert not capture.exists()
+    assert inventory(repo) == before
