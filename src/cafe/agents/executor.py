@@ -50,6 +50,7 @@ class AgentExecutionControl:
     workflow_id: str | None = None
     caller_id: str | None = None
     publish_records: Callable[[list[dict[str, Any]]], None] | None = None
+    require_terminal_stream_event: bool = False
 
     def __post_init__(self) -> None:
         for name in ("max_duration_seconds", "max_output_bytes", "max_output_lines"):
@@ -298,6 +299,9 @@ class AgentExecutor:
                 env.update(
                     {str(key): str(value) for key, value in environment_overrides.items()}
                 )
+
+            from cafe.agents.cli.effort import project_environment
+            env = project_environment(self.config, env)
 
             # Execute with streaming
             if self.config.cli == AgentCLI.COPILOT and not self.config.native_review_configuration:
@@ -1318,8 +1322,29 @@ class AgentExecutor:
                     args = (environment, *args[1:])
                 else:
                     kwargs["env"] = environment
-                return self._execute_with_native_activity(command, cli_name, *args, **kwargs)
-        return self._execute_with_native_activity(cmd, cli_name, *args, **kwargs)
+                return self._execute_with_effort_evidence(command, cli_name, *args, **kwargs)
+        return self._execute_with_effort_evidence(cmd, cli_name, *args, **kwargs)
+
+    def _execute_with_effort_evidence(self, cmd, cli_name, *args, **kwargs):
+        from cafe.agents.cli.effort import reasoning_evidence
+        attempts = getattr(self, "_execution_attempts", None)
+        if attempts is None:
+            attempts = self._execution_attempts = []
+        record = {"cli": self.config.cli.value, "model": self.config.model,
+                  "session_id": self.config.session_id,
+                  "reasoning_evidence": reasoning_evidence(self.config, cmd)}
+        try:
+            response = self._execute_with_native_activity(cmd, cli_name, *args, **kwargs)
+            record.update(status="success", reasoning_evidence=response.reasoning_evidence)
+            attempts.append(record)
+            response.execution_attempts = list(attempts)
+            return response
+        except BaseException as error:
+            record.update(status="failed", error_type=getattr(error, "error_type", type(error).__name__),
+                          reasoning_evidence=getattr(error, "reasoning_evidence", record["reasoning_evidence"]))
+            attempts.append(record)
+            error.execution_attempts = list(attempts)
+            raise
 
     def _execute_with_native_activity(self, cmd, cli_name, *args, **kwargs):
         """Run with optional native activity supplied by the CLI adapter."""
@@ -1579,6 +1604,7 @@ class AgentExecutor:
             received_terminal_stream_event = False
             requires_terminal_stream_event = parse_stream_json and (
                 streaming_output_file is not None or require_terminal_stream_event
+                or (execution_control is not None and execution_control.require_terminal_stream_event)
             )
 
             # Open streaming output file if provided
@@ -2370,6 +2396,11 @@ class AgentExecutor:
                 parsed_response.native_review_observations = (
                     native_review_strategy or self._get_cli_strategy()
                 ).native_review_observations(output_lines, observed_at=native_observed_at)
+                from cafe.agents.cli.effort import reasoning_evidence
+                try:
+                    parsed_response.reasoning_evidence = reasoning_evidence(self.config, cmd, output_lines)
+                except ValueError as exc:
+                    raise AgentExecutionError(str(exc), error_type="reasoning_effort_mismatch") from exc
                 return parsed_response
 
             # Return response (either from stream-json or combined lines)
@@ -2390,6 +2421,12 @@ class AgentExecutor:
                 permission_denials.extend(parsed_response.permission_denials)
                 final_streaming_log = output_lines
 
+            from cafe.agents.cli.effort import reasoning_evidence
+            try:
+                effort_evidence = reasoning_evidence(self.config, cmd, output_lines)
+            except ValueError as exc:
+                raise AgentExecutionError(str(exc), error_type="reasoning_effort_mismatch") from exc
+            self._last_reasoning_evidence = effort_evidence
             # Model is already tracked separately, duration stays in token_usage
             usage_available = parsed_response.usage_available
             return AgentResponse(
@@ -2397,6 +2434,7 @@ class AgentExecutor:
                 token_usage=token_usage,
                 usage_available=usage_available,
                 usage_accounted=True,
+                reasoning_evidence=effort_evidence,
                 transport_result=parsed_response.transport_result,
                 permission_denials=permission_denials,
                 streaming_log=final_streaming_log,
@@ -2408,6 +2446,13 @@ class AgentExecutor:
             )
         except BaseException as error:
             attempt_error = error
+            from cafe.agents.cli.effort import reasoning_evidence
+            try:
+                error.reasoning_evidence = reasoning_evidence(self.config, cmd, output_lines)
+            except ValueError as cause:
+                error.reasoning_evidence = getattr(cause, "reasoning_evidence", {"configured": self.config.reasoning_effort,
+                    "applied": None, "reported": None, "verification": "mismatch",
+                    "provenance": "provider-stream"})
             raise
         finally:
             if process.poll() is None:
@@ -2478,7 +2523,7 @@ def validate_native_review_projection(phase_chains, step_names, configuration, *
             raise ValueError("native review requires a selected execution chain")
         for parent in chain:
             AgentExecutor(AgentConfig(name="native-review-probe", cli=AgentCLI(parent["cli"]),
-                model=parent["model"], native_review_configuration=configuration)).preview_cli_command_args(
+                model=parent["model"], reasoning_effort=parent.get("reasoning_effort"), native_review_configuration=configuration)).preview_cli_command_args(
                     "configuration projection only", allowed_tools=["Agent"],
                     execution_control=(AgentExecutionControl(working_directory=Path(working_directory))
                                        if working_directory is not None else None))

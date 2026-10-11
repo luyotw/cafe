@@ -25,6 +25,10 @@ class AbstractCLI(ABC):
         """
         self.config = config
 
+    def project_reasoning_effort(self, command: List[str]) -> List[str]:
+        from cafe.agents.cli.effort import project_command
+        return project_command(self.config, command)
+
     def create_stream_activity(self, cmd: List[str]) -> StreamActivity | None:
         """Supply optional native activity for this invocation; stdout is default.
 
@@ -349,7 +353,8 @@ class AbstractCLI(ABC):
 
     def build_environment(self) -> dict[str, str]:
         """Build process environment for this CLI."""
-        return dict(os.environ)
+        from cafe.agents.cli.effort import project_environment
+        return project_environment(self.config, os.environ)
 
     def supports_initial_context(self) -> bool:
         """Whether native interactive launch can carry an initial context."""
@@ -380,7 +385,7 @@ class AbstractCLI(ABC):
         if initial_prompt and cli in {"codex", "claude"}:
             command.append(initial_prompt)
 
-        return command
+        return self.project_reasoning_effort(command)
 
     def prepare_interactive_accounting(self, command, environment):
         """Optional native evidence reader; never capture the user's terminal.

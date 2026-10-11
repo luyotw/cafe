@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Mapping, Optional
 
 from cafe.utils.yaml_utils import safe_load
+from cafe.core.execution_entry import ExecutionEntry
+from cafe.agents.cli.effort import validate_effort
 
 SOURCE_WORKTREE = "worktree"
 SOURCE_REPO = "repo"
@@ -20,13 +22,16 @@ class PhaseStepModelResolution:
 
     name: Optional[str]
     role: Optional[str]
-    clis: tuple[tuple[str, Optional[str]], ...]
+    clis: tuple[ExecutionEntry, ...]
     model: Optional[str]
     source: Optional[str]
     chain: tuple[str, ...]
     name_source: Optional[str] = None
     role_source: Optional[str] = None
     clis_source: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "clis", tuple(ExecutionEntry.from_value(entry) for entry in self.clis))
 
 
 def _as_stripped_scalar(value: object, *, field: str, step: str, source: str) -> Optional[str]:
@@ -134,7 +139,7 @@ def _validate_phase_doc(payload: Mapping, source: str) -> None:
                     raise ValueError(
                         f"invalid phase config for step '{step_name}' in '{source}': field='{step_name}.clis[{index}]': expected map"
                     )
-                unknown = set(entry.keys()) - {"cli", "model"}
+                unknown = set(entry.keys()) - {"cli", "model", "reasoning_effort"}
                 if unknown:
                     extra = next(iter(sorted(unknown)))
                     raise ValueError(
@@ -161,19 +166,22 @@ def _validate_phase_doc(payload: Mapping, source: str) -> None:
                     )
                 seen.add(cli)
 
-                _as_stripped_scalar(
+                model = _as_stripped_scalar(
                     entry.get("model"),
                     field=f"{step_name}.clis[{index}].model",
                     step=step_name,
                     source=source,
                 )
-                if entry.get("model") is None:
+                if model is None:
                     raise _validation_error(
-                        source,
-                        step=step_name,
-                        field=f"{step_name}.clis[{index}].model",
+                        source, step=step_name, field=f"{step_name}.clis[{index}].model",
                         detail="expected non-empty string",
                     )
+                if "reasoning_effort" in entry:
+                    try:
+                        validate_effort(cli, model, entry["reasoning_effort"], explicit=True)
+                    except ValueError as exc:
+                        raise _validation_error(source, step=step_name, field=f"{step_name}.clis[{index}].reasoning_effort", detail=str(exc)) from exc
 
 
 def _resolved_step_payload(
@@ -181,7 +189,7 @@ def _resolved_step_payload(
     payload: Mapping,
     step_name: str,
     source: str,
-) -> tuple[Optional[str], Optional[str], Optional[tuple[tuple[str, Optional[str]], ...]], Optional[str]]:
+) -> tuple[Optional[str], Optional[str], Optional[tuple[ExecutionEntry, ...]], Optional[str]]:
     if not step_name:
         return None, None, None, None
 
@@ -205,7 +213,7 @@ def _resolved_step_payload(
     clis = None
     raw_clis = step_config.get("clis")
     if raw_clis:
-        parsed: list[tuple[str, Optional[str]]] = []
+        parsed: list[ExecutionEntry] = []
         for index, entry in enumerate(raw_clis):
             if not isinstance(entry, Mapping):
                 raise ValueError(
@@ -227,16 +235,16 @@ def _resolved_step_payload(
                 step=step_name,
                 source=source,
             )
-            parsed.append((cli, model))
+            parsed.append(ExecutionEntry(cli, model, entry.get("reasoning_effort")))
         clis = tuple(parsed)
 
     return name, role, clis, model_from_cli_clis(clis)
 
 
-def model_from_cli_clis(clis: Optional[tuple[tuple[str, Optional[str]], ...]]) -> Optional[str]:
+def model_from_cli_clis(clis: Optional[tuple[ExecutionEntry, ...]]) -> Optional[str]:
     if not clis:
         return None
-    return clis[0][1]
+    return ExecutionEntry.from_value(clis[0]).model
 
 
 def load_phase_step_model(
@@ -272,7 +280,7 @@ def load_phase_step_model(
 
     resolved_name: Optional[str] = None
     resolved_role: Optional[str] = None
-    resolved_clis: Optional[tuple[tuple[str, Optional[str]], ...]] = None
+    resolved_clis: Optional[tuple[ExecutionEntry, ...]] = None
     resolved_model: Optional[str] = None
     resolved_source: Optional[str] = None
     resolved_name_source: Optional[str] = None

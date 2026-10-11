@@ -26,7 +26,7 @@ def test_load_phase_step_model_prefers_worktree_then_repo(tmp_path: Path) -> Non
     )
 
     assert result.name == "RepoName"
-    assert result.clis == (("gemini", "local-gemini"),)
+    assert [entry.as_dict() for entry in result.clis] == [{"cli": "gemini", "model": "local-gemini"}]
     assert result.model == "local-gemini"
     assert result.chain == ("worktree", "repo")
 

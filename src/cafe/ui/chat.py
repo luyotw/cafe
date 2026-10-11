@@ -81,7 +81,7 @@ def _load_chat_role_config(
     return {
         "name": resolution.name or execution_step,
         "role": resolution.role or role,
-        "clis": [{"cli": cli, "model": model} for cli, model in resolution.clis],
+        "clis": [entry.as_dict() for entry in resolution.clis],
     }
 
 

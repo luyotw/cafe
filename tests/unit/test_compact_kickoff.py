@@ -11,10 +11,12 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _kickoff_test_support import load_kickoff_module, SCRIPT_ROOT
+from test_reasoning_effort_adapters import install_provider_clients
 
 
 @pytest.fixture
 def compact_request(tmp_path, monkeypatch):
+    provider_clients = install_provider_clients(tmp_path, monkeypatch)
     from cafe.utils import config
 
     monkeypatch.setattr(config, "get_global_cafe_dir", lambda **kwargs: tmp_path / "global")
@@ -82,6 +84,10 @@ def compact_request(tmp_path, monkeypatch):
             }
         )
     )
+    cache = provider_clients / 'codex' / 'models_cache.json'
+    metadata = json.loads(cache.read_text())
+    metadata['models'].append({'slug':'test', 'supported_reasoning_levels':[{'effort':'high'},{'effort':'low'}]})
+    cache.write_text(json.dumps(metadata))
     now = datetime.now(timezone.utc).isoformat()
     return {
         "schema_version": 1,
@@ -92,6 +98,7 @@ def compact_request(tmp_path, monkeypatch):
                 "provider": "codex",
                 "model": "test",
                 "version": "test-v1",
+                "reasoning_effort": "high",
                 "assessed_at": now,
                 "sources": [
                     {
@@ -109,7 +116,7 @@ def compact_request(tmp_path, monkeypatch):
         "playbook_id": "selected",
         "compact_inputs": {
             "files": ["app.py", "tests/test_app.py"],
-            "phases": [{"name": "build", "chain": [{"cli": "codex", "model": "test"}]}],
+            "phases": [{"name": "build", "chain": [{"cli": "codex", "model": "test", "reasoning_effort": "high"}], "rationale": {"band":"balanced", "model":"bounded implementation", "effort":"verify edge cases"}}],
             "review_configuration": {
                 "cli": "codex",
                 "model": "test",

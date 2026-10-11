@@ -151,6 +151,22 @@ def replace(
                 raise ValueError("compact replacement must retain the agreed baseline and mode")
             if proposal["file_scope"].get("preexisting") != current["file_scope"]["preexisting"]:
                 raise ValueError("compact replacement must retain preexisting evidence")
+        old_chains = {phase["name"]: phase["chain"] for phase in current["phases"]}
+        new_chains = {phase["name"]: phase["chain"] for phase in proposal["phases"]}
+        for name, old_chain in old_chains.items():
+            if new_chains.get(name) == old_chain:
+                continue
+            for directory in (issue_dir / name).glob("iteration_*"):
+                for filename in ("iteration.json", "context.json"):
+                    evidence = directory / filename
+                    if not evidence.exists():
+                        continue
+                    if not evidence.is_file() or evidence.stat().st_size > 1_048_576:
+                        raise ValueError("phase start evidence is unavailable; resolve recovery before changing its chain")
+                    import json
+                    metadata = json.loads(evidence.read_text())
+                    if metadata.get("prompt") or metadata.get("end_time") or metadata.get("execution_attempts"):
+                        raise ValueError(f"phase '{name}' has already started; model/effort adjustments are future-only")
         candidate = build_initial_contract(
             proposal=proposal,
             issue_name=issue_name,

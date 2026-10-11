@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from cafe.core.execution_entry import ExecutionEntry
 from cafe.settings import SettingUpdateRequest
 from cafe.utils.issue_config import (
     issue_config_lock,
@@ -64,9 +65,13 @@ class InvocationOrder:
     for the step; previews and execution reuse this immutable snapshot.
     """
 
-    entries: tuple[tuple[str, str | None], ...]
-    configured_entries: tuple[tuple[str, str | None], ...] = ()
+    entries: tuple[ExecutionEntry, ...]
+    configured_entries: tuple[ExecutionEntry, ...] = ()
     sticky_disposition: str = "absent"
+
+    def __post_init__(self):
+        for field in ("entries", "configured_entries"):
+            object.__setattr__(self, field, tuple(ExecutionEntry.from_value(e) for e in getattr(self, field)))
 
 
 @dataclass(frozen=True)

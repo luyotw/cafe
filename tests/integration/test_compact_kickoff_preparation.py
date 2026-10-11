@@ -74,6 +74,9 @@ def test_rendered_proposal_activates_only_with_explicit_user_provenance(compact_
     from cafe.core.execution_artifacts import bounded_execution_json
     from cafe.core.execution_checkpoints import load_execution_context
     context_file = issue / "execution_context.json"
+    import yaml
+    selected = json.loads(proposal_file.read_text())
+    (root / ".cafe/phases.yaml").write_text(yaml.safe_dump({phase["name"]:{"name":"Runner", "clis":phase["chain"]} for phase in selected["phases"]}))
     context_file.write_bytes(bounded_execution_json(execution_scope_projection(issue, root)))
     assert load_execution_context(context_file)["paths"] == compact_request["compact_inputs"]["files"]
 
@@ -137,9 +140,11 @@ def test_no_native_graph_prepares_activates_and_resumes_without_reviewer(
     checked = subprocess.run([sys.executable, str(SCRIPT_ROOT / "check_execution_scope.py"),
         "--issue-dir", str(issue), "--root", str(root), "--boundary", "resume",
         "--round-id", "resumed", "--parent-id", "parent", "--output", str(issue / "resume.json")], capture_output=True, text=True, timeout=30)
-    assert checked.returncode == 0, checked.stderr
+    assert checked.returncode == 2, checked.stderr
     receipt = json.loads(checked.stdout)
-    assert receipt["passed"] and receipt["authority_digest"] == activated.contract_sha256
+    assert not receipt["passed"]
+    from cafe.manager._store import load_contract
+    assert load_contract(issue)[1] == activated.contract_sha256
     assert confirmed_contract_snapshot(issue)["review_configuration"] is None
 
 

@@ -153,7 +153,7 @@ class CodexCLI(AbstractCLI):
                 cmd, self._expand_initial_allowed_directories(allowed_directories, cwd)
             )
 
-        return cmd
+        return self.project_reasoning_effort(cmd)
 
     def parse_response(
         self,

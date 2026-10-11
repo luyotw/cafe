@@ -116,6 +116,7 @@ def _cli_fingerprint(cli: str) -> dict[str, Any]:
     from cafe.constraints.context import context_for_tools
     from cafe.constraints.evidence import snapshot
     from cafe.constraints.resolver import PROVIDERS
+
     executable = shutil.which(cli)
     if executable is None:
         raise PreflightCacheError(f"CLI is not installed: {cli}")
@@ -143,28 +144,48 @@ def _cli_fingerprint(cli: str) -> dict[str, Any]:
         "mtime_ns": stat.st_mtime_ns,
         "version_exit_code": version_exit_code,
         "version": version_text,
-        "runtime_constraints": (snapshot(context_for_tools(cli, structured=True, consumers=["authority"]))
-                                if cli in PROVIDERS else None),
+        "runtime_constraints": (
+            snapshot(context_for_tools(cli, structured=True, consumers=["authority"]))
+            if cli in PROVIDERS
+            else None
+        ),
     }
     return {**evidence, "digest": _json_digest(evidence)}
 
 
-def _candidate_key(cli: str, model: str, fingerprint: dict[str, Any]) -> str:
+def _effort_context(cli, model, effort):
+    from cafe.agents.cli.effort import capability_context, validate_controls
+
+    validate_controls(cli, model, effort, os.environ)
+    return capability_context(cli, model, effort)
+
+
+def _candidate_key(
+    cli: str, model: str, fingerprint: dict[str, Any], reasoning_effort: str | None = None
+) -> str:
     return _json_digest(
         {
             "schema_version": SCHEMA_VERSION,
             "cli": cli,
             "model": model,
             "cli_fingerprint": fingerprint["digest"],
+            "reasoning_effort": reasoning_effort,
+            "effort_context": _effort_context(cli, model, reasoning_effort),
         }
     )
 
 
 def candidate_check(
-    *, cache_file: Path, cli: str, model: str, max_age_seconds: int, now: float
+    *,
+    cache_file: Path,
+    cli: str,
+    model: str,
+    max_age_seconds: int,
+    now: float,
+    reasoning_effort: str | None = None,
 ) -> tuple[bool, dict[str, Any]]:
     fingerprint = _cli_fingerprint(cli)
-    key = _candidate_key(cli, model, fingerprint)
+    key = _candidate_key(cli, model, fingerprint, reasoning_effort)
     with _cache_lock(cache_file):
         entry = _load_cache(cache_file)["candidate_success"].get(key)
     if not isinstance(entry, dict):
@@ -174,6 +195,7 @@ def candidate_check(
             "reason": "not_cached",
             "cli": cli,
             "model": model,
+            "reasoning_effort": reasoning_effort,
         }
     checked_at = entry.get("checked_at")
     if not isinstance(checked_at, (int, float)) or now - float(checked_at) > max_age_seconds:
@@ -183,34 +205,56 @@ def candidate_check(
             "reason": "expired",
             "cli": cli,
             "model": model,
+            "reasoning_effort": reasoning_effort,
         }
     return True, {
         "kind": "candidate",
         "status": "hit",
         "cli": cli,
         "model": model,
+        "reasoning_effort": reasoning_effort,
         "resolved_model": entry.get("resolved_model", model),
+        "reasoning_evidence": entry.get("reasoning_evidence"),
         "checked_at": entry.get("checked_at_text"),
         "expires_at": _utc_text(float(checked_at) + max_age_seconds),
     }
 
 
 def candidate_record(
-    *, cache_file: Path, cli: str, model: str, resolved_model: str | None, now: float
+    *,
+    cache_file: Path,
+    cli: str,
+    model: str,
+    resolved_model: str | None,
+    now: float,
+    reasoning_effort: str | None = None,
+    reasoning_evidence: dict | None = None,
 ) -> dict[str, Any]:
     fingerprint = _cli_fingerprint(cli)
     canonical_model = (resolved_model or model).strip()
     if not canonical_model:
         raise PreflightCacheError("resolved model must not be empty")
+    if reasoning_effort is not None:
+        if canonical_model.casefold() != model.casefold():
+            raise PreflightCacheError("explicit effort probe reported a different model")
+        if (
+            not reasoning_evidence
+            or reasoning_evidence.get("applied") != reasoning_effort
+            or reasoning_evidence.get("verification")
+            not in {"provider-confirmed", "invocation-derived"}
+        ):
+            raise PreflightCacheError("explicit effort requires matching applied-effort evidence")
     models = tuple(dict.fromkeys((model, canonical_model)))
     with _cache_lock(cache_file):
         document = _load_cache(cache_file)
         for exact_model in models:
-            key = _candidate_key(cli, exact_model, fingerprint)
+            key = _candidate_key(cli, exact_model, fingerprint, reasoning_effort)
             document["candidate_success"][key] = {
                 "cli": cli,
                 "model": exact_model,
                 "requested_model": model,
+                "reasoning_effort": reasoning_effort,
+                "reasoning_evidence": reasoning_evidence,
                 "resolved_model": canonical_model,
                 "cli_fingerprint": fingerprint,
                 "checked_at": now,
@@ -236,19 +280,26 @@ def _canonical_resolved_model(*, requested_model: str, reported_model: str | Non
 
 
 def candidate_probe(
-    *, cache_file: Path, cli: str, model: str, max_age_seconds: int, now: float
+    *,
+    cache_file: Path,
+    cli: str,
+    model: str,
+    max_age_seconds: int,
+    now: float,
+    reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     hit, cached = candidate_check(
         cache_file=cache_file,
         cli=cli,
         model=model,
+        reasoning_effort=reasoning_effort,
         max_age_seconds=max_age_seconds,
         now=now,
     )
     if hit:
         return cached
 
-    from cafe.agents.executor import AgentExecutionError, AgentExecutor
+    from cafe.agents.executor import AgentExecutionControl, AgentExecutionError, AgentExecutor
     from cafe.core.types import AgentCLI, AgentConfig
 
     try:
@@ -256,8 +307,14 @@ def candidate_probe(
     except ValueError as exc:
         raise PreflightCacheError(f"unsupported CAFE CLI: {cli}") from exc
 
+    admitted_identity = _candidate_key(cli, model, _cli_fingerprint(cli), reasoning_effort)
     executor = AgentExecutor(
-        AgentConfig(name="PreflightCandidateProbe", cli=agent_cli, model=model)
+        AgentConfig(
+            name="PreflightCandidateProbe",
+            cli=agent_cli,
+            model=model,
+            reasoning_effort=reasoning_effort,
+        )
     )
     diagnostics = io.StringIO()
     original_directory = Path.cwd()
@@ -278,13 +335,27 @@ def candidate_probe(
                     ) from exc
             os.chdir(temporary_directory)
             with redirect_stdout(diagnostics), redirect_stderr(diagnostics):
-                response = executor.execute(PROBE_PROMPT, allowed_tools=[])
+                response = executor.execute(
+                    PROBE_PROMPT,
+                    allowed_tools=[],
+                    allowed_directories=[],
+                    read_only=True,
+                    execution_control=AgentExecutionControl(
+                        working_directory=Path(temporary_directory),
+                        require_terminal_stream_event=True,
+                    ),
+                    streaming_output_file=str(Path(temporary_directory) / "stream.jsonl"),
+                )
     except AgentExecutionError as exc:
         detail = exc.display_message or str(exc)
         raise PreflightCacheError(f"candidate probe failed for {cli}:{model}: {detail}") from exc
     finally:
         os.chdir(original_directory)
 
+    if admitted_identity != _candidate_key(cli, model, _cli_fingerprint(cli), reasoning_effort):
+        raise PreflightCacheError(
+            "candidate capability/control context changed during execution; retry preflight"
+        )
     if PROBE_MARKER not in response.response:
         raise PreflightCacheError(
             f"candidate probe returned an unexpected response for {cli}:{model}"
@@ -297,19 +368,25 @@ def candidate_probe(
         cache_file=cache_file,
         cli=cli,
         model=model,
+        reasoning_effort=reasoning_effort,
         resolved_model=resolved_model,
+        reasoning_evidence=response.reasoning_evidence,
         now=now,
     )
     return {
         "kind": "candidate",
         "status": "fresh",
+        "reasoning_evidence": response.reasoning_evidence,
         "cli": cli,
         "model": model,
+        "reasoning_effort": reasoning_effort,
         "resolved_model": resolved_model,
     }
 
 
-def candidate_invalidate(*, cache_file: Path, cli: str, model: str) -> dict[str, Any]:
+def candidate_invalidate(
+    *, cache_file: Path, cli: str, model: str, reasoning_effort: str | None = None
+) -> dict[str, Any]:
     removed = 0
     with _cache_lock(cache_file):
         document = _load_cache(cache_file)
@@ -326,18 +403,29 @@ def candidate_invalidate(*, cache_file: Path, cli: str, model: str) -> dict[str,
     return {"kind": "candidate", "status": "invalidated", "removed": removed}
 
 
-def _parse_chain(raw_entries: Sequence[str]) -> tuple[tuple[str, str], ...]:
-    chain: list[tuple[str, str]] = []
-    seen: set[str] = set()
+def _parse_chain(raw_entries):
+    from cafe.core.execution_entry import ExecutionEntry
+    from cafe.agents.cli.effort import validate_effort
+
+    chain = []
+    seen = set()
     for raw in raw_entries:
-        cli, separator, model = raw.partition(":")
-        cli, model = cli.strip(), model.strip()
-        if not separator or not cli or not model:
-            raise PreflightCacheError("fallback entries must use CLI:MODEL")
-        if cli in seen:
+        if isinstance(raw, dict):
+            entry = ExecutionEntry.from_value(raw)
+        elif raw.lstrip().startswith("{"):
+            entry = ExecutionEntry.from_value(json.loads(raw))
+        else:
+            cli, separator, model = raw.partition(":")
+            if not separator or not cli.strip() or not model.strip():
+                raise PreflightCacheError(
+                    "fallback entries require JSON tuples or legacy CLI:MODEL"
+                )
+            entry = ExecutionEntry(cli.strip(), model.strip())
+        if entry.cli in seen:
             raise PreflightCacheError("fallback smoke requires distinct CLIs")
-        seen.add(cli)
-        chain.append((cli, model))
+        validate_effort(entry.cli, entry.model, entry.reasoning_effort)
+        seen.add(entry.cli)
+        chain.append(entry)
     if len(chain) < 2:
         raise PreflightCacheError("fallback smoke requires a primary and fallback")
     return tuple(chain)
@@ -350,7 +438,9 @@ def _runtime_fingerprint(chain=()) -> dict[str, Any]:
     import cafe.agents.manager as manager_module
     import cafe.core.types as types_module
 
-    modules = (manager_module, executor_module, types_module)
+    from cafe.agents.cli import effort as effort_module
+
+    modules = (manager_module, executor_module, types_module, effort_module)
     files: dict[str, str] = {}
     for module in modules:
         path = Path(str(module.__file__)).resolve()
@@ -363,7 +453,10 @@ def _runtime_fingerprint(chain=()) -> dict[str, Any]:
         "package_version": package_version,
         "modules": files,
         "smoke_protocol": SMOKE_PROTOCOL,
-        "runtime_constraints": {cli: snapshot(context_for_tools(cli, consumers=["authority"], structured=True)) for cli, _ in chain},
+        "runtime_constraints": {
+            cli: snapshot(context_for_tools(cli, consumers=["authority"], structured=True))
+            for cli in [entry.cli for entry in chain]
+        },
     }
     return {**evidence, "digest": _json_digest(evidence)}
 
@@ -371,23 +464,25 @@ def _runtime_fingerprint(chain=()) -> dict[str, Any]:
 def _exercise_fallback_chain(chain: tuple[tuple[str, str], ...]) -> None:
     from unittest.mock import patch
 
-    from cafe.agents.executor import AgentExecutionError, AgentExecutor
+    from cafe.agents.executor import AgentExecutionControl, AgentExecutionError, AgentExecutor
     from cafe.agents.manager import AgentManager
     from cafe.core.types import AgentCLI, AgentConfig, AgentResponse, CliEntry, TokenUsage
 
     entries: list[CliEntry] = []
-    for cli_name, model in chain:
+    for entry in chain:
+        cli_name, model = entry.cli, entry.model
         try:
             cli = AgentCLI(cli_name)
         except ValueError as exc:
             raise PreflightCacheError(f"unsupported CAFE CLI: {cli_name}") from exc
-        entries.append(CliEntry(cli=cli, model=model))
+        entries.append(CliEntry(cli=cli, model=model, reasoning_effort=entry.reasoning_effort))
 
     for success_index in range(1, len(entries)):
         config = AgentConfig(
             name="PreflightFallbackProbe",
             cli=entries[0].cli,
             model=entries[0].model,
+            reasoning_effort=entries[0].reasoning_effort,
             clis=entries,
         )
         manager = AgentManager(issue_name=None)
@@ -396,7 +491,7 @@ def _exercise_fallback_chain(chain: tuple[tuple[str, str], ...]) -> None:
         successful_cli = entries[success_index].cli
 
         def fake_execute(self: AgentExecutor, *_args: Any, **_kwargs: Any) -> AgentResponse:
-            calls.append((self.config.cli.value, self.config.model))
+            calls.append((self.config.cli.value, self.config.model, self.config.reasoning_effort))
             if self.config.cli != successful_cli:
                 raise AgentExecutionError(
                     "preflight model unavailable", error_type="model_not_found"
@@ -415,7 +510,10 @@ def _exercise_fallback_chain(chain: tuple[tuple[str, str], ...]) -> None:
             redirect_stderr(diagnostics),
         ):
             response, *_ = manager.execute(config.name, "fallback smoke")
-        expected = [(entry.cli.value, entry.model) for entry in entries[: success_index + 1]]
+        expected = [
+            (entry.cli.value, entry.model, entry.reasoning_effort)
+            for entry in entries[: success_index + 1]
+        ]
         if (
             response != "FALLBACK_OK"
             or calls != expected
@@ -437,7 +535,10 @@ def fallback_smoke(
     key = _json_digest(
         {
             "schema_version": SCHEMA_VERSION,
-            "chain": chain,
+            "chain": [entry.as_dict() for entry in chain],
+            "effort_context": [
+                _effort_context(entry.cli, entry.model, entry.reasoning_effort) for entry in chain
+            ],
             "runtime_fingerprint": runtime["digest"],
             "smoke_protocol": SMOKE_PROTOCOL,
         }
@@ -450,7 +551,7 @@ def fallback_smoke(
             return {
                 "kind": "fallback",
                 "status": "hit",
-                "chain": [f"{cli}:{model}" for cli, model in chain],
+                "chain": [entry.as_dict() for entry in chain],
                 "checked_at": entry.get("checked_at_text"),
             }
 
@@ -458,7 +559,7 @@ def fallback_smoke(
     with _cache_lock(cache_file):
         document = _load_cache(cache_file)
         document["fallback_success"][key] = {
-            "chain": [f"{cli}:{model}" for cli, model in chain],
+            "chain": [entry.as_dict() for entry in chain],
             "runtime_fingerprint": runtime,
             "checked_at": now,
             "checked_at_text": _utc_text(now),
@@ -467,7 +568,7 @@ def fallback_smoke(
     return {
         "kind": "fallback",
         "status": "fresh",
-        "chain": [f"{cli}:{model}" for cli, model in chain],
+        "chain": [entry.as_dict() for entry in chain],
     }
 
 
@@ -481,16 +582,19 @@ def _parser() -> argparse.ArgumentParser:
     check = subparsers.add_parser("candidate-check")
     check.add_argument("--cli", required=True)
     check.add_argument("--model", required=True)
+    check.add_argument("--reasoning-effort")
     check.add_argument("--max-age-seconds", type=int, default=CANDIDATE_MAX_AGE_SECONDS)
 
     probe = subparsers.add_parser("candidate-probe")
     probe.add_argument("--cli", required=True)
     probe.add_argument("--model", required=True)
+    probe.add_argument("--reasoning-effort")
     probe.add_argument("--max-age-seconds", type=int, default=CANDIDATE_MAX_AGE_SECONDS)
 
     invalidate = subparsers.add_parser("candidate-invalidate")
     invalidate.add_argument("--cli", required=True)
     invalidate.add_argument("--model", required=True)
+    invalidate.add_argument("--reasoning-effort")
 
     smoke = subparsers.add_parser("fallback-smoke")
     smoke.add_argument("--entry", action="append", required=True)
@@ -511,6 +615,7 @@ def main() -> int:
                 cache_file=args.cache_file,
                 cli=args.cli,
                 model=args.model,
+                reasoning_effort=args.reasoning_effort,
                 max_age_seconds=args.max_age_seconds,
                 now=now,
             )
@@ -523,12 +628,16 @@ def main() -> int:
                 cache_file=args.cache_file,
                 cli=args.cli,
                 model=args.model,
+                reasoning_effort=args.reasoning_effort,
                 max_age_seconds=args.max_age_seconds,
                 now=now,
             )
         elif args.command == "candidate-invalidate":
             result = candidate_invalidate(
-                cache_file=args.cache_file, cli=args.cli, model=args.model
+                cache_file=args.cache_file,
+                cli=args.cli,
+                model=args.model,
+                reasoning_effort=args.reasoning_effort,
             )
         else:
             if args.max_age_seconds < 0:
@@ -542,7 +651,7 @@ def main() -> int:
             )
         print(json.dumps(result, sort_keys=True))
         return 0
-    except (OSError, PreflightCacheError, subprocess.SubprocessError) as exc:
+    except (OSError, ValueError, PreflightCacheError, subprocess.SubprocessError) as exc:
         parser.error(str(exc))
     return 2
 

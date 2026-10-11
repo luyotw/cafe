@@ -436,8 +436,17 @@ Before every start or resume, validate the confirmed
 `proactive_review.phase_decisions` projection. If the contract is absent,
 invalid, stale, or its phase coverage no longer matches the active playbook,
 stop and require kickoff reconfirmation; do not infer a review policy from an
-earlier conversation. An explicit user-requested phase-only update does not
-reopen unrelated kickoff policy.
+earlier conversation. A model/effort-only change retains unrelated kickoff
+policy but is a material change to the confirmed execution projection. Retain
+existing user reconfirmation and predecessor CAS; regenerate launch/resume
+context after reconciling the exact future phase YAML and confirmed contract.
+At every existing return-of-control, record a model/effort reassessment for each
+newly completed phase in durable execution order, including no-adjustment when
+no eligible future phase remains. Use the existing Manager output, not a new
+registry. Continuous execution may defer these observations to that boundary.
+Recommendations neither authorize configuration edits nor control an active
+worker. Change only phases that have not started, within existing authority,
+and preflight every changed tuple before its next authorized start/resume.
 
 Only an executed required phase becomes due for proactive review, and only when
 its durable output has reached an existing scheduled confirmation pause that
