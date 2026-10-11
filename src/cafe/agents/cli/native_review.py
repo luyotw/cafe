@@ -13,6 +13,8 @@ from tempfile import TemporaryDirectory
 
 import yaml
 
+from cafe.core.execution_checkpoints import review_read_only_enforcement
+
 _RESOURCE = "__CAFE_NATIVE_REVIEW_RESOURCE__"
 _MAX_BYTES = 128 * 1024
 _PROMPT = (
@@ -38,9 +40,22 @@ def review_instructions(configuration):
     return {
         "claude": "Call Agent with subagent_type; reviewer_id is its tool-use ID. Wait "
         "for the synchronous tool result.",
-        "codex": "Call spawn_agent with agent_type and message; reviewer_id is the "
-        "returned agent_id. Wait for that child to complete using wait. Do "
-        "not set a model or sandbox override.",
+        "codex": "Use the checkpoint_command with your exact parent thread ID, then end "
+        "this turn with exactly one JSON object: "
+        '\'{"cafe_native_review":{"prompt":"Review instructions and '
+        "CAFE_REVIEW_CHECKPOINT:<receipt_id>\"}}'. "
+        + (
+            "CAFE forks one independent native reviewer without an OS sandbox in this same "
+            "app-server. Its inspection-only role is an instruction constraint, not "
+            "a restriction on its actual filesystem permissions. "
+            if cli == "codex" and review_read_only_enforcement(configuration) == "instruction_only"
+            else "CAFE forks one native read-only reviewer in this same app-server. "
+        )
+        + "Do not call spawn_agent or launch another CLI. On the continuation turn, "
+        "copy its independent conclusion and reviewer_id into native_review.json, "
+        "then finish the declared handoff. Do not change reviewed content or "
+        "request another review in that continuation; use the declared self-loop "
+        "for a correction round.",
         "gemini": "Call invoke_agent with agent_name and prompt (or call the same-name "
         "native agent tool with query). reviewer_id is the tool_id. Wait for "
         "completed progress with terminateReason GOAL and its independent "
@@ -61,6 +76,9 @@ def review_instructions(configuration):
 
 def validate_configuration(config):
     configuration = config.native_review_configuration
+    enforcement = review_read_only_enforcement(configuration)
+    if enforcement == "instruction_only" and config.cli.value != "codex":
+        raise ValueError("selected provider does not support instruction-only native review")
     if (
         configuration.get("cli") != config.cli.value
         or configuration.get("read_only") is not True
@@ -85,141 +103,29 @@ def validate_configuration(config):
 def project(config, command):
     if config.native_review_configuration is None:
         return command
-    configuration = validate_configuration(config)
-    role = reviewer_type(configuration)
+    validate_configuration(config)
     cli = config.cli.value
     if cli == "codex":
-        _require_codex_read_only_parent(command, os.environ)
+        cwd = command[command.index("-C") + 1]
         return [
             command[0],
-            "--sandbox",
-            "read-only",
-            *command[1:],
+            "-C",
+            cwd,
+            "-a",
+            "never",
+            "app-server",
+            "--disable",
+            "multi_agent",
+            "--disable",
+            "multi_agent_v2",
             "-c",
-            "features.multi_agent=true",
-            "-c",
-            f"agents.{role}.description="
-            + json.dumps("Independent read-only implementation reviewer"),
-            "-c",
-            f"agents.{role}.config_file=" + json.dumps(_RESOURCE),
+            "agents.enabled=false",
         ]
     if cli == "copilot":
         return [*command, "--plugin-dir", _RESOURCE, "--output-format=json", "--stream=on"]
     if cli == "cursor-agent":
         return [*command, "--plugin-dir", _RESOURCE]
     return command  # Gemini loads user agents from its invocation-local home.
-
-
-def _require_codex_read_only_parent(command, environment):
-    """Codex 0.159 role overrides intentionally do not include permissions.
-
-    Defaults may be writable, and an installed permission profile or writable
-    config cannot be narrowed by an agent role. Require an explicitly read-only
-    parent; never substitute a standalone CLI review.
-    """
-    try:
-        import tomllib
-    except ModuleNotFoundError:
-        import tomli as tomllib
-    if not environment.get("CODEX_API_KEY"):
-        raise ValueError(
-            "Codex native review requires explicit API-key execution; "
-            "ChatGPT/cloud parent permission requirements cannot be verified "
-            "read-only"
-        )
-    home = Path(environment.get("CODEX_HOME") or Path.home() / ".codex")
-    if environment.get("CODEX_ACCESS_TOKEN") or (home / "auth.json").exists():
-        raise ValueError(
-            "Codex native review cannot verify inherited ChatGPT/cloud authentication requirements"
-        )
-    uncertain = [
-        Path("/etc/codex/requirements.toml"),
-        Path("/etc/codex/managed_config.toml"),
-        home / "cloud-config-bundle-cache.json",
-        home / "requirements.toml",
-    ]
-    if any(path.exists() for path in uncertain):
-        raise ValueError(
-            "Codex native review cannot verify managed/cloud parent permission requirements"
-        )
-    cwd = Path.cwd()
-    for index, argument in enumerate(command[:-1]):
-        if argument in {"-C", "--cd"}:
-            cwd = Path(command[index + 1])
-    cwd = cwd.resolve()
-    paths = [home / "config.toml", Path("/etc/codex/config.toml")]
-    explicit_read_only = any(
-        argument in {"--sandbox", "-s"} and command[index + 1] == "read-only"
-        for index, argument in enumerate(command[:-1])
-    )
-    paths.extend(directory / ".codex/config.toml" for directory in (cwd, *cwd.parents))
-    # Reject uncertain layers rather than reimplement Codex's trust/precedence rules.
-    for path in dict.fromkeys(paths):
-        if not path.exists():
-            continue
-        settings = tomllib.loads(path.read_text(encoding="utf-8"))
-        if settings.get("cli_auth_credentials_store", "file") != "file":
-            raise ValueError("Codex native review cannot verify keyring/cloud parent requirements")
-        if (
-            settings.get("default_permissions")
-            or settings.get("permissions")
-            or settings.get("profile")
-        ):
-            raise ValueError(
-                "Codex native reviewer cannot narrow an inherited permission profile;"
-                " a verified read-only parent is required"
-            )
-        explicit_read_only = explicit_read_only or settings.get("sandbox_mode") == "read-only"
-        if settings.get("sandbox_mode", "read-only") != "read-only":
-            raise ValueError(
-                "Codex native reviewers inherit parent permissions; writable parents "
-                "cannot provide verified read-only native review"
-            )
-    if not explicit_read_only:
-        raise ValueError(
-            "Codex native review requires an explicitly selected read-only "
-            "parent; default permissions may be writable"
-        )
-    arguments = iter(command[1:])
-    role = None
-    for argument in arguments:
-        if argument in {"-C", "--cd", "--model", "-m", "--add-dir"}:
-            if next(arguments, None) is None:
-                raise ValueError("native parent command is incomplete")
-        elif argument in {"-a", "--ask-for-approval"}:
-            if next(arguments, None) != "never":
-                raise ValueError("native parent permission escalation must be disabled")
-        elif argument in {"--sandbox", "-s"}:
-            if next(arguments, None) != "read-only":
-                raise ValueError("Codex native review cannot use writable parent permissions")
-        elif argument in {"-c", "--config"}:
-            value = next(arguments, "")
-            key = value.split("=", 1)[0]
-            allowed_role = re.fullmatch(
-                r"agents\.(cafe_reviewer_[a-f0-9]{20})\.(description|config_file)", key
-            )
-            if allowed_role:
-                if role is not None and role != allowed_role[1]:
-                    raise ValueError("native parent has conflicting role definitions")
-                role = allowed_role[1]
-            elif value != "features.multi_agent=true":
-                raise ValueError(
-                    "Codex native review cannot verify an additional configuration override"
-                )
-        elif argument.startswith("-") and argument != "--json":
-            raise ValueError("Codex native review cannot verify an additional parent option")
-    if config_session := _resume_session(command):
-        if not _codex_child_is_read_only(environment, config_session, None):
-            raise ValueError("Codex native review cannot resume an unverified or writable parent")
-
-
-def _resume_session(command):
-    if "resume" not in command:
-        return None
-    index = command.index("resume") + 1
-    if index >= len(command) or command[index].startswith("-"):
-        raise ValueError("native review requires an exact readonly resume session")
-    return command[index]
 
 
 def _reject_native_collision(cli, role, root):
@@ -284,25 +190,13 @@ def invocation(config, command, environment, *, working_directory=None):
         if cli == "cursor-agent":
             _reject_native_collision(cli, role, Path.home())
     if cli == "codex":
-        _require_codex_read_only_parent(command, environment)
+        # Native fork permissions are verified by the app-server transport.
+        yield command, environment
+        return
     with TemporaryDirectory(prefix="cafe-native-review-") as temporary:
         root = Path(temporary)
         resource = root
-        if cli == "codex":
-            resource = root / "reviewer.toml"
-            resource.write_text(
-                'sandbox_mode = "read-only"\napproval_policy = "never"\n'
-                + "model = "
-                + json.dumps(model)
-                + "\n"
-                + "developer_instructions = "
-                + json.dumps(_PROMPT)
-                + "\n"
-                + "[features]\nshell_tool = false\napps = false\nplugins = false\n"
-                "memory_tool = false\nrequest_permissions_tool = false\n",
-                encoding="utf-8",
-            )
-        elif cli in {"copilot", "cursor-agent"}:
+        if cli in {"copilot", "cursor-agent"}:
             (root / "agents").mkdir()
             (root / "plugin.json").write_text(
                 json.dumps(
@@ -490,6 +384,8 @@ def observations(config, lines, observed_at=None, environment=None):
     if cli == "cursor-agent":
         return _cursor_observations(config, role, lines, observed_at)
     if cli == "codex":
+        if review_read_only_enforcement(config.native_review_configuration) == "instruction_only":
+            return []  # Legacy read-only journals cannot prove an unconfined native invocation.
         return _codex_observations(config, role, lines, observed_at, environment or os.environ)
     return []
 

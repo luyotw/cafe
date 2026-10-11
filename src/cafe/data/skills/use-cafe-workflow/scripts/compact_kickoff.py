@@ -50,6 +50,11 @@ def discover(
         "mandatory_confirmation_gates": list(mandatory_confirmation_gate_steps(model)),
     }
     inputs = dict(request.get("compact_inputs", {}))
+    if not confirmed and isinstance(inputs.get("review_configuration"), dict):
+        review = dict(inputs["review_configuration"])
+        if review.get("cli") == "codex":
+            review.setdefault("read_only_enforcement", "instruction_only")
+        inputs["review_configuration"] = review
     preferences = PreferenceStore(
         config_dir or Path.home() / ".config/cafe/kickoff",
         repository_root=catalog_args["project_root"],

@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.9.3] - 2026-10-11
+
+### Fixed
+
+- Run Codex streamlined development and independent inspection-only review with ChatGPT
+  CLI login or API-key authentication. Use one native app-server with a writable
+  parent, an independent native fork and continuation in the original session.
+- Default new Codex compact proposals to execution without an OS sandbox, with
+  explicit instruction-only reviewer permissions. Keep native sandbox enforcement
+  for existing confirmed contracts and record the actual enforcement in review evidence.
+- Reject reviewer model/permission changes, managed feature overrides, extra native
+  delegation and contradictory completion. Preserve scope-bound delivery gates,
+  declared review retry budgets and separate per-model token accounting.
+
+See [the v0.9.3 release notes](docs/releases/v0.9.3.md) for Codex authentication,
+permission modes and verification scope.
+
 ## [0.9.2] - 2026-10-11
 
 ### Fixed

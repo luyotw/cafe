@@ -130,10 +130,17 @@ def validate_compact_proposal(proposal):
     no_review = "review_policy" in execution and execution["review_policy"] is None
     review = None
     if raw["review_configuration"] is not None or not no_review:
-        review = _mapping(raw["review_configuration"], "review_configuration", keys={
-            "cli", "model", "provider_version", "read_only", "model_behavior", "checkpoint_interface"})
+        review = _mapping(raw["review_configuration"], "review_configuration")
+        fields = {"cli", "model", "provider_version", "read_only", "model_behavior",
+                  "checkpoint_interface"}
+        if set(review) not in (fields, fields | {"read_only_enforcement"}):
+            raise ValueError("review_configuration has unsupported or missing fields")
+        from cafe.core.execution_checkpoints import review_read_only_enforcement
+        review_read_only_enforcement(review)
+        if "read_only_enforcement" in review and review.get("cli") != "codex":
+            raise ValueError("explicit read-only enforcement is only supported for Codex")
         if review["read_only"] is not True or review["checkpoint_interface"] != "parent_command":
-            raise ValueError("native review requires read-only checkpoint support")
+            raise ValueError("native review requires an inspection-only role and checkpoint support")
         if review["model_behavior"] not in {"inherits_parent", "independent_override"}:
             raise ValueError("invalid effective reviewer model behavior")
         for field in ("cli", "model", "provider_version"):

@@ -341,6 +341,10 @@ def test_all_native_adapters_connect_confirmed_kickoff_runtime_and_delivery_gate
     (home / "config.toml").write_text('sandbox_mode = "read-only"\n')
     monkeypatch.setenv("CODEX_HOME", str(home))
     monkeypatch.setenv("CODEX_API_KEY", "fixture-not-a-real-key")
+    if cli == "codex":
+        # This test owns legacy native journal evidence; RPC execution is covered
+        # by test_codex_streamlined with the new instruction-only default.
+        compact_request["compact_inputs"]["review_configuration"]["read_only_enforcement"] = "sandbox"
     root, issue, playbook, context = native_context(compact_request, tmp_path, monkeypatch, cli_name=cli)
     monkeypatch.chdir(root)
     assert context["native_reviewer_type"]
