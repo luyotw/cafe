@@ -602,3 +602,7 @@ assert steps["bridge"]["output_artifact"] == "plan"
 - [ ] Tools and hooks are sufficient but not gratuitously broad.
 - [ ] Every selected skill's `workflow.required_tools` declarations are satisfied by `allowed_tools`.
 - [ ] Strict validation, show, and simulation results are reported.
+
+## Structured authoring helper
+
+Use `cafe playbook author --spec <path|-> --dry-run --format json` for supported structure before editing raw source. See `docs/authoring.md` and the executable `tests/fixtures/authoring/pair.yaml` example. Review diff, precise contributor diagnostics, effective authority, artifact/route summaries, gate sets and simulation; resolve author decisions, then use `--apply --expect-change <change_digest>`. Domain procedure remains author-owned. Proposals never grant tools, capabilities, publication, external mutation or human authority. Unsupported comment/anchor/alias/flow transformations require a documented manual exception and existing strict validation/gate/simulation checks. Never edit installed copies or workflow state.

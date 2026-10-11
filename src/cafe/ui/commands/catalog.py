@@ -708,3 +708,9 @@ def skill_rm(
 
     if summary.removed_count == 0:
         raise typer.Exit(1)
+
+# Both entry points share one preparation/publication API.
+from cafe.ui.commands.authoring import phase_app, playbook_author
+
+skill_app.add_typer(phase_app, name="author")
+playbook_app.command("author")(playbook_author)

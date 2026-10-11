@@ -43,6 +43,15 @@ version: 2.12.1
 - Keep the CAFE phase skill authoritative for its workflow declaration, artifacts, checklist, approval gates, and handoff. A selected supporting skill supplies domain procedure only.
 - Resolve and package the confirmed choice at authoring time. Do not make workflow execution search the network, download mutable content, or silently substitute a different skill.
 
+## Helper-first structural authoring
+
+- Use `cafe skill author phase --spec <request.yaml|-> --dry-run --format json` before supported structural edits. Read `docs/authoring.md` for the version-1 envelope and executable pair fixture at `tests/fixtures/authoring/pair.yaml`.
+- Supply domain-owned procedure, artifact selection, routing and authority fields explicitly. Inspect the deterministic diff, contributor diagnostics, proposals, effective authority and confirmation-gate changes.
+- Resolve author decisions through the existing authorized handoff. Missing tools or capabilities are requirements, never permission; mandatory HumanTasks remain human-owned.
+- Apply the reviewed request with `cafe skill author phase --spec <request.yaml|-> --apply --expect-change <change_digest>`. Advisory proposals need explicit request operations and a fresh preview.
+- Keep prose edits confined to deliberately author-owned sections. For unsupported YAML shapes or resources, document the manual exception, edit only the source of truth and run strict validation, gate inspection and simulation. Never edit installed copies or active issue state.
+- Report generated structural defaults separately from supplied domain content, validation/simulation results, authority/gate deltas, and any unsupported operations.
+
 ## Declarative Repair Boundary
 
 - Accept a repair classification from `use-cafe-workflow` only when the evidence
