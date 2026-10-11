@@ -28,6 +28,11 @@ All notable changes to this project will be documented in this file.
 See [the v0.10.0 release notes](docs/releases/v0.10.0.md) for authoring examples,
 cost coverage and upgrade guidance.
 
+### Fixed
+
+- Preserve existing negative historical cost diagnostics when reconciling
+  caller and child evidence.
+
 ## [0.9.3] - 2026-10-11
 
 ### Fixed

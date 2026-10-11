@@ -40,7 +40,7 @@ cost.combined_known: '含 Manager 的已知小計（資料不完整）: USD {cos
 cost.native.child: '子 agent {session}（父 session {parent}，模型 {model}）：{categories}；{provenance}；{source}；{start}..{end}；包含關係={inclusion}；涵蓋狀態={coverage}'
 cost.native.child_subtotal: '子 agent 已知小計：{tokens}'
 cost.native.caller_subtotal: '呼叫端已知小計：{tokens}；{coverage}'
-cost.native.unknown: '未知'
+cost.native.unknown: '未取得'
 cost.native.complete: '完整'
 cost.native.partial: '部分'
 cost.native.combined_unavailable: '完整合計無法確認'
