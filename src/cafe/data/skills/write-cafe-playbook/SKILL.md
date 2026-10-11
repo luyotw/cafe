@@ -21,6 +21,15 @@ version: 1.5.0
 - Read `references/playbook-spec.md` before creating or structurally changing a playbook.
 - Inspect `src/cafe/core/playbook.py` only when the schema or validator behavior may have changed since this reference was written.
 
+## Helper-first structural authoring
+
+- Use `cafe playbook author --spec <request.yaml|-> --dry-run --format json` before supported structural edits. Read `docs/authoring.md` for the version-1 envelope and executable pair fixture at `tests/fixtures/authoring/pair.yaml`.
+- Supply domain-owned procedure, artifact selection, routing and authority fields explicitly. Inspect the deterministic diff, contributor diagnostics, proposals, effective authority and confirmation-gate changes.
+- Resolve author decisions through the existing authorized handoff. Missing tools or capabilities are requirements, never permission; mandatory HumanTasks remain human-owned.
+- Apply the reviewed request with `cafe playbook author --spec <request.yaml|-> --apply --expect-change <change_digest>`. Advisory proposals need explicit request operations and a fresh preview.
+- Keep prose edits confined to deliberately author-owned sections. For unsupported YAML shapes or resources, document the manual exception, edit only the source of truth and run strict validation, gate inspection and simulation. Never edit installed copies or active issue state.
+- Report generated structural defaults separately from supplied domain content, validation/simulation results, authority/gate deltas, and any unsupported operations.
+
 ## First Pass
 - Locate every phase skill and read its `## Context`, `## Output`, user confirmation gates, routing rules, external-cost approvals, and completion conditions.
 - Draw the intended happy path and identify optional phases, same-phase user revision loops, and exceptional recovery routes.
@@ -85,7 +94,7 @@ version: 1.5.0
 2. Write the happy-path step order and mark every optional phase and terminal step.
 3. Create an artifact matrix with producer, artifact key, consumer, and whether the artifact is a result or implementation plan.
 4. Define transitions for success, user review, clarification, permission, no-work skips, and exceptional goto paths.
-5. Write the YAML using the template and field rules in `references/playbook-spec.md`.
+5. Preview and apply a bounded authoring request using the helper-first process above and the field rules in `references/playbook-spec.md`; use manual YAML edits only for documented unsupported operations.
 6. Run `cafe skill validate --strict` so the referenced skills and placeholders are valid.
 7. Run `cafe playbook validate <id> --strict`, inspect `cafe playbook show <id>`,
    and run `cafe playbook confirmation-gates <id>` to verify both assignable
