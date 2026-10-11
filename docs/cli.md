@@ -135,3 +135,12 @@ and [Cursor](https://cursor.com/docs/subagents) definitions. Codex's native
 thread fork and turn permission overrides; ordinary
 [subagent inheritance](https://developers.openai.com/codex/subagents) does not
 provide that writable-parent/read-only-child separation.
+
+## Contract authoring
+
+`cafe skill author phase --spec <path|-> --dry-run|--apply` and
+`cafe playbook author --spec <path|-> --dry-run|--apply` accept version-1 YAML/JSON
+intent for writable source contracts. Use `--format json` for one machine result
+and `--expect-change <digest>` to apply the reviewed preview. See
+[Source contract authoring](authoring.md) for executable requests, public API,
+supported operations, diagnostics, authority boundaries and transaction limits.
