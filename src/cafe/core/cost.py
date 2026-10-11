@@ -667,28 +667,30 @@ def source_remainder(stats, records):
         raise ValueError("invalid historical remainder proof")
     remaining = {}
     for key in fields:
-        value = historical.get(key, stats.get(key))
-        if value is None:
-            continue
-        if key == "total_cost_usd":
-            if type(value) not in (int, float, Decimal, str):
-                raise ValueError("invalid source cost")
-            amount = Decimal(str(value))
-            if not amount.is_finite() or amount < 0:
-                raise ValueError("invalid source cost")
-        elif type(value) is not int or value < 0:
-            raise ValueError("invalid source counter")
-        else:
-            amount = value
         canonical = "cache_write_input_tokens" if key == "cache_creation_input_tokens" else key
-        if key not in historical:
-            amount = 0 if canonical in ambiguous else amount - represented.get(canonical, 0)
-        tolerance = (
-            Decimal(str(math.ulp(value))) * max(1, len(rows)) * 2
-            if key == "total_cost_usd" and type(value) is float
-            else 0
-        )
-        remaining[key] = max(0, amount) if amount > tolerance else 0
+        for proof, value in ((True, historical.get(key)), (False, stats.get(key))):
+            if value is None:
+                continue
+            if key == "total_cost_usd":
+                if type(value) not in (int, float, Decimal, str):
+                    raise ValueError("invalid source cost")
+                amount = Decimal(str(value))
+                if not amount.is_finite() or amount < 0:
+                    raise ValueError("invalid source cost")
+            elif type(value) is not int or value < 0:
+                raise ValueError("invalid source counter")
+            else:
+                amount = value
+            if not proof:
+                amount = 0 if canonical in ambiguous else amount - represented.get(canonical, 0)
+            tolerance = (
+                Decimal(str(math.ulp(value))) * max(1, len(rows)) * 2
+                if key == "total_cost_usd" and type(value) is float
+                else 0
+            )
+            # Historical proof is an independent lower bound, not a frozen
+            # replacement for subsequent scalar-only legacy observations.
+            remaining[key] = max(remaining.get(key, 0), amount if amount > tolerance else 0)
     return remaining
 
 

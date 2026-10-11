@@ -349,6 +349,63 @@ def test_caller_legacy_roundtrip_needs_no_public_residual_field(tmp_path):
         assert stats["input_tokens"] == 7 and stats["total_cost_usd"] == 0.25
 
 
+@pytest.mark.parametrize("phase_proof,chat_proof", [("0.25", "0.1"), (0.25, "0.1"), ("0.25", 0.1)])
+def test_public_source_partitions_valid_historical_money_types(tmp_path, phase_proof, chat_proof):
+    child = record(100, "final")
+    directory = tmp_path / "compose/iteration_001"
+    directory.mkdir(parents=True)
+    path = directory / "iteration.json"
+    persisted = dict(
+        stats=dict(
+            total_cost_usd=1.25,
+            cost_records=[child],
+            accounting_residual=dict(total_cost_usd=phase_proof),
+        ),
+        chat_usage=[dict(
+            cli="mock", model="unknown", mode="interactive", calls=1,
+            incomplete_calls=1, unknown_fields=[], cost_records=[],
+            stats=dict(total_cost_usd=0.1, accounting_residual=dict(total_cost_usd=chat_proof)),
+        )],
+    )
+    path.write_text(json.dumps(persisted))
+    sources = collect_cost_sources(tmp_path)
+    assert len(sources) == 2 and not any(s.get("read_error") for s in sources)
+    assert summarize_sources(sources)["known"] == Decimal("1.25")
+    assert json.loads(path.read_text()) == persisted
+
+
+@pytest.mark.parametrize("with_tokens", [False, True])
+def test_public_sink_preserves_scalar_only_increment_after_historical_migration(
+    tmp_path, with_tokens
+):
+    from cafe.core.usage import iteration_usage_sink
+    from cafe.services.cost_summary import unrecorded_usage
+
+    child = record(100, "final")
+    parent = dict(
+        invocation_id="historical-caller", provenance="reported", amount_usd="1",
+        complete=True, usage=dict(input_tokens=10, output_tokens=2, total_tokens=12),
+    )
+    directory = tmp_path / "compose/iteration_001"
+    directory.mkdir(parents=True)
+    path = directory / "iteration.json"
+    proof = dict(total_cost_usd="0.25", input_tokens=7)
+    path.write_text(json.dumps(dict(iteration=1, stats=dict(
+        total_cost_usd=2.25, input_tokens=117, output_tokens=12,
+        cost_records=[parent, child], accounting_residual=proof,
+    ))))
+    sink = iteration_usage_sink(tmp_path, path)
+    sink(TokenUsage(cost_records=[child]))
+    assert summarize_sources(collect_cost_sources(tmp_path))["known"] == Decimal("2.25")
+    sink(TokenUsage(total_cost_usd=0.5, **(dict(input_tokens=5) if with_tokens else {})))
+    stats = json.loads(path.read_text())["stats"]
+    assert stats["accounting_residual"] == proof
+    assert summarize_sources(collect_cost_sources(tmp_path))["known"] == Decimal("2.75")
+    assert unrecorded_usage(stats, stats["cost_records"])["input_tokens"] == (
+        12 if with_tokens else 7
+    )
+
+
 @pytest.mark.parametrize(
     "usage",
     [

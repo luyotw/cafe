@@ -7,6 +7,7 @@ import math
 import os
 import stat
 from contextlib import contextmanager, nullcontext
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict
 
@@ -606,7 +607,10 @@ def phase_stats_without_chat(stats, groups):
         group_stats = _caller_stats(group.get("stats", {}), group_records)
         for key, value in group_stats.get("accounting_residual", {}).items():
             if key in historical_proof:
-                historical_proof[key] = max(0, historical_proof[key] - value)
+                phase_value = historical_proof[key]
+                if key == "total_cost_usd":
+                    phase_value, value = Decimal(str(phase_value)), Decimal(str(value))
+                historical_proof[key] = max(0, phase_value - value)
         for key, value in group_stats.items():
             if key in CHAT_USAGE_FIELDS and isinstance(value, (int, float)) and key in remaining:
                 if key == "total_cost_usd":
