@@ -22,6 +22,37 @@ def test_invalid_explicit_effort_names_source_and_entry(tmp_path, value):
     assert "custom_build.clis[0].reasoning_effort" in str(error.value)
 
 
+@pytest.mark.parametrize("cli,model", [("gemini", "gemini-3-pro"), ("cursor-agent", "auto")])
+@pytest.mark.parametrize("entry_index", [0, 1])
+def test_unverified_effort_control_rejection_identifies_configured_tuple(
+    tmp_path, cli, model, entry_index
+):
+    path = tmp_path / "phases.yaml"
+    entries = [{"cli": "codex", "model": "legacy"}] * entry_index
+    entries.append({"cli": cli, "model": model, "reasoning_effort": "high"})
+    write_phase(path, entries)
+
+    with pytest.raises(ValueError) as error:
+        load_phase_step_model(step_name="custom_build", local_path=path)
+
+    message = str(error.value)
+    assert str(path) in message
+    assert f"custom_build.clis[{entry_index}].reasoning_effort" in message
+    assert cli in message and model in message
+    assert any(action in message.lower() for action in ("omit", "remove", "select", "choose"))
+
+
+@pytest.mark.parametrize("cli,model", [("gemini", "gemini-3-pro"), ("cursor-agent", "auto")])
+def test_unverified_effort_control_preserves_legacy_omission(tmp_path, cli, model):
+    path = tmp_path / "phases.yaml"
+    write_phase(path, [{"cli": cli, "model": model}])
+
+    result = load_phase_step_model(step_name="custom_build", local_path=path)
+
+    assert result.clis[0].model == model
+    assert result.clis[0].reasoning_effort is None
+
+
 def test_local_chain_omission_does_not_inherit_repository_effort(tmp_path):
     local, repo = tmp_path / "local.yaml", tmp_path / "repo.yaml"
     write_phase(repo, [{"cli": "claude", "model": "claude-opus-4-6", "reasoning_effort": "high"}])

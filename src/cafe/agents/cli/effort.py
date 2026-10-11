@@ -158,14 +158,14 @@ def validate_effort(
         raise ValueError(
             "reasoning_effort must be a non-empty supported lowercase token; omit the field to retain CLI defaults"
         )
-    if cli in {"cursor-agent", "gemini"}:
-        raise ValueError(
-            f"reasoning_effort: {cli} has no verified independent invocation-scoped level control preserving managed settings; omit effort for legacy execution or select a verified adapter"
-        )
     # Never include unvalidated control or model contents in diagnostics.
     safe_model = (
         model if isinstance(model, str) and re.fullmatch(r"[a-zA-Z0-9_.-]+", model) else "<unknown>"
     )
+    if cli in {"cursor-agent", "gemini"}:
+        raise ValueError(
+            f"reasoning_effort: {cli}/{safe_model} has no verified independent invocation-scoped level control preserving managed settings; omit effort for legacy execution or select a verified adapter"
+        )
     try:
         levels = supported_efforts(cli, model, environment)
     except ValueError as exc:
