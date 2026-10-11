@@ -395,7 +395,8 @@ def candidate_invalidate(
             if (
                 isinstance(entry, dict)
                 and entry.get("cli") == cli
-                and (entry.get("model") == model or entry.get("resolved_model") == model)
+                and entry.get("reasoning_effort") == reasoning_effort
+                and model in (entry.get("model"), entry.get("requested_model"), entry.get("resolved_model"))
             ):
                 del entries[key]
                 removed += 1

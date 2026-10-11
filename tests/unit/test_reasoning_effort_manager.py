@@ -92,6 +92,82 @@ def test_preflight_cache_separates_effort_omission_and_control_changes(provider_
     assert not check("high")
 
 
+@pytest.mark.parametrize("invalidated_effort", ["high", "low", None])
+def test_candidate_invalidation_preserves_other_effort_receipts(provider_clients, invalidated_effort):
+    cache = load_kickoff_module("preflight_cache")
+    path = provider_clients / "preflight.json"
+    for effort in ("high", "low", None):
+        cache.candidate_record(
+            cache_file=path, cli="codex", model="gpt-5.5", resolved_model="gpt-5.5",
+            reasoning_effort=effort, now=100,
+            reasoning_evidence={"applied": effort, "verification": "invocation-derived"},
+        )
+
+    result = cache.candidate_invalidate(
+        cache_file=path, cli="codex", model="gpt-5.5", reasoning_effort=invalidated_effort
+    )
+
+    assert result["removed"] == 1
+    for effort in ("high", "low", None):
+        hit, _ = cache.candidate_check(
+            cache_file=path, cli="codex", model="gpt-5.5", reasoning_effort=effort,
+            max_age_seconds=60, now=101,
+        )
+        assert hit == (effort != invalidated_effort)
+
+
+@pytest.mark.parametrize("invalidated_model", ["sonnet", "claude-sonnet-4-6"])
+def test_candidate_invalidation_removes_requested_and_resolved_alias_receipts(
+    provider_clients, invalidated_model
+):
+    cache = load_kickoff_module("preflight_cache")
+    path = provider_clients / "preflight.json"
+    cache.candidate_record(
+        cache_file=path, cli="claude", model="sonnet", resolved_model="claude-sonnet-4-6", now=100
+    )
+    cache.candidate_record(
+        cache_file=path, cli="claude", model="opus", resolved_model="claude-opus-4-6", now=100
+    )
+    assert cache.candidate_invalidate(
+        cache_file=path, cli="claude", model=invalidated_model
+    )["removed"] == 2
+    for model in ("sonnet", "claude-sonnet-4-6", "opus", "claude-opus-4-6"):
+        hit, _ = cache.candidate_check(
+            cache_file=path, cli="claude", model=model, max_age_seconds=60, now=101
+        )
+        assert hit == (model in {"opus", "claude-opus-4-6"})
+
+
+@pytest.mark.parametrize("invalidated_model", ["GPT-5.5", "gpt-5.5"])
+@pytest.mark.parametrize("invalidated_effort", ["high", "low", None])
+def test_candidate_alias_invalidation_preserves_other_effort_aliases(
+    provider_clients, invalidated_model, invalidated_effort
+):
+    # Model capability metadata is the external boundary for exact alias admission.
+    capabilities = provider_clients / "codex/models_cache.json"
+    metadata = json.loads(capabilities.read_text())
+    metadata["models"].append({**metadata["models"][0], "slug": "GPT-5.5"})
+    capabilities.write_text(json.dumps(metadata))
+    cache = load_kickoff_module("preflight_cache")
+    path = provider_clients / "preflight.json"
+    for effort in ("high", "low", None):
+        cache.candidate_record(
+            cache_file=path, cli="codex", model="GPT-5.5", resolved_model="gpt-5.5",
+            reasoning_effort=effort, now=100,
+            reasoning_evidence={"applied": effort, "verification": "invocation-derived"},
+        )
+    assert cache.candidate_invalidate(
+        cache_file=path, cli="codex", model=invalidated_model, reasoning_effort=invalidated_effort
+    )["removed"] == 2
+    for effort in ("high", "low", None):
+        for model in ("GPT-5.5", "gpt-5.5"):
+            hit, _ = cache.candidate_check(
+                cache_file=path, cli="codex", model=model, reasoning_effort=effort,
+                max_age_seconds=60, now=101,
+            )
+            assert hit == (effort != invalidated_effort)
+
+
 def test_reassessment_consumes_each_completed_phase_in_order_without_granting_mutation():
     owner = load_kickoff_module("kickoff_models")
     completed = [

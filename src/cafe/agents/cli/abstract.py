@@ -382,10 +382,11 @@ class AbstractCLI(ABC):
         if self.config.model and cli in {"claude", "copilot", "gemini"}:
             command.extend(["--model", self.config.model])
 
+        command = self.project_reasoning_effort(command)
         if initial_prompt and cli in {"codex", "claude"}:
             command.append(initial_prompt)
 
-        return self.project_reasoning_effort(command)
+        return command
 
     def prepare_interactive_accounting(self, command, environment):
         """Optional native evidence reader; never capture the user's terminal.
