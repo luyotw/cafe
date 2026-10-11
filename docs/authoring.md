@@ -158,7 +158,11 @@ refused. Existing worktree/canonical/global/builtin resolver precedence and
 aliases are retained; ineffective shadowed builtin edits are diagnosed.
 
 Preview uses temporary source views and performs no persistent writes or
-catalog synchronization. Apply acquires a private per-repository lock outside
+catalog synchronization. Preparation uses lightweight catalog inventory, then
+stages and hashes changed declarations, their effective dependencies and affected
+consumers. Unrelated catalog content does not invalidate a reviewed change; used
+references, template catalogs and required Todo producer corpus remain protected.
+Apply acquires a private per-repository lock outside
 source catalogs, re-prepares, checks source/dependency digests and stages the
 complete write set in a durable bounded recovery journal. Publication uses
 atomic per-file replacement with original modes, then revalidates published

@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
-import hashlib
 import re
-import shutil
 import tempfile
 from pathlib import Path
 
@@ -13,8 +11,6 @@ from pydantic import ValidationError
 
 from cafe.catalogs.resolver import CatalogKind, CatalogResolver
 from cafe.core.playbook import (
-    PlaybookDefinition,
-    _resolve_phase_step_defaults,
     _tool_requirement_satisfied,
     confirmation_gate_steps,
     load_playbook_file,
@@ -24,17 +20,13 @@ from cafe.core.playbook import (
     resolve_step_behavior,
 )
 from cafe.playbooks.simulate import analyze_playbook
-from cafe.skills.loader import SkillLoader
 from cafe.skills.selectors import skill_selector_names
 from cafe.skills.workflow_composition import resolve_step_workflow_composition
 from cafe.utils.yaml_utils import safe_load
 
 from .phase import PhaseError, guard
 from .requests import decode_request
-
-
-def digest(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+from .sources import SourceView, digest
 
 
 def _public(value):
@@ -67,101 +59,61 @@ def _authority(model):
 def validate(root, result, requests):
     builtin = root / "src/cafe/data" if (root / "src/cafe/core/playbook.py").is_file() else None
     resolver = CatalogResolver(project_root=root, builtin_root=builtin, read_only=True)
-    entries = resolver.entries([CatalogKind.PHASE, CatalogKind.PLAYBOOK])
-    phase_entries = [e for e in entries if e.kind == CatalogKind.PHASE]
-    playbook_entries = [e for e in entries if e.kind == CatalogKind.PLAYBOOK]
+    source_by_name = {
+        key: resolver.locate(CatalogKind.PHASE, key)[1] for key in resolver.keys(CatalogKind.PHASE)
+    }
+    books_by_key = {
+        key: resolver.locate(CatalogKind.PLAYBOOK, key)[1]
+        for key in resolver.keys(CatalogKind.PLAYBOOK)
+    }
+    original_sources = dict(source_by_name)
+    changed_names, phase_targets, candidates = set(), {}, {}
+    changed_targets = {change["target"] for change in result.changes}
+    changed_books = set()
+    for relative, content in result.files.items():
+        path = Path(relative)
+        if "skills" in path.parts:
+            index = path.parts.index("skills")
+            name = path.parts[index + 1]
+            actual = root / Path(*path.parts[: index + 2])
+            selected = source_by_name.get(name)
+            if selected and selected.resolve() != actual.resolve() and relative.startswith("src/"):
+                result.diagnose(
+                    "ineffective_shadow",
+                    f"Selected source is {selected}",
+                    target=relative,
+                    skill=name,
+                    remedy="Explicitly target the effective source or remove the shadow separately",
+                )
+                continue
+            source_by_name[name] = actual
+            if relative in changed_targets:
+                changed_names.add(name)
+            phase_targets[name] = str(Path(*path.parts[: index + 2]) / "SKILL.md")
+        else:
+            selected = books_by_key.get(path.stem)
+            actual = root / path
+            if selected and selected.resolve() != actual.resolve() and relative.startswith("src/"):
+                result.diagnose(
+                    "ineffective_shadow",
+                    f"Selected source is {selected}",
+                    target=relative,
+                    field="target",
+                    remedy="Explicitly target the effective playbook source",
+                )
+                continue
+            books_by_key[path.stem] = actual
+            candidates[relative] = content
+            changed_books.add(path.stem)
+    if result.status == "rejected":
+        return
     with tempfile.TemporaryDirectory(prefix="cafe-author-view-") as temporary:
         staged = Path(temporary)
-        (staged / ".cafe").mkdir()
-        source_by_name = {}
-        for entry in phase_entries:
-            dest = staged / ".cafe/skills" / entry.key
-            shutil.copytree(entry.path, dest, symlinks=False)
-            source_by_name[entry.key] = entry.path
-            for file in entry.path.rglob("*"):
-                if file.is_file():
-                    result.dependencies[str(file)] = digest(file)
-        candidates = {}
-        for entry in playbook_entries:
-            path = entry.path
-            result.dependencies[str(path)] = digest(path)
-            relative = None
-            try:
-                relative = str(path.relative_to(root))
-            except ValueError:
-                pass
-            candidates[relative or str(path)] = path.read_text()
-        changed_names = set()
-        phase_targets = {}
-        reset_sources = set()
-        books_by_key = {entry.key: entry.path for entry in playbook_entries}
-        for relative, content in result.files.items():
-            path = Path(relative)
-            if "skills" in path.parts:
-                index = path.parts.index("skills")
-                name = path.parts[index + 1]
-                changed_names.add(name)
-                phase_targets[name] = str(Path(*path.parts[: index + 2]) / "SKILL.md")
-                selected = source_by_name.get(name)
-                actual = root / Path(*path.parts[: index + 2])
-                if selected and selected.resolve() != actual.resolve():
-                    # A builtin patch must not overwrite the selected project/global override.
-                    if relative.startswith("src/"):
-                        result.diagnose(
-                            "ineffective_shadow",
-                            f"Selected source is {selected}",
-                            target=relative,
-                            skill=name,
-                            remedy=(
-                                "Explicitly target the effective source "
-                                "or remove the shadow separately"
-                            ),
-                        )
-                        continue
-                if (
-                    selected
-                    and selected.resolve() != actual.resolve()
-                    and name not in reset_sources
-                ):
-                    folder = staged / ".cafe/skills" / name
-                    shutil.rmtree(folder)
-                    if actual.exists():
-                        shutil.copytree(actual, folder)
-                    source_by_name[name] = actual
-                    reset_sources.add(name)
-                dest = staged / ".cafe/skills" / name / Path(*path.parts[index + 2 :])
-            else:
-                selected = books_by_key.get(path.stem)
-                actual = root / path
-                if selected and selected.resolve() != actual.resolve():
-                    if relative.startswith("src/"):
-                        result.diagnose(
-                            "ineffective_shadow",
-                            f"Selected source is {selected}",
-                            target=relative,
-                            field="target",
-                            remedy="Explicitly target the effective playbook source",
-                        )
-                        continue
-                    # A new active project declaration replaces the lower-precedence candidate.
-                    candidates.pop(str(selected), None)
-                    try:
-                        candidates.pop(str(selected.relative_to(root)), None)
-                    except ValueError:
-                        pass
-                candidates[relative] = content
-                continue
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(content)
-        loader = SkillLoader(
-            project_root=staged,
-            global_root=staged / "global",
-            builtin_root=staged / "builtin",
-            read_only=True,
-            resolve_presentation=False,
-        )
-        for name in sorted(changed_names):
-            skill_dir = staged / ".cafe/skills" / name
+        view = SourceView(root, staged / "proposed", source_by_name, result, proposed=True)
+        before_view = SourceView(root, staged / "original", original_sources, result)
+        loader = view.loader
+        for name in sorted(phase_targets):
+            skill_dir = view.stage(name, resources=False)
             relative = phase_targets[name]
             resources = {
                 str(p.relative_to(skill_dir)): p.read_text()
@@ -169,6 +121,13 @@ def validate(root, result, requests):
                 if p.name != "SKILL.md"
             }
             try:
+                declaration = guard((skill_dir / "SKILL.md").read_text(), name, resources)
+                view.resources(name, declaration)
+                resources = {
+                    str(p.relative_to(skill_dir)): p.read_text()
+                    for p in skill_dir.rglob("*.md")
+                    if p.name != "SKILL.md"
+                }
                 declaration = guard((skill_dir / "SKILL.md").read_text(), name, resources)
                 for field, message in loader.workflow_declaration_resource_diagnostics(
                     skill_dir, declaration
@@ -200,22 +159,34 @@ def validate(root, result, requests):
                 )
         if result.status == "rejected":
             return
-        loader.discover(strict=True)
-        changed_books = {r.target for r in requests if "playbooks" in Path(r.target).parts}
+        if changed_names:
+            for key, source in books_by_key.items():
+                if key in changed_books:
+                    continue
+                try:
+                    content = source.read_text()
+                    affected = _affected(content, changed_names, view)
+                except Exception:
+                    # Inventory is advisory; unrelated malformed declarations are not candidates.
+                    continue
+                if affected:
+                    relative = (
+                        str(source.relative_to(root))
+                        if source.is_relative_to(root)
+                        else str(source)
+                    )
+                    candidates[relative] = content
+                    result.dependencies[str(source)] = digest(source)
         for relative, content in sorted(candidates.items()):
-            # Existing unaffected playbooks need not revalidate legacy warning contracts.
-            if relative not in changed_books and not _affected(content, changed_names, loader):
-                continue
             candidate = staged / "playbooks" / Path(relative).name
             candidate.parent.mkdir(exist_ok=True)
             candidate.write_text(content)
             try:
                 raw = decode_request(content)
-                preliminary = PlaybookDefinition.model_validate(
-                    _resolve_phase_step_defaults(normalize_playbook_yaml(raw), loader)
-                )
+                preliminary = view.book(raw)
+                loader.discover(strict=True)
                 graph = _public(dataclasses.asdict(analyze_playbook(preliminary)))
-                _bindings(preliminary, loader, result, relative, graph)
+                _bindings(preliminary, loader, result, relative, graph, view)
                 loaded = load_playbook_file(
                     candidate, source="project", skill_loader=loader, strict=True
                 )
@@ -236,14 +207,9 @@ def validate(root, result, requests):
                 before_authority = {}
                 source = root / relative
                 if source.is_file():
-                    original_loader = SkillLoader(
-                        project_root=root,
-                        builtin_root=builtin,
-                        read_only=True,
-                        resolve_presentation=False,
-                    )
+                    before_view.book(decode_request(source.read_text()))
                     original = load_playbook_file(
-                        source, source="project", skill_loader=original_loader
+                        source, source="project", skill_loader=before_view.loader
                     ).model
                     before = {
                         "assignable": list(confirmation_gate_steps(original)),
@@ -272,7 +238,7 @@ def validate(root, result, requests):
                 )
 
 
-def _bindings(model, loader, result, target, graph):
+def _bindings(model, loader, result, target, graph, view):
     producers = {}
     workspaces = {}
     consumers = {}
@@ -361,7 +327,7 @@ def _bindings(model, loader, result, target, graph):
                 composition.skill_names
             )
             for contributor in composition.contributors:
-                _todos(model, loader, name, contributor, producers, result, target)
+                _todos(model, loader, name, contributor, producers, result, target, view)
                 for tool in contributor.declaration.required_tools:
                     if not _tool_requirement_satisfied(tool, step.allowed_tools):
                         result.diagnose(
@@ -516,7 +482,7 @@ def _explicit_authority(model, raw, before, requests, result, target):
                 )
 
 
-def _todos(model, loader, step_name, contributor, producers, result, target):
+def _todos(model, loader, step_name, contributor, producers, result, target, view):
     declaration = contributor.declaration
     for checklist in (declaration.checklist, declaration.checklist_overlay):
         if not checklist:
@@ -556,7 +522,7 @@ def _todos(model, loader, step_name, contributor, producers, result, target):
                     if owner == step_name:
                         continue  # Serial bridges read the incoming version, not their own output.
                     for primary in skill_selector_names(model.steps[owner].skill):
-                        directory = loader.get_skill_dir(primary)
+                        directory = view.stage(primary, corpus=True)
                         corpus = "\n".join(p.read_text() for p in directory.rglob("*.md"))
                         if not all(
                             token in corpus
@@ -582,19 +548,32 @@ def _todos(model, loader, step_name, contributor, producers, result, target):
                             )
 
 
-def _affected(content, changed_names, loader):
-    """Use effective runtime source identities; aliases and overlays are not raw text matches."""
-    if not changed_names:
-        return False
+def _affected(content, changed_names, view):
+    """Inventory selectors without letting one missing neighbor hide an affected consumer."""
     raw = normalize_playbook_yaml(safe_load(content))
     for name, step in raw.get("steps", {}).items():
-        primary = skill_selector_names(step["skill"])
-        workflow = resolve_playbook_skills(
-            raw, channel="workflow", role=step.get("role"), step_name=name
-        )
-        if any(
-            loader.get_skill_dir(requested).name in changed_names
-            for requested in (*primary, *workflow)
-        ):
-            return True
+        if not isinstance(step, dict) or "skill" not in step:
+            continue
+        try:
+            primary = skill_selector_names(step["skill"])
+        except (ValueError, TypeError):
+            primary = ()
+        for requested in primary:
+            try:
+                if view.identity(requested) in changed_names:
+                    return True
+            except FileNotFoundError:
+                continue
+        try:
+            workflow = resolve_playbook_skills(
+                raw, channel="workflow", role=step.get("role"), step_name=name
+            )
+        except (ValueError, TypeError, KeyError):
+            workflow = ()
+        for requested in workflow:
+            try:
+                if view.identity(requested) in changed_names:
+                    return True
+            except FileNotFoundError:
+                continue
     return False
