@@ -1,0 +1,47 @@
+version: 1
+target: .cafe/playbooks/fieldwork.yaml
+mode: create
+declaration:
+  playbook:
+    id: fieldwork
+    conversation_locale: en-US
+    applicability:
+      summary: Collect a bounded field observation.
+      use_when: [An observation needs a reproducible record.]
+      avoid_when: [The task requires implementation.]
+  skills:
+    workflow: {shared: []}
+    chat: {shared: []}
+  roles:
+    observer: {}
+  entry_point: observe
+  commands:
+    prepare:
+      prompt_for_spec_plan_config: false
+  steps:
+    observe:
+      skill: cafe-observe
+      role: observer
+      input_artifacts: []
+      output_artifact: observation
+      allowed_tools: []
+      'on':
+        await_agent: _done
+companions:
+  - version: 1
+    target: .cafe/skills/cafe-observe/SKILL.md
+    mode: create
+    declaration:
+      name: cafe-observe
+      description: Record an author-selected field observation.
+      version: 1.0.0
+      workflow:
+        execution_profile:
+          workload: research
+          reasoning: standard
+          risk_domains: []
+          fallback_strength: equivalent_or_stronger
+    sections:
+      Instructions: Record the supplied observation and its provenance.
+      Output: 'Write the observation to: {output_file}'
+      Handoff: Choose the declared outcome and write the next-step baton.

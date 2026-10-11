@@ -276,9 +276,7 @@ def content_digest(
                     )
             except (OSError, RuntimeError):
                 if materialize_nested_symlinks:
-                    raise CatalogValidationError(
-                        f"Catalog symlink target is unavailable: {node}"
-                    )
+                    raise CatalogValidationError(f"Catalog symlink target is unavailable: {node}")
                 digest.update(f"L\0{relative}\0{mode:o}\0{link_target}\0".encode())
                 digest.update(f"T\0{relative}\0missing\0".encode())
             else:
@@ -466,7 +464,7 @@ class CatalogResolver:
             return
         read_valid_agent_definition(path, key)
 
-    def _resolve_unlocked(self, kind: CatalogKind, key: str) -> CatalogEntry:
+    def _locate_unlocked(self, kind: CatalogKind, key: str) -> tuple[str, Path, Optional[str]]:
         key = self._validate_key(kind, key)
         roots = [
             (source, root, project_layer, self._catalog_root_available(root))
@@ -478,17 +476,27 @@ class CatalogResolver:
             path = self.candidate_path(kind, key, root)
             if not path.exists() and not path.is_symlink():
                 continue
-            entry_digest = content_digest(path)
-            self._validate_entry(kind, key, path)
-            return CatalogEntry(
-                kind=kind,
-                key=key,
-                source=source,
-                path=path,
-                digest=entry_digest,
-                project_layer=project_layer,
-            )
+            return source, path, project_layer
         raise FileNotFoundError(f"{kind.value.title()} not found: {key}")
+
+    def locate(self, kind: CatalogKind, key: str) -> tuple[str, Path, Optional[str]]:
+        """Select a source by normal precedence without reading or hashing its contents."""
+        with global_catalog_lock(self.global_root, read_only=self.read_only):
+            return self._locate_unlocked(kind, key)
+
+    def _resolve_unlocked(self, kind: CatalogKind, key: str) -> CatalogEntry:
+        key = self._validate_key(kind, key)
+        source, path, project_layer = self._locate_unlocked(kind, key)
+        entry_digest = content_digest(path)
+        self._validate_entry(kind, key, path)
+        return CatalogEntry(
+            kind=kind,
+            key=key,
+            source=source,
+            path=path,
+            digest=entry_digest,
+            project_layer=project_layer,
+        )
 
     def resolve(self, kind: CatalogKind, key: str) -> CatalogEntry:
         with global_catalog_lock(self.global_root, read_only=self.read_only):
