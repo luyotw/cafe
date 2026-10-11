@@ -51,7 +51,7 @@ def prepare(request, *, root=None, _allow_pending=False):
             if phase:
                 if target.parent.parent.name != "skills":
                     raise ValueError("Phase target must be skills/<name>/SKILL.md")
-            elif target.parent.name != "playbooks" or target.suffix not in {".yaml", ".yml"}:
+            elif target.parent.name != "playbooks" or target.suffix != ".yaml":
                 raise ValueError("Playbook target must be playbooks/<id>.yaml")
             before = target.read_text() if target.exists() else None
             if item.mode == "create":

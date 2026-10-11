@@ -60,3 +60,11 @@ def test_public_schema_projects_authoritative_runtime_models():
     schema = request_schema()
     assert schema["playbook"] == PlaybookDefinition.model_json_schema()
     assert schema["phase_workflow"] == SkillWorkflowDeclaration.model_json_schema()
+
+
+def test_authoring_rejects_playbook_extension_not_discovered_by_runtime(tmp_path):
+    request = pair()
+    request["target"] = ".cafe/playbooks/fieldwork.yml"
+    result = prepare(request, root=tmp_path)
+    assert result.status == "rejected"
+    assert not (tmp_path / ".cafe").exists()
