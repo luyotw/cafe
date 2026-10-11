@@ -73,9 +73,9 @@ def discover(
             explicit = next((v for v in overrides if v.startswith(name + "=")), None)
             preferred = saved.get("steps", {}).get(name, saved.get("roles", {}).get(step.role))
             if explicit or preferred:
-                from format_kickoff_contract import _parse_phase_chains
-                raw = explicit or name + "=" + json.dumps(preferred)
-                chain = [entry.as_dict() for entry in _parse_phase_chains([raw], step_names=set(model.steps))[name]]
+                from format_kickoff_contract import _parse_phase_chains, _parse_chain
+                selected = _parse_phase_chains([explicit], step_names=set(model.steps))[name] if explicit else _parse_chain(json.dumps(preferred), step_name=name)
+                chain = [entry.as_dict() for entry in selected]
                 inputs["newly_selected_effort"] = True
             else:
                 try:

@@ -299,3 +299,21 @@ def test_interrupted_preflight_without_terminal_event_never_caches_success(phase
             now=100,
         )
     assert not path.exists()
+
+
+def test_actual_execution_workspace_cap_controls_preview_and_process_admission(phase_process):
+    from cafe.agents.executor import AgentExecutionControl, AgentExecutionError
+    root, cafe = phase_process
+    configure(cafe, "high")
+    manager = setup_agents(ConfigManager(config_dir=cafe), "issue408-test", "bespoke-build", cafe_dir=cafe, stream_agent_output=False)
+    workspace = root / "actual-workspace"
+    settings = workspace / ".claude/settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text(json.dumps({"maxEffortLevel": "low"}))
+    control = AgentExecutionControl(working_directory=workspace)
+    executor = manager.get_agent("David")
+    with pytest.raises(ValueError):
+        executor.preview_cli_command_args("preview", execution_control=control)
+    with pytest.raises(AgentExecutionError):
+        executor.execute("attempt", execution_control=control)
+    assert not (root / "launches.jsonl").exists()

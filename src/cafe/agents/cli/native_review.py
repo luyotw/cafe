@@ -97,6 +97,9 @@ def validate_configuration(config):
             "Cursor native plugin reviewers inherit the parent model; "
             "independent_override is unsupported"
         )
+    if config.cli.value == "codex" and config.reasoning_effort is not None:
+        from cafe.agents.cli.effort import validate_effort
+        validate_effort("codex", configuration["model"], config.reasoning_effort, explicit=True)
     return configuration
 
 
@@ -106,6 +109,8 @@ def project(config, command):
     validate_configuration(config)
     cli = config.cli.value
     if cli == "codex":
+        # Native parent/child effort is scoped through admitted thread/turn RPCs.
+        # A global app-server override would also affect independent child models.
         cwd = command[command.index("-C") + 1]
         return [
             command[0],

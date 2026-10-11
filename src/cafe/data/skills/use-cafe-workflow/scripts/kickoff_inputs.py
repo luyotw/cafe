@@ -717,9 +717,12 @@ def _prefill_saved_inputs(values: dict[str, Any], *, store: Any, request: dict[s
             candidate = steps.get(name, roles.get(step.role))
             if name in overrides or candidate is None:
                 continue
-            if not _is_string_list(candidate) or not candidate:
-                raise ValueError("saved chain must be a nonempty string array")
-            entry = name + "=" + ",".join(candidate)
+            if not isinstance(candidate, list) or not candidate:
+                raise ValueError("saved chain must be a nonempty entry array")
+            selected = owner._parse_chain(json.dumps(candidate), step_name=name)
+            if any(entry.reasoning_effort is None for entry in selected):
+                raise ValueError(f"saved chain for {name} is a selection hint; select explicit reasoning_effort for every entry")
+            entry = name + "=" + json.dumps([value.as_dict() for value in selected])
             owner._parse_phase_chains([entry], step_names=set(model.steps))
             result.append(entry)
         return {"phase_chain": result}

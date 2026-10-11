@@ -13,13 +13,37 @@ import os
 import re
 import shutil
 import subprocess
-from functools import lru_cache
+from functools import lru_cache, wraps
+from contextvars import ContextVar
+import inspect
 from pathlib import Path
 from typing import Mapping
 
 from packaging.version import Version
 
-PROJECTION_VERSION = 1
+_WORKSPACE = ContextVar("effort_workspace", default=None)
+
+
+def scoped_controls(method):
+    """Admit against the actual invocation workspace without changing host cwd."""
+    signature = inspect.signature(method)
+
+    @wraps(method)
+    def scoped(*args, **kwargs):
+        control = signature.bind(*args, **kwargs).arguments.get("execution_control")
+        workspace = getattr(control, "working_directory", None)
+        token = _WORKSPACE.set(
+            Path(workspace).expanduser().resolve() if workspace is not None else _WORKSPACE.get()
+        )
+        try:
+            return method(*args, **kwargs)
+        finally:
+            _WORKSPACE.reset(token)
+
+    return scoped
+
+
+PROJECTION_VERSION = 2
 LEVELS = ("low", "medium", "high", "xhigh", "max")
 CLAUDE_MODELS = {
     "claude-opus-4-6": ("low", "medium", "high", "max"),
@@ -159,7 +183,7 @@ def control_paths(cli: str, environment: Mapping[str, str]) -> list[Path]:
             root / "config.toml",
             root / "models_cache.json",
             Path("/etc/codex/requirements.toml"),
-            Path.cwd() / ".codex/config.toml",
+            (_WORKSPACE.get() or Path.cwd()) / ".codex/config.toml",
         ]
     if cli == "claude":
         root = Path(environment.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
@@ -167,8 +191,8 @@ def control_paths(cli: str, environment: Mapping[str, str]) -> list[Path]:
             root / "settings.json",
             root / "managed-settings.json",
             Path("/etc/claude-code/managed-settings.json"),
-            Path.cwd() / ".claude/settings.json",
-            Path.cwd() / ".claude/settings.local.json",
+            (_WORKSPACE.get() or Path.cwd()) / ".claude/settings.json",
+            (_WORKSPACE.get() or Path.cwd()) / ".claude/settings.local.json",
         ]
     if cli == "copilot":
         return [Path(environment.get("COPILOT_HOME") or Path.home() / ".copilot") / "config.json"]
@@ -242,6 +266,7 @@ def capability_context(cli: str, model: str | None, effort: str | None) -> str:
         sources.append(Path(__file__).with_name(adapter_name + ".py"))
     payload = {
         "projection": PROJECTION_VERSION,
+        "workspace": str((_WORKSPACE.get() or Path.cwd()).resolve()),
         "adapter_sources": {
             path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in sources
         },
@@ -261,10 +286,12 @@ def capability_context(cli: str, model: str | None, effort: str | None) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
-def reasoning_evidence(config, command: list[str] | None = None, records=()) -> dict:
+def reasoning_evidence(
+    config, command: list[str] | None = None, records=(), *, native_applied_effort=None
+) -> dict:
     """Reconcile native reports without inferring a level from usage or exit."""
     configured = config.reasoning_effort
-    applied = None
+    applied = native_applied_effort
     if configured is not None and command is not None:
         if config.cli.value == "codex" and f'model_reasoning_effort="{configured}"' in command:
             applied = configured

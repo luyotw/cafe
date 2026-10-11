@@ -19,7 +19,11 @@ verifies the installed client version and exact model; unknown combinations fail
 before launch. These are adapter capabilities, not phase-skill model defaults.
 
 - Codex 0.159.3 and later uses invocation `--config model_reasoning_effort="LEVEL"`
-  on fresh and resumed executions. The selected model's levels come from the
+  on fresh and resumed executions. Native app-server execution applies the
+  admitted value through thread config and every turn's `effort` RPC field;
+  response `reasoningEffort` confirms thread settings, not per-turn internal
+  thinking telemetry. Independently modeled forks must admit the inherited token
+  too; unknown child combinations reject before launch. The selected model's levels come from the
   installed client's version-matching `models_cache.json`; no family-name or
   token-count inference is used. CLI configuration overrides inherited defaults.
   [Codex configuration reference](https://developers.openai.com/codex/config-reference/).
@@ -65,7 +69,9 @@ Existing iteration records remain readable without rewriting their history.
 
 Candidate cache receipts separate explicit effort and omission and include
 executable/version, adapter/runtime projection and opaque effective-control
-fingerprints. Actual probes run on misses. Failed, interrupted and mismatched
+fingerprints, including the actual execution workspace. Invocation admission
+reads project controls in that workspace, without changing the host directory.
+Actual probes run on misses. Failed, interrupted and mismatched
 probes cannot cache success. Ordered fallback smoke remains provider-free and
 checks the production Manager's per-entry takeover contract. Primary-only chains
 never gain a fallback.

@@ -156,6 +156,10 @@ def replace(
         for name, old_chain in old_chains.items():
             if new_chains.get(name) == old_chain:
                 continue
+            from cafe.core.audit_events import AuditEventStore
+            audit = AuditEventStore(issue_dir)
+            if audit.root.exists() and audit.latest_record(workflow_id, {"step_started"}, step=name) is not None:
+                raise ValueError(f"phase '{name}' has already started; model/effort adjustments are future-only")
             for directory in (issue_dir / name).glob("iteration_*"):
                 for filename in ("iteration.json", "context.json"):
                     evidence = directory / filename
@@ -165,7 +169,7 @@ def replace(
                         raise ValueError("phase start evidence is unavailable; resolve recovery before changing its chain")
                     import json
                     metadata = json.loads(evidence.read_text())
-                    if metadata.get("prompt") or metadata.get("end_time") or metadata.get("execution_attempts"):
+                    if metadata.get("timestamp") or metadata.get("iteration") or metadata.get("prompt") or metadata.get("end_time") or metadata.get("execution_attempts"):
                         raise ValueError(f"phase '{name}' has already started; model/effort adjustments are future-only")
         candidate = build_initial_contract(
             proposal=proposal,

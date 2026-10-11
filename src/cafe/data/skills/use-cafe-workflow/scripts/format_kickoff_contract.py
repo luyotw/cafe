@@ -420,7 +420,16 @@ def _parse_chain(raw_chain: str, *, step_name: str) -> ModelChain:
         values = json.loads(raw_chain)
         if not isinstance(values, list):
             raise ValueError("phase chain must be a JSON array")
-        return _validate_chain(values, step_name=step_name)
+        entries = []
+        for value in values:
+            if isinstance(value, str):
+                parsed = _parse_chain(value, step_name=step_name)
+                if len(parsed) != 1:
+                    raise ValueError("each saved chain entry must identify one CLI/model")
+                entries.extend(parsed)
+            else:
+                entries.append(value)
+        return _validate_chain(entries, step_name=step_name)
     chain: ModelChain = []
     seen_clis: set[str] = set()
     for raw_entry in raw_chain.split(","):
@@ -450,6 +459,8 @@ def _validate_chain(
     seen: set[str] = set()
     result: ModelChain = []
     for raw_entry in chain:
+        if isinstance(raw_entry, dict) and "reasoning_effort" in raw_entry:
+            validate_effort(raw_entry.get("cli"), raw_entry.get("model"), raw_entry["reasoning_effort"], explicit=True)
         entry = ExecutionEntry.from_value(raw_entry)
         raw_cli, raw_model = entry.cli, entry.model
         try:

@@ -203,3 +203,22 @@ print(json.dumps({'type':'turn.completed','usage':{'input_tokens':1,'output_toke
                 "user_reconfirmation",
             )
         )
+
+
+@pytest.mark.parametrize("start_evidence", ["timestamp", "audit"])
+def test_promptless_started_phase_cannot_change_effort_after_reconfirmation(compact_request, compact_proposal, start_evidence):
+    root = Path(compact_request["project_root"])
+    issue = root / ".cafe/issues/sample"
+    store = BlackboardStore(issue)
+    board = store.load_or_create("build", playbook_id="selected")
+    first = activate_confirmed_contract(ActivateConfirmedContract(issue, "sample", board.workflow_id, "user", datetime.now(timezone.utc), compact_proposal))
+    if start_evidence == "timestamp":
+        iteration = issue / "build/iteration_001"
+        iteration.mkdir(parents=True)
+        (iteration / "iteration.json").write_text(json.dumps({"iteration": 1, "timestamp": datetime.now(timezone.utc).isoformat()}))
+    else:
+        store.record_event(board, "step_started", {"step": "build", "attempt": 1, "hop": 1, "runtime": "fixture"})
+    changed = deepcopy(compact_proposal)
+    changed["phases"][0]["chain"][0]["reasoning_effort"] = "low"
+    with pytest.raises(ValueError):
+        replace_confirmed_contract(ReplaceConfirmedContract(issue, "sample", board.workflow_id, "user", datetime.now(timezone.utc), changed, first.contract_sha256, "user_reconfirmation"))

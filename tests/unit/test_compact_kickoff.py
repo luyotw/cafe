@@ -190,3 +190,32 @@ def test_staged_render_creates_complete_compact_proposal(compact_request, tmp_pa
     receipt = json.loads(result.stdout)
     assert receipt["status"] == "rendered"
     assert (tmp_path / "proposal.md").is_file()
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_saved_effort_preferences_remain_hints_until_phase_selection_is_complete(compact_request, tmp_path, explicit):
+    owner = load_kickoff_module("kickoff_inputs")
+    prefs = load_kickoff_module("kickoff_preferences")
+    root = Path(compact_request["project_root"])
+    compact_request["compact_inputs"].pop("phases")
+    config = tmp_path / "saved-prefs"
+    store = prefs.PreferenceStore(config, repository_root=root)
+    chain = [{"cli":"codex", "model":"test", "reasoning_effort":"high"}] if explicit else ["codex:test"]
+    store.set("phase.chains", {"steps":{"build":chain}}, scope="repository", origin="explicit")
+    discovered = owner.discover_kickoff(compact_request, config_dir=config, cache_dir=tmp_path / "cache")
+    assembled = owner.assemble_kickoff(compact_request, discovery=discovered)
+    assert assembled["status"] == "incomplete"
+    requirements = {gap["requirement"] for gap in assembled["missing_decisions"]}
+    assert "model_effort_rationale:build" in requirements
+    assert ("explicit_effort:build" in requirements) == (not explicit)
+    selected = discovered["inputs"]["phases"][0]["chain"][0]
+    assert selected.get("reasoning_effort") == ("high" if explicit else None)
+    values = {"playbook_id":"selected", "issue_name":"new-task"}
+    report, missing, sources = {}, [], {}
+    owner._prefill_saved_inputs(values, store=store, request=compact_request, report=report, missing=missing, sources=sources)
+    if explicit:
+        entries = load_kickoff_module("format_kickoff_contract")._parse_phase_chains(values["phase_chain"], step_names={"build"})
+        assert entries["build"][0].reasoning_effort == "high"
+    else:
+        assert "phase_chain" not in values
+        assert any("reasoning_effort" in gap["requirement"] for gap in missing)

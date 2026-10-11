@@ -112,6 +112,7 @@ for line in sys.stdin:
         result = {
             "thread": {"id": child if fork else parent},
             "model": params["model"],
+            "reasoningEffort": "low" if case == "effort_mismatch" else params.get("config", {}).get("model_reasoning_effort"),
             "cwd": root,
             "approvalPolicy": "never",
             "sandbox": (
@@ -684,3 +685,45 @@ def test_instruction_only_execution_rejects_unconfirmed_effective_permissions(rp
     _, execute = run(case, enforcement="instruction_only")
     with pytest.raises(AgentExecutionError):
         execute()
+
+
+@pytest.mark.parametrize("session", [None, PARENT])
+def test_native_parent_effort_is_admitted_and_reapplied_to_every_rpc_turn(rpc, monkeypatch, session):
+    run, selected, transcript, commands, _, home = rpc
+    monkeypatch.setattr("cafe.agents.cli.effort.client_identity", lambda cli: {"version": "0.159.3", "executable": "fixture"})
+    (home / "models_cache.json").write_text(json.dumps({"client_version": "0.159.3", "models": [{"slug": "test", "supported_reasoning_levels": [{"effort": "high"}]}]}))
+    executor, invoke = run(session=session)
+    executor.config.reasoning_effort = "high"
+    response = invoke()
+    requests = _records(transcript)
+    opened = next(r for r in requests if r["method"] in {"thread/start", "thread/resume"})
+    assert opened["params"]["config"]["model_reasoning_effort"] == "high"
+    assert all(r["params"]["effort"] == "high" for r in requests if r["method"] == "turn/start")
+    assert response.reasoning_evidence["configured"] == response.reasoning_evidence["applied"] == "high"
+    assert response.execution_attempts[0]["reasoning_evidence"]["applied"] == "high"
+    assert response.execution_attempts[0]["status"] == "success"
+
+
+def test_native_parent_mismatch_fails_closed_with_physical_evidence(rpc, monkeypatch):
+    run, _, transcript, _, _, home = rpc
+    monkeypatch.setattr("cafe.agents.cli.effort.client_identity", lambda cli: {"version": "0.159.3", "executable": "fixture"})
+    (home / "models_cache.json").write_text(json.dumps({"client_version": "0.159.3", "models": [{"slug": "test", "supported_reasoning_levels": [{"effort": "high"}]}]}))
+    executor, invoke = run("effort_mismatch")
+    executor.config.reasoning_effort = "high"
+    with pytest.raises(AgentExecutionError) as error:
+        invoke()
+    assert error.value.error_type == "reasoning_effort_mismatch"
+    assert error.value.execution_attempts[0]["status"] == "failed"
+    assert error.value.reasoning_evidence["reported"] == "low"
+    assert not any(r["method"] == "turn/start" for r in _records(transcript))
+
+
+def test_native_independent_model_cannot_inherit_unverified_parent_effort(rpc, monkeypatch):
+    run, _, _, commands, _, home = rpc
+    monkeypatch.setattr("cafe.agents.cli.effort.client_identity", lambda cli: {"version":"0.159.3", "executable":"fixture"})
+    (home / "models_cache.json").write_text(json.dumps({"client_version":"0.159.3", "models":[{"slug":"test", "supported_reasoning_levels":[{"effort":"high"}]}]}))
+    executor, invoke = run(model="unverified-child")
+    executor.config.reasoning_effort = "high"
+    with pytest.raises(AgentExecutionError):
+        invoke()
+    assert commands == []

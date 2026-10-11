@@ -203,3 +203,29 @@ def test_atomic_writer_and_ordered_smoke_preserve_each_effort(provider_clients):
     assert smoke()["status"] == "hit"
     entries[1]["reasoning_effort"] = "high"
     assert smoke()["status"] == "fresh"
+
+
+def test_preflight_receipt_cannot_cross_execution_workspaces(provider_clients, monkeypatch):
+    cache = load_kickoff_module("preflight_cache")
+    path = provider_clients / "workspace-cache.json"
+    cache.candidate_record(
+        cache_file=path,
+        cli="codex",
+        model="gpt-5.5",
+        reasoning_effort="high",
+        resolved_model="gpt-5.5",
+        now=100,
+        reasoning_evidence={"applied": "high", "verification": "invocation-derived"},
+    )
+    workspace = provider_clients / "other-workspace"
+    workspace.mkdir()
+    monkeypatch.chdir(workspace)
+    hit, _ = cache.candidate_check(
+        cache_file=path,
+        cli="codex",
+        model="gpt-5.5",
+        reasoning_effort="high",
+        max_age_seconds=60,
+        now=101,
+    )
+    assert not hit

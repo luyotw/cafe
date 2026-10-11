@@ -41,7 +41,7 @@ def _project_records(store):
 
 
 def _validate_value(key, value, model=None):
-    from format_kickoff_contract import _parse_phase_chains, _parse_event_manager_entries, _resolve_partition
+    from format_kickoff_contract import _parse_chain, _parse_event_manager_entries, _resolve_partition
     from cafe.core.playbook import confirmation_gate_steps
     from kickoff_preferences import canonical_language_input
 
@@ -54,9 +54,9 @@ def _validate_value(key, value, model=None):
         if model is not None and (set(steps) - set(model.steps) or set(roles) - {s.role for s in model.steps.values()}):
             raise ValueError("Saved model selectors do not match this playbook")
         for name, chain in [*steps.items(), *roles.items()]:
-            if not isinstance(chain, list) or not chain or not all(isinstance(c, str) for c in chain):
-                raise ValueError("Expected ordered CLI:model chains")
-            _parse_phase_chains([f"{name}={','.join(chain)}"], step_names={name})
+            if not isinstance(chain, list) or not chain:
+                raise ValueError("Expected ordered execution entry chains")
+            _parse_chain(json.dumps(chain), step_name=name)
     elif key == "review.decisions":
         if not isinstance(value, dict) or any(v not in {"required", "not_required"} for v in value.values()):
             raise ValueError("Expected per-step review decisions")
@@ -185,8 +185,9 @@ def build_offer(args, proposal, model, *, store=None, templates=None, issue_id="
                                       for c in manager["clis"]])
     for phase in proposal["phases"]:
         name = phase["name"]
-        add("phase.chains", [f"{c['cli']}:{c['model']}" for c in phase["chain"]],
-            name, model.steps[name].role)
+        chain = phase["chain"]
+        value = copy.deepcopy(chain) if any("reasoning_effort" in c for c in chain) else [f"{c['cli']}:{c['model']}" for c in chain]
+        add("phase.chains", value, name, model.steps[name].role)
     partition = proposal["confirmation_contract"]
     if partition["user_required"] or partition["manager_confirmable"]:
         add("confirmation.assignments", {k: partition[k] for k in ("user_required", "manager_confirmable")})
@@ -311,7 +312,8 @@ def render_offer(offer, *, zh, table):
 
     def display(key, value):
         if key == "phase.chains":
-            return " → ".join(value) + (("（無備援）" if zh else " (no fallback)") if len(value) == 1 else "")
+            rendered = [entry if isinstance(entry, str) else f"{entry['cli']}:{entry['model']} (effort={entry.get('reasoning_effort') or 'CLI-default'})" for entry in value]
+            return " → ".join(rendered) + (("（無備援）" if zh else " (no fallback)") if len(value) == 1 else "")
         if key == "manager.event_manager":
             return " → ".join(value)
         if key == "worktree.convention" and value == {"current_checkout": True}:

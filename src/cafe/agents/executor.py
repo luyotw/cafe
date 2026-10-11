@@ -10,6 +10,7 @@ from queue import Empty
 from threading import Event, Timer
 from typing import Any, Callable, List, Optional
 
+from cafe.agents.cli.effort import scoped_controls
 from cafe.agents.cli import AbstractCLI, ClaudeCLI, CodexCLI, CopilotCLI, CursorCLI, GeminiCLI
 from cafe.agents.diagnostics import sanitize_error_excerpt, save_stderr_diagnostics
 from cafe.agents.process_output import ProcessOutput, ProcessOutputError
@@ -223,6 +224,7 @@ class AgentExecutor:
 
         return translated
 
+    @scoped_controls
     def execute(
         self,
         prompt: str,
@@ -316,7 +318,7 @@ class AgentExecutor:
                 from cafe.agents.cli.codex_native_review import execute_native_review
 
                 def native_attempt():
-                    return execute_native_review(
+                    return self._execute_with_effort_evidence(cmd, "Codex", invoke_attempt=lambda: execute_native_review(
                         self,
                         cmd,
                         prompt,
@@ -325,7 +327,7 @@ class AgentExecutor:
                         allowed_directories=allowed_directories,
                         execution_control=execution_control,
                         streaming_output_file=streaming_output_file,
-                    )
+                    ))
 
                 agent_response = self._execute_with_session_recovery(
                     cmd=cmd,
@@ -660,6 +662,7 @@ class AgentExecutor:
         )
         return cmd[1:]
 
+    @scoped_controls
     def _build_controlled_command(
         self,
         cli_strategy: AbstractCLI,
@@ -738,7 +741,8 @@ class AgentExecutor:
             cmd.extend(["--policy", str(policy_path)])
         return cmd, process_cwd
 
-    def preview_cli_environment(self) -> dict[str, str]:
+    @scoped_controls
+    def preview_cli_environment(self, execution_control: AgentExecutionControl | None = None) -> dict[str, str]:
         """Build the CLI environment that would be used for execution."""
         cli_strategy = self._get_cli_strategy()
         return cli_strategy.build_environment()
@@ -1325,7 +1329,7 @@ class AgentExecutor:
                 return self._execute_with_effort_evidence(command, cli_name, *args, **kwargs)
         return self._execute_with_effort_evidence(cmd, cli_name, *args, **kwargs)
 
-    def _execute_with_effort_evidence(self, cmd, cli_name, *args, **kwargs):
+    def _execute_with_effort_evidence(self, cmd, cli_name, *args, invoke_attempt=None, **kwargs):
         from cafe.agents.cli.effort import reasoning_evidence
         attempts = getattr(self, "_execution_attempts", None)
         if attempts is None:
@@ -1334,7 +1338,7 @@ class AgentExecutor:
                   "session_id": self.config.session_id,
                   "reasoning_evidence": reasoning_evidence(self.config, cmd)}
         try:
-            response = self._execute_with_native_activity(cmd, cli_name, *args, **kwargs)
+            response = invoke_attempt() if invoke_attempt is not None else self._execute_with_native_activity(cmd, cli_name, *args, **kwargs)
             record.update(status="success", reasoning_evidence=response.reasoning_evidence)
             attempts.append(record)
             response.execution_attempts = list(attempts)
