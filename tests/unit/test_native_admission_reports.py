@@ -527,6 +527,81 @@ def test_public_chat_table_uses_group_records_for_source_legacy(legacy, monkeypa
     assert ("$0.2500 legacy" in text) == bool(legacy)
 
 
+@pytest.mark.parametrize(
+    "canonical,alias,label",
+    [
+        ("cache_read_input_tokens", "cached_input_tokens", "Cache Read:"),
+        ("cache_write_input_tokens", "cache_creation_input_tokens", "Cache Write:"),
+    ],
+)
+def test_public_timeline_keeps_legacy_category_without_a_derived_field(
+    canonical, alias, label, monkeypatch, capsys
+):
+    from cafe.services.status_display import StatusDisplay
+    from cafe.services.timeline_builder import TimelineBuilder
+
+    monkeypatch.setattr("cafe.services.status_display.RICH_AVAILABLE", False)
+    parent = dict(
+        invocation_id="caller",
+        cli="codex",
+        model="actual",
+        provenance="reported",
+        amount_usd=".2",
+        complete=True,
+        usage=dict(input_tokens=10, output_tokens=2, total_tokens=12, **{canonical: 3, alias: 4}),
+        token_total_evidence=dict(kind="input_plus_output", source="native_adapter"),
+    )
+    child = record(100, "final")
+    old = dict(
+        input_tokens=110,
+        output_tokens=12,
+        total_cost_usd=1.2,
+        cost_records=[parent, child],
+        **{canonical: 7},
+        accounting_residual={canonical: 7},
+    )
+    stats = merge_token_usage_stats(old, TokenUsage(cost_records=[child]))
+    new_caller = dict(
+        invocation_id="later-caller",
+        cli="codex",
+        model="later",
+        provenance="reported",
+        amount_usd=".1",
+        complete=True,
+        usage=dict(input_tokens=2, output_tokens=1, total_tokens=3, **{canonical: 1}),
+    )
+    incoming = TokenUsage(
+        input_tokens=2,
+        output_tokens=1,
+        total_cost_usd=0.1,
+        cost_records=[new_caller],
+        **{canonical: 1},
+    )
+    for _ in range(2):
+        stats = merge_token_usage_stats(stats, incoming)
+    entries = TimelineBuilder("custom", phase_names=["compose"]).build_timeline_entries(
+        {},
+        {
+            "compose": [
+                dict(
+                    iteration=1,
+                    status="completed",
+                    timestamp="2026-10-11T00:00:00+00:00",
+                    stats=stats,
+                )
+            ]
+        },
+    )
+    StatusDisplay().render_model_status_table(entries)
+    values = [
+        line.split(":", 1)[1].strip()
+        for line in capsys.readouterr().out.splitlines()
+        if line.strip().startswith(label)
+    ]
+    assert "7" in values
+    assert "8" not in values
+
+
 @pytest.mark.parametrize("provider", ["cursor-agent", "custom-provider"])
 def test_public_source_keeps_non_native_exclusive_cache_categories(tmp_path, provider):
     directory = tmp_path / "compose/iteration_001"

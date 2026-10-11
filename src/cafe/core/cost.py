@@ -615,7 +615,10 @@ def source_remainder(stats, records):
         raise ValueError("unsupported scalar coverage")
     admission = accounting_admission(records)
     caller_only = stats.get("scalar_coverage") == "caller" or any(
-        r.get("scalar_coverage") == "caller" for r in records
+        r.get("scalar_coverage") == "caller"
+        or isinstance(r.get("scalar_coverage"), dict)
+        and r["scalar_coverage"].get("kind") == "caller"
+        for r in records
     )
     rows = []
     for row in admission["records"]:
@@ -630,6 +633,25 @@ def source_remainder(stats, records):
     represented, ambiguous = {}, set()
     for row in rows:
         values, invalid = _row_counters(row, observations=True)
+        coverage = row.get("scalar_coverage", {})
+        if isinstance(coverage, dict) and coverage and (
+            coverage.get("kind") != "caller"
+            or not coverage.keys() <= {"kind", "excluded_fields"}
+        ):
+            raise ValueError("invalid scalar coverage")
+        excluded = coverage.get("excluded_fields", []) if isinstance(coverage, dict) else []
+        if (
+            not isinstance(excluded, list)
+            or len(excluded) > len(COUNTERS)
+            or any(k not in COUNTERS for k in excluded)
+        ):
+            raise ValueError("invalid scalar coverage fields")
+        values = {k: v for k, v in values.items() if k not in excluded}
+        invalid = [
+            g
+            for g in invalid
+            if not any(g in ("invalid_" + k, "conflicting_" + k) for k in excluded)
+        ]
         for key, value in values.items():
             represented[key] = represented.get(key, 0) + value
         for gap in invalid:

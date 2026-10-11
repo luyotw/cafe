@@ -329,7 +329,10 @@ Compatibility token/money scalars cover the caller only. Children contribute
 only records, never scalar projection. The additive persisted
 `scalar_coverage="caller"` marker distinguishes this interpretation from older
 child-inclusive aggregates; it is also carried on native records so existing
-Timeline entries need only `cost_records`. There is no public residual field or
+Timeline entries need only `cost_records`. For migrated caller records, bounded
+`scalar_coverage` flags list excluded counter categories without storing residual
+amounts. These preserve independent legacy categories after projection and after
+new caller evidence is appended; they are not physical invocation identity. There is no public residual field or
 derived Timeline native-usage field. Record merge precedes the caller replay
 check; scalar duplicate subtraction applies only to caller records.
 

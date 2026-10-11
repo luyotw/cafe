@@ -12,7 +12,7 @@ from typing import Any, Dict
 
 import yaml
 
-from cafe.core.cost import accounting_admission, merge_cost_records, source_remainder
+from cafe.core.cost import _row_counters, accounting_admission, merge_cost_records, source_remainder
 from cafe.core.types import TokenUsage
 from cafe.core.workspace_lock import workspace_execution_lock
 from cafe.utils.issue_config import issue_config_lock
@@ -26,7 +26,19 @@ def _caller_stats(values, records):
     if native and merged.get("scalar_coverage") != "caller" and records:
         # Read old child-inclusive aggregates once; preserve their proven remainder.
         remainder = source_remainder(merged, records)
+        records = [dict(r) for r in records]
         callers = [r for r in records if "native_usage" not in r]
+        for row in callers:
+            admitted, _ = _row_counters(row)
+            observed, invalid = _row_counters(row, observations=True)
+            excluded = set(observed) - admitted.keys()
+            for gap in invalid:
+                if gap.startswith(("invalid_", "conflicting_")):
+                    excluded.add(gap.split("_", 1)[1])
+            if excluded:
+                # Coverage flags carry no remainder amounts and survive BASE Timeline projection.
+                row["scalar_coverage"] = dict(kind="caller", excluded_fields=sorted(excluded))
+        merged["cost_records"] = records
         caller_tokens = accounting_admission(callers)["native_usage"]["tokens"]
         for key, value in remainder.items():
             represented = sum(
@@ -53,6 +65,7 @@ def merge_token_usage_stats(existing: Any, incoming: TokenUsage) -> Dict[str, An
     prior_records = merged.get("cost_records", [])
     native = any("native_usage" in r for r in [*prior_records, *incoming.cost_records])
     merged = _caller_stats(merged, prior_records)
+    prior_records = merged.get("cost_records", prior_records)
     incoming_records = [
         dict(r, scalar_coverage="caller") if native and "native_usage" in r else r
         for r in incoming.cost_records
@@ -584,6 +597,7 @@ def phase_stats_without_chat(stats, groups):
 
     records = stats.get("cost_records", []) if isinstance(stats, dict) else []
     remaining = _caller_stats(stats, records)
+    records = remaining.get("cost_records", records)
     remaining["cost_records"] = records
     historical_proof = dict(remaining.get("accounting_residual", {}))
     money = [remaining["total_cost_usd"]] if "total_cost_usd" in remaining else []

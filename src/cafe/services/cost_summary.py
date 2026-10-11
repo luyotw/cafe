@@ -178,6 +178,8 @@ def summarize_sources(sources, *, exclude_ids=(), ambiguous_sources=()):
                 ),
             )
             for record in valid:
+                # Source scalar coverage is not part of the physical invocation identity.
+                record = {k: v for k, v in record.items() if k != "scalar_coverage"}
                 key = record["invocation_id"]
                 if key in excluded or key in conflicting:
                     continue
