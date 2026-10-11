@@ -743,6 +743,9 @@ def summarize_cost(records, *, legacy_cost=None, legacy_residual=None):
         # Older iterations/chat groups can be updated in place. Their numeric
         # subtotal includes both old spend and the new records; retain only the
         # unrepresented remainder, without counting new invocations twice.
+        aggregate = Decimal(str(legacy_cost))
+        if not aggregate.is_finite() or aggregate < 0:
+            raise ValueError("Invalid legacy cost")
         remainder = source_remainder({"total_cost_usd": legacy_cost}, records).get(
             "total_cost_usd", 0
         )
