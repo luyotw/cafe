@@ -150,7 +150,7 @@ def _kickoff_formatter_command(
     playbook_id: str = "standard",
     pr_auto_create: bool | str | None = False,
     phase_chains: dict[str, str] | None = None,
-    manager_confirmable: tuple[str, ...] = ("spec", "plan"),
+    manager_confirmable: tuple[str, ...] = ("spec", "plan", "deliver"),
     include_proactive_review_args: bool = True,
 ) -> list[str]:
     pr_args = (
@@ -2444,6 +2444,7 @@ def test_kickoff_contract_formatter_accepts_primary_only_chains(
             "spec",
             "plan",
             "pr",
+            "deliver",
             "--current-checkout",
             *_proactive_review_args("standard"),
         ]
@@ -2826,7 +2827,7 @@ def test_kickoff_contract_formatter_rejects_incomplete_gate_partition(
     )
 
     assert result.returncode == 2
-    assert "unassigned gates: plan" in result.stderr
+    assert "unassigned gates: deliver, plan, pr" in result.stderr
 
 
 def test_kickoff_contract_formatter_rejects_mandatory_gate_assignment(
@@ -2839,10 +2840,27 @@ def test_kickoff_contract_formatter_rejects_mandatory_gate_assignment(
         encoding="utf-8",
     )
 
-    command = _kickoff_formatter_command(strategic_context)
-    manager_index = command.index("--manager-confirmable")
-    command[manager_index + 1 : manager_index + 3] = ["spec", "plan", "deliver"]
-    result = run_kickoff_formatter(command)
+    import yaml
+
+    # Custom playbooks may still reserve result acceptance for the real user.
+    playbook = yaml.safe_load(
+        (PROJECT_ROOT / "src/cafe/data/playbooks/standard.yaml").read_text(encoding="utf-8")
+    )
+    for step in playbook["steps"].values():
+        step.get("initial_input", {}).pop("legacy_presentation", None)
+    outcome = next(
+        task
+        for task in playbook["steps"]["deliver"]["human_tasks"]
+        if task["trigger"] == "confirm_output"
+    )
+    outcome["mandatory_confirmation"] = True
+    path = tmp_path / ".cafe/playbooks/standard.yaml"
+    path.parent.mkdir(parents=True)
+    path.write_text(yaml.safe_dump(playbook, sort_keys=False), encoding="utf-8")
+    command = _kickoff_formatter_command(
+        strategic_context, "--project-root", str(tmp_path)
+    )
+    result = run_kickoff_formatter(command, cwd=tmp_path)
 
     assert result.returncode == 2
     assert "unknown gates: deliver" in result.stderr
@@ -2886,6 +2904,7 @@ def test_kickoff_contract_formatter_uses_cafe_python_when_site_packages_are_miss
             "spec",
             "plan",
             "pr",
+            "deliver",
             "--worktree",
             ".cafe/worktrees/issue346",
             *_proactive_review_args("standard"),
@@ -3030,6 +3049,7 @@ def test_kickoff_formatter_rejects_unresolved_phase_models(
             "--user-required",
             "spec",
             "pr",
+            "deliver",
             "--current-checkout",
         ],
         cwd=tmp_path,
@@ -3077,15 +3097,15 @@ def test_builtin_confirmation_gate_candidates_come_from_playbook_declarations() 
     }
 
     assert actual == {
-        "direct": ("pr",),
-        "direct-qa": ("pr",),
-        "simple": ("spec", "pr"),
-        "standard": ("spec", "plan", "pr"),
-        "standard-qa": ("spec", "plan", "pr"),
-        "tdd": ("spec", "plan", "pr"),
-        "tdd-qa": ("spec", "plan", "pr"),
+        "direct": ("pr", "deliver"),
+        "direct-qa": ("pr", "deliver"),
+        "simple": ("spec", "pr", "deliver"),
+        "standard": ("spec", "plan", "pr", "deliver"),
+        "standard-qa": ("spec", "plan", "pr", "deliver"),
+        "tdd": ("spec", "plan", "pr", "deliver"),
+        "tdd-qa": ("spec", "plan", "pr", "deliver"),
         "editorial": ("brief",),
-        "hotfix": ("pr",),
+        "hotfix": ("pr", "deliver"),
         "incident": (),
         "research": (),
     }
@@ -3095,15 +3115,15 @@ def test_builtin_confirmation_gate_candidates_come_from_playbook_declarations() 
         for playbook_id in actual
     }
     assert mandatory == {
-        "direct": ("deliver",),
-        "direct-qa": ("deliver",),
-        "simple": ("deliver",),
-        "standard": ("deliver",),
-        "standard-qa": ("deliver",),
-        "tdd": ("deliver",),
-        "tdd-qa": ("deliver",),
+        "direct": (),
+        "direct-qa": (),
+        "simple": (),
+        "standard": (),
+        "standard-qa": (),
+        "tdd": (),
+        "tdd-qa": (),
         "editorial": (),
-        "hotfix": ("deliver",),
+        "hotfix": (),
         "incident": (),
         "research": (),
     }
@@ -3365,13 +3385,13 @@ def test_kickoff_defaults_assignable_gates_to_manager_confirmation() -> None:
     )
 
     user_required, manager_confirmable = module._resolve_partition(
-        candidates=("spec", "plan"),
+        candidates=("spec", "plan", "deliver"),
         user_values=None,
         manager_values=None,
     )
 
     assert user_required == []
-    assert manager_confirmable == ["spec", "plan"]
+    assert manager_confirmable == ["spec", "plan", "deliver"]
 
 
 def test_kickoff_cli_forwards_custom_task_overrides_and_overall_authority(tmp_path: Path) -> None:
@@ -3389,13 +3409,12 @@ def test_kickoff_cli_forwards_custom_task_overrides_and_overall_authority(tmp_pa
     assert proposal["task_contract"] == {
         "user_required": [
             {"phase": "pr", "task_id": "pr-review"},
-            {"phase": "deliver", "task_id": "delivery-outcome"},
-            {"phase": "deliver", "task_id": "delivery-review"},
             {"phase": "review", "task_id": "choose-release"},
         ],
         "manager_confirmable": [
             {"phase": "spec", "task_id": "output-review"},
             {"phase": "plan", "task_id": "output-review"},
+            {"phase": "deliver", "task_id": "delivery-outcome"},
             {"phase": "develop", "task_id": "known-answer"},
         ],
     }
@@ -3491,7 +3510,11 @@ def test_kickoff_derives_proactive_defaults_only_at_scheduled_pauses(
     assert "| develop |" not in section
     assert "| review |" not in section
     assert section.count("Manager may confirm and advance after clean review") == 2
-    assert section.count("user confirmation remains required") == 2
+    assert section.count("user confirmation remains required") == 1
+    assert (
+        "| deliver | not_required | Manager may confirm after ordinary evidence verification |"
+        in section
+    )
 
 
 def test_kickoff_defaults_apply_to_custom_assignable_and_mandatory_gates(
@@ -4327,7 +4350,9 @@ mandate:
 def test_kickoff_rejects_incomplete_delivery_before_activation(tmp_path, damage):
     strategic_context = tmp_path / "strategic_context.yaml"
     strategic_context.write_text("mandate: {preset: technical-led, axes: {}}\n")
-    command = _kickoff_formatter_command(strategic_context)
+    command = _kickoff_formatter_command(
+        strategic_context, "--project-root", str(PROJECT_ROOT)
+    )
     index = command.index("--delivery-contract")
     if damage == "missing":
         del command[index : index + 2]
