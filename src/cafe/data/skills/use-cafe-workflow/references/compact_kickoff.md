@@ -25,9 +25,17 @@ Keep the agreed baseline unchanged on expansion and resume.
 System scope validation is required before every native review invocation, on
 resume before further work and immediately before delivery. Detection blocks
 progress; it neither authorizes expansion nor deletion of unrelated changes.
-The streamlined graph requires one independent read-only native reviewer per
+The streamlined graph requires one independent inspection-only native reviewer per
 round and current terminal zero-blocker evidence. Corrections require a new
 checkpoint and review within the declared attempt budget.
+
+New Codex proposals explicitly default to
+`read_only_enforcement: instruction_only`: development, native review and the
+host continuation run without an OS sandbox. Read-only describes the reviewer's
+inspection-only role, not enforced filesystem permissions. Include this setting
+in the complete proposal. `sandbox` remains an explicit alternative. Already
+confirmed contracts without this field retain their original native restrictions;
+changing them requires a digest-checked contract replacement.
 
 Deliver only to the confirmed endpoint after current review and final scope
 validation. Reuse unchanged granted authority and retain mandatory host

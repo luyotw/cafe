@@ -18,6 +18,7 @@ This inventory is executable documentation: the unit contract discovers every `s
 
 | Launcher identity | Classification |
 | --- | --- |
+| `src/cafe/agents/cli/codex_native_review.py::__enter__` | Internal fixed Codex app-server transport |
 | `src/cafe/agents/executor.py::_execute_streaming_process` | Internal agent CLI transport |
 | `src/cafe/agents/manager.py::_create_claude_session` | Internal agent CLI transport |
 | `src/cafe/delivery/operations.py::run` | Registered fixed Git/GitHub delivery capability adapter |

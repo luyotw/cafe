@@ -17,7 +17,8 @@ class ProcessOutput:
 
     _STDERR_LIMIT = 1_048_576
 
-    def __init__(self, process):
+    def __init__(self, process, *, max_line_bytes=None):
+        self._max_line_bytes = max_line_bytes
         self._streams = (process.stdout, process.stderr)
         self._stop = Event()
         self._stdout = Queue(maxsize=16)
@@ -80,6 +81,12 @@ class ProcessOutput:
                 pending = ""
                 for chunk in self._chunks(stream):
                     pending += chunk
+                    if self._max_line_bytes is not None:
+                        if any(
+                            len(part.encode("utf-8")) > self._max_line_bytes
+                            for part in pending.split("\n")
+                        ):
+                            raise ProcessOutputError("Provider stdout line exceeds its bound.")
                     while "\n" in pending:
                         line, pending = pending.split("\n", 1)
                         if not self._put_stdout(line + "\n"):

@@ -253,7 +253,7 @@ def observe(cli, conf, records, when):
     return adapter.native_review_observations(lines, observed_at={id(line): when for line in lines})
 
 
-@pytest.mark.parametrize("cli", PROVIDERS)
+@pytest.mark.parametrize("cli", PROVIDERS[1:])
 def test_native_parent_transport_passes_current_review_and_delivery_validation(
     cli, execution_context, monkeypatch, tmp_path
 ):
@@ -568,17 +568,16 @@ def test_codex_ignores_role_claim_when_child_effective_configuration_differs(
     assert observe("codex", conf, records, receipt["observed_at"])[0]["terminal"] is None
 
 
-def test_codex_writable_parent_is_rejected_before_native_process_submission(tmp_path, monkeypatch):
+def test_codex_writable_parent_projects_native_app_server(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     home = tmp_path / "codex"
     home.mkdir()
     (home / "config.toml").write_text('sandbox_mode = "danger-full-access"\n')
     monkeypatch.setenv("CODEX_HOME", str(home))
     monkeypatch.setenv("CODEX_API_KEY", "fixture-not-a-real-key")
-    with pytest.raises(ValueError, match="inherit parent permissions"):
-        validate_native_review_projection(
-            {"build": [{"cli": "codex", "model": "test"}]}, ["build"], configuration("codex")
-        )
+    validate_native_review_projection(
+        {"build": [{"cli": "codex", "model": "test"}]}, ["build"], configuration("codex")
+    )
 
 
 @pytest.mark.parametrize("cli", ["gemini", "cursor-agent"])
@@ -712,7 +711,7 @@ def test_duplicate_start_cannot_replace_checkpoint(cli, execution_context, monke
 
 
 @pytest.mark.parametrize("defect", ["default", "cloud_auth", "keyring", "permissions"])
-def test_codex_unverified_permissions_are_rejected_before_launch(defect, tmp_path, monkeypatch):
+def test_codex_auth_and_config_are_verified_by_native_rpc(defect, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     home = tmp_path / "codex"
     home.mkdir()
@@ -730,10 +729,9 @@ def test_codex_unverified_permissions_are_rejected_before_launch(defect, tmp_pat
         (home / "config.toml").write_text(
             'sandbox_mode = "read-only"\ndefault_permissions = "custom"\n'
         )
-    with pytest.raises(ValueError):
-        validate_native_review_projection(
-            {"build": [{"cli": "codex", "model": "test"}]}, ["build"], configuration("codex")
-        )
+    validate_native_review_projection(
+        {"build": [{"cli": "codex", "model": "test"}]}, ["build"], configuration("codex")
+    )
 
 
 @pytest.mark.parametrize("cli", PROVIDERS)

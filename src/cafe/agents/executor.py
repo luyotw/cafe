@@ -259,6 +259,15 @@ class AgentExecutor:
             # Decision-only execution creates it only inside its isolated cwd.
             # Read-only chat preserves absent/existing/shared ignore state.
             decision_only = allowed_tools == [] and allowed_directories == []
+            if (
+                self.config.cli == AgentCLI.CODEX
+                and self.config.native_review_configuration
+                and (read_only or decision_only)
+            ):
+                raise AgentExecutionError(
+                    "Codex native development review cannot run in a read-only or empty scope.",
+                    error_type="native_review_unavailable",
+                )
             if self.config.cli == AgentCLI.GEMINI and not decision_only and not read_only:
                 cli_strategy.ensure_geminiignore()
             if self.config.cli == AgentCLI.COPILOT:
@@ -296,7 +305,31 @@ class AgentExecutor:
                 parse_stream_json = True
 
             # Execute with session recovery if session_id configured
-            if self.config.session_id:
+            if self.config.cli == AgentCLI.CODEX and self.config.native_review_configuration:
+                from cafe.agents.cli.codex_native_review import execute_native_review
+
+                def native_attempt():
+                    return execute_native_review(
+                        self,
+                        cmd,
+                        prompt,
+                        environment=env,
+                        working_directory=process_cwd,
+                        allowed_directories=allowed_directories,
+                        execution_control=execution_control,
+                        streaming_output_file=streaming_output_file,
+                    )
+
+                agent_response = self._execute_with_session_recovery(
+                    cmd=cmd,
+                    cli_name="Codex",
+                    invoke_attempt=native_attempt,
+                    create_new_session_fn=cli_strategy.create_session,
+                    update_cmd_with_session_fn=lambda command, session: command,
+                    allow_session_recovery=not exact_session,
+                )
+                self.config.session_id = agent_response.session_id
+            elif self.config.session_id:
 
                 def extract_codex_content(data: dict) -> Optional[str]:
                     if data.get("type") != "item.completed":
@@ -454,6 +487,11 @@ class AgentExecutor:
         execution_control: AgentExecutionControl | None = None,
     ) -> EventDriverExecutionResult:
         """Run one callback process without ordinary session recovery semantics."""
+        if self.config.cli == AgentCLI.CODEX and self.config.native_review_configuration:
+            raise AgentExecutionError(
+                "Codex native review is unavailable for callback-only execution.",
+                error_type="native_review_unavailable",
+            )
         strategy = self._get_cli_strategy()
         if not strategy.event_driver_conforming:
             raise AgentExecutionError(
@@ -846,7 +884,11 @@ class AgentExecutor:
                 and "prompt is too long" in error_msg
             )
 
-            is_session_error = any(phrase in error_msg for phrase in session_error_phrases)
+            is_session_error = getattr(
+                e,
+                "native_session_recoverable",
+                any(phrase in error_msg for phrase in session_error_phrases),
+            )
 
             if is_session_error or is_prompt_too_long:
                 if not allow_session_recovery:

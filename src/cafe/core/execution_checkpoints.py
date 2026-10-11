@@ -20,6 +20,18 @@ from cafe.core.file_scope import (
 BOUNDARIES = frozenset({"before_review", "resume", "before_delivery"})
 
 
+def review_read_only_enforcement(configuration):
+    """Keep role intent separate from the confirmed permission mechanism.
+
+    Missing fields retain the native restrictions of existing contracts.
+    Instruction-only review never establishes OS-enforced read-only access.
+    """
+    enforcement = configuration.get("read_only_enforcement", "sandbox")
+    if enforcement not in ("sandbox", "instruction_only"):
+        raise ValueError("unsupported reviewer read-only enforcement")
+    return enforcement
+
+
 def context_digest(context):
     validate_scope_paths(context["paths"])
     if (
@@ -133,11 +145,19 @@ def require_current_review(context, evidence, *, native_observations=None, sourc
     reviewer = invocations[0]
     if not isinstance(reviewer, dict):
         raise ValueError("native reviewer evidence is invalid")
+    enforcement = review_read_only_enforcement(context.get("review_configuration") or {})
+    if enforcement == "instruction_only" and native_observations is None:
+        raise ValueError("instruction-only review requires host-observed permission evidence")
     if native_observations is not None:
         observed = native_observations.get("observations", [])
         if len(observed) != 1 or native_observations.get("parent_id") != receipt["parent_id"]:
             raise ValueError("native invocation evidence is missing or differs from the parent")
         actual = observed[0]
+        if (enforcement == "instruction_only" or "read_only_enforcement" in actual) and (
+            actual.get("read_only_enforcement") != enforcement
+            or actual.get("sandbox_enabled") is not (enforcement == "sandbox")
+        ):
+            raise ValueError("review permission evidence differs from confirmed enforcement")
         if (actual.get("receipt_id") != receipt["receipt_id"] or
                 actual.get("reviewer_id") != reviewer.get("reviewer_id") or
                 actual.get("configuration") != context["review_configuration"] or
