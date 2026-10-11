@@ -252,8 +252,9 @@ class GenericPhase:
                     context["playbook_graph"],
                     "Routes available from the current step:",
                     context["route_catalog"],
-                    "Use an outcome-only baton for a default route. Use an explicit baton "
-                    "only to select a listed discretionary `goto` target; a step that merely "
+                    "Use an outcome-only baton only for an ordinary `await_agent` default route. "
+                    "Use a full baton for human or exceptional routes, and to select a listed "
+                    "discretionary `goto` target; a step that merely "
                     "appears in the graph is not authorized.",
                     "Route readiness is advisory context. The runtime revalidates required "
                     "inputs and every ownership, human, permission, capability, publication, "

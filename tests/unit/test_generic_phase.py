@@ -177,6 +177,8 @@ def test_build_prompt_injects_graph_once_and_current_route_catalog(tmp_path: Pat
     assert prompt.count(routes) == 1
     assert "valid to_step values:" not in prompt
     assert "this step's defined transitions" not in prompt
+    assert "only for an ordinary `await_agent` default route" in prompt
+    assert "full baton for human or exceptional routes" in prompt
 
 
 def test_build_prompt_includes_files_and_checklist_guard(tmp_path: Path) -> None:

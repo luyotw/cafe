@@ -11,6 +11,52 @@ def executor():
     return object.__new__(GenericWorkflowStepExecutor)
 
 
+@pytest.mark.parametrize("defect", [
+    None, "empty", "unknown", "override", "subclass", "publish", "started",
+    "result", "extra", "index", "bool_index", "name", "malformed",
+])
+def test_control_checkpoint_recovery_requires_inert_builtin_identity(defect):
+    from dataclasses import asdict
+    from types import SimpleNamespace
+
+    from cafe.core.hooks import HookResult, NoChangesNeededHandler, PermissionRetryHandler
+
+    runner = executor()
+    runner.generic_phase = SimpleNamespace(hook_registry={
+        "NoChangesNeededHandler": NoChangesNeededHandler,
+        "PermissionRetryHandler": PermissionRetryHandler,
+    })
+    declaration = {"hooks": {"after_execute": ["NoChangesNeededHandler", "PermissionRetryHandler"]}}
+    identity = ["after_execute", 0, "NoChangesNeededHandler"]
+    item = {"state": "completed", "result": asdict(HookResult())}
+    if defect == "unknown":
+        runner.generic_phase.hook_registry[identity[2]] = object
+    elif defect == "override":
+        runner.generic_phase.hook_registry[identity[2]] = lambda: NoChangesNeededHandler()
+    elif defect == "subclass":
+        runner.generic_phase.hook_registry[identity[2]] = type("Custom", (NoChangesNeededHandler,), {})
+    elif defect == "publish":
+        identity[0] = "publish_output"
+    elif defect == "started":
+        item = {"state": "started"}
+    elif defect == "result":
+        item["result"]["events"] = [{"type": "external_effect"}]
+    elif defect == "extra":
+        item["unknown"] = True
+    elif defect == "index":
+        identity[1] = 2
+    elif defect == "bool_index":
+        identity[1] = False
+    elif defect == "name":
+        identity[2] = "PermissionRetryHandler"
+    hooks = {json.dumps(identity): item}
+    if defect == "empty":
+        hooks = {}
+    elif defect == "malformed":
+        hooks = {"bad": item}
+    assert runner._is_control_only_publication({"hooks": hooks}, declaration) is (defect is None)
+
+
 @pytest.mark.parametrize(
     "malformed",
     [

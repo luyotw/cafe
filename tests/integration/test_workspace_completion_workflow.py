@@ -218,6 +218,85 @@ def test_i8_same_iteration_reentry_never_replays_effects(journey, monkeypatch, a
     assert len(j.manager.calls) == 1
 
 
+@pytest.mark.parametrize("mode", ["baton", "legacy"])
+@pytest.mark.parametrize("authorize", [False, True])
+def test_user_retry_recovers_legacy_control_checkpoint_without_completing_pending_work(
+    journey, monkeypatch, mode, authorize
+):
+    """Old releases could record control hooks before rejecting completion."""
+    from dataclasses import asdict
+
+    from cafe.core.blackboard import BlackboardStore
+    from cafe.core.hooks import HookResult
+    from cafe.ui.human_tasks import apply_human_task_payload
+
+    j = journey([CORRECTED, (CORRECTED, "need_clarification")], mode=mode,
+                workspace=True, unchecked=True, human="need_clarification")
+    skill = j.repo / ".cafe/skills/custom-report/SKILL.md"
+    skill.write_text(skill.read_text().replace("pattern: revision_feedback", "pattern: answer_questions\n    questions_from_xml: true")
+                     .replace("input_schema: feedback", "input_schema: answers"))
+    step = j.playbook["steps"]["inspect_custom"]
+    step["human_tasks"] = [{"trigger": "need_clarification", "task_id": "decision",
+                            "outcomes": {"submit": "inspect_custom"}}]
+    step["hooks"]["after_execute"] = ["NoChangesNeededHandler", "PermissionRetryHandler"]
+    # The original rejected completion remains a genuine interruption task.
+    with monkeypatch.context() as patch:
+        patch.setattr(j.executor, "_validate_and_retry_checklist_completion",
+                      lambda **kwargs: (kwargs["completion_response"], None, False))
+        assert not j.runtime.run(start_step="inspect_custom").completed
+    assert len(j.manager.calls) == 1
+    path = j.iteration / "iteration.json"
+    metadata = json.loads(path.read_text())
+    historical = {"delivery": "a" * 64, "response": metadata["response"], "hooks": {
+        json.dumps(["after_execute", i, name]): {
+            "state": "completed", "result": asdict(HookResult())
+        } for i, name in enumerate(step["hooks"]["after_execute"])
+    }}
+    metadata["workspace_publication"] = historical
+    exhausted = {"consumed": 2, "rejections": [{"producer": "inspect_custom",
+                 "artifact": "evidence_bundle", "path": str(j.iteration / "output.md"),
+                 "diagnostic": "historical report rejection"}]}
+    metadata["artifact_correction"] = exhausted
+    path.write_text(json.dumps(metadata))
+    before = (j.iteration / "output.md").read_bytes(), (j.iteration / "checklist.md").read_bytes()
+    if not authorize:
+        monkeypatch.setattr(j.executor, "_get_next_iteration_number", lambda *args: 1)
+        (j.issue / "next_step.txt").write_text(json.dumps({"version": 1, "intent": "await_agent"}))
+        with pytest.raises(ValueError, match="checklist is incomplete"):
+            j.executor.execute_step("inspect_custom", step, j.runtime.blackboard)
+        assert len(j.manager.calls) == 1
+        assert json.loads(path.read_text())["workspace_publication"] == historical
+        assert "workspace_control_publication_recovery" not in json.loads(path.read_text())
+        return
+    records = HumanTaskRecordStore(j.issue)
+    task = records.tasks()[0]
+    application = apply_human_task_payload(
+        issue_dir=j.issue, playbook_data=j.playbook,
+        blackboard=BlackboardStore(j.issue).load_or_create("inspect_custom"),
+        from_step="inspect_custom", trigger=task.trigger,
+        raw_payload={"task": task.policy_id, "decision": "retry", "human_task_id": task.id},
+        source="test",
+    )
+    assert application.rejection is None
+    resumed = j.reconstruct()
+    assert not resumed.run().completed
+    assert len(j.manager.calls) == 2
+    assert j.manager.calls[-1][2].is_exact
+    assert j.manager.calls[-1][2].session_id == "exact-report-session"
+    assert j.effects.count("after") == 0 and j.manager.deliveries == 0
+    assert "custom_snapshot" not in resumed.blackboard.artifacts
+    assert (j.iteration / "output.md").read_bytes() == before[0]
+    assert (j.iteration / "checklist.md").read_bytes() == before[1]
+    assert b"[ ]" in before[1]
+    assert resumed.blackboard.handoff_contract.intent.value == "need_clarification"
+    records = HumanTaskRecordStore(j.issue)
+    assert [t.trigger for t in records.tasks() if t.status.value == "pending"] == ["need_clarification"]
+    saved = json.loads(path.read_text())
+    assert saved["workspace_control_publication_recovery"]["publication"] == historical
+    assert saved["artifact_correction"] == exhausted
+    assert saved["artifact_correction_recovery_result"] == records.get_result(task.id).id
+
+
 @pytest.mark.parametrize("mutation", ["none", "source", "evidence"])
 def test_i5_dirty_projected_evidence_enters_correction_and_revalidates(journey, mutation):
     def invalidate(iteration, call):

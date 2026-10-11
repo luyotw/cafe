@@ -47,7 +47,7 @@ from cafe.core.delta_packet import (
     persist_delta_packet,
 )
 from cafe.core.git import GitOperations
-from cafe.core.hooks import HookResult
+from cafe.core.hooks import HookResult, NoChangesNeededHandler, PermissionRetryHandler
 from cafe.core.human_task_records import (
     HumanTaskRecordError,
     HumanTaskRecordStore,
@@ -890,6 +890,7 @@ class GenericWorkflowStepExecutor(Phase):
 
         def run_agent(prompt: str) -> str:
             nonlocal producing_directories
+            recovery_authorized = False
             last_prompt[:] = [prompt]
             if before_agent is not None:
                 # A cached response can still dispatch completion corrections.
@@ -897,6 +898,21 @@ class GenericWorkflowStepExecutor(Phase):
                 before_agent()
             if workspace_eligible:
                 progress = self._load_workspace_publication(iteration_dir)
+                if progress is not None and self._is_control_only_publication(progress, step_def):
+                    recovery_authorized = self._consume_artifact_recovery_authorization(
+                        iteration_dir, workflow_id=blackboard_state.workflow_id, step_name=step_name
+                    )
+                    if recovery_authorized:
+                        metadata = self._load_workspace_metadata(iteration_dir)
+                        metadata["workspace_control_publication_recovery"] = {
+                            "publication": progress,
+                            "recovery_result": metadata["artifact_correction_recovery_result"],
+                        }
+                        del metadata["workspace_publication"]
+                        self._persist_workspace_metadata(
+                            self._resolve_iteration_context_file(iteration_dir), metadata
+                        )
+                        progress = None
                 if progress is not None:
                     # Revalidate the existing delivery and replay only conclusive hook results.
                     return progress["response"]
@@ -909,9 +925,10 @@ class GenericWorkflowStepExecutor(Phase):
             # A baton retry or automatic re-entry is still the same correction
             # sequence. Reserve its opportunity before invoking any provider.
             budget = self._load_artifact_correction(iteration_dir)
-            recovery_authorized = self._consume_artifact_recovery_authorization(
-                iteration_dir, workflow_id=blackboard_state.workflow_id, step_name=step_name
-            )
+            if not recovery_authorized:
+                recovery_authorized = self._consume_artifact_recovery_authorization(
+                    iteration_dir, workflow_id=blackboard_state.workflow_id, step_name=step_name
+                )
             if budget.rejections:
                 if not recovery_authorized:
                     budget.consume()
@@ -1724,6 +1741,40 @@ class GenericWorkflowStepExecutor(Phase):
         metadata = self._load_workspace_metadata(iteration_dir)
         metadata["workspace_publication"] = progress
         self._persist_workspace_metadata(path, metadata)
+
+    def _is_control_only_publication(
+        self, progress: dict[str, Any], step_def: dict[str, Any]
+    ) -> bool:
+        """Recognize only conclusive, inert builtin control hooks from old releases.
+
+        An empty result alone cannot prove an arbitrary hook had no side effect.
+        Unknown, overridden, started or publication hooks keep their checkpoint.
+        """
+        declared = (step_def.get("hooks") or {}).get("after_execute", [])
+        hooks = progress["hooks"]
+        if not hooks:
+            return False
+        trusted = (NoChangesNeededHandler, PermissionRetryHandler)
+        for key, item in hooks.items():
+            try:
+                identity = json.loads(key)
+            except (ValueError, TypeError):
+                return False
+            if not isinstance(identity, list) or len(identity) != 3:
+                return False
+            stage, index, name = identity
+            if (
+                stage != "after_execute"
+                or type(index) is not int
+                or index < 0
+                or index >= len(declared)
+                or not isinstance(name, str)
+                or declared[index] != name
+                or not any(self.generic_phase.hook_registry.get(name) is hook for hook in trusted)
+                or item != {"state": "completed", "result": asdict(HookResult())}
+            ):
+                return False
+        return True
 
     def _workspace_delivery_identity(
         self,
