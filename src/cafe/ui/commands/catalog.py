@@ -30,6 +30,7 @@ from cafe.skills.global_installer import GlobalSkillSyncSummary, sync_global_ski
 from cafe.skills.importer import SkillImportSummary, import_skills, preview_importable_skills
 from cafe.skills.loader import SkillLoader, canonical_skill_name
 from cafe.skills.remover import SkillRemoveSummary, remove_skills
+from cafe.ui.commands.authoring import phase_app, playbook_author
 from cafe.ui.inquirer_prompts import (  # noqa: F401 — kept for type resolution; actual calls go through cli for test-patch compat
     prompt_checkbox,
     prompt_confirm,
@@ -710,7 +711,5 @@ def skill_rm(
         raise typer.Exit(1)
 
 # Both entry points share one preparation/publication API.
-from cafe.ui.commands.authoring import phase_app, playbook_author
-
 skill_app.add_typer(phase_app, name="author")
 playbook_app.command("author")(playbook_author)
