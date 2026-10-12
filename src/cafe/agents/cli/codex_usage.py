@@ -17,7 +17,9 @@ _COUNTERS = frozenset(TokenUsage.model_fields) - {
     "cost_records",
 }
 _TAIL_BYTES = 2 * 1024 * 1024
-_LINE_BYTES = 256 * 1024
+# Native agent messages can exceed 256 KiB before the next usage record.
+# Keep a finite line bound while accepting those normal journal entries.
+_LINE_BYTES = 512 * 1024
 _REQUEST_BYTES = 16 * 1024 * 1024
 
 

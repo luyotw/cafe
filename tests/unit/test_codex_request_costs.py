@@ -42,12 +42,15 @@ def request(path, total, last, *, duplicate=False):
         write(path, row)
 
 
-def project(tmp_path, *, resumed=False, duplicate=False):
+def project(tmp_path, *, resumed=False, duplicate=False, message_size=0):
     journal = tmp_path / "sessions" / f"rollout-test-{SESSION}.jsonl"
     journal.parent.mkdir()
     prior = counters(1_000_000, 900_000) if resumed else None
     if resumed:
         metadata(journal)
+        if message_size:
+            write(journal, dict(type="event_msg", payload=dict(
+                type="agent_message", message="x" * message_size)))
         request(journal, prior, prior)
     command = ["codex", "exec"] + (["resume", SESSION] if resumed else [])
     observe = prepare_request_usage(command, {"CODEX_HOME": str(tmp_path)},
@@ -55,6 +58,9 @@ def project(tmp_path, *, resumed=False, duplicate=False):
     if not resumed:
         metadata(journal)
     write(journal, dict(type="turn_context", payload=dict(model="gpt-test")))
+    if message_size:
+        write(journal, dict(type="event_msg", payload=dict(
+            type="agent_message", message="x" * message_size)))
     total = dict(prior or {key: 0 for key in counters(0)})
     for n in (180_000, 180_000):
         last = counters(n, 100_000)
@@ -82,6 +88,24 @@ def test_short_requests_above_aggregate_threshold_are_priced_once(tmp_path, resu
     assert summarize_cost(result.cost_records)["estimated"] == Decimal("0.3602")
     assert account_cost(result, cli="codex", model="gpt-test", state=state(),
                         invocation_id="physical") is result
+
+
+@pytest.mark.parametrize("resumed", [False, True])
+def test_large_native_messages_do_not_hide_request_usage(tmp_path, resumed):
+    observe, usage, lines, _ = project(tmp_path, resumed=resumed, message_size=300_000)
+    record, = account_cost(observe(usage, lines), cli="codex", model="gpt-test",
+                           state=state()).cost_records
+    assert len(record["request_estimates"]) == 2
+    assert Decimal(record["amount_usd"]) == Decimal("0.3602")
+
+
+@pytest.mark.parametrize("resumed", [False, True])
+def test_native_message_line_limit_remains_bounded(tmp_path, resumed):
+    observe, usage, lines, _ = project(tmp_path, resumed=resumed, message_size=600_000)
+    record, = account_cost(observe(usage, lines), cli="codex", model="gpt-test",
+                           state=state()).cost_records
+    assert record["provenance"] == "unavailable"
+    assert record["amount_usd"] is None
 
 
 @pytest.mark.parametrize("damage", ["missing_request", "wrong_last", "model_missing",

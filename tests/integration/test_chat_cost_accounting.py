@@ -49,8 +49,9 @@ def append_codex_totals(journal, usage):
 
 
 @pytest.mark.parametrize("resumed", [False, True])
+@pytest.mark.parametrize("large_message", [False, True])
 def test_codex_chat_prices_native_requests_and_status_counts_chat_once(
-    phase_chat, monkeypatch, provider_process, resumed, capsys
+    phase_chat, monkeypatch, provider_process, resumed, large_message, capsys
 ):
     from datetime import datetime, timezone
     from decimal import Decimal
@@ -103,6 +104,9 @@ def test_codex_chat_prices_native_requests_and_status_counts_chat_once(
                 handle.write(json.dumps(dict(type="turn_context",
                     timestamp=datetime.now(timezone.utc).isoformat(),
                     payload=dict(model="gpt-test"))) + "\n")
+                if large_message:
+                    handle.write(json.dumps(dict(type="event_msg", payload=dict(
+                        type="agent_message", message="x" * 300_000))) + "\n")
                 for endpoint in endpoints:
                     row = dict(type="event_msg", payload=dict(type="token_count", info=dict(
                         total_token_usage=endpoint, last_token_usage=last,
