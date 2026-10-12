@@ -1999,13 +1999,52 @@ class GenericWorkflowStepExecutor(Phase):
             raise RuntimeError(
                 f"Workspace correction requires the exact producing session; consumed {budget['consumed']}: {reason}"
             )
+        execution_config = self._resolve_execution_config_for_iteration(
+            agent_name, step_name=step_name, continuation=continuation
+        )
+        configured_cli = getattr(execution_config.cli, "value", execution_config.cli)
+        if configured_cli != observed["cli"]:
+            raise RuntimeError("Workspace recovery cannot substitute the producing CLI")
+        recovery = self._workspace_recovery_request(
+            metadata=metadata, workflow_id=blackboard_state.workflow_id,
+            step_name=step_name, configured_model=execution_config.model,
+        )
+        expected_model = observed["model"]
+        history = metadata.get("workspace_recovery_history", [])
+        if recovery is not None:
+            expected_model = execution_config.model
+            if recovery["session_recovery"] is not None:
+                continuation = SessionContinuation.new()
+                selected = self._resolve_execution_config_for_iteration(
+                    agent_name, step_name=step_name, continuation=continuation
+                )
+                if (getattr(selected.cli, "value", selected.cli) != observed["cli"]
+                        or selected.model != expected_model):
+                    raise RuntimeError("Fresh workspace recovery changed the selected CLI/model")
         self._reserve_workspace_correction(iteration_dir, budget, reason)
+        if recovery is not None:
+            # Retain the old producer before a real recovery invocation. The
+            # existing budget still counts this attempt, including failures.
+            history = [*history, {
+                "version": 1, "task_id": recovery["task_id"],
+                "result_id": recovery["result_id"], "state": "prepared",
+                "previous": actual_context,
+                "previous_response_sha256": hashlib.sha256(
+                    json.dumps(metadata.get("response"), ensure_ascii=False).encode("utf-8")
+                ).hexdigest(),
+                "target": {"cli": observed["cli"], "model": expected_model,
+                           "session_policy": continuation.policy.value},
+            }]
+            prepared = self._load_workspace_metadata(iteration_dir)
+            prepared["workspace_recovery_history"] = history
+            self._persist_workspace_metadata(path, prepared)
         prompt = workspace_correction_prompt(
             reason,
             consumed=budget["consumed"],
             remaining=3 - budget["consumed"],
             locale=blackboard_state.conversation_locale,
         )
+        save_budget_on_exit = True
         try:
             self._refresh_and_validate_workspace_inputs(
                 step_def=step_def, blackboard_state=blackboard_state
@@ -2038,6 +2077,8 @@ class GenericWorkflowStepExecutor(Phase):
                 "workspace_publication"
             ) != metadata.get("workspace_publication"):
                 raise RuntimeError("Workspace correction changed pinned metadata")
+            if current.get("workspace_recovery_history", []) != history:
+                raise RuntimeError("Workspace correction changed recovery history")
             actual_cli = getattr(self.agent_manager, "get_last_cli", lambda: None)()
             actual_session = getattr(self.agent_manager, "get_last_session_id", lambda: None)()
             actual_model = (
@@ -2046,9 +2087,13 @@ class GenericWorkflowStepExecutor(Phase):
                 or getattr(self.agent_manager.get_agent(agent_name).config, "model", None)
             )
             if (
-                actual_cli != continuation.cli
-                or actual_session != continuation.session_id
-                or actual_model != observed["model"]
+                getattr(actual_cli, "value", actual_cli) != observed["cli"]
+                or actual_model != expected_model
+                or (continuation.is_exact and actual_session != continuation.session_id)
+                or (not continuation.is_exact and (
+                    not isinstance(actual_session, str) or not actual_session
+                    or actual_session == observed["session_id"]
+                ))
             ):
                 raise RuntimeError("Workspace correction did not preserve CLI/model/producing session")
             self._refresh_and_validate_workspace_inputs(
@@ -2061,8 +2106,53 @@ class GenericWorkflowStepExecutor(Phase):
                 current = self._load_workspace_metadata(iteration_dir)
                 current["response"] = response
                 current.pop("streaming_log", None)
-                self._persist_workspace_metadata(path, current)
+                if recovery is not None:
+                    completed = {**history[-1], "state": "completed",
+                                 "actual": {"cli": observed["cli"], "model": actual_model,
+                                            "session_id": actual_session}}
+                    current["workspace_recovery_history"] = [*history[:-1], completed]
+                    next_continuation = SessionContinuation.resume_exact(
+                        AgentCLI(observed["cli"]), actual_session
+                    )
+                    current.update(model=actual_model, session_id=actual_session,
+                                   session_continuation=next_continuation.to_dict())
+                    if recovery["session_recovery"] is not None:
+                        current["session_recovery"] = recovery["session_recovery"]
+                    # Commit identity and its pin in one existing atomic write.
+                    next_context = {**actual_context, "metadata": {
+                        key: current.get(key) for key in observed
+                    }}
+                    current["workspace_completion"] = {**budget, "context": next_context}
+                try:
+                    self._persist_workspace_metadata(path, current)
+                except BaseException:
+                    if recovery is not None:
+                        # An atomic writer can commit before reporting failure.
+                        # Never overwrite an uncertain new identity with the old pin.
+                        save_budget_on_exit = False
+                        try:
+                            durable = self._load_workspace_metadata(iteration_dir)
+                        except Exception:
+                            durable = {}
+                        transition_fields = (
+                            "model", "session_id", "session_continuation", "response",
+                            "workspace_completion", "workspace_recovery_history",
+                        )
+                        if all(durable.get(key) == current.get(key) for key in transition_fields):
+                            budget["context"] = next_context
+                            self._session_continuation = next_continuation
+                            save_budget_on_exit = True
+                        elif (all(durable.get(key) == value for key, value in observed.items())
+                              and durable.get("workspace_completion", {}).get("context") == pinned
+                              and durable.get("workspace_recovery_history") == history):
+                            save_budget_on_exit = True
+                    raise
+                if recovery is not None:
+                    budget["context"] = next_context
+                    self._session_continuation = next_continuation
             except WorkspaceDiagnosticCapacityError as error:
+                if recovery is not None:
+                    raise  # An unpersisted producer transition cannot authorize a handoff.
                 # Auxiliary telemetry must not replace a valid current human request.
                 # Use the same producer classifier as the completion gate, after
                 # enforcing the original execution identity and input authority.
@@ -2092,8 +2182,60 @@ class GenericWorkflowStepExecutor(Phase):
             ][-8:]
             raise
         finally:
-            # A provider cannot replenish the count, including on interruption.
-            self._save_workspace_completion(iteration_dir, budget)
+            # The reservation is already durable when transition readback fails.
+            if save_budget_on_exit:
+                self._save_workspace_completion(iteration_dir, budget)
+
+    def _workspace_recovery_request(
+        self, *, metadata: dict[str, Any], workflow_id: str, step_name: str,
+        configured_model: str | None,
+    ) -> dict[str, Any] | None:
+        """Recognize one typed user recovery, never a configuration-only rotation."""
+        history = metadata.get("workspace_recovery_history", [])
+        required = {"version", "task_id", "result_id", "state", "previous", "target",
+                    "previous_response_sha256"}
+        if (not isinstance(history, list) or len(history) > 3
+                or any(not isinstance(item, dict) or item.get("version") != 1
+                       or item.get("state") not in {"prepared", "completed"}
+                       or set(item) != (required | ({"actual"} if item.get("state") == "completed" else set()))
+                       or any(not isinstance(item.get(key), str) or not item[key]
+                              for key in ("task_id", "result_id", "previous_response_sha256"))
+                       or not isinstance(item.get("previous"), dict)
+                       or not isinstance(item.get("target"), dict)
+                       or (item.get("state") == "completed" and not isinstance(item.get("actual"), dict))
+                       for item in history)):
+            raise ValueError("Invalid workspace recovery history")
+        if (len({item["result_id"] for item in history}) != len(history)
+                or len(history) > metadata.get("workspace_completion", {}).get("consumed", 0)):
+            raise ValueError("Workspace recovery history exceeds its reserved attempts")
+        records = HumanTaskRecordStore(self.issue_dir)
+        matching = [task for task in records.tasks()
+                    if task.workflow_id == workflow_id and task.step == step_name
+                    and task.iteration == self.iteration
+                    and task.trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER
+                    and task.policy_id == AGENT_EXECUTION_INTERRUPTED_TASK_ID] if records.exists else []
+        latest = max(matching, key=lambda task: (task.created_at, task.id)) if matching else None
+        result = records.get_result(latest.id) if latest and latest.status is HumanTaskStatus.COMPLETED else None
+        changed_model = configured_model != metadata.get("model")
+        if result is not None and not any(item["result_id"] == result.id for item in history):
+            decision = result.payload.get("decision")
+            declared = latest.expected_result.get("decisions", [])
+            if (latest.continuations.get(decision) == step_name
+                    and any(item.get("id") == decision for item in declared)):
+                session_recovery = None
+                if decision == AGENT_EXECUTION_FRESH_SESSION_DECISION:
+                    session_recovery = self._selected_fresh_session_recovery(
+                        workflow_id=workflow_id, current_data=metadata,
+                        configured_clis=[AgentCLI(metadata["cli"])],
+                    )
+                if ((decision == "retry" and changed_model) or session_recovery is not None):
+                    if not isinstance(configured_model, str) or not configured_model:
+                        raise RuntimeError("Workspace recovery requires an exact configured model")
+                    return {"task_id": latest.id, "result_id": result.id,
+                            "session_recovery": session_recovery}
+        if changed_model:
+            raise RuntimeError("Workspace model change requires an unused typed user recovery")
+        return None
 
     def _load_artifact_correction(self, iteration_dir: Path) -> ArtifactCorrectionBudget:
         context_file = self._resolve_iteration_context_file(iteration_dir)
