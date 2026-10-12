@@ -65,6 +65,7 @@ def test_manager_failed_attempt_accounting_retains_and_deduplicates_cost():
     from cafe.core.types import AgentCLI
 
     manager = AgentManager(session_manager=Mock(spec=SessionManager))
+    manager._last_execution_attempts = []  # Normally initialized by execute().
     error = AgentExecutionError("rate limit", error_type="rate_limit")
     error.accounting_usage = estimate(invocation_id="spent", complete=False)
     for attempt in (1, 2):

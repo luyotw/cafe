@@ -91,9 +91,14 @@ The following rules describe the Codex calculation:
   prevent estimating a known total output count.
 * Standard global API rates are the explicit comparison basis. A total input
   count below a published context boundary establishes that every constituent
-  request is short. An aggregate above the boundary does not establish each
-  request's context band; CAFE leaves that estimate unavailable instead of
-  applying a guessed long-context rate.
+  request is short. For Codex CLI 0.159.3, a bounded reader also reconciles the
+  exact native journal's per-request `last_token_usage` against cumulative
+  endpoints and this invocation's stdout usage. Each verified request uses its
+  own short/long context rate, including when their combined input exceeds the
+  boundary. One invocation cost record retains the request estimates without
+  counting them as additional invocations. Missing, conflicting or oversized
+  native evidence falls back to the aggregate rule: an aggregate above the
+  boundary stays unavailable rather than using a guessed context rate.
 * Model IDs are matched exactly. CAFE does not resolve rolling aliases or use
   requested configuration as proof of which model ran. If stdout omits the
   model, the bounded reader can use this invocation's exact Codex native
@@ -105,6 +110,15 @@ subtracted. Retry and fallback attempts retain separate records and their known
 usage; partial failures retain known subtotals and incomplete coverage. Repeated
 records with the same invocation ID are not added twice. A provider's repeated
 final telemetry does not create another cost invocation.
+
+Workflow calls and one-shot `cafe chat` calls share this request reader and
+estimator. A resumed chat reads only records appended after its verified
+pre-launch baseline, excluding prior workflow/chat spend. Repeated native usage
+events are deduplicated by their cumulative endpoint. Native request counters
+must cover all recorded invocation categories before they can be used for
+pricing; missing categories are never invented as zeros. Status and Manager
+reports continue to read the persisted invocation calculations, and do not
+silently recalculate historical records.
 
 Amounts use decimal arithmetic. Status, timeline, step and workflow summaries
 read persisted records and never fetch prices or recalculate historical costs.

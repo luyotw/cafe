@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from cafe.agents.cli.abstract import AbstractCLI
 from cafe.agents.cli.codex_stream_activity import CodexStreamActivity
-from cafe.agents.cli.codex_usage import prepare_resumed_usage
+from cafe.agents.cli.codex_usage import prepare_request_usage
 from cafe.agents.stream_activity import StreamActivity
 from cafe.core.types import PermissionDenial, TokenUsage
 from cafe.utils.git_utils import get_git_dir
@@ -50,7 +50,7 @@ class CodexCLI(AbstractCLI):
         return None
 
     def prepare_response_accounting(self, command, environment):
-        return prepare_resumed_usage(command, environment, selected_session=self.config.session_id)
+        return prepare_request_usage(command, environment, selected_session=self.config.session_id)
 
     def prepare_descendant_accounting(self, environment, scope, *, attempt_id):
         from cafe.agents.cli.codex_subagent_usage import NativeInterval, session_id

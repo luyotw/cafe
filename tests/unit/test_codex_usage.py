@@ -74,7 +74,9 @@ def test_resume_native_options_keep_the_exact_configured_baseline(source):
 
 def test_fresh_command_does_not_reuse_a_configured_resume_baseline(source):
     cli, environment, _journal = source
-    assert cli.prepare_response_accounting(["codex", "exec", "hello"], environment) is None
+    observer = cli.prepare_response_accounting(["codex", "exec", "hello"], environment)
+    usage = TokenUsage(input_tokens=150, output_tokens=13)
+    assert observer(usage, []) is usage
 
 
 @pytest.mark.parametrize("session", ["another-thread", None])

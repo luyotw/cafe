@@ -116,7 +116,11 @@ def account_cost(
             raise ValueError("Invalid provider-reported cost")
         record.update(provenance="reported", amount_usd=str(Decimal(str(value))), reason=None)
     elif cli in {"codex", "copilot", "cursor", "cursor-agent", "gemini"}:
-        if cli == "gemini" and "reasoning_output_tokens" not in known:
+        if cli == "codex" and usage.turn_usages and all(
+            turn.get("kind") == "codex_request" for turn in usage.turn_usages
+        ):
+            _estimate_codex_requests(record, known, state, usage.turn_usages, valuation_date)
+        elif cli == "gemini" and "reasoning_output_tokens" not in known:
             record["reason"] = "reasoning_usage_unavailable"
         else:
             _estimate_tokens(record, known, state, valuation_date)
@@ -196,7 +200,54 @@ def _account_models(usage, *, cli, state, invocation_id, complete, valuation_dat
     return result
 
 
-def _estimate_tokens(record, known, state, valuation_date=None):
+def _estimate_codex_requests(record, known, state, requests, valuation_date):
+    """Price verified requests while preserving one physical invocation record."""
+    keys = {
+        "input_tokens", "output_tokens", "cache_read_input_tokens",
+        "cache_write_input_tokens", "cache_creation_input_tokens", "reasoning_output_tokens",
+    } & known.keys()
+    try:
+        if (not {"input_tokens", "output_tokens", "cache_read_input_tokens"} <= keys
+                or any(sum(turn["usage"][key] for turn in requests) != known[key] for key in keys)
+                or any(type(turn["usage"][key]) is not int or turn["usage"][key] < 0
+                       for turn in requests for key in keys)):
+            raise ValueError("unreconciled request usage")
+        estimates = []
+        for turn in requests:
+            item = dict(cli="codex", model=turn["model"])
+            _estimate_tokens(item, turn["usage"], state, valuation_date, request=True)
+            if item.get("amount_usd") is None:
+                record["reason"] = item["reason"]
+                return
+            estimates.append(item)
+        models = {item["model"] for item in estimates}
+        if record["model"] is not None and models != {record["model"]}:
+            raise ValueError("request model disagrees with invocation model")
+        record.update(
+            provenance="estimated",
+            amount_usd=str(sum(Decimal(item["amount_usd"]) for item in estimates)),
+            reason=None,
+            model=next(iter(models)) if len(models) == 1 else None,
+            model_source="native_journal",
+            pricing=copy.deepcopy(estimates[0]["pricing"]),
+            pricing_stale=any(item["pricing_stale"] for item in estimates),
+            calculation_version=2,
+            service_tier="standard",
+            context_band=(estimates[0]["context_band"] if len(
+                {item["context_band"] for item in estimates}
+            ) == 1 else "mixed"),
+            request_estimates=estimates,
+            billed_tokens={key: sum(item["billed_tokens"][key] for item in estimates)
+                           for key in estimates[0]["billed_tokens"]},
+            valuation_date=estimates[0]["valuation_date"],
+            assumptions=["Native request counters reconcile with this invocation's usage",
+                         "API-equivalent standard global pricing; excludes subscription billing, tools, taxes and discounts"],
+        )
+    except (KeyError, TypeError, ValueError):
+        record["reason"] = "request_usage_unavailable"
+
+
+def _estimate_tokens(record, known, state, valuation_date=None, *, request=False):
     model = record["model"]
     if not model or model.lower() == "auto":
         record["reason"] = "model_unavailable"
@@ -230,10 +281,14 @@ def _estimate_tokens(record, known, state, valuation_date=None):
     context_input = known["input_tokens"]
     if record["cli"] in {"cursor", "cursor-agent"}:
         context_input += known["cache_read_input_tokens"] + known.get("cache_write_input_tokens", 0)
-    if limit is not None and context_input > limit:
+    if limit is not None and context_input > limit and not request:
         record["reason"] = "context_tier_unavailable"
         return
-    prices = copy.deepcopy(rate["usd_per_million_tokens"]["short"])
+    band = "long" if request and limit is not None and context_input > limit else "short"
+    prices = copy.deepcopy(rate["usd_per_million_tokens"].get(band))
+    if prices is None:
+        record["reason"] = "required_rate_unavailable"
+        return
     valuation_date = valuation_date or datetime.now(timezone.utc).date().isoformat()
     if rate.get("valid_through") and valuation_date > rate["valid_through"]:
         record["reason"] = "expired_rate_unavailable"
@@ -294,7 +349,7 @@ def _estimate_tokens(record, known, state, valuation_date=None):
         calculation_version=1,
         pricing_stale=bool(state.get("stale")),
         service_tier="standard",
-        context_band="short",
+        context_band=band,
         short_context_limit=limit,
         valuation_date=valuation_date,
         rate_model=matched_model,
@@ -306,7 +361,8 @@ def _estimate_tokens(record, known, state, valuation_date=None):
                 else "Input includes cache reads/writes; reasoning is included in output"
             ),
             (
-                "Short context verified by invocation token upper bound"
+                "Context band verified by native request input"
+                if request else "Short context verified by invocation token upper bound"
                 if limit
                 else "Single published context rate"
             ),
