@@ -253,7 +253,8 @@ def _iteration(issue, state, directory, step, iteration, execute, progress):
 
 
 def repair_workflow(issue_dir: Path, *, kind: str, step: str, iteration: int,
-                    execute: bool = False, progress: Callable[[dict], None] | None = None) -> dict:
+                    execute: bool = False, progress: Callable[[dict], None] | None = None,
+                    execution_context_file: Path | None = None) -> dict:
     """Preview by default; execution never dispatches an agent or publication."""
     issue = Path(issue_dir).absolute()
     progress = progress or (lambda event: None)
@@ -263,6 +264,7 @@ def repair_workflow(issue_dir: Path, *, kind: str, step: str, iteration: int,
             state = _snapshot(issue)
             if kind == 'iteration': return _iteration(issue, state, directory, step, iteration, execute, progress)
             if kind == 'interruption': return _interruption(issue, state, directory, step, iteration, execute)
+            if kind == 'readiness': return _readiness(issue, state, directory, step, iteration, execute, execution_context_file, progress)
             raise ValueError('unsupported repair kind')
         if not execute:
             _quiescent(issue)
@@ -373,3 +375,175 @@ def _interruption(issue, state, directory, step, iteration, execute):
         _event(audit, state, step, 'interruption_repair_completed',
                {'iteration': iteration, 'handoff_key': key, 'task_id': task.id, 'reason': prepared['reason']})
     return {'status': 'repaired', 'task_id': task.id, 'handoff_key': key}
+
+
+def _original_context(issue, state, source):
+    from cafe.core.execution_checkpoints import context_digest
+    if source is None: raise ValueError('original saved --execution-context-file is required')
+    path = Path(source).absolute()
+    if not path.is_relative_to(issue): raise ValueError('execution context must be retained inside the selected issue')
+    content, _ = _read(path, 256 * 1024)
+    context = _json(content)
+    context_digest(context)
+    if (context.get('identity', {}).get('workflow_id') != state.workflow_id
+            or context.get('identity', {}).get('issue_name') != issue.name
+            or Path(context.get('root', '')).resolve() != issue.parents[2].resolve()):
+        raise ValueError('saved context belongs to another original execution')
+    return context, {'path': str(path.relative_to(issue)), 'sha256': sha256_bytes(content)}
+
+
+def _saved_terminal(path, session):
+    if not isinstance(session, str) or not session: raise ValueError('saved producing session is absent')
+    session_seen = terminal = exited = False
+    with _regular(path, LEGACY_RAW_BYTES) as (handle, _):
+        count = 0
+        while True:
+            line = handle.readline(LEGACY_RECORD_BYTES + 1)
+            if not line: break
+            count += 1
+            if len(line) > LEGACY_RECORD_BYTES or count > LEGACY_RECORDS or not line.endswith(b'\n'):
+                raise ValueError('saved terminal records exceed bounds or are truncated')
+            record = _json(line)
+            if not isinstance(record, dict): raise ValueError('saved terminal record is malformed')
+            if record.get('type') == 'thread.started':
+                session_seen = record.get('thread_id') == session
+                terminal = exited = False
+            elif record.get('type') == 'result' and record.get('session_id') == session:
+                session_seen = True
+                terminal = record.get('is_error') is not True
+            elif record.get('type') == 'turn.completed' and session_seen:
+                terminal = True
+            elif record.get('type') in {'error', 'turn.failed'}:
+                terminal = exited = False
+            elif record.get('type') == 'stderr_diagnostics':
+                exited = type(record.get('returncode')) is int and record['returncode'] == 0
+    if not (session_seen and terminal and exited):
+        raise ValueError('saved matching explicit terminal and successful process exit are required')
+
+
+def _readiness(issue, state, directory, step, iteration, execute, context_file, progress):
+    from cafe.core.blackboard import HandoffContract, HandoffOwner
+    from cafe.core.execution_checkpoints import validate_delivery_readiness, prepare_delivery_readiness, load_review_evidence
+    from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
+    from cafe.core.playbook import execution_graph_digest
+    from cafe.core.route_catalog import authorize_route_target
+    from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
+    from cafe.playbooks.loader import PlaybookLoader
+    from cafe.utils.checklist_validator import validate_checklist
+
+    context, context_source = _original_context(issue, state, context_file)
+    graph = PlaybookLoader(project_root=issue.parents[2], read_only=True).load(state.playbook_id, strict=True)
+    if step not in graph['steps']: raise ValueError('selected producer is not in the current declared graph')
+    graph_hash = execution_graph_digest(graph)
+    if context.get('graph_digest') is not None and context['graph_digest'] != graph_hash:
+        raise ValueError('execution graph changed since original confirmation')
+    declaration = graph['steps'][step].get('execution', {})
+    artifact = declaration.get('delivery_evidence_artifact')
+    if ('before_delivery' not in declaration.get('checkpoints', []) or not isinstance(artifact, str)
+            or Path(artifact).is_absolute() or '..' in Path(artifact).parts):
+        raise ValueError('selected producer lacks an iteration-local readiness declaration')
+    path = directory / artifact
+    original_ready, _ = _read(path, 256 * 1024)
+    readiness = _json(original_ready)
+    if not isinstance(readiness, dict): raise ValueError('saved readiness is malformed')
+    metadata_bytes, _ = _read(directory / 'iteration.json', 1_048_576)
+    metadata = _json(metadata_bytes)
+    if metadata.get('workflow_id') not in {None, state.workflow_id} or metadata.get('iteration') != iteration:
+        raise ValueError('saved iteration is not bound to the selected execution')
+    if any(task.status is HumanTaskStatus.PENDING for task in HumanTaskRecordStore(issue).tasks()):
+        raise ValueError('a pending human decision must remain user-owned')
+    output, _ = _read(directory / 'output.md', 1_048_576)
+    checklist, _ = _read(directory / 'checklist.md', 1_048_576)
+    if not output.strip() or not validate_checklist(directory / 'checklist.md').is_complete:
+        raise ValueError('saved output and complete checklist are required')
+    _saved_terminal(directory / 'streaming.jsonl', metadata.get('session_id'))
+    raw_proof = _raw_proof(directory / 'streaming.jsonl', None, progress)
+    review = load_review_evidence(issue / 'execution_review.json') if context.get('review_policy') == 'single_native' else None
+    paths = list(directory.glob('*checkpoint*.json'))
+    if len(paths) > 128: raise ValueError('checkpoint attribution exceeds bounded candidate count')
+    candidates = []
+    for candidate_path in paths:
+        candidate = _json(_read(candidate_path, 256 * 1024)[0])
+        if isinstance(candidate, dict) and candidate.get('boundary') == 'before_delivery': candidates.append(candidate)
+    for candidate in [readiness.get('checkpoint'), (_json(_read(issue / 'execution_delivery.json', 256 * 1024)[0]).get('checkpoint')
+            if (issue / 'execution_delivery.json').exists() else None)]:
+        if isinstance(candidate, dict) and candidate.get('boundary') == 'before_delivery': candidates.append(candidate)
+    unique = {json.dumps(value, sort_keys=True): value for value in candidates}
+    if len(unique) != 1: raise ValueError('saved delivery checkpoint is absent or ambiguous')
+    saved = next(iter(unique.values()))
+    if saved.get('parent_id') != metadata.get('session_id'):
+        raise ValueError('saved delivery checkpoint belongs to another producing invocation')
+    target = dict(readiness, checkpoint=saved)
+    validate_delivery_readiness(context, target, review_evidence=review)
+    from cafe.core.execution_artifacts import bounded_execution_json
+    target_bytes = bounded_execution_json(target)
+    audit = AuditEventStore(issue)
+    history = _repair_events(audit, state, step, iteration, {'readiness_repair_prepared', 'readiness_repair_completed'})
+    prepared = [record['data'] for record in history if record['event_type'] == 'readiness_repair_prepared']
+    if len(prepared) > 1: raise ValueError('ambiguous saved-readiness repair identity')
+    contract = HandoffContract.from_dict(prepared[0]['contract']) if prepared else state.handoff_contract
+    if (contract is None or contract.from_step != step or contract.to_owner not in {HandoffOwner.AGENT, HandoffOwner.DONE}
+            or contract.to_step == step or not authorize_route_target(graph, current_step=step,
+                    intent=contract.intent.value, target=contract.to_step)):
+        raise ValueError('no original legal outbound handoff; do not infer it from provider response')
+    patched = dict(metadata)
+    if not patched.get('status_code'): patched['status_code'] = contract.status_code or f'BATON_{contract.intent.value.upper()}'
+    # A genuine saved invocation already carries its end time; never fabricate it.
+    if not patched.get('end_time'): raise ValueError('saved invocation bookkeeping is incomplete')
+    patched_sha = sha256_bytes(json.dumps(patched, ensure_ascii=False, indent=2).encode())
+    binding = dict(iteration=iteration, context_source=context_source, graph_sha256=graph_hash,
+        checkpoint_sha256=sha256_bytes(json.dumps(saved, sort_keys=True).encode()),
+        output_sha256=sha256_bytes(output), checklist_sha256=sha256_bytes(checklist),
+        raw_proof=raw_proof, contract=contract.to_dict(), ready_target_sha256=sha256_bytes(target_bytes))
+    if prepared:
+        proof = prepared[0]
+        if any(proof.get(k) != v for k, v in binding.items()): raise ValueError('saved readiness source binding changed')
+        if sha256_bytes(original_ready) not in {proof['ready_original_sha256'], proof['ready_target_sha256']}:
+            raise ValueError('readiness differs from its prepared pre/post image')
+        if sha256_bytes(metadata_bytes) not in {proof['metadata_original_sha256'], proof['metadata_target_sha256']}:
+            raise ValueError('iteration metadata changed since preparation')
+    else:
+        proof = dict(binding, ready_original_sha256=sha256_bytes(original_ready),
+                     metadata_original_sha256=sha256_bytes(metadata_bytes), metadata_target_sha256=patched_sha)
+        proof['operation_id'] = sha256_bytes(json.dumps([state.workflow_id, step, proof], sort_keys=True).encode())
+    completed = [r for r in history if r['event_type'] == 'readiness_repair_completed']
+    if completed:
+        if len(completed) != 1 or completed[0]['data'] != proof or state.current_step != contract.to_step:
+            raise ValueError('completed readiness repair conflicts with current ownership')
+        if execute and state.applied_event_sequence < completed[0]['sequence']:
+            BlackboardStore(issue).load_or_create(step, playbook_id=state.playbook_id)
+        return {'status': 'no-op', 'operation_id': proof['operation_id']}
+    if state.current_step not in {step, contract.to_step}: raise ValueError('another owner controls the workflow')
+    if not execute: return {'status': 'proposed', 'operation_id': proof['operation_id']}
+    # Reuse existing handoff validation before any repair write. Construct only
+    # its read surface here; normal runtime initialization is deferred until all
+    # admission checks pass because it can reconcile durable projections.
+    probe = object.__new__(BlackboardWorkflowRuntime)
+    probe.issue_dir, probe.playbook, probe.steps = issue, graph, graph['steps']
+    probe.blackboard, probe.blackboard_store = state, BlackboardStore(issue)
+    from cafe.core.blackboard import EventEntry
+    retained_bytes = 0
+    for record in audit.iter_records(state.workflow_id):
+        if record['step'] == step and (record['event_type'].startswith('workflow_feedback_') or record['event_type'] == 'human_task_completed'):
+            retained_bytes += len(json.dumps(record).encode())
+            if retained_bytes > LEGACY_METADATA_BYTES:
+                raise ValueError('saved handoff attribution exceeds bounded evidence capacity')
+            state.events.append(EventEntry.from_dict(record))
+    _read(issue / 'capability_receipts.json', LEGACY_METADATA_BYTES)
+    admitted = probe._validate_reconciled_handoff(current_step=step,
+        iteration_dir_override=directory, contract_override=contract)
+    if not admitted.reconciled:
+        raise ValueError('saved handoff failed existing reconciliation gates: ' + ', '.join(admitted.missing_evidence))
+    # All source/terminal/checkpoint/review/decision checks precede durable writes.
+    if not prepared: _event(audit, state, step, 'readiness_repair_prepared', proof)
+    atomic_write_bytes(path, target_bytes)
+    runtime = BlackboardWorkflowRuntime(issue_dir=issue, playbook=graph, executor=None, execution_context=context)
+    result = runtime._validate_reconciled_handoff(current_step=step,
+        iteration_dir_override=directory, contract_override=contract)
+    if not result.reconciled: raise ValueError('saved handoff failed existing reconciliation gates: ' + ', '.join(result.missing_evidence))
+    if runtime.blackboard.current_step == step:
+        runtime._apply_reconciled_handoff(current_step=step, runtime='explicit_readiness_repair', result=result)
+    if runtime.blackboard.current_step != contract.to_step:
+        raise ValueError('existing completion gate refused the saved handoff')
+    _event(audit, runtime.blackboard, step, 'readiness_repair_completed', proof)
+    return {'status': 'repaired', 'operation_id': proof['operation_id'], 'to_step': contract.to_step}

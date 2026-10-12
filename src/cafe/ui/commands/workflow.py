@@ -1439,6 +1439,7 @@ def repair(
     step: str = typer.Option(..., '--step', help='Exact source step'),
     iteration: int = typer.Option(..., '--iteration', min=1, max=999),
     execute: bool = typer.Option(False, '--execute', help='Apply verified repair; default is read-only preview'),
+    execution_context_file: Optional[Path] = typer.Option(None, '--execution-context-file', help='Original saved resolved execution context for readiness or PR repair'),
 ) -> None:
     """Repair saved machine evidence without executing workflow work."""
     import json
@@ -1449,7 +1450,7 @@ def repair(
         raise typer.Exit(2)
     result = repair_workflow(
         Path.cwd() / '.cafe' / 'issues' / issue, kind=kind, step=step,
-        iteration=iteration, execute=execute,
+        iteration=iteration, execute=execute, execution_context_file=execution_context_file,
         progress=lambda event: typer.echo(json.dumps(event), err=True),
     )
     typer.echo(json.dumps(result, ensure_ascii=False))
