@@ -84,6 +84,21 @@ You can contribute to this project in several ways:
 
 6.  Open a Pull Request to the `main` branch of the original repository. In the PR description, please detail your changes, their purpose, and any relevant Issue numbers.
 
+### PR merge policy
+
+CAFE defaults to **merge commits** for GitHub pull requests. This preserves the
+source commits referenced by development and review evidence while providing a
+PR-level history through `git log --first-parent`. Integrations between `main`,
+`develop`, and release branches should retain shared ancestry through merge
+commits.
+
+Squash is an explicit exception for a short-lived, single-target feature branch
+whose commits are mostly WIP or fixups and are better represented as one reviewed
+change. One feature containing several commits is not sufficient reason to
+choose squash. State the reason and obtain approval for the selected strategy
+in the existing delivery action review. Repository and branch restrictions still
+apply; a default or exception never authorizes a merge by itself.
+
 ## Testing policy (workflow)
 
 Plan, develop, and review skills enforce a **test invariants** policy: tests should protect business rules and user-journey outcomes, not fragile UI structure. See `src/cafe/data/skills/cafe-plan/references/test_invariants_policy.md` for what to test, what to avoid, and examples.
