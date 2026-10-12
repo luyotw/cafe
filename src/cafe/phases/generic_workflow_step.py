@@ -11,6 +11,7 @@ import shutil
 import stat
 import tempfile
 from contextlib import nullcontext
+from copy import deepcopy
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1514,6 +1515,7 @@ class GenericWorkflowStepExecutor(Phase):
                     output_key=output_key,
                     output_path=output_path,
                     updated_by=step_name,
+                    step_def=step_def,
                     persist=not workspace_eligible,
                 )
                 # Carry the complete producer record into the runtime publication
@@ -3772,7 +3774,10 @@ class GenericWorkflowStepExecutor(Phase):
         artifact: ArtifactEntry,
         *,
         allow_missing_legacy_record: bool = False,
+        persist_legacy_metadata: bool = False,
     ) -> tuple[ArtifactEntry, tuple[Any, ...]]:
+        if not persist_legacy_metadata:
+            artifact = deepcopy(artifact)
         document, record, record_path, _actual_digest = cls._load_validated_plan_artifact(
             artifact_name,
             artifact,
@@ -3831,7 +3836,8 @@ class GenericWorkflowStepExecutor(Phase):
                 )
         if recorded_work is None:
             record["todo_work_identities"] = expected_work
-            cls._persist_plan_artifact_record(record_path, record)
+            if persist_legacy_metadata:
+                cls._persist_plan_artifact_record(record_path, record)
         artifact.todo_work_identities = expected_work
         return artifact, tuple(document.items)
 
@@ -3842,8 +3848,11 @@ class GenericWorkflowStepExecutor(Phase):
         artifact: ArtifactEntry,
         *,
         allow_missing_legacy_record: bool = False,
+        persist_legacy_metadata: bool = False,
     ) -> tuple[Optional[ArtifactEntry], tuple[Any, ...]]:
         """Resolve the last detailed plan through any provisional alignment."""
+        if not persist_legacy_metadata:
+            artifact = deepcopy(artifact)
         document, record, record_path, _actual_digest = cls._load_validated_plan_artifact(
             artifact_name,
             artifact,
@@ -3854,6 +3863,7 @@ class GenericWorkflowStepExecutor(Phase):
                 artifact_name,
                 artifact,
                 allow_missing_legacy_record=allow_missing_legacy_record,
+                persist_legacy_metadata=persist_legacy_metadata,
             )
 
         for candidate in (
@@ -3901,7 +3911,8 @@ class GenericWorkflowStepExecutor(Phase):
             }
         if recorded_baseline is None:
             record["todo_identity_baseline"] = baseline
-            cls._persist_plan_artifact_record(record_path, record)
+            if persist_legacy_metadata:
+                cls._persist_plan_artifact_record(record_path, record)
         artifact.todo_identity_baseline = baseline
         reference = baseline["artifact"]
         if reference is None:
@@ -3918,7 +3929,9 @@ class GenericWorkflowStepExecutor(Phase):
             path=reference["path"],
             content_sha256=reference["content_sha256"],
         )
-        return cls._validate_direct_plan_todo_authority(artifact_name, referenced)
+        return cls._validate_direct_plan_todo_authority(
+            artifact_name, referenced, persist_legacy_metadata=persist_legacy_metadata
+        )
 
     @classmethod
     def _prepare_todo_identity_input(
@@ -3938,7 +3951,11 @@ class GenericWorkflowStepExecutor(Phase):
             raise ValueError(
                 f"prior plan Todo authority {artifact_name!r} has an invalid selected artifact"
             )
-        cls._resolve_plan_todo_authority(artifact_name, prior)
+        # Legacy author metadata is prepared explicitly before invocation, never
+        # as a side effect of consumer validation or publication preflight.
+        cls._resolve_plan_todo_authority(
+            artifact_name, prior, persist_legacy_metadata=True
+        )
 
     @staticmethod
     def _step_input_artifacts(
@@ -4706,6 +4723,54 @@ class GenericWorkflowStepExecutor(Phase):
             "producer_step": workspace.producer_step,
         }
 
+    def _execution_report_plan_items(
+        self,
+        *,
+        step_def: Mapping[str, Any],
+        blackboard_state: BlackboardState,
+        output_path: str,
+    ) -> tuple[Any, ...]:
+        """Validate the invocation's pinned plan, never select a newer authority."""
+        from cafe.core.checklist import ProjectedTodo, load_materialization
+
+        materialized = load_materialization(Path(output_path).parent / "iteration.json")
+        if materialized is None or (
+            getattr(self, "_effective_checklist", materialized) != materialized
+        ):
+            raise ValueError("execution report plan binding is missing or changed")
+        bindings = [binding for binding in materialized.projections if binding["source"] == "plan"]
+        if not bindings:
+            raise ValueError("execution report has no pinned plan authority")
+        declared = step_def.get("input_artifacts")
+        selected_items: dict[str, Any] = {}
+        for binding in bindings:
+            name = binding["declaration_artifact"]
+            if not isinstance(declared, (list, tuple)) or name not in declared or binding["causal"] is not False:
+                raise ValueError("execution report plan source is not a declared direct input")
+            entry = blackboard_state.artifacts.get(name)
+            if not isinstance(entry, ArtifactEntry) or (
+                entry.name != binding["artifact"]
+                or entry.path != binding["path"]
+                or entry.version != binding["version"]
+                or (entry.content_sha256 is not None and entry.content_sha256 != binding["content_sha256"])
+            ):
+                raise ValueError("execution report plan source binding changed")
+            authority, items = self._resolve_plan_todo_authority(name, entry)
+            if authority is None or authority.path != entry.path or authority.content_sha256 != binding["content_sha256"]:
+                raise ValueError("execution report plan authority does not match its pinned source")
+            if [item.item_id for item in items] != binding["producer_ids"] or len(items) != len(binding["handles"]):
+                raise ValueError("execution report plan item identities changed")
+            rows = [ProjectedTodo(handle, item).checklist_row()
+                    for handle, item in zip(binding["handles"], items)]
+            if rows != binding["rows"]:
+                raise ValueError("execution report plan source fingerprints changed")
+            for item in items:
+                prior = selected_items.get(item.item_id)
+                if prior is not None and prior != item:
+                    raise ValueError("execution report has ambiguous plan item authorities")
+                selected_items[item.item_id] = item
+        return tuple(selected_items.values())
+
     def _write_artifact_record(
         self,
         *,
@@ -4714,6 +4779,7 @@ class GenericWorkflowStepExecutor(Phase):
         output_path: str,
         updated_by: str,
         persist: bool = True,
+        step_def: Optional[Mapping[str, Any]] = None,
     ) -> ArtifactEntry:
         previous = blackboard_state.artifacts.get(output_key)
         version = previous.version + 1 if previous else 1
@@ -4728,6 +4794,23 @@ class GenericWorkflowStepExecutor(Phase):
         )
         plan_document = syntax.plan_document
         todo_items = syntax.items
+        producer = step_def if step_def is not None else (
+            getattr(self, "playbook", {}).get("steps", {}).get(updated_by, {})
+        )
+        plan_author = (
+            producer.get("output_artifact") == output_key
+            and producer.get("todo_identity_input_artifact") == output_key
+            and output_key in (producer.get("input_artifacts") or [])
+        )
+        # Domain playbooks can explicitly publish a plan as a feedback source
+        # without declaring a prior-plan prompt input (including their first run).
+        routes = resolve_step_behavior(self.playbook, updated_by).feedback_routes if hasattr(self, "playbook") else None
+        plan_author = plan_author or any(
+            route.artifact == output_key and route.todo_source == "plan"
+            for route in (routes or {}).values()
+        )
+        if plan_document is not None and not plan_author:
+            raise ValueError("plan-stage publication requires a declared plan author contract")
         if (
             plan_document is not None
             and plan_document.kind is PlanTodoDocumentKind.PROVISIONAL_ALIGNMENT
@@ -4757,7 +4840,20 @@ class GenericWorkflowStepExecutor(Phase):
         elif todo_items is not None:
             continuity_proofs = syntax.continuity
             plan_items = [item for item in todo_items if item.source == "plan"]
-            if plan_items:
+            if plan_items and not plan_author:
+                if producer.get("output_artifact") != output_key:
+                    raise ValueError("execution report plan publication has an unknown producer contract")
+                authoritative = {item.item_id: item for item in self._execution_report_plan_items(
+                    step_def=producer, blackboard_state=blackboard_state, output_path=output_path
+                )}
+                for item in plan_items:
+                    prior = authoritative.get(item.item_id)
+                    if prior is None or _plan_work_identity(prior) != _plan_work_identity(item):
+                        raise ValueError(
+                            f"execution report plan item {item.item_id!r} changes the accepted plan; "
+                            "return to the plan author for a revision"
+                        )
+            elif plan_items:
                 todo_identities = {
                     item.item_id: hashlib.sha256(
                         "\x1f".join(

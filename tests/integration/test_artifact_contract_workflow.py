@@ -246,6 +246,7 @@ def _publish_route_through_runtime(
     publisher.phase_dir = producer_dir
     publisher.iteration = 1
     publisher.phase_name = producer
+    publisher.playbook = playbook
     initial = BlackboardStore(issue_dir).load_or_create(producer, playbook_id=playbook["playbook"]["id"])
     entry = publisher._write_artifact_record(
         blackboard_state=initial,
@@ -786,3 +787,96 @@ def test_post_use_workspace_mismatch_prevents_all_publication_boundaries(
         if persisted.handoff_contract is not None
         else None
     ) == initial_handoff
+
+
+@pytest.mark.parametrize("corrupt_plan", [False, True])
+def test_pinned_plan_report_supersedes_legacy_code_across_process_restart(tmp_path, monkeypatch, corrupt_plan):
+    """Publish via real producer/runtime seams and reload in a fresh process."""
+    from cafe.core.checklist import ChecklistMaterialization, ProjectedTodo
+    from cafe.core.todo import parse_todo_list
+
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "legacy-report"
+    plan, plan_file = _write_route_artifact(issue_dir, producer="author",
+        artifact_name="roadmap", source="plan", prefix="PLAN")
+    legacy_dir = issue_dir / "implement" / "iteration_001"
+    legacy_dir.mkdir(parents=True)
+    legacy_file = legacy_dir / "output.md"
+    legacy_file.write_text("## Todo Progress\nLegacy report edited after publication.\n")
+    legacy = ArtifactEntry(name="report", kind=ArtifactKind.DOCUMENT, version=1,
+        updated_by="implement", path=str(legacy_file), content_sha256="0" * 64)
+    (legacy_dir / "artifact.json").write_text(json.dumps(legacy.to_dict()))
+    iteration = issue_dir / "implement" / "iteration_002"
+    iteration.mkdir(parents=True)
+    output = iteration / "output.md"
+    output.write_bytes(plan_file.read_bytes())
+    item = parse_todo_list(plan_file.read_text())[0]
+    binding = {"declaration_artifact": "roadmap", "source": "plan", "causal": False,
+        "contributor": "implementation", "section": 0, "artifact": "roadmap",
+        "path": str(plan_file), "version": plan.version, "content_sha256": plan.content_sha256,
+        "handles": [item.item_id], "producer_ids": [item.item_id],
+        "rows": [ProjectedTodo(item.item_id, item).checklist_row()]}
+    materialized = ChecklistMaterialization("", (), (binding,), False)
+    (iteration / "iteration.json").write_text(json.dumps({"effective_checklist": materialized.to_dict()}))
+    playbook = {"playbook": {"id": "legacy-report"}, "steps": {
+        "author": {"output_artifact": "roadmap", "input_artifacts": ["roadmap"],
+            "todo_identity_input_artifact": "roadmap", "on": {"await_agent": "implement"}},
+        "implement": {"output_artifact": "report", "input_artifacts": ["roadmap"],
+            "on": {"await_agent": "consume"}},
+        "consume": {"input_artifacts": ["roadmap", "report"], "on": {"await_agent": "_done"}}}}
+    playbook_file = tmp_path / "journey.json"
+    playbook_file.write_text(json.dumps(playbook))
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("implement", playbook_id="legacy-report")
+    state.artifacts.update(roadmap=plan, report=legacy)
+    store.save(state)
+    legacy_before = {p: p.read_bytes() for p in (legacy_file, legacy_dir / "artifact.json")}
+    plan_record_before = (plan_file.parent / "artifact.json").read_bytes()
+    if corrupt_plan:
+        plan_file.write_text(plan_file.read_text().replace("preserve identity", "changed after launch"))
+    code = '''
+import json, sys
+from pathlib import Path
+from cafe.core.blackboard import BlackboardStore
+from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
+from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
+issue, config = map(Path, sys.argv[1:])
+playbook = json.loads(config.read_text())
+state = BlackboardStore(issue).load_or_create('implement')
+publisher = GenericWorkflowStepExecutor.__new__(GenericWorkflowStepExecutor)
+publisher.issue_dir = issue
+publisher.playbook = playbook
+publisher.phase_dir = issue / 'implement'
+publisher.iteration = 2
+output = publisher.phase_dir / 'iteration_002' / 'output.md'
+try:
+    entry = publisher._write_artifact_record(blackboard_state=state,
+        output_key='report', output_path=str(output), updated_by='implement')
+except ValueError as exc:
+    print(json.dumps({'published': False, 'error': str(exc)}))
+else:
+    runtime = BlackboardWorkflowRuntime(issue_dir=issue, playbook=playbook, executor=object())
+    runtime._store_artifacts({'report': str(output)}, {'report': entry.to_dict()})
+    runtime._emit_transition(current_step='implement', next_step='consume',
+        status_code='await_agent', source='integration.production_path', runtime='test')
+    print(json.dumps({'published': True}))
+'''
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join((str(Path(__file__).resolve().parents[2] / "src"), env.get("PYTHONPATH", "")))
+    result = subprocess.run([sys.executable, "-c", code, str(issue_dir), str(playbook_file)],
+        cwd=tmp_path, env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    observed = json.loads(result.stdout.strip().splitlines()[-1])
+    assert observed["published"] is not corrupt_plan
+    reloaded = BlackboardStore(issue_dir).load_or_create("consume")
+    assert reloaded.artifacts["report"].version == (1 if corrupt_plan else 2)
+    if corrupt_plan:
+        assert not (iteration / "artifact.json").exists()
+        assert not any(event.event_type == "transition" for event in reloaded.events)
+    else:
+        assert reloaded.artifacts["report"].path == str(output)
+        assert reloaded.artifacts["report"].todo_identities is None
+        assert reloaded.artifacts["report"].content_sha256 == hashlib.sha256(output.read_bytes()).hexdigest()
+        assert any(event.event_type == "transition" for event in reloaded.events)
+    assert all(path.read_bytes() == content for path, content in legacy_before.items())
+    assert (plan_file.parent / "artifact.json").read_bytes() == plan_record_before
