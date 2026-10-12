@@ -274,3 +274,43 @@ def test_i7_saved_readiness_public_cli_stops_at_handoff(saved_delivery):
         '--step', 'inspect_custom', '--iteration', '1', '--execution-context-file', str(context), '--execute'])
     assert result.exit_code == 0 and json.loads(result.stdout)['to_step'] == 'deliver_custom'
     assert j.manager.deliveries == 0
+
+
+from tests.unit.test_pr_delivery import publication, unknown_publication, historical_publication
+from tests.unit.test_file_scope import repository
+
+
+@pytest.mark.parametrize('historical', [False, True])
+def test_i9_public_readonly_reconciliation_preserves_original_unknown_and_no_replay(
+    request, unknown_publication, historical, monkeypatch):
+    # Use one isolated repository per invocation; the historical positive case
+    # is supplied through its owning approval fixture in the separate test below.
+    if historical:
+        from cafe.core.blackboard import BlackboardStore
+        p = unknown_publication
+        record = json.loads((p['issue'] / 'delivery_result.json').read_text())
+        store = BlackboardStore(p['issue']); state = store.load_or_create('ship_custom')
+        store.append_capability_receipt(state, dict(record['receipt'], request=record['request']))
+        (p['issue'] / 'delivery_result.json').write_text(json.dumps({k: record[k] for k in ['delivered', 'status', 'authority_digest', 'commit']}))
+    p = unknown_publication
+    monkeypatch.chdir(p['root'])
+    args = ['repair', '--issue', 'pr-case', '--kind', 'pr-result', '--step', 'ship_custom',
+        '--iteration', '1', '--execution-context-file', str(p['issue'] / 'saved-context.json'), '--execute']
+    before = (p['issue'] / 'next_step.txt').read_bytes()
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code == 0 and json.loads(result.stdout)['status'] == 'verified'
+    assert CliRunner().invoke(app, args).exit_code == 0
+    assert (p['issue'] / 'next_step.txt').read_bytes() == before
+    assert sum(kind == 'publish' for kind, _ in p['calls']) == 1
+
+
+def test_i9_public_historical_approval_receipt_is_not_consumed_or_answered(historical_publication, monkeypatch):
+    p = historical_publication
+    monkeypatch.chdir(p['root'])
+    before = (p['issue'] / 'human_tasks.json').read_bytes()
+    args = ['repair', '--issue', 'pr-case', '--kind', 'pr-result', '--step', 'ship_custom',
+        '--iteration', '1', '--execution-context-file', str(p['issue'] / 'saved-context.json'), '--execute']
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code == 0 and json.loads(result.stdout)['status'] == 'verified'
+    assert (p['issue'] / 'human_tasks.json').read_bytes() == before
+    assert sum(kind == 'publish' for kind, _ in p['calls']) == 1

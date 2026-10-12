@@ -265,6 +265,7 @@ def repair_workflow(issue_dir: Path, *, kind: str, step: str, iteration: int,
             if kind == 'iteration': return _iteration(issue, state, directory, step, iteration, execute, progress)
             if kind == 'interruption': return _interruption(issue, state, directory, step, iteration, execute)
             if kind == 'readiness': return _readiness(issue, state, directory, step, iteration, execute, execution_context_file, progress)
+            if kind == 'pr-result': return _pr_result(issue, state, directory, step, iteration, execute, execution_context_file)
             raise ValueError('unsupported repair kind')
         if not execute:
             _quiescent(issue)
@@ -547,3 +548,40 @@ def _readiness(issue, state, directory, step, iteration, execute, context_file, 
         raise ValueError('existing completion gate refused the saved handoff')
     _event(audit, runtime.blackboard, step, 'readiness_repair_completed', proof)
     return {'status': 'repaired', 'operation_id': proof['operation_id'], 'to_step': contract.to_step}
+
+
+def _pr_result(issue, state, directory, step, iteration, execute, context_file):
+    from cafe.core.pr_delivery import prepare_pr_reconciliation
+    from cafe.core.execution_artifacts import bounded_execution_json
+    context, context_source = _original_context(issue, state, context_file)
+    for source in [issue / 'human_tasks.json', issue / 'capability_receipts.json']:
+        if source.exists() or source.is_symlink(): _read(source, LEGACY_METADATA_BYTES)
+    path = issue / 'delivery_result.json'
+    content, identity = _read(path, 256 * 1024)
+    record = _json(content)
+    if not isinstance(record, dict): raise ValueError('original publication result is malformed')
+    original = {key: value for key, value in record.items() if key != 'reconciliation'}
+    association, observation = prepare_pr_reconciliation(issue, issue.parents[2], context, original, directory)
+    association['context_source'] = context_source
+    fingerprint = sha256_bytes(json.dumps([association, observation], sort_keys=True).encode())
+    previous = record.get('reconciliation')
+    if previous is not None and (not isinstance(previous, dict) or previous.get('original') != original
+                                or previous.get('association') != association):
+        raise ValueError('existing reconciliation conflicts with original publication association')
+    history = previous.get('observations', []) if previous else []
+    if not isinstance(history, list) or any(not isinstance(item, dict) or not isinstance(item.get('fingerprint'), str) for item in history):
+        raise ValueError('saved PR observation history is malformed')
+    observations = list(history)
+    if len(observations) > 128: raise ValueError('read-only observation history exceeds bounded record capacity')
+    found = [item for item in observations if item.get('fingerprint') == fingerprint]
+    if len(found) > 1: raise ValueError('ambiguous observation identity')
+    if found: return {'status': 'no-op', 'effective_status': previous['effective_status'], 'association_id': association['id']}
+    status = observation['status']
+    outcome = {'verified': 'succeeded', 'unresolved': 'unknown', 'mismatch': 'mismatch'}[status]
+    if not execute: return {'status': status, 'association_id': association['id'], 'preview': True}
+    if _read(path, 256 * 1024) != (content, identity): raise ValueError('original result changed while observing')
+    observations.append({'fingerprint': fingerprint, 'observed_at': datetime.now().astimezone().isoformat(), **observation})
+    result = dict(original, reconciliation={'original': original, 'original_sha256': previous['original_sha256'] if previous else sha256_bytes(content),
+        'association': association, 'observations': observations, 'effective_status': outcome, 'effective_delivered': status == 'verified'})
+    atomic_write_bytes(path, bounded_execution_json(result))
+    return {'status': status, 'association_id': association['id'], 'effective_status': outcome}

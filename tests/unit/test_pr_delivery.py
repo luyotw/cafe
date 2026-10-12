@@ -126,3 +126,174 @@ def test_u14_merged_only_passes_original_confirmed_condition(allowed):
         'head': {'ref': 'feature', 'sha': 'a' * 40, 'repo': {'full_name': 'example/project'}},
         'base': {'ref': 'main', 'repo': {'full_name': 'example/project'}}}
     assert verify_pr_identity(expected, {}, rest)['status'] == ('verified' if allowed else 'mismatch')
+
+
+def pr_repair(p, execute=True):
+    from cafe.core.workflow_repair import repair_workflow
+    return repair_workflow(p['issue'], kind='pr-result', step='ship_custom', iteration=1,
+        execute=execute, execution_context_file=p['issue'] / 'saved-context.json')
+
+
+@pytest.fixture
+def unknown_publication(publication, monkeypatch):
+    p = publication
+    def unavailable(argv, **kwargs):
+        if argv[:3] == ['gh', 'pr', 'view'] or argv[:2] == ['gh', 'api']:
+            raise subprocess.CalledProcessError(8, argv)
+        return p['transport'](argv, **kwargs)
+    monkeypatch.setattr(subprocess, 'run', unavailable)
+    publisher(p)
+    monkeypatch.setattr(subprocess, 'run', p['transport'])
+    return p
+
+
+def test_u16_bound_unknown_reconciliation_is_additive_and_idempotent(unknown_publication):
+    p = unknown_publication
+    path = p['issue'] / 'delivery_result.json'
+    original = json.loads(path.read_text())
+    count = sum(kind == 'publish' for kind, _ in p['calls'])
+    assert pr_repair(p, False)['status'] == 'verified'
+    assert json.loads(path.read_text()) == original
+    assert pr_repair(p)['status'] == 'verified'
+    saved = json.loads(path.read_text())
+    assert saved['status'] == 'unknown' and saved['delivered'] is False
+    assert saved['reconciliation']['original'] == original
+    assert saved['reconciliation']['effective_status'] == 'succeeded'
+    bytes_after = path.read_bytes()
+    assert pr_repair(p)['status'] == 'no-op'
+    assert path.read_bytes() == bytes_after
+    assert sum(kind == 'publish' for kind, _ in p['calls']) == count
+
+
+@pytest.fixture
+def historical_publication(publication, monkeypatch):
+    from cafe.core.capabilities import load_capability_registry, default_capability_definition_dirs
+    from cafe.core.capability_approvals import CapabilityApprovalService
+    p = publication
+    registry = dict(load_capability_registry(default_capability_definition_dirs(p['root'])))
+    registry['cafe.pr.publish'] = registry['cafe.pr.publish'].model_copy(update={'approval': 'required'})
+    pending = publisher(p, registry=registry)
+    service = CapabilityApprovalService(issue_dir=p['issue'], workflow_id=p['context']['identity']['workflow_id'], step='delivery', iteration=1)
+    approval = service.inspect(pending['task_id'])
+    # Genuine original approval execution receipt is saved by the owning service.
+    service.record_decision(pending['task_id'], {'decision': 'approve',
+        'workflow_id': p['context']['identity']['workflow_id'], 'task_id': pending['task_id'],
+        'request_fingerprint': approval['fingerprint'], 'correlation_id': approval['correlation_id']})
+    def unavailable(argv, **kwargs):
+        if argv[:3] == ['gh', 'pr', 'view'] or argv[:2] == ['gh', 'api']:
+            raise subprocess.CalledProcessError(8, argv)
+        return p['transport'](argv, **kwargs)
+    monkeypatch.setattr(subprocess, 'run', unavailable)
+    publisher(p, registry=registry, approval_task_id=pending['task_id'], correlation_id=approval['correlation_id'])
+    monkeypatch.setattr(subprocess, 'run', p['transport'])
+    record = json.loads((p['issue'] / 'delivery_result.json').read_text())
+    original = {key: record[key] for key in ['delivered', 'status', 'authority_digest', 'commit']}
+    (p['issue'] / 'delivery_result.json').write_text(json.dumps(original))
+    p.update(original=original, approval_task_id=pending['task_id'])
+    return p
+
+
+def test_u16_historical_four_field_record_uses_genuine_independent_approval_receipt(historical_publication):
+    p = historical_publication
+    assert set(json.loads((p['issue'] / 'delivery_result.json').read_text())) == {'delivered', 'status', 'authority_digest', 'commit'}
+    original_tasks = (p['issue'] / 'human_tasks.json').read_bytes()
+    result = pr_repair(p)
+    assert result['status'] == 'verified'
+    saved = json.loads((p['issue'] / 'delivery_result.json').read_text())
+    assert saved['reconciliation']['original'] == p['original']
+    assert saved['reconciliation']['association']['receipt_source']['task_id'] == p['approval_task_id']
+    assert (p['issue'] / 'human_tasks.json').read_bytes() == original_tasks
+    assert pr_repair(p)['status'] == 'no-op'
+    assert sum(kind == 'publish' for kind, _ in p['calls']) == 1
+
+
+@pytest.mark.parametrize('defect', ['absent_receipt', 'authority', 'commit', 'request', 'workflow',
+    'remote', 'source', 'base', 'correlation', 'fingerprint', 'pr_number', 'ambiguous'])
+def test_u16_historical_binding_conflicts_refuse_without_guessing_intent(historical_publication, defect):
+    p = historical_publication
+    path = p['issue'] / 'human_tasks.json'
+    data = json.loads(path.read_text())
+    task = data['tasks'][p['approval_task_id']] if isinstance(data['tasks'], dict) else next(t for t in data['tasks'] if t['id'] == p['approval_task_id'])
+    approval = task['capability_approval']
+    if defect == 'absent_receipt': approval.pop('receipt')
+    elif defect == 'authority':
+        old = json.loads((p['issue'] / 'delivery_result.json').read_text());old['authority_digest'] = 'b' * 64
+        (p['issue'] / 'delivery_result.json').write_text(json.dumps(old))
+    elif defect == 'commit':
+        old = json.loads((p['issue'] / 'delivery_result.json').read_text());old['commit'] = 'b' * 40
+        (p['issue'] / 'delivery_result.json').write_text(json.dumps(old))
+    elif defect == 'workflow': approval['receipt']['workflow_id'] = 'other'
+    elif defect == 'correlation': approval['receipt']['correlation_id'] = 'other'
+    elif defect == 'fingerprint': approval['receipt']['request_fingerprint'] = 'b' * 64
+    elif defect == 'pr_number': approval['receipt']['execution']['outputs']['pr_number'] = '2'
+    elif defect == 'ambiguous':
+        # Two independently attributed genuine-looking receipts cannot be picked by convenience.
+        copy = deepcopy(task); copy['id'] = 'other-task'; copy['capability_approval']['receipt']['task_id'] = 'other-task'
+        if isinstance(data['tasks'], dict): data['tasks']['other-task'] = copy
+        else: data['tasks'].append(copy)
+    else:
+        key = {'request': 'output', 'remote': 'remote', 'source': 'source_branch', 'base': 'base'}[defect]
+        approval['receipt']['request']['args'][key] = 'other'
+    path.write_text(json.dumps(data))
+    before = (p['issue'] / 'delivery_result.json').read_bytes(), path.read_bytes()
+    assert pr_repair(p)['status'] == 'refused'
+    assert ((p['issue'] / 'delivery_result.json').read_bytes(), path.read_bytes()) == before
+    assert sum(kind == 'publish' for kind, _ in p['calls']) == 1
+
+
+@pytest.mark.parametrize('observation', ['unavailable', 'malformed', 'source', 'base_repo', 'sha'])
+def test_u16_observation_unknown_or_mismatch_is_explicit_without_replay(unknown_publication, monkeypatch, observation):
+    p = unknown_publication
+    if observation == 'source': p['rest']['head']['ref'] = 'other'
+    elif observation == 'base_repo': p['rest']['base']['repo']['full_name'] = 'other/project'
+    elif observation == 'sha': p['rest']['head']['sha'] = 'b' * 40
+    else:
+        def fail(argv, **kwargs):
+            if argv[:3] == ['gh', 'pr', 'view'] or argv[:2] == ['gh', 'api']:
+                if observation == 'malformed': return subprocess.CompletedProcess(argv, 0, '{broken', '')
+                raise subprocess.CalledProcessError(9, argv)
+            return p['transport'](argv, **kwargs)
+        monkeypatch.setattr(subprocess, 'run', fail)
+    result = pr_repair(p)
+    assert result['status'] == ('unresolved' if observation in ['unavailable', 'malformed'] else 'mismatch')
+    saved = json.loads((p['issue'] / 'delivery_result.json').read_text())
+    assert saved['status'] == 'unknown' and saved['delivered'] is False
+    assert not saved['reconciliation']['effective_delivered']
+    assert sum(kind == 'publish' for kind, _ in p['calls']) == 1
+
+
+def test_u16_historical_independent_capability_store_proves_original_receipt(unknown_publication):
+    from cafe.core.blackboard import BlackboardStore
+    p = unknown_publication
+    path = p['issue'] / 'delivery_result.json'
+    record = json.loads(path.read_text())
+    store = BlackboardStore(p['issue'])
+    state = store.load_or_create('ship_custom')
+    # Persist genuine original request and actual owner-produced receipt through
+    # an existing store, independently of the old minimal attempt record.
+    store.append_capability_receipt(state, dict(record['receipt'], request=record['request']))
+    original = {k: record[k] for k in ['delivered', 'status', 'authority_digest', 'commit']}
+    path.write_text(json.dumps(original))
+    assert pr_repair(p)['status'] == 'verified'
+    assert json.loads(path.read_text())['reconciliation']['original'] == original
+    assert sum(kind == 'publish' for kind, _ in p['calls']) == 1
+
+
+@pytest.mark.parametrize('boundary', ['before', 'after'])
+def test_u16_result_write_failure_reentry_retains_same_attempt(unknown_publication, monkeypatch, boundary):
+    from cafe.core import workflow_repair
+    p = unknown_publication
+    write = workflow_repair.atomic_write_bytes
+    failed = False
+    def injection(path, payload):
+        nonlocal failed
+        if path == p['issue'] / 'delivery_result.json' and not failed:
+            failed = True
+            if boundary == 'after': write(path, payload)
+            raise OSError('result persistence interruption')
+        write(path, payload)
+    monkeypatch.setattr(workflow_repair, 'atomic_write_bytes', injection)
+    assert pr_repair(p)['status'] == 'interrupted'
+    assert pr_repair(p)['status'] == ('verified' if boundary == 'before' else 'no-op')
+    assert pr_repair(p)['status'] == 'no-op'
+    assert sum(kind == 'publish' for kind, _ in p['calls']) == 1
