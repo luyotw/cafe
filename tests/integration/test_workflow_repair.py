@@ -59,3 +59,41 @@ def test_i2_public_refusal_and_readonly_preview_preserve_every_source(legacy, mo
     result = invoke(legacy, monkeypatch)
     assert result.exit_code == 2 and json.loads(result.stdout)['status'] == 'refused'
     assert legacy[1].read_bytes() == original and not events(legacy[0])
+
+
+from tests.unit.test_workflow_repair import interrupted, interrupt, repair_interrupted
+
+
+@pytest.mark.parametrize('boundary', ['baton', 'task', 'owner'])
+def test_i3_public_orphan_recovery_is_discoverable_and_typed(interrupted, monkeypatch, boundary):
+    from cafe.core.blackboard import BlackboardStore
+    from cafe.core.human_task_records import HumanTaskRecordStore
+    from cafe.core.human_tasks import HumanTaskPolicy, HumanTaskCompletion, validate_human_task_completion
+    runtime, directory, controls, calls = interrupted
+    original = {'baton': BlackboardStore.write_handoff_contract,
+                'task': HumanTaskRecordStore.materialize_with_status,
+                'owner': BlackboardStore.set_current_step}[boundary]
+    failed = False
+    def fail_after(self, *args, **kwargs):
+        nonlocal failed
+        result = original(self, *args, **kwargs)
+        if not failed:
+            failed = True
+            raise OSError('after durable write')
+        return result
+    owner_type = HumanTaskRecordStore if boundary == 'task' else BlackboardStore
+    name = {'baton': 'write_handoff_contract', 'task': 'materialize_with_status', 'owner': 'set_current_step'}[boundary]
+    monkeypatch.setattr(owner_type, name, fail_after)
+    with pytest.raises(OSError): interrupt(runtime)
+    monkeypatch.chdir(runtime.issue_dir.parents[2])
+    result = CliRunner().invoke(app, ['repair', '--issue', 'interrupted-case', '--kind', 'interruption',
+        '--step', 'compose_custom', '--iteration', '1', '--execute'])
+    assert result.exit_code == 0 and json.loads(result.stdout)['status'] == 'repaired'
+    records = HumanTaskRecordStore(runtime.issue_dir)
+    task = records.tasks()[0]
+    policy = HumanTaskPolicy.model_validate(task.expected_result)
+    typed = validate_human_task_completion(policy, {'decision': 'retry'})
+    assert isinstance(typed, HumanTaskCompletion) and typed.decision == 'retry'
+    assert not records.results() and not calls
+    assert BlackboardStore(runtime.issue_dir).load_read_only().current_step == 'user'
+    assert repair_interrupted(interrupted)['status'] == 'no-op'

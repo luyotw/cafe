@@ -152,3 +152,152 @@ def test_u3_exceptional_resource_bounds_are_finite(legacy, resource):
     before = legacy[1].read_bytes()
     assert repair(legacy)['status'] == 'refused'
     assert legacy[1].read_bytes() == before
+
+
+@pytest.fixture
+def interrupted(tmp_path):
+    from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
+    issue = tmp_path / '.cafe/issues/interrupted-case'
+    playbook = {'playbook': {'id': 'bespoke'}, 'steps': {
+        'compose_custom': {'skill': 'custom', 'role': 'author', 'on': {'await_agent': '_done'}}}}
+    calls = []
+    runtime = BlackboardWorkflowRuntime(issue_dir=issue, playbook=playbook,
+        executor=lambda **kw: calls.append('agent'))
+    runtime._notify_new_human_task = lambda task: None
+    directory = issue / 'compose_custom/iteration_001'
+    directory.mkdir(parents=True)
+    controls = {'iteration': 1, 'session_id': 'same-session', 'model': 'same-model',
+        'cli': 'codex', 'workspace_completion': {'consumed': 2},
+        'checkpoint': {'receipt_id': 'genuine'}, 'approval': {'id': 'original'}}
+    (directory / 'iteration.json').write_text(json.dumps(controls))
+    return runtime, directory, controls, calls
+
+
+def interrupt(runtime):
+    return runtime._pause_for_agent_execution_interruption(
+        current_step='compose_custom', reason='agent_error', runtime='fixture')
+
+
+def repair_interrupted(j, execute=True):
+    from cafe.core.workflow_repair import repair_workflow
+    return repair_workflow(j[0].issue_dir, kind='interruption', step='compose_custom',
+                           iteration=1, execute=execute)
+
+
+def test_u6_fallible_context_preparation_publishes_no_handoff(interrupted):
+    runtime, directory, _, _ = interrupted
+    path = directory / 'iteration.json'
+    path.write_text(json.dumps({'unrelated': 'x' * 1_048_576}))
+    original = (runtime.issue_dir / 'next_step.txt').read_bytes()
+    from cafe.core.human_task_records import HumanTaskRecordStore
+    with pytest.raises((RuntimeError, ValueError)):
+        interrupt(runtime)
+    assert (runtime.issue_dir / 'next_step.txt').read_bytes() == original
+    assert not HumanTaskRecordStore(runtime.issue_dir).tasks()
+    assert runtime.blackboard.current_step == 'compose_custom'
+
+
+@pytest.mark.parametrize('boundary', ['prepared', 'baton', 'task_before', 'task_after', 'owner', 'pause'])
+def test_u7_partial_interruption_converges_original_handoff_without_execution(interrupted, monkeypatch, boundary):
+    from cafe.core.blackboard import BlackboardStore
+    from cafe.core.human_task_records import HumanTaskRecordStore
+    runtime, directory, controls, calls = interrupted
+    failed = False
+    log, write, materialize, owner = BlackboardStore.log_event, BlackboardStore.write_handoff_contract, HumanTaskRecordStore.materialize_with_status, BlackboardStore.set_current_step
+    def after_log(self, state, step, kind, message, *args, **kwargs):
+        nonlocal failed
+        value = log(self, state, step, kind, message, *args, **kwargs)
+        if not failed and ((boundary == 'prepared' and kind == 'agent_interruption_prepared') or (boundary == 'pause' and kind == 'workflow_paused')):
+            failed = True; raise OSError('audit stop')
+        return value
+    def after_baton(self, state, contract):
+        nonlocal failed
+        value = write(self, state, contract)
+        if boundary == 'baton' and not failed:
+            failed = True; raise OSError('baton stop')
+        return value
+    def task_boundary(self, **kwargs):
+        nonlocal failed
+        if boundary == 'task_before' and not failed:
+            failed = True; raise OSError('before task')
+        value = materialize(self, **kwargs)
+        if boundary == 'task_after' and not failed:
+            failed = True; raise OSError('after task')
+        return value
+    def after_owner(self, state, step):
+        nonlocal failed
+        value = owner(self, state, step)
+        if boundary == 'owner' and not failed:
+            failed = True; raise OSError('owner stop')
+        return value
+    monkeypatch.setattr(BlackboardStore, 'log_event', after_log)
+    monkeypatch.setattr(BlackboardStore, 'write_handoff_contract', after_baton)
+    monkeypatch.setattr(HumanTaskRecordStore, 'materialize_with_status', task_boundary)
+    monkeypatch.setattr(BlackboardStore, 'set_current_step', after_owner)
+    with pytest.raises(OSError): interrupt(runtime)
+    before = json.loads((directory / 'iteration.json').read_text())
+    result = repair_interrupted(interrupted)
+    assert result['status'] == 'repaired'
+    records = HumanTaskRecordStore(runtime.issue_dir)
+    assert len(records.tasks()) == 1 and not records.results()
+    task = records.tasks()[0]
+    state = BlackboardStore(runtime.issue_dir).load_read_only()
+    assert state.current_step == 'user' and state.handoff_contract.from_step == 'compose_custom'
+    assert task.handoff_key.endswith(state.handoff_contract.created_at)
+    after = json.loads((directory / 'iteration.json').read_text())
+    assert all(after[k] == v for k, v in controls.items())
+    assert after['agent_interruption']['id'] == state.handoff_contract.created_at
+    assert not calls
+    assert repair_interrupted(interrupted)['status'] == 'no-op'
+    assert len(records.tasks()) == 1
+
+
+@pytest.mark.parametrize('terminal', ['completed', 'cancelled'])
+def test_u7_terminal_decisions_never_reopen(interrupted, terminal):
+    from cafe.core.human_task_records import HumanTaskRecordStore
+    runtime = interrupted[0]
+    interrupt(runtime)
+    records = HumanTaskRecordStore(runtime.issue_dir)
+    task = records.tasks()[0]
+    if terminal == 'cancelled':
+        records.cancel(workflow_id=task.workflow_id, task_id=task.id, reason='simulated user cancellation')
+    else:
+        # This explicit simulated user action is separate from repair.
+        records.complete(workflow_id=task.workflow_id, task_id=task.id,
+                         payload={'decision': 'retry', 'continuation': 'compose_custom'}, source='fixture-user')
+    before = (runtime.issue_dir / 'human_tasks.json').read_bytes()
+    assert repair_interrupted(interrupted)['status'] == 'refused'
+    assert (runtime.issue_dir / 'human_tasks.json').read_bytes() == before
+
+
+def test_u8_live_or_uncertain_worker_refuses_without_writes(legacy):
+    path = legacy[0] / '.workflow-worker-launches.json'
+    path.write_text(json.dumps({'attempts': {'one': {'status': 'starting'}}}))
+    before = legacy[1].read_bytes()
+    assert repair(legacy)['status'] == 'refused'
+    assert legacy[1].read_bytes() == before and not events(legacy[0])
+
+
+def test_u8_real_cross_process_advancement_lease_refuses(legacy):
+    import subprocess, sys
+    lock = legacy[0] / '.workflow-advancement.lock'
+    script = "import fcntl,sys; h=open(sys.argv[1],'a'); fcntl.flock(h,fcntl.LOCK_EX); print('held',flush=True); sys.stdin.read()"
+    child = subprocess.Popen([sys.executable, '-u', '-c', script, str(lock)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    try:
+        assert child.stdout.readline().strip() == 'held'
+        original = legacy[1].read_bytes()
+        assert repair(legacy)['status'] == 'refused'
+        assert legacy[1].read_bytes() == original and not events(legacy[0])
+    finally:
+        child.communicate('', timeout=5)
+    assert child.returncode == 0
+
+
+def test_u7_reentered_normal_interruption_reuses_pending_identity(interrupted):
+    from cafe.core.human_task_records import HumanTaskRecordStore
+    runtime = interrupted[0]
+    interrupt(runtime)
+    first = runtime.blackboard.handoff_contract.to_dict()
+    interrupt(runtime)
+    assert runtime.blackboard.handoff_contract.to_dict() == first
+    assert len(HumanTaskRecordStore(runtime.issue_dir).tasks()) == 1

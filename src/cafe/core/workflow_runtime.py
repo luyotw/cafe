@@ -1233,6 +1233,18 @@ class BlackboardWorkflowRuntime:
         """Create one notified HumanTask instead of inferring completion from partial output."""
         records = HumanTaskRecordStore(self.issue_dir)
         iteration = self._human_task_iteration(current_step)
+        existing = self.blackboard.handoff_contract
+        if (not replacement and existing is not None
+                and existing.source == "workflow.agent_execution_interrupted"
+                and existing.from_step == current_step and existing.to_owner is HandoffOwner.USER):
+            from cafe.core.workflow_repair import _interruption
+            recovered = _interruption(self.issue_dir, self.blackboard,
+                self.issue_dir / current_step / f"iteration_{iteration:03d}", current_step, iteration, True)
+            task = records.get_task(recovered["task_id"])
+            if task is not None:
+                self._notify_new_human_task(task)
+            return PlaybookRunResult(final_step=current_step,
+                final_status_code=f"INTERRUPTED:{reason}", completed=False, detail=recovered["task_id"])
         saved_policy = self._saved_restart_policy()
         policy, binding = agent_execution_interrupted_human_task(
             step_name=current_step, restart_policy=saved_policy, interruption_reason=reason,
@@ -1249,8 +1261,7 @@ class BlackboardWorkflowRuntime:
         result_status = (
             status_code if reason == "checklist_validation_failed" else f"INTERRUPTED:{reason}"
         )
-        self.blackboard_store.update_handoff_contract(
-            self.blackboard,
+        contract = self.blackboard_store.build_handoff_contract(
             from_step=current_step,
             to_owner=HandoffOwner.USER,
             to_step="user",
@@ -1258,9 +1269,6 @@ class BlackboardWorkflowRuntime:
             status_code=status_code,
             source="workflow.agent_execution_interrupted",
         )
-        contract = self.blackboard.handoff_contract
-        if contract is None:
-            raise RuntimeError("agent interruption did not create a handoff contract")
         iteration_dir = self.issue_dir / current_step / f"iteration_{iteration:03d}"
         context_path = iteration_dir / "iteration.json"
         context = load_restart_context(context_path)
@@ -1282,8 +1290,6 @@ class BlackboardWorkflowRuntime:
                 "step": current_step,
                 "iteration": iteration,
             }
-            iteration_dir.mkdir(parents=True, exist_ok=True)
-            atomic_write_bytes(context_path, json.dumps(context, ensure_ascii=False, indent=2).encode())
         prompt = policy.prompt
         if reason == "agent_artifact_format_exhausted":
             rejection = next((
@@ -1293,6 +1299,43 @@ class BlackboardWorkflowRuntime:
                 and event.data.get("reason") == reason
             ), "")
             prompt = f"{prompt}\n\n{rejection}"
+        # Finish fallible context/policy/task preparation before publishing an
+        # owner or baton. The existing audit preserves the same handoff on crash.
+        context["workflow_completion_trusted"] = False
+        context_payload = json.dumps(context, ensure_ascii=False, indent=2).encode()
+        if len(context_payload) > 1_048_576:
+            raise ValueError("Interruption control evidence exceeds existing recovery capacity")
+        original_payload = context_path.read_bytes() if context_path.exists() else None
+        prepared = {
+            "step": current_step, "iteration": iteration, "reason": reason,
+            "runtime": runtime, "contract": contract.to_dict(),
+            "context_original_sha256": sha256_bytes(original_payload) if original_payload is not None else None,
+            "context_target_sha256": sha256_bytes(context_payload),
+            "marker_key": evidence_key if not replacement else None,
+            "marker": context.get(evidence_key) if not replacement else None,
+            "policy_id": policy.id, "prompt": prompt,
+            "expected_result": policy.model_dump(mode="json"),
+            "continuations": binding.outcomes,
+        }
+        superseded_ids = self._superseded_human_task_ids(
+            records, step=current_step, iteration=iteration,
+            trigger=AGENT_EXECUTION_INTERRUPTED_TRIGGER, policy_id=policy.id,
+            replaced_handoff=replaced_handoff,
+        )
+        key = self._human_task_handoff_key(contract)
+        with records.transaction():
+            matching = [task for task in records.tasks() if task.handoff_key == key]
+            if len(matching) > 1 or any(task.status is not HumanTaskStatus.PENDING for task in matching):
+                raise ValueError("Interruption task identity is ambiguous or terminal")
+        self.blackboard_store.record_event(self.blackboard, "agent_interruption_prepared", prepared)
+        # Verify durable preparation through the existing audit before effects.
+        committed = self.blackboard_store.audit.read(
+            self.blackboard.workflow_id, self.blackboard.applied_event_sequence, bounded=True
+        )
+        if committed is None or committed["data"] != prepared:
+            raise RuntimeError("Interruption preparation is not durably readable")
+        atomic_write_bytes(context_path, context_payload)
+        self.blackboard_store.write_handoff_contract(self.blackboard, contract)
         materialization = records.materialize_with_status(
             workflow_id=self.blackboard.workflow_id,
             step=current_step,
@@ -1304,16 +1347,10 @@ class BlackboardWorkflowRuntime:
             continuations=binding.outcomes,
             assignee_type="user",
             handoff_key=self._human_task_handoff_key(contract),
-            superseded_task_ids=self._superseded_human_task_ids(
-                records, step=current_step, iteration=iteration,
-                trigger=AGENT_EXECUTION_INTERRUPTED_TRIGGER, policy_id=policy.id,
-                replaced_handoff=replaced_handoff,
-            ),
+            superseded_task_ids=superseded_ids,
         )
         self._replaced_user_handoff = None
         task = materialization.task
-        self._mark_latest_iteration_completion_untrusted(current_step)
-        self._notify_new_human_task(task)
         self.blackboard_store.set_current_step(self.blackboard, "user")
         if materialization.created:
             self.blackboard_store.record_event(
@@ -1337,6 +1374,7 @@ class BlackboardWorkflowRuntime:
                 "task_id": task.id,
             },
         )
+        self._notify_new_human_task(task)
         self._dispatch_workflow_event(
             "human_task",
             {

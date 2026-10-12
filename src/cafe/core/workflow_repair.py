@@ -262,6 +262,7 @@ def repair_workflow(issue_dir: Path, *, kind: str, step: str, iteration: int,
         def operation():
             state = _snapshot(issue)
             if kind == 'iteration': return _iteration(issue, state, directory, step, iteration, execute, progress)
+            if kind == 'interruption': return _interruption(issue, state, directory, step, iteration, execute)
             raise ValueError('unsupported repair kind')
         if not execute:
             _quiescent(issue)
@@ -271,3 +272,104 @@ def repair_workflow(issue_dir: Path, *, kind: str, step: str, iteration: int,
         return {'status': 'refused', 'reason': str(error), 'next_action': 'inspect original evidence and resolve the stated prerequisite'}
     except OSError as error:
         return {'status': 'interrupted', 'reason': str(error), 'next_action': 'explicitly reenter under the same selection; verify durable bytes and audit'}
+
+
+def _interruption(issue, state, directory, step, iteration, execute):
+    from cafe.core.blackboard import HandoffContract, HandoffIntent, HandoffOwner
+    from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
+    from cafe.core.human_tasks import agent_execution_interrupted_human_task, AGENT_EXECUTION_INTERRUPTED_TRIGGER
+    from cafe.core.restart_policy import load_restart_context, resolve_restart_policy
+    from cafe.utils.issue_config import read_issue_config_strict
+
+    path = directory / 'iteration.json'
+    content, identity = _read(path, 1_048_576)
+    context = load_restart_context(path)
+    audit = AuditEventStore(issue)
+    histories = _repair_events(audit, state, step, iteration, {'agent_interruption_prepared', 'interruption_repair_completed'})
+    candidates = [record['data'] for record in histories if record['event_type'] == 'agent_interruption_prepared']
+    marker = context.get('agent_interruption') or context.get('restart_preparation_failure')
+    current = state.handoff_contract
+    if candidates:
+        # The latest original interruption supersedes older resolved decisions;
+        # all source bindings still have to match the exact selected iteration.
+        prepared = candidates[-1]
+        contract = HandoffContract.from_dict(prepared['contract'])
+        if marker and marker.get('id') not in {contract.created_at, (prepared.get('marker') or {}).get('id')}:
+            raise ValueError('interruption marker conflicts with prepared identity')
+        if sha256_bytes(content) not in {prepared['context_original_sha256'], prepared['context_target_sha256']}:
+            raise ValueError('interruption context changed since durable preparation')
+    else:
+        if (current is None or current.from_step != step or current.to_owner is not HandoffOwner.USER
+                or current.intent is not HandoffIntent.MANUAL_HANDOFF
+                or current.source != 'workflow.agent_execution_interrupted'):
+            raise ValueError('no uniquely bound original interruption handoff')
+        contract = current
+        # Legacy orphan baton may predate the metadata marker; the actual
+        # interrupted event must supply the original reason, never provider exit.
+        record = audit.latest_record(state.workflow_id, {'step_interrupted'}, step=step)
+        reason = marker.get('reason') if isinstance(marker, dict) else (record or {}).get('data', {}).get('reason')
+        if not isinstance(reason, str) or not (reason.startswith('agent_') or reason == 'checklist_validation_failed'):
+            raise ValueError('no genuine interruption evidence')
+        if marker and (marker.get('id') != contract.created_at or marker.get('workflow_id') != state.workflow_id
+                       or marker.get('step') != step or marker.get('iteration') != iteration):
+            raise ValueError('original interruption marker is mismatched')
+        config = issue / 'issue.yaml'
+        policy, binding = agent_execution_interrupted_human_task(step_name=step,
+            restart_policy=resolve_restart_policy(read_issue_config_strict(config) if config.exists() else {}),
+            interruption_reason=reason)
+        from dataclasses import replace
+        policy = policy.model_copy(update={'prompt': policy.prompt})
+        proposed = dict(context, agent_interruption=dict(id=contract.created_at, reason=reason,
+                workflow_id=state.workflow_id, step=step, iteration=iteration), workflow_completion_trusted=False)
+        prepared = dict(step=step, iteration=iteration, reason=reason, runtime='explicit-repair',
+            contract=contract.to_dict(), context_original_sha256=sha256_bytes(content),
+            context_target_sha256=sha256_bytes(json.dumps(proposed, ensure_ascii=False, indent=2).encode()),
+            marker_key='agent_interruption', marker=proposed['agent_interruption'], policy_id=policy.id,
+            prompt=policy.prompt, expected_result=policy.model_dump(mode='json'), continuations=binding.outcomes)
+    if contract.from_step != step or contract.to_owner is not HandoffOwner.USER or contract.to_step != 'user':
+        raise ValueError('prepared handoff is not the selected human interruption')
+    key = ':'.join(['user-handoff', state.workflow_id, step, contract.intent.value, contract.created_at])
+    records = HumanTaskRecordStore(issue)
+    tasks = [task for task in records.tasks() if task.handoff_key == key]
+    if len(tasks) > 1 or any(task.status is not HumanTaskStatus.PENDING for task in tasks):
+        raise ValueError('matching task is ambiguous or terminal; decisions cannot be reopened')
+    if tasks and any(task.workflow_id != state.workflow_id or task.step != step or task.iteration != iteration
+                     or task.expected_result != prepared['expected_result'] or task.continuations != prepared['continuations'] for task in tasks):
+        raise ValueError('pending task conflicts with original preparation')
+    if any(task.workflow_id == state.workflow_id and task.step == step and task.iteration == iteration
+           and task.status is HumanTaskStatus.PENDING and task.handoff_key != key for task in records.tasks()):
+        raise ValueError('another pending decision owns this iteration')
+    target = dict(context)
+    if prepared.get('marker_key'): target[prepared['marker_key']] = prepared['marker']
+    target['workflow_completion_trusted'] = False
+    payload = json.dumps(target, ensure_ascii=False, indent=2).encode()
+    if len(payload) > 1_048_576 or sha256_bytes(payload) != prepared['context_target_sha256']:
+        raise ValueError('reconstructed interruption target does not match original preparation')
+    completion = [record for record in histories if record['event_type'] == 'interruption_repair_completed'
+                  and record['data'].get('handoff_key') == key]
+    coherent = (len(tasks) == 1 and state.current_step == 'user' and current is not None
+                and current.to_dict() == contract.to_dict() and content == payload
+                and _json(_read(issue / 'next_step.txt', 4096)[0]) == contract.to_next_step_dict())
+    if coherent and completion:
+        if len(completion) != 1: raise ValueError('ambiguous interruption completion proof')
+        if execute and state.applied_event_sequence < completion[0]['sequence']:
+            BlackboardStore(issue).load_or_create(step, playbook_id=state.playbook_id)
+        return {'status': 'no-op', 'task_id': tasks[0].id}
+    if not execute: return {'status': 'proposed', 'handoff_key': key}
+    if _read(path, 1_048_576) != (content, identity): raise ValueError('interruption evidence changed')
+    if not candidates: _event(audit, state, step, 'agent_interruption_prepared', prepared)
+    store = BlackboardStore(issue)
+    with records.transaction():
+        tasks = [task for task in records.tasks() if task.handoff_key == key]
+        if len(tasks) > 1 or any(task.status is not HumanTaskStatus.PENDING for task in tasks):
+            raise ValueError('task changed or became terminal')
+        atomic_write_bytes(path, payload)
+        task = records.materialize_with_status(workflow_id=state.workflow_id, step=step, iteration=iteration,
+            trigger=AGENT_EXECUTION_INTERRUPTED_TRIGGER, policy_id=prepared['policy_id'], prompt=prepared['prompt'],
+            expected_result=prepared['expected_result'], continuations=prepared['continuations'], assignee_type='user',
+            handoff_key=key).task
+        store.write_handoff_contract(state, contract)
+        store.set_current_step(state, 'user')
+        _event(audit, state, step, 'interruption_repair_completed',
+               {'iteration': iteration, 'handoff_key': key, 'task_id': task.id, 'reason': prepared['reason']})
+    return {'status': 'repaired', 'task_id': task.id, 'handoff_key': key}
