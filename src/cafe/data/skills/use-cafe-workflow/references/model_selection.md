@@ -330,3 +330,16 @@ retains its initial tuple and historical evidence.
 
 See [Phase reasoning effort](../../../../../../docs/reasoning-effort.md) for adapter
 admission and the configured/applied/reported evidence limits.
+
+An interrupted workspace correction remains pinned to its actual producer.
+After an explicit phase-model change, submit the existing typed recovery choice
+before resuming: `retry` retains the original session, while
+`retry_fresh_session` explicitly requests a new session. Configuration alone
+cannot rotate a pinned correction. The runtime retains the original producer
+and recovery-result references, reserves the next existing correction
+opportunity, and rebinds active producer evidence only after the real invocation
+returns the selected CLI/model and permitted session. Failed, mismatched or
+unpersisted transitions stay interrupted; old results never become evidence for
+the replacement model. Correction budgets, capacity limits, approval/receipt
+history and publication replay restrictions remain unchanged. An exhausted
+workspace budget is not reset by selecting a new model or session.

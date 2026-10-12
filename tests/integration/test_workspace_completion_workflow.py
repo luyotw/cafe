@@ -360,14 +360,229 @@ def test_i2_interrupted_reservation_survives_runtime_reconstruction(journey, dec
         raw_payload={"task": task.policy_id, "decision": decision, "human_task_id": task.id},
         source="test",
     )
+    if decision == "retry_fresh_session":
+        j.manager.get_last_session_id = lambda: (
+            "replacement-session" if len(j.manager.calls) >= 3 else "exact-report-session"
+        )
     resumed = j.reconstruct()
     resumed.run()
     after = json.loads((j.iteration / "iteration.json").read_text())["workspace_completion"]
     assert after["consumed"] == 3
     assert len(j.manager.calls) == 4
-    assert all(call[2].is_exact for call in j.manager.calls[2:])
+    if decision == "retry_fresh_session":
+        assert not j.manager.calls[2][2].is_exact
+        assert j.manager.calls[3][2].session_id == "replacement-session"
+    else:
+        assert all(call[2].is_exact for call in j.manager.calls[2:])
     assert j.manager.deliveries == 0 and j.effects.count("after") == 0
     assert not (j.issue / "inspect_custom" / "iteration_002").exists()
+
+
+@pytest.mark.parametrize("decision", ["retry", "retry_fresh_session"])
+def test_user_recovery_adopts_changed_model_only_after_a_real_invocation(journey, decision):
+    from cafe.agents.executor import AgentExecutionError
+    from cafe.core.blackboard import BlackboardStore
+    from cafe.ui.human_tasks import apply_human_task_payload
+
+    def work(repo, iteration, call):
+        if call == 1:
+            (repo / "owned.txt").write_text("unfinished repair\n")
+        elif call == 3:
+            saved = json.loads((iteration / "iteration.json").read_text())
+            assert saved["model"] == "test-model"
+            assert saved["workspace_completion"]["consumed"] == 2
+            git(repo, "add", "owned.txt")
+            git(repo, "commit", "-m", "finish authorized repair")
+
+    j = journey([CORRECTED, AgentExecutionError("capacity", error_type="provider_overloaded"),
+                 CORRECTED], workspace=True, workspace_action=work)
+    j.runtime.run(start_step="inspect_custom")
+    records = HumanTaskRecordStore(j.issue)
+    task = records.tasks()[0]
+    state = BlackboardStore(j.issue).load_or_create("inspect_custom")
+    apply_human_task_payload(issue_dir=j.issue, playbook_data=j.playbook, blackboard=state,
+                            from_step="inspect_custom", trigger=task.trigger,
+                            raw_payload={"task": task.policy_id, "decision": decision,
+                                         "human_task_id": task.id}, source="test")
+    config = j.repo / ".cafe/phases.yaml"
+    config.write_text(config.read_text().replace("test-model", "replacement-model"))
+    if decision == "retry_fresh_session":
+        j.manager.get_last_session_id = lambda: (
+            "replacement-session" if len(j.manager.calls) >= 3 else "exact-report-session"
+        )
+    result = j.reconstruct().run()
+    assert result.completed
+    assert len(j.manager.calls) == 3 and j.manager.deliveries == 1
+    saved = json.loads((j.iteration / "iteration.json").read_text())
+    assert saved["model"] == "replacement-model"
+    assert saved["workspace_completion"]["consumed"] == 2
+    previous = saved["workspace_recovery_history"][-1]
+    assert previous["previous"]["metadata"]["model"] == "test-model"
+    assert previous["previous"]["metadata"]["session_id"] == "exact-report-session"
+    assert previous["result_id"] == records.get_result(task.id).id
+    assert previous["state"] == "completed"
+    if decision == "retry_fresh_session":
+        assert not j.manager.calls[2][2].is_exact
+        assert saved["session_id"] == "replacement-session"
+    else:
+        assert j.manager.calls[2][2].session_id == "exact-report-session"
+        assert saved["session_id"] == "exact-report-session"
+    assert j.effects.count("after") == 1
+    before = len(j.manager.calls)
+    j.reconstruct().run()
+    assert len(j.manager.calls) == before
+
+
+
+@pytest.mark.parametrize("failure", ["before_commit", "after_commit", "unreadable_commit"])
+def test_workspace_recovery_write_failure_keeps_identity_and_pin_coherent(journey, failure):
+    from cafe.agents.executor import AgentExecutionError
+    from cafe.core.blackboard import BlackboardStore
+    from cafe.ui.human_tasks import apply_human_task_payload
+
+    j = journey([CORRECTED, AgentExecutionError("capacity", error_type="provider_overloaded"),
+                 CORRECTED], workspace=True,
+                workspace_action=lambda repo, iteration, call: (repo / "owned.txt").write_text("dirty"))
+    j.runtime.run(start_step="inspect_custom")
+    task = HumanTaskRecordStore(j.issue).tasks()[0]
+    state = BlackboardStore(j.issue).load_or_create("inspect_custom")
+    apply_human_task_payload(issue_dir=j.issue, playbook_data=j.playbook, blackboard=state,
+                            from_step="inspect_custom", trigger=task.trigger,
+                            raw_payload={"task": task.policy_id, "decision": "retry",
+                                         "human_task_id": task.id}, source="test")
+    config = j.repo / ".cafe/phases.yaml"
+    config.write_text(config.read_text().replace("test-model", "replacement-model"))
+    resumed = j.reconstruct()
+    executor = resumed.executor.__self__
+    persist = executor._persist_workspace_metadata
+    load = executor._load_workspace_metadata
+    committed = False
+    writes_after_failure = []
+
+    def fail_transition(path, metadata):
+        nonlocal committed
+        if committed:
+            writes_after_failure.append(metadata)
+        history = metadata.get("workspace_recovery_history", [])
+        if not committed and history and history[-1]["state"] == "completed":
+            if failure != "before_commit":
+                persist(path, metadata)
+            committed = True
+            raise OSError("transition write result unavailable")
+        return persist(path, metadata)
+
+    def readback(iteration):
+        if committed and failure == "unreadable_commit":
+            raise OSError("transition readback unavailable")
+        return load(iteration)
+
+    executor._persist_workspace_metadata = fail_transition
+    executor._load_workspace_metadata = readback
+    result = resumed.run()
+    assert not result.completed
+    saved = json.loads((j.iteration / "iteration.json").read_text())
+    model = "test-model" if failure == "before_commit" else "replacement-model"
+    assert saved["model"] == model
+    assert saved["workspace_completion"]["context"]["metadata"]["model"] == model
+    assert saved["workspace_completion"]["consumed"] == 2
+    assert saved["workspace_recovery_history"][-1]["previous"]["metadata"]["model"] == "test-model"
+    assert len(j.manager.calls) == 3
+    assert j.manager.deliveries == 0 and "after" not in j.effects
+    if failure == "unreadable_commit":
+        assert not writes_after_failure
+
+
+def test_changed_workspace_model_without_recovery_does_not_dispatch(journey):
+    def drift(iteration, call):
+        if call == 1:
+            j.manager.agent.config.model = "unapproved-replacement"
+
+    j = journey([CORRECTED], workspace=True, provider_mutation=drift,
+                workspace_action=lambda repo, iteration, call: (repo / "owned.txt").write_text("dirty"))
+    result = j.runtime.run(start_step="inspect_custom")
+    assert not result.completed
+    assert len(j.manager.calls) == 1
+    assert j.manager.deliveries == 0 and "after" not in j.effects
+    saved = json.loads((j.iteration / "iteration.json").read_text())
+    assert saved["model"] == "test-model"
+
+
+@pytest.mark.parametrize("failure", ["model", "session", "cli", "history", "exhausted"])
+def test_workspace_recovery_refuses_unverified_identity_or_exhausted_budget(journey, failure):
+    from cafe.agents.executor import AgentExecutionError
+    from cafe.core.blackboard import BlackboardStore
+    from cafe.core.types import AgentCLI
+    from cafe.ui.human_tasks import apply_human_task_payload
+
+    def mutate(iteration, call):
+        if call != 3:
+            return
+        if failure == "model":
+            j.manager.get_last_model = lambda: "unexpected-model"
+        elif failure == "session":
+            j.manager.get_last_session_id = lambda: "unexpected-session"
+        elif failure == "cli":
+            j.manager.get_last_cli = lambda: AgentCLI.CLAUDE
+        elif failure == "history":
+            path = iteration / "iteration.json"
+            saved = json.loads(path.read_text())
+            saved["workspace_recovery_history"][-1]["state"] = "completed"
+            path.write_text(json.dumps(saved))
+
+    j = journey([CORRECTED, AgentExecutionError("capacity", error_type="provider_overloaded"),
+                 CORRECTED], workspace=True, provider_mutation=mutate,
+                workspace_action=lambda repo, iteration, call: (repo / "owned.txt").write_text("dirty"))
+    j.runtime.run(start_step="inspect_custom")
+    records = HumanTaskRecordStore(j.issue)
+    task = records.tasks()[0]
+    state = BlackboardStore(j.issue).load_or_create("inspect_custom")
+    apply_human_task_payload(issue_dir=j.issue, playbook_data=j.playbook, blackboard=state,
+                            from_step="inspect_custom", trigger=task.trigger,
+                            raw_payload={"task": task.policy_id, "decision": "retry",
+                                         "human_task_id": task.id}, source="test")
+    config = j.repo / ".cafe/phases.yaml"
+    config.write_text(config.read_text().replace("test-model", "replacement-model"))
+    if failure == "exhausted":
+        path = j.iteration / "iteration.json"
+        saved = json.loads(path.read_text())
+        saved["workspace_completion"]["consumed"] = 3
+        path.write_text(json.dumps(saved))
+    result = j.reconstruct().run()
+    assert not result.completed
+    saved = json.loads((j.iteration / "iteration.json").read_text())
+    assert saved["model"] == "test-model"
+    assert saved["workspace_completion"]["context"]["metadata"]["model"] == "test-model"
+    assert saved["workspace_completion"]["consumed"] == (3 if failure == "exhausted" else 2)
+    assert len(j.manager.calls) == (2 if failure == "exhausted" else 3)
+    assert j.manager.deliveries == 0 and "after" not in j.effects
+
+
+def test_failed_model_recovery_cannot_reuse_the_completed_user_decision(journey):
+    from cafe.agents.executor import AgentExecutionError
+    from cafe.core.blackboard import BlackboardStore
+    from cafe.ui.human_tasks import apply_human_task_payload
+
+    j = journey([CORRECTED, AgentExecutionError("capacity", error_type="provider_overloaded")],
+                workspace=True,
+                workspace_action=lambda repo, iteration, call: (repo / "owned.txt").write_text("dirty"))
+    j.runtime.run(start_step="inspect_custom")
+    records = HumanTaskRecordStore(j.issue)
+    task = records.tasks()[0]
+    state = BlackboardStore(j.issue).load_or_create("inspect_custom")
+    apply_human_task_payload(issue_dir=j.issue, playbook_data=j.playbook, blackboard=state,
+                            from_step="inspect_custom", trigger=task.trigger,
+                            raw_payload={"task": task.policy_id, "decision": "retry",
+                                         "human_task_id": task.id}, source="test")
+    config = j.repo / ".cafe/phases.yaml"
+    config.write_text(config.read_text().replace("test-model", "replacement-model"))
+    j.reconstruct().run()
+    assert len(j.manager.calls) == 3
+    before = len(j.manager.calls)
+    j.reconstruct().run()
+    assert len(j.manager.calls) == before
+    saved = json.loads((j.iteration / "iteration.json").read_text())
+    assert saved["workspace_completion"]["consumed"] == 2
+    assert saved["workspace_recovery_history"][-1]["state"] == "prepared"
 
 
 @pytest.mark.parametrize("defect", ["missing", "malformed", "wrong-owner"])

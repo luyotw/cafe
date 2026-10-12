@@ -11,6 +11,19 @@ def executor():
     return object.__new__(GenericWorkflowStepExecutor)
 
 
+@pytest.mark.parametrize("history", [None, {}, [None], [{}], [{"version": 1,
+    "state": "completed", "result_id": "unbound"}]])
+def test_malformed_workspace_recovery_history_cannot_authorize_model_rotation(tmp_path, history):
+    runner = executor()
+    runner.issue_dir = tmp_path
+    runner.iteration = 1
+    with pytest.raises(ValueError):
+        runner._workspace_recovery_request(
+            metadata={"model": "original", "workspace_recovery_history": history},
+            workflow_id="workflow", step_name="custom_step", configured_model="replacement",
+        )
+
+
 @pytest.mark.parametrize("defect", [
     None, "empty", "unknown", "override", "subclass", "publish", "started",
     "result", "extra", "index", "bool_index", "name", "malformed",
