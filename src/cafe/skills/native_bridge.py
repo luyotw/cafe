@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -11,7 +12,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
-from cafe.catalogs.resolver import global_catalog_lock
+from cafe.catalogs.resolver import (
+    MAX_CATALOG_DISCOVERY_ENTRIES,
+    CatalogKind,
+    CatalogResolver,
+    bounded_directory_names,
+    content_digest,
+    global_catalog_lock,
+)
 from cafe.core.types import AgentCLI
 from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.loader import SkillLoader
@@ -33,6 +41,8 @@ class SkillValidationResult:
 
 class NativeSkillBridge:
     """Bridge resolved CAFE skills into each CLI's native skill directory."""
+
+    PROJECT_LINK_CLIS = (AgentCLI.CODEX, AgentCLI.CLAUDE, AgentCLI.COPILOT)
 
     MANAGED_SKILLS_MANIFEST = ".cafe-managed-skills.json"
 
@@ -91,11 +101,10 @@ class NativeSkillBridge:
                     f"Refusing to traverse project-local CLI skill symlink: {current}"
                 )
             if current.exists() and not current.is_dir():
-                if current != skills_root:
-                    raise SkillDiscoveryError(
-                        f"CLI skill directory ancestor is not a directory: {current}"
-                    )
-                current.unlink()
+                raise SkillDiscoveryError(
+                    "CLI skill directory path is not a directory; "
+                    f"preserve and relocate it: {current}"
+                )
         skills_root.mkdir(parents=True, exist_ok=True)
         if not skills_root.resolve().is_relative_to(self.project_root):
             raise SkillDiscoveryError(
@@ -129,22 +138,170 @@ class NativeSkillBridge:
         """
         with global_catalog_lock(self.skill_loader.global_root):
             source_dir = self.skill_loader.get_skill_dir(name)
-            target_dir = (
-                self._ensure_native_skills_dir(cli)
-                / self.get_installed_skill_name(name)
+            target_dir = self._ensure_native_skills_dir(cli) / source_dir.name
+            records = self._read_managed_skills(cli)
+            if self.is_active_project_skill(name) and cli in self.PROJECT_LINK_CLIS:
+                self._install_project_link(cli, source_dir, records)
+            else:
+                self._require_replaceable(target_dir, records)
+                staging = Path(tempfile.mkdtemp(dir=target_dir.parent, prefix=".cafe-install-"))
+                try:
+                    shutil.copytree(source_dir, staging, dirs_exist_ok=True)
+                    if context:
+                        skill_file = staging / "SKILL.md"
+                        rendered = skill_file.read_text(encoding="utf-8")
+                        for key, value in context.items():
+                            rendered = rendered.replace(f"{{{key}}}", str(value))
+                        skill_file.write_text(rendered, encoding="utf-8")
+                    self._replace_entry(cli, target_dir, staging, records, "copy", source_dir)
+                finally:
+                    if staging.exists():
+                        shutil.rmtree(staging)
+            return target_dir
+
+    def is_active_project_skill(self, name: str) -> bool:
+        """Distinguish active authority from canonical-checkout fallback selections."""
+        try:
+            source = self.skill_loader.get_skill_dir(name)
+        except (SkillDiscoveryError, FileNotFoundError):
+            return False
+        return source.parent == self.project_root / ".cafe" / "skills"
+
+    def reconcile_project_skills(self) -> list[str]:
+        """Expose fresh active-local entries in all three named providers.
+
+        Unrelated conflicts are reported while safe entries proceed. A selected
+        conflict is rejected by install_skill before the agent can be launched.
+        """
+        errors: list[str] = []
+        with global_catalog_lock(self.skill_loader.global_root):
+            authority = self.project_root / ".cafe" / "skills"
+            sources: dict[str, Path] = {}
+            invalid: set[str] = set()
+            resolver = CatalogResolver(
+                project_root=self.project_root,
+                canonical_root=self.project_root,
+                global_root=self.skill_loader.global_root,
+                builtin_root=self.skill_loader.builtin_root,
+            )
+            try:
+                names = (
+                    bounded_directory_names(
+                        authority,
+                        max_entries=MAX_CATALOG_DISCOVERY_ENTRIES,
+                        limit_error=lambda: SkillDiscoveryError("Too many active project skills"),
+                    )
+                    if authority.exists()
+                    else []
+                )
+                for name in names:
+                    try:
+                        entry = resolver.resolve(CatalogKind.PHASE, name)
+                        sources[name] = entry.path
+                    except (OSError, ValueError, RuntimeError, SkillDiscoveryError) as exc:
+                        invalid.add(name)
+                        errors.append(f"Invalid active project skill {name}: {exc}")
+            except (OSError, ValueError, RuntimeError, SkillDiscoveryError) as exc:
+                # Failed enumeration cannot establish deletion of old sources.
+                errors.append(f"Cannot enumerate active project skills: {exc}")
+                for error in errors:
+                    logging.getLogger(__name__).warning(error)
+                return errors
+            for cli in self.PROJECT_LINK_CLIS:
+                try:
+                    self._ensure_native_skills_dir(cli)
+                    records = self._read_managed_skills(cli)
+                    for name, record in list(records.items()):
+                        if (
+                            record.get("kind") == "project_link"
+                            and name not in sources
+                            and name not in invalid
+                        ):
+                            self._remove_managed_skill(cli, name)
+                    records = self._read_managed_skills(cli)
+                    for source in sources.values():
+                        try:
+                            self._install_project_link(cli, source, records)
+                        except (OSError, ValueError, RuntimeError, SkillDiscoveryError) as exc:
+                            errors.append(f"{cli.value} project skill {source.name}: {exc}")
+                except (OSError, ValueError, RuntimeError, SkillDiscoveryError) as exc:
+                    errors.append(f"{cli.value} project skills: {exc}")
+        for error in errors:
+            logging.getLogger(__name__).warning(error)
+        return errors
+
+    def _install_project_link(self, cli: AgentCLI, source: Path, records: dict) -> Path:
+        target = self._ensure_native_skills_dir(cli) / source.name
+        relative = os.path.relpath(source, target.parent)
+        if target.is_symlink() and os.readlink(target) == relative:
+            # A correct manual link has safe semantics and can be adopted.
+            records[target.name] = self._entry_record(target, "project_link", source)
+            self._write_managed_skills(cli, records)
+            return target
+        if not (target.is_symlink() and target.resolve() == source.resolve()):
+            self._require_replaceable(target, records)
+        staging = Path(tempfile.mkdtemp(dir=target.parent, prefix=".cafe-link-"))
+        staging.rmdir()
+        try:
+            staging.symlink_to(relative, target_is_directory=True)
+            self._replace_entry(cli, target, staging, records, "project_link", source)
+        finally:
+            if staging.is_symlink():
+                staging.unlink()
+        return target
+
+    def _require_replaceable(self, target: Path, records: dict) -> None:
+        if (target.exists() or target.is_symlink()) and not self._owns_entry(
+            target, records.get(target.name)
+        ):
+            raise SkillDiscoveryError(
+                f"Unmanaged or changed native skill conflict: {target}. "
+                "Back up and relocate the entry, then rerun prepare or launch; "
+                "legacy names or matching contents alone do not prove ownership."
             )
 
-            if target_dir.exists():
-                shutil.rmtree(target_dir)
-            shutil.copytree(source_dir, target_dir)
-            if context:
-                skill_file = target_dir / "SKILL.md"
-                rendered = skill_file.read_text(encoding="utf-8")
-                for key, value in context.items():
-                    rendered = rendered.replace(f"{{{key}}}", str(value))
-                skill_file.write_text(rendered, encoding="utf-8")
-            self._record_managed_skill(cli, target_dir.name)
-            return target_dir
+    def _replace_entry(
+        self, cli: AgentCLI, target: Path, staging: Path, records: dict, kind: str, source: Path
+    ) -> None:
+        self._ensure_native_skills_dir(cli)
+        correct_link = (
+            kind == "project_link" and target.is_symlink() and target.resolve() == source.resolve()
+        )
+        if not correct_link:
+            self._require_replaceable(target, records)
+        backup = Path(tempfile.mkdtemp(dir=target.parent, prefix=".cafe-backup-"))
+        backup.rmdir()
+        had_target = target.exists() or target.is_symlink()
+        previous = records.get(target.name)
+        if had_target:
+            target.rename(backup)
+        succeeded = False
+        try:
+            staging.rename(target)
+            records[target.name] = self._entry_record(target, kind, source)
+            self._write_managed_skills(cli, records)
+            succeeded = True
+        except BaseException:
+            if target.is_symlink():
+                target.unlink()
+            elif target.exists():
+                shutil.rmtree(target)
+            if had_target:
+                backup.rename(target)
+            if previous is None:
+                records.pop(target.name, None)
+            else:
+                # Rename changes ctime; bind the restored entry to its current identity.
+                records[target.name] = {**previous, "identity": self._entry_identity(target)}
+            self._write_managed_skills(cli, records)
+            raise
+        finally:
+            # If rollback itself failed, leave the backup available for recovery.
+            if succeeded:
+                if backup.is_symlink():
+                    backup.unlink()
+                elif backup.exists():
+                    shutil.rmtree(backup)
 
     @staticmethod
     def provider_aware_invocation(invocations: Mapping[AgentCLI, str]) -> str:
@@ -171,54 +328,61 @@ class NativeSkillBridge:
     ) -> list[Path]:
         """Make the CLI-native CAFE skill directory match one resolved environment.
 
-        A workflow or chat environment is an exact set, not an additive install.
-        The manifest lets the bridge remove CAFE-managed entries without touching
-        unrelated native skills. On first use, existing catalog-backed entries
-        are treated as legacy CAFE installs so an upgrade also clears stale skills.
+        The selected transient environment is an exact set. Persistent project
+        links are reconciled separately and are never removed by selection.
+        Cleanup requires current-entry ownership, not a catalog-name match.
         """
         with global_catalog_lock(self.skill_loader.global_root):
-            desired: list[tuple[str, str]] = []
-            seen: set[str] = set()
-            for name in names:
-                installed_name = self.skill_loader.get_skill_dir(name).name
-                if installed_name in seen:
-                    continue
-                seen.add(installed_name)
-                desired.append((name, installed_name))
-
             self._ensure_native_skills_dir(cli)
-            managed = self._read_managed_skills(cli)
-            if managed is None:
-                managed = self._legacy_managed_skills(cli)
-            desired_names = {installed_name for _, installed_name in desired}
-            for stale_name in managed - desired_names:
-                self._remove_managed_skill(cli, stale_name)
-            self._write_managed_skills(cli, desired_names)
+            desired = {self.skill_loader.get_skill_dir(name).name for name in names}
+            records = self._read_managed_skills(cli)
+            for name, record in list(records.items()):
+                if record.get("kind") == "copy" and name not in desired:
+                    self._remove_managed_skill(cli, name)
+            # install=False never claims names that have not been installed.
+            self._write_managed_skills(cli, self._read_managed_skills(cli))
             if not install:
                 return []
-            return [
-                self.install_skill(name, cli, context=context)
-                for name, _ in desired
-            ]
+            return self.install_skills(names, cli, context=context)
 
     def _managed_skills_manifest(self, cli: AgentCLI) -> Path:
         return self.get_native_skills_dir(cli) / self.MANAGED_SKILLS_MANIFEST
 
-    def _read_managed_skills(self, cli: AgentCLI) -> set[str] | None:
+    @staticmethod
+    def _safe_name(name: object) -> bool:
+        return (
+            isinstance(name, str)
+            and name not in {"", ".", ".."}
+            and Path(name).name == name
+            and "\\" not in name
+        )
+
+    def _read_managed_skills(self, cli: AgentCLI) -> dict[str, dict]:
         manifest = self._managed_skills_manifest(cli)
-        if not manifest.is_file():
-            return None
+        if manifest.is_symlink() or not manifest.is_file():
+            return {}
         try:
             data = json.loads(manifest.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            return None
-        if not isinstance(data, list):
-            return None
-        return {name for name in data if isinstance(name, str) and Path(name).name == name}
+            return {}
+        # Legacy lists are readable but confer no destructive ownership proof.
+        if isinstance(data, list):
+            return {name: {"kind": "legacy"} for name in data if self._safe_name(name)}
+        if not isinstance(data, dict) or data.get("version") != 2:
+            return {}
+        entries = data.get("entries")
+        if not isinstance(entries, dict):
+            return {}
+        return {
+            name: record
+            for name, record in entries.items()
+            if self._safe_name(name) and isinstance(record, dict)
+        }
 
-    def _write_managed_skills(self, cli: AgentCLI, names: set[str]) -> None:
+    def _write_managed_skills(self, cli: AgentCLI, records: dict[str, dict]) -> None:
         manifest = self._managed_skills_manifest(cli)
-        manifest.parent.mkdir(parents=True, exist_ok=True)
+        if manifest.is_symlink():
+            raise SkillDiscoveryError(f"Refusing to replace native manifest symlink: {manifest}")
         file_descriptor, temporary_name = tempfile.mkstemp(
             dir=manifest.parent,
             prefix=f".{manifest.name}.",
@@ -226,45 +390,72 @@ class NativeSkillBridge:
         )
         temporary_manifest = Path(temporary_name)
         try:
-            with os.fdopen(file_descriptor, "w", encoding="utf-8") as temporary_file:
-                temporary_file.write(json.dumps(sorted(names)) + "\n")
+            with os.fdopen(file_descriptor, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps({"version": 2, "entries": records}, sort_keys=True) + "\n")
             temporary_manifest.replace(manifest)
-            self._ensure_managed_skills_git_excluded(cli, names)
+            owned = {
+                name
+                for name, record in records.items()
+                if self._owns_entry(manifest.parent / name, record)
+            }
+            self._ensure_managed_skills_git_excluded(cli, owned)
         finally:
             if temporary_manifest.exists():
                 temporary_manifest.unlink()
 
-    def _legacy_managed_skills(self, cli: AgentCLI) -> set[str]:
-        """Recognize pre-manifest CAFE installs without claiming arbitrary skills."""
-        skills_root = self.get_native_skills_dir(cli)
-        if not skills_root.is_dir():
-            return set()
-        managed: set[str] = set()
-        for candidate in skills_root.iterdir():
-            if not candidate.is_dir():
-                continue
-            try:
-                if self.skill_loader.get_skill_dir(candidate.name).name == candidate.name:
-                    managed.add(candidate.name)
-            except (SkillDiscoveryError, FileNotFoundError):
-                continue
-        return managed
+    @staticmethod
+    def _entry_identity(target: Path) -> dict:
+        stat = target.lstat()
+        return {"device": stat.st_dev, "inode": stat.st_ino, "ctime_ns": stat.st_ctime_ns}
+
+    def _entry_record(self, target: Path, kind: str, source: Path) -> dict:
+        record = {"kind": kind, "source": str(source), "identity": self._entry_identity(target)}
+        if target.is_symlink():
+            record["link_target"] = os.readlink(target)
+        else:
+            record["digest"] = content_digest(target)
+        return record
+
+    def _owns_entry(self, target: Path, record: dict | None) -> bool:
+        if not record or record.get("kind") not in {"copy", "project_link"}:
+            return False
+        try:
+            if self._entry_identity(target) != record.get("identity"):
+                return False
+            if target.is_symlink():
+                return record.get("kind") == "project_link" and os.readlink(target) == record.get(
+                    "link_target"
+                )
+            return (
+                record.get("kind") == "copy"
+                and target.is_dir()
+                and content_digest(target) == record.get("digest")
+            )
+        except (OSError, ValueError, RuntimeError):
+            return False
 
     def _remove_managed_skill(self, cli: AgentCLI, name: str) -> None:
-        if Path(name).name != name:
-            return
-        target = self.get_native_skills_dir(cli) / name
-        if target.is_symlink() or target.is_file():
-            target.unlink()
-        elif target.is_dir():
-            shutil.rmtree(target)
+        with global_catalog_lock(self.skill_loader.global_root):
+            if not self._safe_name(name):
+                return
+            self._ensure_native_skills_dir(cli)
+            records = self._read_managed_skills(cli)
+            target = self.get_native_skills_dir(cli) / name
+            if self._owns_entry(target, records.get(name)):
+                if target.is_symlink():
+                    target.unlink()
+                else:
+                    shutil.rmtree(target)
+            elif target.exists() or target.is_symlink():
+                logging.getLogger(__name__).warning("Preserving changed native skill: %s", target)
+            records.pop(name, None)
+            self._write_managed_skills(cli, records)
 
-    def _record_managed_skill(self, cli: AgentCLI, name: str) -> None:
-        managed = self._read_managed_skills(cli)
-        if managed is None:
-            managed = self._legacy_managed_skills(cli)
-        managed.add(name)
-        self._write_managed_skills(cli, managed)
+    def record_rendered_copy(self, cli: AgentCLI, target: Path, source: Path) -> None:
+        """Bind successful transient rendering to the present entry's full contents."""
+        records = self._read_managed_skills(cli)
+        records[target.name] = self._entry_record(target, "copy", source)
+        self._write_managed_skills(cli, records)
 
     def _ensure_managed_skills_git_excluded(self, cli: AgentCLI, names: set[str]) -> None:
         """Locally exclude runtime helpers, preserving visibility of user skills.
@@ -281,7 +472,11 @@ class NativeSkillBridge:
             return "".join("\\" + char if char in "\\*?[] " else char for char in value)
 
         entries = [f"/{native}/{self.MANAGED_SKILLS_MANIFEST}"]
-        entries.extend(f"/{native}/{literal(name)}/" for name in sorted(names))
+        entries.extend(
+            f"/{native}/{literal(name)}"
+            + ("" if (self.get_native_skills_dir(cli) / name).is_symlink() else "/")
+            for name in sorted(names)
+        )
         try:
             result = subprocess.run(
                 ["git", "-C", str(self.project_root), "rev-parse", "--git-path", "info/exclude"],
@@ -306,6 +501,17 @@ class NativeSkillBridge:
                     and lines[index + 1].rstrip("\r\n") == f"/{top}/"
                 ):
                     index += 2
+                    continue
+                if lines[index].rstrip("\r\n") == "# CAFE managed native skills (auto-excluded)":
+                    index += 1
+                    group = []
+                    while index < len(lines) and not lines[index].startswith("#"):
+                        if not lines[index].startswith(f"/{native}/"):
+                            group.append(lines[index])
+                        index += 1
+                    if group:
+                        kept.append("# CAFE managed native skills (auto-excluded)\n")
+                        kept.extend(group)
                     continue
                 kept.append(lines[index])
                 index += 1

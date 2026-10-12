@@ -116,7 +116,7 @@ def test_install_skill_git_excludes_managed_paths(tmp_path: Path) -> None:
     bridge.install_skill("cafe-plan", AgentCLI.CODEX)
 
     exclude = (project / ".git" / "info" / "exclude").read_text(encoding="utf-8")
-    assert "/.codex/skills/cafe-plan/" in exclude.splitlines()
+    assert "/.codex/skills/cafe-plan" in exclude.splitlines()
     assert "/.codex/" not in exclude.splitlines()
 
     status = subprocess.run(
@@ -143,7 +143,7 @@ def test_install_skill_git_exclude_is_idempotent(tmp_path: Path) -> None:
     bridge.install_skill("cafe-plan", AgentCLI.CODEX)
 
     exclude = (project / ".git" / "info" / "exclude").read_text(encoding="utf-8")
-    assert exclude.splitlines().count("/.codex/skills/cafe-plan/") == 1
+    assert exclude.splitlines().count("/.codex/skills/cafe-plan") == 1
     assert exclude.splitlines().count("/.codex/skills/.cafe-managed-skills.json") == 1
 
 
