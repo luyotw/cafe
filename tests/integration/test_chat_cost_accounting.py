@@ -48,6 +48,91 @@ def append_codex_totals(journal, usage):
         }) + "\n")
 
 
+@pytest.mark.parametrize("resumed", [False, True])
+def test_codex_chat_prices_native_requests_and_status_counts_chat_once(
+    phase_chat, monkeypatch, provider_process, resumed, capsys
+):
+    from datetime import datetime, timezone
+    from decimal import Decimal
+
+    from cafe.core.cost import summarize_cost
+    from cafe.services.cost_summary import collect_cost_sources, summarize_sources
+    from cafe.services.status_display import StatusDisplay
+    from cafe.services.timeline_builder import TimelineBuilder
+    from tests.unit.test_cost_accounting import state
+
+    issue, target, session, journal = codex_chat(phase_chat, monkeypatch)
+    if not resumed:
+        journal.unlink()
+        # Exercise the public fresh one-shot path, without a selected session.
+        SessionManager().delete_session("David", AgentCLI.CODEX, "x", "implementation")
+    else:
+        journal.write_text(json.dumps(dict(type="session_meta", payload=dict(
+            id=session, cli_version="0.159.3", source="exec",
+        ))) + "\n")
+    monkeypatch.setattr("cafe.core.cost.pricing_store", lambda *args: type(
+        "PinnedRates", (), {"status": lambda self: state(), "refresh_in_background": lambda self: None}
+    )())
+    total = dict(input_tokens=1_000_000, output_tokens=10, cached_input_tokens=900_000,
+                 cache_write_input_tokens=0, reasoning_output_tokens=3) if resumed else dict(
+                     input_tokens=0, output_tokens=0, cached_input_tokens=0,
+                     cache_write_input_tokens=0, reasoning_output_tokens=0)
+    if resumed:
+        append_codex_totals(journal, total)
+    for call in range(2):
+        last = dict(input_tokens=180_000, output_tokens=10, cached_input_tokens=100_000,
+                    cache_write_input_tokens=0, reasoning_output_tokens=3)
+        endpoints = []
+        for _ in range(2):
+            total = {key: total[key] + last[key] for key in total}
+            endpoints.append(dict(total))
+        launch = provider_process([
+            {"type": "thread.started", "thread_id": session},
+            {"type": "turn.completed", "usage": total},
+        ])
+        launch.reset_mock()
+        process = launch.return_value
+
+        def run(command, **kwargs):
+            if not journal.exists():
+                journal.write_text(json.dumps(dict(type="session_meta", payload=dict(
+                    id=session, cli_version="0.159.3", source="exec",
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                ))) + "\n")
+            with journal.open("a") as handle:
+                handle.write(json.dumps(dict(type="turn_context",
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    payload=dict(model="gpt-test"))) + "\n")
+                for endpoint in endpoints:
+                    row = dict(type="event_msg", payload=dict(type="token_count", info=dict(
+                        total_token_usage=endpoint, last_token_usage=last,
+                    )))
+                    handle.write((json.dumps(row) + "\n") * 2)
+            return process
+
+        launch.side_effect = run
+        assert chat.launch_chat_session(
+            "developer", "x", phase_name="implementation", prompt="hello"
+        ) == 0
+        assert launch.call_count == 1
+        # A second call resumes the session created by the first call.
+    group, = groups(target)
+    records = [r for r in group["cost_records"] if "request_estimates" in r]
+    assert len(records) == 2
+    assert group["stats"]["input_tokens"] == 720_000
+    assert summarize_cost(records)["estimated"] == Decimal("0.7204")
+    summary = summarize_sources(collect_cost_sources(issue))
+    assert summary["estimated"] == Decimal("0.7204")
+    service = StatusService(issues_root=issue.parent)
+    iterations = service.load_iteration_statuses("x", "implementation")
+    assert iterations[0]["stats"]["input_tokens"] == 0  # Chat partition excludes overlap.
+    builder = TimelineBuilder("x", phase_names=["implementation"])
+    entries = builder.build_timeline_entries({}, {"implementation": iterations})
+    capsys.readouterr()
+    StatusDisplay().render_cost_summary(entries, service.load_chat_usage("x", ["implementation"]))
+    assert "Workflow: $0.7204 estimated" in capsys.readouterr().out
+
+
 @pytest.mark.parametrize("repeat_terminal", [False, True])
 def test_codex_chat_persists_official_rate_estimate_once(phase_chat, provider_process, repeat_terminal):
     from decimal import Decimal
