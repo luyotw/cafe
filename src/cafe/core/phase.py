@@ -407,7 +407,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         """Crew-configured primary CLI for this agent as a plain string, if resolvable."""
         order = getattr(self, "_invocation_order", None)
         if order is not None and order.configured_entries:
-            return order.configured_entries[0][0]
+            return order.configured_entries[0].cli
         getter = getattr(self.agent_manager, "configured_primary_cli", None)
         if not callable(getter):
             return None
@@ -428,7 +428,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         """Return the registered execution chain without invocation-local reordering."""
         order = getattr(self, "_invocation_order", None)
         if order is not None:
-            return [f"{cli}:{model or ''}" for cli, model in order.configured_entries]
+            return [entry.as_dict() for entry in order.configured_entries]
 
         getter = getattr(self.agent_manager, "configured_execution_chain", None)
         if callable(getter):
@@ -502,6 +502,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                                     "model": str(model_value).strip()
                                     if isinstance(model_value, str)
                                     else None,
+                                    **({"reasoning_effort": entry["reasoning_effort"]} if entry.get("reasoning_effort") is not None else {}),
                                 }
                             )
                         continue
@@ -522,6 +523,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                             "model": str(model_value).strip()
                             if isinstance(model_value, str)
                             else None,
+                            **({"reasoning_effort": entry.reasoning_effort} if getattr(entry, "reasoning_effort", None) is not None else {}),
                         }
                     )
             data[agent_name] = {
@@ -532,6 +534,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                 "configured_primary": configured_primary,
                 "chain": execution_chain_snapshot,
                 "step_name": extra.get("step_name"),
+                "reasoning_evidence": getattr(self.agent_manager, "get_last_reasoning_evidence", lambda: None)(),
                 "updated_at": datetime.now().astimezone().isoformat(),
             }
             active_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -587,7 +590,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
 
         if not all(
             hasattr(execution_config, attr)
-            for attr in ("cli", "session_id", "model", "clis", "backup_clis", "models_config")
+            for attr in ("cli", "session_id", "model", "reasoning_effort", "clis", "backup_clis", "models_config")
         ):
             return self._fail_closed_execution_config(
                 default_config,
@@ -991,6 +994,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             with open(context_file, "r", encoding="utf-8") as f:
                 context_data = json.load(f)
             context_data["prompt"] = prompt
+            context_data["reasoning_evidence"] = {"configured": getattr(execution_config, "reasoning_effort", None), "applied": None, "reported": None, "verification": "pending", "provenance": "phase-configuration"}
             context_data["cli"] = agent_cli
             # 開始執行前就記下已解析的 model,讓 summary 在 iteration 一開始就抓得到 CLI/Model
             # (執行後會再以 agent 實際回報的 model 覆寫;見下方 model 更新)。
@@ -1104,6 +1108,15 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                 )
             )
             failed_attempts = get_failed_attempts()
+            effort_getter = getattr(self.agent_manager, "get_last_reasoning_evidence", None)
+            effort = effort_getter() if callable(effort_getter) else None
+            if isinstance(effort, dict):
+                context_path = self._resolve_iteration_context_file(iteration_dir)
+                metadata = json.loads(context_path.read_text(encoding="utf-8"))
+                metadata["reasoning_evidence"] = effort
+                metadata["execution_attempts"] = getattr(self.agent_manager, "get_execution_attempts", lambda: [])()
+                metadata["configured_execution_chain"] = [entry.as_dict() for entry in getattr(self, "_invocation_order", ()).configured_entries] if getattr(self, "_invocation_order", None) else []
+                context_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
             if native_review_configuration is not None:
                 observer = getattr(self.agent_manager, "get_last_native_review_observations", None)
                 observations = observer() if callable(observer) else []
@@ -1171,6 +1184,13 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             from cafe.core.types import CriticalPhaseError
 
             failed_attempts = get_failed_attempts()
+            if context_file.exists():
+                context_data = json.loads(context_file.read_text(encoding="utf-8"))
+                context_data["execution_attempts"] = getattr(self.agent_manager, "get_execution_attempts", lambda: [])()
+                evidence = getattr(self.agent_manager, "get_last_reasoning_evidence", lambda: None)()
+                if isinstance(evidence, dict):
+                    context_data["reasoning_evidence"] = evidence
+                context_file.write_text(json.dumps(context_data, ensure_ascii=False, indent=2), encoding="utf-8")
             # Failed calls still identify the provider thread. Retain the final
             # attempt's verified pair so a user-selected retry can resume it.
             if failed_attempts:
@@ -1213,6 +1233,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                     "cli_unavailable",
                     "model_not_found",
                     "constraints_changed",
+                    "reasoning_effort_mismatch",
                 )
             )
 

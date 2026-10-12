@@ -150,8 +150,8 @@ class TestLaunchChatSession:
         mock_config.get.return_value = {
             "name": "David",
             "clis": [
-                {"cli": "claude", "develop": "sonnet"},
-                {"cli": "codex", "develop": "gpt-5.3-codex"},
+                {"cli": "claude", "model": "sonnet"},
+                {"cli": "codex", "model": "gpt-5.3-codex"},
             ],
         }
         mock_config_manager_cls.return_value = mock_config

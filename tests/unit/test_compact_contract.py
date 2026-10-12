@@ -30,6 +30,14 @@ def compact_proposal(compact_request, tmp_path):
 
 
 def activate(tmp_path, proposal, confirmed_by="user"):
+    # Model the confirmed kickoff installation before a launch/scope projection.
+    if tmp_path.parent.name == "issues" and tmp_path.parent.parent.name == ".cafe":
+        import yaml
+        target = tmp_path.parent.parent / "phases.yaml"
+        prior = yaml.safe_load(target.read_text()) if target.exists() else {}
+        document = {phase["name"]: {"name": prior.get(phase["name"], {}).get("name", "Runner"),
+                    "clis": phase["chain"]} for phase in proposal["phases"]}
+        target.write_text(yaml.safe_dump(document))
     return activate_confirmed_contract(
         ActivateConfirmedContract(
             issue_dir=tmp_path,

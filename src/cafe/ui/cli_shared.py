@@ -170,7 +170,7 @@ def check_agent_clis_available(
             or "phase-config"
         )
         return _check_chain(
-            [cli for cli, _model in phase_resolution.clis],
+            [entry.cli for entry in phase_resolution.clis],
             context=f"file={phase_config_file} step={active_step} field=clis",
         )
 
@@ -208,33 +208,21 @@ def setup_agents(
             return local_path, repo_path, fallback_cafe_dir.parent
 
     local_path, repo_path, project_root = _resolve_phase_config_paths()
-    if execution_chain is not None:
-        from cafe.utils.phase_config import PhaseStepModelResolution
-        chain = [CliEntry.model_validate(entry) for entry in execution_chain]
-        if not chain or playbook_data is None:
-            raise ValueError("resolved execution chain requires an active declared step")
-        role = playbook_data["steps"][phase_name]["role"]
-        name = _build_workflow_role_agent_map(config_manager, playbook_data).get(role)
-        if not name:
-            raise ValueError("resolved execution step has no agent")
-        resolved = PhaseStepModelResolution(name=name, role=role,
-            clis=tuple((entry.cli.value, entry.model) for entry in chain), model=chain[0].model,
-            source="resolved_execution_context", chain=("resolved_execution_context",))
-    elif playbook_data is None:
-        resolved = load_phase_step_model(
-            step_name=phase_name,
-            local_path=local_path,
-            repo_path=repo_path,
-        )
+    if playbook_data is None:
+        resolved = load_phase_step_model(step_name=phase_name, local_path=local_path, repo_path=repo_path)
     else:
-        resolved = resolve_phase_binding(
-            playbook=playbook_data,
-            step_name=phase_name,
-            local_path=local_path,
-            repo_path=repo_path,
-            project_root=project_root,
-        ).phase
-    chain = [CliEntry(cli=AgentCLI(cli), model=model) for cli, model in resolved.clis]
+        resolved = resolve_phase_binding(playbook=playbook_data, step_name=phase_name,
+            local_path=local_path, repo_path=repo_path, project_root=project_root).phase
+    if execution_chain is not None:
+        from cafe.core.execution_entry import ExecutionEntry
+        from cafe.agents.cli.effort import validate_effort
+        for entry in execution_chain:
+            if "reasoning_effort" in entry:
+                validate_effort(entry["cli"], entry["model"], entry["reasoning_effort"], explicit=True)
+        projected = tuple(ExecutionEntry.from_value(entry) for entry in execution_chain)
+        if projected != resolved.clis:
+            raise ValueError(f"phase '{phase_name}' execution projection conflicts with current phase configuration; reconfirm and regenerate launch/resume context")
+    chain = [CliEntry(**entry.as_dict()) for entry in resolved.clis]
     primary = chain[0]
     agent_manager = AgentManager(issue_name=issue_name, stream_agent_output=stream_agent_output)
     agent_manager.register_agent(
@@ -242,6 +230,7 @@ def setup_agents(
             name=resolved.name,
             cli=primary.cli,
             model=primary.model,
+            reasoning_effort=primary.reasoning_effort,
             clis=chain,
             backup_clis=[entry.cli for entry in chain[1:]],
         )

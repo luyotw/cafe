@@ -43,7 +43,7 @@ class ClaudeCLI(AbstractCLI):
             option = source[index]
             if option in {"--tools", "--allowed-tools", "--disallowed-tools", "--permission-mode"}:
                 index += 2  # Replace only conflicting CAFE-built option pairs.
-            elif option in {"-p", "--resume", "--model", "--output-format", "--add-dir"}:
+            elif option in {"-p", "--resume", "--model", "--effort", "--output-format", "--add-dir"}:
                 native.extend(source[index : index + 2])
                 index += 2
             else:
@@ -230,7 +230,7 @@ class ClaudeCLI(AbstractCLI):
         if allowed_directories:
             cmd = self.add_directories(cmd, allowed_directories)
 
-        return cmd
+        return self.project_reasoning_effort(cmd)
 
     def parse_response(
         self,

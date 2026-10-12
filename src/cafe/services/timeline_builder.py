@@ -30,6 +30,7 @@ class TimelineEntry:
     # Token usage fields
     cli: Optional[str] = None
     model: Optional[str] = None
+    reasoning_evidence: Optional[Dict[str, Any]] = None
     input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
     cache_write_tokens: Optional[int] = None
@@ -233,6 +234,7 @@ class TimelineBuilder:
             status_code=status_code,
             cli=cli,
             model=model,
+            reasoning_evidence=iteration_status.get("reasoning_evidence"),
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cache_write_tokens=cache_write_tokens,

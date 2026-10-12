@@ -2563,7 +2563,7 @@ class GenericWorkflowStepExecutor(Phase):
     def _configured_clis_for_agent(self, agent_name: str) -> list[AgentCLI]:
         order = getattr(self, "_invocation_order", None)
         if order is not None:
-            return [AgentCLI(cli) for cli, _model in order.entries]
+            return [AgentCLI(entry.cli) for entry in order.entries]
         try:
             config = self.agent_manager.get_agent(agent_name).config
         except Exception:
@@ -2701,10 +2701,8 @@ class GenericWorkflowStepExecutor(Phase):
         order = getattr(self, "_invocation_order", None)
 
         def present(entries):
-            return [
-                {"cli": cli, "model": sanitize_error_excerpt(ValueError(model)) if model else None}
-                for cli, model in entries
-            ]
+            from cafe.core.execution_entry import ExecutionEntry
+            return [ExecutionEntry.from_value(entry).as_dict() for entry in entries]
 
         effective = getattr(execution_config, "clis", None)
         if not isinstance(effective, list) or not effective:
@@ -2722,10 +2720,10 @@ class GenericWorkflowStepExecutor(Phase):
             "configured_order": present(
                 order.configured_entries
                 if order
-                else tuple((e.cli.value, e.resolve_model(self.phase_name)) for e in effective)
+                else tuple(e.model_copy(update={"model": e.resolve_model(self.phase_name)}) for e in effective)
             ),
             "effective_order": present(
-                tuple((e.cli.value, e.resolve_model(self.phase_name)) for e in effective)
+                tuple(e.model_copy(update={"model": e.resolve_model(self.phase_name)}) for e in effective)
             ),
             "sticky_disposition": order.sticky_disposition if order else "unknown",
             "override_reason": override,
@@ -3024,22 +3022,14 @@ class GenericWorkflowStepExecutor(Phase):
         return local_path, repo_path
 
     def _resolve_step_phase_config(self, step_name: str):
-        resolved = getattr(self, "_resolved_execution_chains", {}).get(step_name)
-        if resolved is not None:
-            from cafe.utils.phase_config import PhaseStepModelResolution
-            if not resolved:
-                raise ValueError("resolved execution chain is empty")
-            role = self.playbook["steps"][step_name]["role"]
-            name = self.role_agent_map.get(role) or self.playbook.get("roles", {}).get(role, {}).get("default_agent")
-            return PhaseStepModelResolution(name=name, role=role,
-                clis=tuple((entry["cli"], entry["model"]) for entry in resolved), model=resolved[0]["model"],
-                source="resolved_execution_context", chain=("resolved_execution_context",))
         local_path, repo_path = self._resolve_phase_config_paths()
-        return load_phase_step_model(
-            step_name=step_name,
-            local_path=local_path,
-            repo_path=repo_path,
-        )
+        phase = load_phase_step_model(step_name=step_name, local_path=local_path, repo_path=repo_path)
+        projected = getattr(self, "_resolved_execution_chains", {}).get(step_name)
+        if projected is not None:
+            from cafe.core.execution_entry import ExecutionEntry
+            if tuple(ExecutionEntry.from_value(entry) for entry in projected) != phase.clis:
+                raise ValueError(f"phase '{step_name}' execution projection conflicts with current configuration; reconfirm and regenerate launch/resume context")
+        return phase
 
     def _resolve_agent_name(self, step_name: str, step_def: Dict[str, Any]) -> str:
         role = str(step_def.get("role", "developer"))
@@ -3067,11 +3057,20 @@ class GenericWorkflowStepExecutor(Phase):
 
         raise ValueError(f"Unsupported playbook role '{role}' for workflow execution")
 
-    def _apply_step_agent_model(
-        self, *, step_name: str, step_def: Dict[str, Any], agent_name: str
-    ) -> None:
-        model = self._resolve_step_model(step_name=step_name, step_def=step_def)
-        self.agent_manager.get_agent(agent_name).config.model = model
+    def _apply_step_agent_model(self, *, step_name: str, step_def: Dict[str, Any], agent_name: str) -> None:
+        phase = self._resolve_step_phase_config(step_name)
+        if phase.role is not None and phase.role != step_def.get("role"):
+            raise ValueError("phase configuration role differs from the declared step")
+        config = self.agent_manager.get_agent(agent_name).config
+        entries = [CliEntry(**entry.as_dict()) for entry in phase.clis]
+        primary = entries[0]
+        if config.cli != primary.cli:
+            config.session_id = None
+        config.cli = primary.cli
+        config.model = primary.model
+        config.reasoning_effort = primary.reasoning_effort
+        config.clis = entries
+        config.backup_clis = [entry.cli for entry in entries[1:]]
 
     def _resolve_step_model(self, *, step_name: str, step_def: Dict[str, Any]) -> Optional[str]:
         # Phase-level config (worktree/repo/local) is authoritative for a step.

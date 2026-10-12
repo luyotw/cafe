@@ -333,6 +333,10 @@ class StatusDisplay:
 
             # Format token usage
             model_str = entry.model or "--"
+            effort = entry.reasoning_evidence or {}
+            model_str += f" / effort={effort.get('reported') or effort.get('applied') or 'unknown/CLI-default'}"
+            if effort:
+                model_str += f" ({effort.get('verification', 'unknown/CLI-default')})"
             input_tokens_str = self.format_token_count(entry.input_tokens)
             output_tokens_str = self.format_token_count(entry.output_tokens)
             cache_write_str = self.format_token_count(entry.cache_write_tokens)

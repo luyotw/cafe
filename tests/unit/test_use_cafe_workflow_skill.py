@@ -47,11 +47,29 @@ PRIMARY_ONLY_PHASE_CHAINS = {
 }
 
 
+_legacy_phase_files = []
+
+
+@pytest.fixture(autouse=True)
+def cleanup_legacy_phase_fixtures():
+    yield
+    for path in _legacy_phase_files:
+        path.unlink(missing_ok=True)
+    _legacy_phase_files.clear()
+
+
 def _phase_chain_args(chains: dict[str, str] | None = None) -> list[str]:
-    result: list[str] = []
+    # These tests exercise existing default-only configuration, not new effort selection.
+    import tempfile
+    import yaml
+    document = {}
     for step, chain in (chains or DEFAULT_PHASE_CHAINS).items():
-        result.extend(["--phase-chain", f"{step}={chain}"])
-    return result
+        document[step] = {"name":"Fixture", "clis":[dict(zip(("cli","model"), entry.split(":",1))) for entry in chain.split(",")]}
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as handle:
+        yaml.safe_dump(document, handle)
+    path = Path(handle.name)
+    _legacy_phase_files.append(path)
+    return ["--phase-config", str(path)]
 
 
 def _proactive_review_args(playbook_id: str, *, project_root: Path = PROJECT_ROOT) -> list[str]:
@@ -1238,11 +1256,11 @@ mandate:
     assert "| Catalog |" not in result.stdout
     assert "### Phase model chains" in result.stdout
     assert (
-        "| develop | copilot:implementation-main | "
-        "cursor-agent:implementation-fallback |" in result.stdout
+        "| develop | copilot:implementation-main (effort=CLI-default) | "
+        "cursor-agent:implementation-fallback (effort=CLI-default) |" in result.stdout
     )
-    assert "| review | gemini:review-main | copilot:review-fallback |" in result.stdout
-    assert "| pr | cursor-agent:publication-main | gemini:publication-fallback |" in result.stdout
+    assert "| review | gemini:review-main (effort=CLI-default) | copilot:review-fallback (effort=CLI-default) |" in result.stdout
+    assert "| pr | cursor-agent:publication-main (effort=CLI-default) | gemini:publication-fallback (effort=CLI-default) |" in result.stdout
     assert "### Phase execution requirements" not in result.stdout
     assert "| need_clarification | manager_confirmable |" in result.stdout
     assert "### Declared HumanTask ownership" not in result.stdout
@@ -1933,7 +1951,6 @@ def test_kickoff_fact_text_cannot_create_extra_contract_sections(
         "--risk-factor",
         "--assessment-rationale",
         "--playbook-rationale",
-        "--phase-rationale",
         "--strategic-context",
     ],
 )
@@ -2396,7 +2413,7 @@ def test_kickoff_formatter_documents_structural_validation_boundary() -> None:
     assert "structurally validated" in script
     assert "validates chain structure only; it does not validate model suitability" in kickoff
     assert "Model suitability remains Manager-assessed" in kickoff
-    assert "--phase-rationale" not in script
+    assert "--phase-rationale" in script
 
 
 def test_kickoff_reference_distinguishes_new_and_legacy_manager_contract_versions() -> None:
@@ -2451,7 +2468,7 @@ def test_kickoff_contract_formatter_accepts_primary_only_chains(
     )
 
     assert result.returncode == 0, result.stderr
-    assert "| develop | claude:implementation-main | — |" in result.stdout
+    assert "| develop | claude:implementation-main (effort=CLI-default) | — |" in result.stdout
 
 
 def test_phase_writer_installs_exact_confirmed_chains_atomically(tmp_path: Path) -> None:
@@ -2486,10 +2503,10 @@ def test_phase_writer_installs_exact_confirmed_chains_atomically(tmp_path: Path)
     from cafe.utils.phase_config import load_phase_step_model
 
     resolution = load_phase_step_model(step_name="develop", local_path=target)
-    assert resolution.clis == (
-        ("codex", "gpt-5.6-sol"),
-        ("claude", "claude-opus-5"),
-    )
+    assert [entry.as_dict() for entry in resolution.clis] == [
+        {"cli": "codex", "model": "gpt-5.6-sol"},
+        {"cli": "claude", "model": "claude-opus-5"},
+    ]
 
 
 def test_phase_writer_accepts_primary_only_chain(tmp_path: Path) -> None:
@@ -2527,7 +2544,7 @@ def test_phase_writer_accepts_primary_only_chain(tmp_path: Path) -> None:
     from cafe.utils.phase_config import load_phase_step_model
 
     resolution = load_phase_step_model(step_name="develop", local_path=target)
-    assert resolution.clis == (("claude", "claude-opus-5"),)
+    assert [entry.as_dict() for entry in resolution.clis] == [{"cli": "claude", "model": "claude-opus-5"}]
 
 
 def test_phase_writer_preserves_existing_file_when_candidate_is_invalid(tmp_path: Path) -> None:
@@ -3002,8 +3019,7 @@ entry_point: audit
             "--manager-mode",
             "unattended",
             *_preflight_args(),
-            "--phase-chain",
-            "audit=gemini:audit-main,copilot:audit-fallback",
+            *_phase_chain_args({"audit": "gemini:audit-main,copilot:audit-fallback"}),
             "--repository-content-locale",
             "en-US",
             "--current-checkout",
@@ -3016,7 +3032,7 @@ entry_point: audit
         assert "cafe-audit_revise" in result.stderr
         return
     assert result.returncode == 0, result.stderr
-    assert "| audit | gemini:audit-main | copilot:audit-fallback |" in result.stdout
+    assert "| audit | gemini:audit-main (effort=CLI-default) | copilot:audit-fallback (effort=CLI-default) |" in result.stdout
     assert "cafe-audit_first" not in result.stdout
     assert "cafe-audit_revise" not in result.stdout
     assert "Phase execution requirements" not in result.stdout
@@ -3070,7 +3086,7 @@ def test_kickoff_formatter_accepts_phase_chains_without_rationale(
     result = run_kickoff_formatter(command)
     assert result.returncode == 0, result.stderr
     assert (
-        "| develop | copilot:implementation-main | cursor-agent:implementation-fallback |"
+        "| develop | copilot:implementation-main (effort=CLI-default) | cursor-agent:implementation-fallback (effort=CLI-default) |"
         in result.stdout
     )
     assert "rationale" not in result.stdout
@@ -3592,10 +3608,7 @@ entry_point: define
             "--manager-mode",
             "unattended",
             *_preflight_args(),
-            "--phase-chain",
-            "define=codex:define-model",
-            "--phase-chain",
-            "publish=codex:publish-model",
+            *_phase_chain_args({"define": "codex:define-model", "publish": "codex:publish-model"}),
             "--repository-content-locale",
             "en-US",
             "--current-checkout",

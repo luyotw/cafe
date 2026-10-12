@@ -81,7 +81,10 @@ from conversation_locale_adapter import contract_locale_snapshot  # noqa: E402, 
 from render_workflow_progress import render_progress  # noqa: E402, I001
 from kickoff_preference_offer import build_offer, render_offer  # noqa: E402, I001
 
-ModelChain = list[tuple[str, str]]
+from cafe.core.execution_entry import ExecutionEntry
+from cafe.agents.cli.effort import validate_effort
+
+ModelChain = list[ExecutionEntry]
 EventManagerChain = list[tuple[str, str | None]]
 
 
@@ -413,6 +416,20 @@ def _scheduled_task_declarations(
 
 
 def _parse_chain(raw_chain: str, *, step_name: str) -> ModelChain:
+    if raw_chain.lstrip().startswith("["):
+        values = json.loads(raw_chain)
+        if not isinstance(values, list):
+            raise ValueError("phase chain must be a JSON array")
+        entries = []
+        for value in values:
+            if isinstance(value, str):
+                parsed = _parse_chain(value, step_name=step_name)
+                if len(parsed) != 1:
+                    raise ValueError("each saved chain entry must identify one CLI/model")
+                entries.extend(parsed)
+            else:
+                entries.append(value)
+        return _validate_chain(entries, step_name=step_name)
     chain: ModelChain = []
     seen_clis: set[str] = set()
     for raw_entry in raw_chain.split(","):
@@ -427,7 +444,7 @@ def _parse_chain(raw_chain: str, *, step_name: str) -> ModelChain:
         if cli in seen_clis:
             raise ValueError(f"duplicate CLI '{cli}' in phase chain for {step_name}")
         seen_clis.add(cli)
-        chain.append((cli, model))
+        chain.append(ExecutionEntry(cli, model))
     return _validate_chain(chain, step_name=step_name)
 
 
@@ -441,7 +458,11 @@ def _validate_chain(
         raise ValueError(f"phase chain for {step_name} must include a primary")
     seen: set[str] = set()
     result: ModelChain = []
-    for raw_cli, raw_model in chain:
+    for raw_entry in chain:
+        if isinstance(raw_entry, dict) and "reasoning_effort" in raw_entry:
+            validate_effort(raw_entry.get("cli"), raw_entry.get("model"), raw_entry["reasoning_effort"], explicit=True)
+        entry = ExecutionEntry.from_value(raw_entry)
+        raw_cli, raw_model = entry.cli, entry.model
         try:
             cli = AgentCLI(raw_cli).value
         except ValueError as exc:
@@ -452,7 +473,9 @@ def _validate_chain(
         if cli in seen:
             raise ValueError(f"duplicate CLI '{cli}' in phase chain for {step_name}")
         seen.add(cli)
-        result.append((cli, model))
+        if entry.reasoning_effort is not None:
+            validate_effort(cli, model, entry.reasoning_effort, explicit=True)
+        result.append(ExecutionEntry(cli, model, entry.reasoning_effort))
     return result
 
 
@@ -471,7 +494,10 @@ def _parse_phase_chains(
             raise ValueError(f"unknown phase-chain step: {step_name}")
         if step_name in parsed:
             raise ValueError(f"duplicate phase-chain step: {step_name}")
-        parsed[step_name] = _parse_chain(raw_chain, step_name=step_name)
+        selected = _parse_chain(raw_chain, step_name=step_name)
+        if any(entry.reasoning_effort is None for entry in selected):
+            raise ValueError(f"newly selected chain for {step_name} requires explicit reasoning_effort on every entry; use STEP=JSON_ARRAY with verified tuples")
+        parsed[step_name] = selected
     return parsed
 
 
@@ -520,6 +546,7 @@ def _parser() -> argparse.ArgumentParser:
         metavar="JSON_ARGV_LIST",
         help="Legacy/nonadopting closeout only; rejected by phase-owned development graphs.",
     )
+    parser.add_argument("--phase-rationale", action="append", default=[], help="STEP=JSON_OBJECT with band, model and effort rationale")
     parser.add_argument("--closeout-choice", choices=["cleanup", "archive", "leave", "pending"])
     parser.add_argument(
         "--cleanup",
@@ -723,6 +750,12 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
     _manager_policy_rows(args)
     capability_choices = _capability_choices(args, model)
     overrides = _parse_phase_chains(args.phase_chain, step_names=set(model.steps))
+    rationales = {}
+    for raw in getattr(args, "phase_rationale", []):
+        name, separator, value = raw.partition("=")
+        if not separator or name not in model.steps or name in rationales:
+            raise ValueError("phase rationale requires a distinct declared STEP=JSON_OBJECT")
+        rationales[name] = json.loads(value)
     phase_config = _project_path(args.phase_config, project_root)
     phases: list[dict[str, Any]] = []
     for step_name, step in model.steps.items():
@@ -733,10 +766,13 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
             selected, _ = _resolve_configured_chain(
                 step_name=step_name, role=step.role, phase_config=phase_config
             )
+        if step_name in overrides and step_name not in rationales:
+            raise ValueError(f"new selection for {step_name} requires a capability band and model/effort rationale")
         phases.append(
             {
+                **({"rationale": rationales[step_name]} if step_name in rationales else {}),
                 "name": step_name,
-                "chain": [{"cli": cli, "model": model_name} for cli, model_name in selected],
+                "chain": [entry.as_dict() for entry in selected],
             }
         )
     scheduled_tasks = _scheduled_task_declarations(
@@ -931,6 +967,9 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
     preflight = [text("checks"), _table(headers, preflight_rows)] if preflight_rows else []
     chains = {phase["name"]: phase["chain"] for phase in proposal["phases"]}
     model_rows: list[list[Any]] = []
+    def tuple_text(entry):
+        return f"{entry['cli']}:{entry['model']} (effort={entry.get('reasoning_effort', 'CLI-default')})"
+
     for step_name, step in model.steps.items():
         resolve_execution_profile(
             skill_loader,
@@ -950,10 +989,13 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
         model_rows.append(
             [
                 step_name,
-                f"{chain[0]['cli']}:{chain[0]['model']}",
-                " → ".join(f"{entry['cli']}:{entry['model']}" for entry in chain[1:]) or "—",
+                tuple_text(chain[0]),
+                " → ".join(tuple_text(entry) for entry in chain[1:]) or "—",
             ]
         )
+    for phase in proposal["phases"]:
+        if "rationale" in phase:
+            model_rows.append([phase["name"] + ".rationale", json.dumps(phase["rationale"], ensure_ascii=False), "—"])
     confirmation = proposal["confirmation_contract"]
     manager_confirmable = set(confirmation["manager_confirmable"])
     eligible = set(confirmation_gate_steps(model)) | set(mandatory_confirmation_gate_steps(model))

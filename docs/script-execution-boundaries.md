@@ -55,6 +55,7 @@ This inventory is executable documentation: the unit contract discovers every `s
 | `src/cafe/data/skills/use-cafe-workflow/scripts/kickoff_delivery.py::_inventory` | Internal fixed Git tracked-file inventory query |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/sync_helper_with_preflight.py::_run_command` | Explicit CLI-native helper publication with fixed CAFE pre/post checks |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/preflight_cache.py::_cli_fingerprint` | Internal version probe |
+| `src/cafe/agents/cli/effort.py::_client_version` | Internal fixed read-only provider version probe |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/preflight_cache.py::candidate_probe` | User-requested model availability probe |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/run_workflow.py::run` | Internal fixed CAFE workflow bootstrap |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/run_workflow.py::_bootstrap_isolated_runtime` | Internal fixed Python re-exec |

@@ -387,6 +387,8 @@ class StatusService:
                         "status_code": context_data.get("status_code"),
                         "cli": context_data.get("cli"),
                         "model": context_data.get("model"),
+                        "reasoning_evidence": context_data.get("reasoning_evidence"),
+                        "execution_attempts": context_data.get("execution_attempts", []),
                         "chat_usage": context_data.get("chat_usage", []),
                         "stats": (
                             phase_stats_without_chat(

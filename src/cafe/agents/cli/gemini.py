@@ -89,7 +89,7 @@ class GeminiCLI(AbstractCLI):
         if allowed_directories:
             cmd = self.add_directories(cmd, allowed_directories)
 
-        return cmd
+        return self.project_reasoning_effort(cmd)
 
     def parse_response(
         self,

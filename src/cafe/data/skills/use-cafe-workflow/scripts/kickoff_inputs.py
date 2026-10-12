@@ -18,7 +18,7 @@ from _kickoff_store import VersionedJsonStore, repository_identity
 _ALLOWED_FIELDS = {
     "playbook_id", "project_root", "issue_name", "delivery_contract", "cleanup",
     "cleanup_description", "closeout_choice", "update_preflight", "catalog_preflight",
-    "manager_mode", "poll_interval_seconds", "event_manager", "phase_chain", "phase_config",
+    "manager_mode", "poll_interval_seconds", "event_manager", "phase_chain", "phase_config", "phase_rationale",
     "effective_locale", "locale_source", "repository_content_locale", "capability_choice",
     "user_required", "manager_confirmable", "worktree", "current_checkout",
     "task_user_required", "task_manager_confirmable", "need_permission", "need_clarification",
@@ -36,7 +36,7 @@ _JSON_FLAGS = {
 }
 _REPEATED_FLAGS = {
     "cleanup_description": "--cleanup-description",
-    "event_manager": "--event-manager", "phase_chain": "--phase-chain",
+    "event_manager": "--event-manager", "phase_chain": "--phase-chain", "phase_rationale": "--phase-rationale",
     "capability_choice": "--capability-choice", "task_user_required": "--task-user-required",
     "task_manager_confirmable": "--task-manager-confirmable",
     "proactive_review_decision": "--proactive-review-decision",
@@ -717,9 +717,12 @@ def _prefill_saved_inputs(values: dict[str, Any], *, store: Any, request: dict[s
             candidate = steps.get(name, roles.get(step.role))
             if name in overrides or candidate is None:
                 continue
-            if not _is_string_list(candidate) or not candidate:
-                raise ValueError("saved chain must be a nonempty string array")
-            entry = name + "=" + ",".join(candidate)
+            if not isinstance(candidate, list) or not candidate:
+                raise ValueError("saved chain must be a nonempty entry array")
+            selected = owner._parse_chain(json.dumps(candidate), step_name=name)
+            if any(entry.reasoning_effort is None for entry in selected):
+                raise ValueError(f"saved chain for {name} is a selection hint; select explicit reasoning_effort for every entry")
+            entry = name + "=" + json.dumps([value.as_dict() for value in selected])
             owner._parse_phase_chains([entry], step_names=set(model.steps))
             result.append(entry)
         return {"phase_chain": result}
@@ -865,15 +868,12 @@ def _prefill_configured_inputs(values: dict[str, Any], *, project_root: Path, so
     if "phase_chain" not in blocked and _is_string_list(supplied_chains):
         overrides = owner._parse_phase_chains(supplied_chains, step_names=set(model.steps))
         config = owner._project_path(Path(values.get("phase_config", parser.get_default("phase_config"))), project_root)
-        chains = list(supplied_chains)
         for name, step in phases.items():
-            if name in overrides:
-                continue
-            chain, _ = owner._resolve_configured_chain(step_name=name, role=step.role, phase_config=config)
-            chains.append(name + "=" + ",".join(f"{cli}:{model_name}" for cli, model_name in chain))
-        if chains != supplied_chains:
-            values["phase_chain"] = chains
-            sources["phase_chain"] = "configured phase chains; explicit overrides retained; suitability still requires assessment"
+            if name not in overrides:
+                owner._resolve_configured_chain(step_name=name, role=step.role, phase_config=config)
+        if "phase_config" not in values:
+            values["phase_config"] = str(config)
+            sources["phase_config"] = "existing phase configuration; explicit overrides retained; suitability still requires assessment"
 
 
 def assemble_kickoff(

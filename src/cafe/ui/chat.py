@@ -81,7 +81,7 @@ def _load_chat_role_config(
     return {
         "name": resolution.name or execution_step,
         "role": resolution.role or role,
-        "clis": [{"cli": cli, "model": model} for cli, model in resolution.clis],
+        "clis": [entry.as_dict() for entry in resolution.clis],
     }
 
 
@@ -197,7 +197,11 @@ def _phase_entries(role_config: dict) -> list[CliEntry]:
         if not isinstance(item, dict):
             continue
         try:
-            entries.append(CliEntry(cli=AgentCLI(item.get("cli")), model=item.get("model")))
+            entries.append(CliEntry(
+                cli=AgentCLI(item.get("cli")),
+                model=item.get("model"),
+                reasoning_effort=item.get("reasoning_effort"),
+            ))
         except (TypeError, ValueError):
             continue
     return entries
@@ -747,12 +751,18 @@ def _launch_chat_session(
         print(f"\n⚠️  Unknown CLI tool '{agent_cli_str}'. Skipping chat.\n")
         return 1 if read_only else 0
 
+    phase_entries = _phase_entries(agent_config)
+    selected_entry = next((entry for entry in phase_entries if entry.cli == agent_cli), None)
+    # Session/sticky state selects a configured CLI, never its historical tuple.
+    if selected_entry is not None:
+        agent_model = selected_entry.resolve_model(execution_step)
     agent_manager.register_agent(
         AgentConfig(
             name=agent_name,
             cli=agent_cli,
             model=agent_model,
-            clis=_phase_entries(agent_config),
+            reasoning_effort=selected_entry.reasoning_effort if selected_entry else None,
+            clis=phase_entries,
         )
     )
 

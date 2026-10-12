@@ -5,7 +5,7 @@ validity are defined by `cafe.utils.phase_config`; this reference is guidance,
 not an alternate schema.
 
 After kickoff confirmation, serialize the exact dynamic step names and ordered
-CLI/model entries to JSON and install them in the active worktree:
+CLI/model/effort entries to JSON and install them in the active worktree:
 
 ```bash
 python3 <skill-dir>/scripts/write_phase_config.py \
@@ -27,6 +27,7 @@ quality_gate:
   clis:
     - cli: codex
       model: <confirmed-exact-model>
+      reasoning_effort: <confirmed-supported-effort>
 ```
 
 Add further `clis` entries only for fallbacks confirmed in the kickoff. A
@@ -34,3 +35,11 @@ single-entry list is a valid primary-only chain.
 
 Do not copy this example as a default, infer missing steps, or read legacy
 configuration. For validation questions, inspect `src/cafe/utils/phase_config.py`.
+
+Each entry owns optional effort. Omission keeps existing provider defaults; it
+never inherits effort from another entry or source. Newly selected Manager
+chains require an explicit verified effort per entry. Shape and provider support
+are validated through the core parser and adapters before atomic replacement.
+For future updates, preserve unrelated steps and reconcile the confirmed
+contract through its existing reconfirmation/CAS path before generating new
+launch/resume context. Mismatched YAML and projection block execution.

@@ -90,7 +90,10 @@ def native_context(compact_request, tmp_path, monkeypatch, cli_name="claude"):
     cli.write_text("#!/bin/sh\nif [ \"$1\" = --version ]; then echo fixture-provider; exit 0; fi\nexit 2\n")
     cli.chmod(0o755)
     monkeypatch.setenv("PATH", str(binary) + os.pathsep + os.environ["PATH"])
-    compact_request["compact_inputs"]["phases"][0]["chain"] = [{"cli": cli_name, "model": "test"}]
+    # Native-review fixtures reuse an existing effort-omitting phase configuration.
+    (root / ".cafe/phases.yaml").write_text(yaml.safe_dump({"build": {"name": "Runner", "role": "operator", "clis": [{"cli": cli_name, "model": "test"}]}}))
+    compact_request["compact_inputs"].pop("phases")
+    compact_request["model_assessments"][0].pop("reasoning_effort", None)
     compact_request["compact_inputs"]["review_configuration"].update(cli=cli_name, provider_version="fixture-provider")
     compact_request["model_assessments"][0]["provider"] = cli_name
     playbook_file = root / ".cafe/playbooks/selected.yaml"
@@ -220,7 +223,7 @@ def test_unconfirmed_public_launcher_never_invokes_work(compact_request):
     assert not (issue / "execution_context.json").exists()
 
 
-def test_public_step_factory_keeps_confirmed_chain_when_defaults_are_broken(compact_request, tmp_path, monkeypatch):
+def test_public_step_factory_rejects_conflicting_defaults_before_provider_launch(compact_request, tmp_path, monkeypatch):
     import yaml
     from cafe.ui.cli_shared import _build_workflow_step_executor
     from cafe.phases.generic_phase import GenericPhase
@@ -250,18 +253,22 @@ def test_public_step_factory_keeps_confirmed_chain_when_defaults_are_broken(comp
         dispatched.append((executor.config.cli.value, executor.config.model))
         return AgentResponse(response="complete", token_usage=TokenUsage(), cli=executor.config.cli)
     monkeypatch.setattr(AgentExecutor, "execute", provider)
-    engine = _build_workflow_step_executor(config_manager=config, issue_dir=issue,
-        issue_name="sample", playbook_data=playbook, generic_phase=GenericPhase(SkillLoader(project_root=root)),
-        phase_name="build", execution_chain=context["phase_chains"]["build"], stream_agent_output=False)
-    engine.agent_manager.execute("operator", "bounded provider fixture", phase_name="build")
-    assert dispatched == [("codex", "test")]
+    with pytest.raises(ValueError):
+        _build_workflow_step_executor(config_manager=config, issue_dir=issue,
+            issue_name="sample", playbook_data=playbook, generic_phase=GenericPhase(SkillLoader(project_root=root)),
+            phase_name="build", execution_chain=context["phase_chains"]["build"], stream_agent_output=False)
+    assert dispatched == []
 
 
 def test_native_preparation_checks_explicit_backup_before_confirmation(compact_request, tmp_path, monkeypatch):
     from tests.unit._kickoff_test_support import load_kickoff_module
     native_context(compact_request, tmp_path, monkeypatch)
     compact_request['issue_name'] = 'unconfirmed-backup'
-    compact_request['compact_inputs']['phases'][0]['chain'].append({'cli': 'codex', 'model': 'other'})
+    import yaml
+    phase_file = Path(compact_request["project_root"]) / ".cafe/phases.yaml"
+    phases = yaml.safe_load(phase_file.read_text())
+    phases["build"]["clis"].append({"cli": "codex", "model": "other"})
+    phase_file.write_text(yaml.safe_dump(phases))
     other = deepcopy(compact_request['model_assessments'][0])
     other['model'] = 'other'
     other['provider'] = 'codex'

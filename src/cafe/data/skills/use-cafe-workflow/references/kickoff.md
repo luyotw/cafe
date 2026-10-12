@@ -343,10 +343,14 @@ confirmation before preparation or workflow execution.
 If the playbook, effective conversation locale, repository content locale,
 operating mode, or candidate set changes, reconfirm the kickoff contract before
 the next workflow execution. Phase model chains are kickoff initial values. The
-Manager cannot change a phase model on its own, but must apply an exact phase-only
-update for subsequent execution whenever the user explicitly requests one. A
-running iteration finishes with the model that started it. This update does not
-change the separate event-driven callback chain.
+Manager selects band, model and explicit verified effort jointly, with per-phase
+model/effort rationale. Each new primary/fallback entry requires effort; legacy
+omission is compatibility, not authority to select uncontrolled new entries.
+Unavailable effort control is a specific limitation for the existing human route.
+Manager cannot change a phase tuple on its own. An authorized future update must
+retain existing reconfirmation/CAS, reconcile YAML and confirmed contract, and
+regenerate compact launch/resume projections. A running iteration finishes with
+the tuple that started it; completed receipts and callback chains remain unchanged.
 
 `need_clarification` and `need_permission` are reactive interruptions, not
 scheduled candidates. `manual_handoff` is routing, not a planned confirmation

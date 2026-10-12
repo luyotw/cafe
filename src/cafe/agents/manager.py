@@ -17,6 +17,7 @@ from cafe.agents.transport_types import _validated_evidence_scalar
 from cafe.constraints import Context, material_digest, replace_prompt_block, resolve
 from cafe.constraints.context import context_for_tools
 from cafe.constraints.resolver import PROVIDERS
+from cafe.core.execution_entry import ExecutionEntry
 from cafe.core.restart_policy import InvocationOrder
 from cafe.core.session import SessionManager, SessionStore
 from cafe.core.session_continuation import (
@@ -105,6 +106,8 @@ class AgentManager:
             cli=config.cli,
             session_id=session_id,
             model=config.model,
+            reasoning_effort=config.reasoning_effort,
+            native_review_configuration=config.native_review_configuration,
             clis=config.clis,
             backup_clis=config.backup_clis,
             models_config=config.models_config,
@@ -170,7 +173,7 @@ class AgentManager:
                         continue
                     model_value = item.get("model")
                     model_text = str(model_value).strip() if isinstance(model_value, str) else ""
-                    chain_entries.append(f"{cli_name}:{model_text}")
+                    chain_entries.append(ExecutionEntry(cli_name, model_text or None, item.get("reasoning_effort")).fingerprint())
             chain = tuple(chain_entries) if chain_entries else None
 
         return cli, (model if isinstance(model, str) else None), configured_primary, chain
@@ -182,6 +185,7 @@ class AgentManager:
                 CliEntry(
                     cli=entry.cli,
                     model=entry.model,
+                    reasoning_effort=entry.reasoning_effort,
                     phase_models=dict(entry.phase_models),
                 )
                 for entry in config.clis
@@ -189,7 +193,7 @@ class AgentManager:
             ]
 
         chain: list[CliEntry] = [
-            CliEntry(cli=config.cli, model=config.model),
+            CliEntry(cli=config.cli, model=config.model, reasoning_effort=config.reasoning_effort),
         ]
         for backup_cli in config.backup_clis:
             phase_models = {}
@@ -226,7 +230,7 @@ class AgentManager:
         chain = self._normalize_chain(self._configured_chain_for_agent(config))
 
         configured_chain = tuple(
-            f"{entry.cli.value}:{entry.resolve_model(phase_name) or ''}" for entry in chain
+            ExecutionEntry(entry.cli.value, entry.resolve_model(phase_name), entry.reasoning_effort).fingerprint() for entry in chain
         )
 
         last_success = self._load_active_cli_from_file(config.name)
@@ -280,8 +284,8 @@ class AgentManager:
             if disposition == "retained":
                 disposition = "bypassed"
         return InvocationOrder(
-            entries=tuple((e.cli.value, e.resolve_model(phase_name)) for e in effective),
-            configured_entries=tuple((e.cli.value, e.resolve_model(phase_name)) for e in canonical),
+            entries=tuple(ExecutionEntry(e.cli.value, e.resolve_model(phase_name), e.reasoning_effort) for e in effective),
+            configured_entries=tuple(ExecutionEntry(e.cli.value, e.resolve_model(phase_name), e.reasoning_effort) for e in canonical),
             sticky_disposition=disposition,
         )
 
@@ -343,7 +347,7 @@ class AgentManager:
         base = self.get_agent(agent_name).config
         continuation = continuation or SessionContinuation.auto()
         chain = (
-            [CliEntry(cli=AgentCLI(cli), model=model) for cli, model in invocation_order.entries]
+            [CliEntry(**entry.as_dict()) for entry in invocation_order.entries]
             if invocation_order is not None
             else self._resolve_execution_chain(base, phase_name=phase_name)
         )
@@ -380,6 +384,7 @@ class AgentManager:
             cli=primary.cli,
             session_id=primary_session_id,
             model=primary_model,
+            reasoning_effort=primary.reasoning_effort,
             clis=chain,
             backup_clis=[entry.cli for entry in chain[1:]],
             models_config=base.models_config,
@@ -405,6 +410,7 @@ class AgentManager:
             a.cli == b.cli
             and a.session_id == b.session_id
             and a.model == b.model
+            and a.reasoning_effort == b.reasoning_effort
             and a.clis == b.clis
             and a.backup_clis == b.backup_clis
             and a.models_config == b.models_config
@@ -483,8 +489,10 @@ class AgentManager:
             AgentExecutionError: If all agents (primary + backups) fail
         """
         self._failed_attempts = []
+        self._last_execution_attempts = []
         self._failed_cost_usage = TokenUsage()
         self._last_native_review_observations = []
+        self._last_reasoning_evidence = None
         saved_sessions: Dict[AgentCLI, str] = {}
         base_executor = self.get_agent(agent_name)
 
@@ -651,6 +659,8 @@ class AgentManager:
         self._last_cli = actual_cli
         self._last_session_id = actual_session_id
         self._last_reported_model = reported_model
+        self._last_reasoning_evidence = agent_response.reasoning_evidence
+        self._last_execution_attempts.extend(agent_response.execution_attempts)
 
         # Save session ID if it was created during execution
         if actual_session_id and saved_sessions.get(actual_cli) != actual_session_id:
@@ -776,6 +786,7 @@ class AgentManager:
             if previous_observer is not None:
                 previous_observer(session_id)
 
+        executor._execution_attempts = []
         executor.on_session_observed = save_observed_session
         try:
             return invoke()
@@ -794,6 +805,12 @@ class AgentManager:
         self._last_constraints = {"version": 1, "context": view.context.model_dump(mode="json"),
                                   "digest": material_digest(view)}
         return rendered
+
+    def get_execution_attempts(self):
+        return list(getattr(self, "_last_execution_attempts", []))
+
+    def get_last_reasoning_evidence(self):
+        return getattr(self, "_last_reasoning_evidence", None)
 
     def get_last_constraints(self):
         """Latest actual-attempt evidence for neutral iteration persistence."""
@@ -931,6 +948,7 @@ class AgentManager:
                 name=config.name,
                 cli=entry.cli,
                 model=backup_model,
+                reasoning_effort=entry.reasoning_effort,
                 session_id=fallback_session_id,
                 native_review_configuration=config.native_review_configuration,
             )
@@ -1036,6 +1054,11 @@ class AgentManager:
             attempt=attempt,
             error=error,
         )
+        self._last_execution_attempts.extend(getattr(error, "execution_attempts", []))
+        effort = getattr(error, "reasoning_evidence", None)
+        if isinstance(effort, dict):
+            record["reasoning_evidence"] = effort
+            self._last_reasoning_evidence = effort
         from cafe.core.cost import account_cost
         from cafe.core.usage import merge_token_usage_stats
 
