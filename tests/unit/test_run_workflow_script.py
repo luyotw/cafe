@@ -769,6 +769,78 @@ def test_explicit_user_input_rejects_empty_or_combined_continuations(
     )
 
 
+@pytest.mark.parametrize("mode", ["attached", "unattended", "event-driven"])
+def test_initial_input_reaches_a_genuine_cold_start(tmp_path, monkeypatch, mode):
+    from cafe.core.blackboard import BlackboardStore
+
+    module = _module()
+    issue = tmp_path / ".cafe/issues/issue498"
+    BlackboardStore(issue).load_or_create("develop", playbook_id="direct")
+    _install_contract_stubs(monkeypatch, module, _contract(mode, tmp_path))
+    launched = []
+    assert module.run(
+        _args(mode, "--initial-input", "新增孩子立即顯示"), cwd=tmp_path,
+        process_factory=lambda argv, **kwargs: launched.append(argv) or _Process(),
+    ) == 0
+    assert launched[0][-2:] == ["--user-input", "新增孩子立即顯示"]
+
+
+@pytest.mark.parametrize("step", ["user", "done", "develop"])
+def test_initial_input_cannot_overwrite_a_started_workflow(tmp_path, monkeypatch, step):
+    from cafe.core.blackboard import BlackboardStore
+
+    module = _module()
+    issue = tmp_path / ".cafe/issues/issue498"
+    store = BlackboardStore(issue)
+    state = store.load_or_create("develop", playbook_id="direct")
+    state.current_step = step
+    state.step_attempt_counts = {"develop": 1}
+    store.save(state)
+    _install_contract_stubs(monkeypatch, module, _contract("unattended", tmp_path))
+    assert module.run(
+        _args("unattended", "--initial-input", "replacement"), cwd=tmp_path,
+        process_factory=lambda *a, **kw: pytest.fail("started workflow must not launch"),
+    ) == 2
+
+
+@pytest.mark.parametrize("payload", ["   ", "x" * 65537])
+def test_invalid_initial_input_never_launches(tmp_path, monkeypatch, payload):
+    module = _module()
+    _prepared(tmp_path)
+    _install_contract_stubs(monkeypatch, module, _contract("unattended", tmp_path))
+    assert module.run(
+        _args("unattended", "--initial-input", payload), cwd=tmp_path,
+        process_factory=lambda *a, **kw: pytest.fail("invalid input must not launch"),
+    ) == 2
+
+
+@pytest.mark.parametrize("other", ["--user-input", "--user-handoff", "--alignment-input"])
+def test_initial_input_cannot_be_combined_with_a_handoff(tmp_path, monkeypatch, other):
+    module = _module()
+    _prepared(tmp_path, step="user")
+    _install_contract_stubs(monkeypatch, module, _contract("unattended", tmp_path))
+    assert module.run(
+        _args("unattended", "--initial-input", "requirements", other, "{}"), cwd=tmp_path,
+        process_factory=lambda *a, **kw: pytest.fail("combined input must not launch"),
+    ) == 2
+
+
+def test_new_manual_workflow_without_requirements_fails_before_worker_creation(tmp_path, monkeypatch):
+    from cafe.core.blackboard import BlackboardStore
+
+    module = _module()
+    issue = tmp_path / ".cafe/issues/issue498"
+    BlackboardStore(issue).load_or_create("develop", playbook_id="streamlined")
+    (issue / "issue.yaml").write_text("initial_input:\n  provider: manual_text\n")
+    _install_contract_stubs(monkeypatch, module, _contract("unattended", tmp_path))
+    args = _args("unattended")
+    args[args.index("--playbook") + 1] = "streamlined"
+    assert module.run(
+        args, cwd=tmp_path,
+        process_factory=lambda *a, **kw: pytest.fail("empty manual workflow must not launch"),
+    ) == 2
+
+
 def test_legacy_driver_alignment_decision_resumes_the_confirmed_workflow(
     tmp_path: Path, monkeypatch
 ) -> None:

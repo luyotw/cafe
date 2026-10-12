@@ -103,6 +103,13 @@ and `--mute-agent-output`, supplies `--background` only for unattended and
 event-driven operation, and supplies the callback only for event-driven mode.
 It never infers HumanTask answers, permissions, `--open-pr`, model or playbook
 changes, `--add-dir`, `--no-verify`, or retry/fresh-session choices.
+For a genuinely new workflow, `--initial-input` supplies bounded initial
+requirements through the same wrapper. It is forwarded to the owning CLI's
+initial-input provider and may not be combined with any continuation input.
+It cannot answer a HumanTask or replace an active workflow's input. A new
+non-legacy manual-input workflow without requirements fails before worker
+creation; GitHub input and legacy empty-template preparation retain their
+existing behavior.
 The separately authorized continuation inputs are `--alignment-input`,
 `--user-handoff`, and `--user-input`; exactly one may be supplied.
 `--alignment-input` requires explicit JSON and is accepted

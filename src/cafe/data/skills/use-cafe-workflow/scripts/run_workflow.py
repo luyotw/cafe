@@ -458,6 +458,10 @@ def _parser() -> argparse.ArgumentParser:
         "--user-input",
         help="Explicit user input for a user-owned workflow boundary.",
     )
+    parser.add_argument(
+        "--initial-input",
+        help="Initial requirements for a genuinely new workflow; never a handoff answer.",
+    )
     return parser
 
 
@@ -491,6 +495,34 @@ def _validate_user_input(raw: str | None) -> str | None:
     if len(raw.encode("utf-8")) > 65_536:
         raise ValueError("user input exceeds the 64 KiB limit")
     return raw
+
+
+def _validate_initial_input(raw: str | None, *, issue_dir: Path, project_root: Path,
+                            playbook: str) -> str | None:
+    from cafe.core.blackboard import BlackboardStore, is_genuine_cold_start
+    from cafe.core.initial_input import MANUAL_TEXT_PROVIDER, load_initial_input_selection
+    from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
+    from cafe.utils.yaml_utils import safe_load
+
+    content = _validate_user_input(raw)
+    config_path = issue_dir / "issue.yaml"
+    config = safe_load(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
+    provider, _ = load_initial_input_selection(config or {})
+    if content is None and provider != MANUAL_TEXT_PROVIDER:
+        return None
+    graph = apply_issue_playbook_overrides(
+        PlaybookLoader(project_root=project_root).load(playbook), config_path,
+    )
+    entry = graph["entry_point"]
+    cold_start = is_genuine_cold_start(BlackboardStore(issue_dir).load_read_only(), entry_point=entry)
+    if content is not None and not cold_start:
+        raise ValueError("initial input requires a genuinely new workflow")
+    declaration = graph["steps"][entry].get("initial_input", {})
+    if content is None and cold_start and declaration and not declaration.get("legacy_presentation"):
+        saved = issue_dir / entry / "iteration_001" / "user_input.md"
+        if not saved.is_file() or not saved.read_text(encoding="utf-8").strip():
+            raise ValueError("manual initial requirements are missing; supply --initial-input")
+    return content
 
 
 def run(
@@ -561,7 +593,7 @@ def run(
         _validate_checkout(contract, project_root)
         continuation_count = sum(
             value is not None
-            for value in (args.alignment_input, args.user_handoff, args.user_input)
+            for value in (args.alignment_input, args.user_handoff, args.user_input, args.initial_input)
         )
         if continuation_count > 1:
             raise ValueError("continuation inputs cannot be combined")
@@ -577,6 +609,9 @@ def run(
         user_input = _validate_user_input(args.user_input)
         if user_input is not None and not _is_user_boundary(state):
             raise ValueError("explicit user input requires a current user-owned boundary")
+        initial_input = _validate_initial_input(
+            args.initial_input, issue_dir=issue_dir, project_root=project_root, playbook=playbook,
+        )
         if mode == "event-driven":
             callback_script = _validate_event_binding(
                 issue_dir=issue_dir,
@@ -629,8 +664,9 @@ def run(
         command.append("--background")
     if mode == "event-driven":
         command.extend(["--on-workflow-event", CALLBACK_ID])
-    if continuation_input is not None:
-        command.extend(["--user-input", continuation_input])
+    invocation_input = initial_input or continuation_input
+    if invocation_input is not None:
+        command.extend(["--user-input", invocation_input])
 
     try:
         process = process_factory(

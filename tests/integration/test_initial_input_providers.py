@@ -400,6 +400,25 @@ def test_custom_github_intake_uses_trusted_host_boundary_once(tmp_path: Path, mo
     assert "Current user input for this iteration:\n" + content in manager.prompts[0]
 
 
+def test_background_manual_input_reaches_the_first_agent(tmp_path, monkeypatch):
+    """The detached worker consumes the CLI-owned input, not an empty prompt."""
+    monkeypatch.chdir(tmp_path)
+    executor, manager, issue_dir, step = _prepare_intake_issue(tmp_path, input_method="manual")
+    content = "新增孩子後，首頁立即顯示；保留其他裝置的授權。"
+    with patch("cafe.ui.commands.workflow.FixedWorkerLauncher.launch", return_value=1234) as launch:
+        result = runner.invoke(app, [
+            "workflow", "--issue", "intake-journey", "--playbook", "intake",
+            "--execute", "--background", "--user-input", content,
+        ])
+    assert result.exit_code == 0, result.stdout
+    launch.assert_called_once()
+    state = BlackboardStore(issue_dir).load_or_create("intake")
+    executor.execute_step("intake", step, state)
+    assert len(manager.prompts) == 1
+    assert "Current user input for this iteration:\n" + content in manager.prompts[0]
+    assert content in (issue_dir / "intake/iteration_001/output.md").read_text()
+
+
 def test_builtin_workflows_prepare_and_seed_their_first_spec_step(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -121,6 +121,24 @@ def test_delivery_replacement_preserves_normal_progress_node_count():
     assert module._forward_targets(_delivery_graph(), "package") == ["ship"]
 
 
+def test_compact_delivery_renders_only_runtime_delivery_and_cleanup():
+    module = _module()
+    graph = PlaybookLoader(project_root=PROJECT_ROOT).load("streamlined")
+    policy = {"contract_mode": "compact", "delivery_contract": {"schema_version": 4}}
+    rendered = module.render_progress(
+        playbook=graph, contract=policy, manager_state={"cleanup": "pending"},
+    )
+    assert "○ develop · Pending" in rendered
+    assert "○ deliver · Pending" in rendered
+    assert "deliver (closeout)" not in rendered
+    assert "○ cleanup (closeout) · Pending" in rendered
+    with pytest.raises(ValueError, match="runtime phase 'deliver'"):
+        module.render_progress(
+            playbook=graph, contract=policy,
+            manager_state={"deliver": "pending", "cleanup": "pending"},
+        )
+
+
 @pytest.mark.parametrize("state,decision,iteration,blocked,expected", [
     ("pending", None, 1, False, "Awaiting confirmation"),
     ("completed", "confirm", 1, False, "Completed"),
@@ -227,7 +245,7 @@ def test_compact_pending_task_renders_with_user_owned_authority(compact_task_sta
         contract=contract,
         locale="en-US",
         issue_dir=issue_dir,
-        driver_state=_unknown_closeout_state(),
+        driver_state={"cleanup": "unknown"},
     )
     assert "build" in rendered
     assert _module()._active_task_authority(issue_dir)["resolution_owner"] == "user_required"
