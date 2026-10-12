@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
+import yaml
+
 from cafe.catalogs.resolver import (
     MAX_CATALOG_DISCOVERY_ENTRIES,
     CatalogKind,
@@ -22,7 +24,7 @@ from cafe.catalogs.resolver import (
 )
 from cafe.core.types import AgentCLI
 from cafe.skills.exceptions import SkillDiscoveryError
-from cafe.skills.loader import SkillLoader
+from cafe.skills.loader import SkillLoader, read_skill_frontmatter
 
 
 @dataclass(frozen=True)
@@ -197,11 +199,18 @@ class NativeSkillBridge:
                 for name in names:
                     try:
                         entry = resolver.resolve(CatalogKind.PHASE, name)
+                        read_skill_frontmatter(entry.path / "SKILL.md")
                         sources[name] = entry.path
-                    except (OSError, ValueError, RuntimeError, SkillDiscoveryError) as exc:
+                    except (
+                        OSError,
+                        ValueError,
+                        RuntimeError,
+                        SkillDiscoveryError,
+                        yaml.YAMLError,
+                    ) as exc:
                         invalid.add(name)
                         errors.append(f"Invalid active project skill {name}: {exc}")
-            except (OSError, ValueError, RuntimeError, SkillDiscoveryError) as exc:
+            except (OSError, ValueError, RuntimeError, SkillDiscoveryError, yaml.YAMLError) as exc:
                 # Failed enumeration cannot establish deletion of old sources.
                 errors.append(f"Cannot enumerate active project skills: {exc}")
                 for error in errors:
@@ -222,9 +231,21 @@ class NativeSkillBridge:
                     for source in sources.values():
                         try:
                             self._install_project_link(cli, source, records)
-                        except (OSError, ValueError, RuntimeError, SkillDiscoveryError) as exc:
+                        except (
+                            OSError,
+                            ValueError,
+                            RuntimeError,
+                            SkillDiscoveryError,
+                            yaml.YAMLError,
+                        ) as exc:
                             errors.append(f"{cli.value} project skill {source.name}: {exc}")
-                except (OSError, ValueError, RuntimeError, SkillDiscoveryError) as exc:
+                except (
+                    OSError,
+                    ValueError,
+                    RuntimeError,
+                    SkillDiscoveryError,
+                    yaml.YAMLError,
+                ) as exc:
                     errors.append(f"{cli.value} project skills: {exc}")
         for error in errors:
             logging.getLogger(__name__).warning(error)
@@ -478,56 +499,163 @@ class NativeSkillBridge:
             for name in sorted(names)
         )
         try:
-            result = subprocess.run(
-                ["git", "-C", str(self.project_root), "rev-parse", "--git-path", "info/exclude"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if result.returncode != 0:
+            context = self._worktree_git_exclude_context()
+            if context is None:
                 return
-            exclude_path = Path(result.stdout.strip())
-            if not exclude_path.is_absolute():
-                exclude_path = self.project_root / exclude_path
+            exclude_path, common_exclude, user_rules, config, scope, key = context
             existing = exclude_path.read_text(encoding="utf-8") if exclude_path.exists() else ""
-            # Remove only the exact legacy block written by this bridge.
-            lines = existing.splitlines(keepends=True)
-            kept: list[str] = []
-            index = 0
-            while index < len(lines):
-                if (
-                    lines[index].rstrip("\r\n") == "# CAFE native-skill CLI dir (auto-excluded)"
-                    and index + 1 < len(lines)
-                    and lines[index + 1].rstrip("\r\n") == f"/{top}/"
-                ):
-                    index += 2
-                    continue
-                if lines[index].rstrip("\r\n") == "# CAFE managed native skills (auto-excluded)":
-                    index += 1
-                    group = []
-                    while index < len(lines) and not lines[index].startswith("#"):
-                        if not lines[index].startswith(f"/{native}/"):
-                            group.append(lines[index])
-                        index += 1
-                    if group:
-                        kept.append("# CAFE managed native skills (auto-excluded)\n")
-                        kept.extend(group)
-                    continue
-                kept.append(lines[index])
-                index += 1
-            updated = "".join(kept)
+            begin = "# CAFE inherited user excludes (begin)\n"
+            end = "# CAFE inherited user excludes (end)\n"
+            if existing.startswith(begin) and end in existing:
+                existing = existing.split(end, 1)[1]
+            common_existing = (
+                common_exclude.read_text(encoding="utf-8") if common_exclude.exists() else ""
+            )
+            cleaned_common = self._strip_native_exclude_blocks(common_existing, native, top)
+            if cleaned_common != common_existing:
+                common_exclude.write_text(cleaned_common, encoding="utf-8")
+            existing = self._strip_native_exclude_blocks(existing, native, top)
+            updated = existing
             missing = [entry for entry in entries if entry not in updated.splitlines()]
             if missing:
                 if updated and not updated.endswith("\n"):
                     updated += "\n"
                 updated += "# CAFE managed native skills (auto-excluded)\n"
                 updated += "\n".join(missing) + "\n"
-            if updated != existing:
-                exclude_path.parent.mkdir(parents=True, exist_ok=True)
-                exclude_path.write_text(updated, encoding="utf-8")
-        except (OSError, subprocess.SubprocessError):
+            if user_rules and not user_rules.endswith("\n"):
+                user_rules += "\n"
+            updated = begin + user_rules + end + updated
+            if not exclude_path.exists() or updated != exclude_path.read_text(encoding="utf-8"):
+                descriptor, temporary_name = tempfile.mkstemp(
+                    dir=exclude_path.parent, prefix=".cafe-exclude-"
+                )
+                temporary = Path(temporary_name)
+                try:
+                    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                        handle.write(updated)
+                    temporary.replace(exclude_path)
+                finally:
+                    if temporary.exists():
+                        temporary.unlink()
+            # Select the private rules only after a complete exclude file exists.
+            command = ["git", "-C", str(self.project_root), "config", scope]
+            includes = subprocess.run(
+                command + ["--get-all", key], capture_output=True, text=True, timeout=5
+            )
+            if str(config) not in includes.stdout.splitlines():
+                subprocess.run(
+                    command + ["--add", key, str(config)],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=True,
+                )
+        except (OSError, subprocess.SubprocessError, ValueError) as exc:
+            logging.getLogger(__name__).warning("Could not exclude managed native skills: %s", exc)
             # Best effort only; Git's clean-worktree gate remains authoritative.
             return
+
+    def _worktree_git_exclude_context(self) -> tuple[Path, Path, str, Path, str, str] | None:
+        """Use private Git-dir config/excludes without enabling repository extensions.
+
+        Conditional includes bind to exactly one Git directory. Existing
+        worktreeConfig repositories use their already enabled worktree scope.
+        User excludes are reread on each reconciliation, never modified.
+        """
+
+        def git(*args: str) -> subprocess.CompletedProcess:
+            return subprocess.run(
+                ["git", "-C", str(self.project_root), *args],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+
+        result = git("rev-parse", "--absolute-git-dir")
+        if result.returncode != 0:
+            return None
+        git_dir = Path(result.stdout.strip())
+        config = git_dir / "cafe-native-skills.config"
+        exclude = git_dir / "cafe-native-skills.exclude"
+        common_result = git("rev-parse", "--git-path", "info/exclude")
+        if common_result.returncode != 0:
+            raise OSError(common_result.stderr.strip())
+        common = Path(common_result.stdout.strip())
+        if not common.is_absolute():
+            common = self.project_root / common
+        if config.is_symlink() or exclude.is_symlink():
+            raise OSError("Refusing native Git helper symlink")
+        if exclude.exists() and (
+            not config.exists()
+            or not exclude.read_text(encoding="utf-8").startswith(
+                "# CAFE inherited user excludes (begin)\n"
+            )
+        ):
+            raise OSError(f"Preserving occupied native Git exclude file: {exclude}")
+        marker = "# CAFE native skill Git configuration\n"
+        if config.exists() and not config.read_text(encoding="utf-8").startswith(marker):
+            raise OSError(f"Preserving occupied native Git helper: {config}")
+        current = git("config", "--path", "--get", "core.excludesFile")
+        if current.returncode not in {0, 1}:
+            raise OSError(current.stderr.strip())
+        user_path = current.stdout.strip()
+        if user_path == str(exclude):
+            saved = git("config", "--file", str(config), "--path", "--get", "cafe.userExcludesFile")
+            if saved.returncode != 0:
+                raise OSError("Missing original user excludes path in native Git helper")
+            user_path = saved.stdout.strip()
+        elif not user_path:
+            user_path = str(
+                Path(os.environ.get("XDG_CONFIG_HOME", self.home_dir / ".config")) / "git/ignore"
+            )
+        user_file = Path(user_path).expanduser()
+        if not user_file.is_absolute():
+            user_file = self.project_root / user_file
+        user_rules = user_file.read_text(encoding="utf-8") if user_file.is_file() else ""
+        if not config.exists():
+            config.write_text(marker, encoding="utf-8")
+        for key, value in (
+            ("cafe.userExcludesFile", str(user_file)),
+            ("core.excludesFile", str(exclude)),
+        ):
+            configured = git("config", "--file", str(config), key, value)
+            if configured.returncode != 0:
+                raise OSError(configured.stderr.strip())
+        extension = git("config", "--bool", "--get", "extensions.worktreeConfig")
+        worktree_scope = extension.stdout.strip() == "true"
+        scope = "--worktree" if worktree_scope else "--local"
+        pattern = "".join("\\" + char if char in "\\*?[]" else char for char in str(git_dir))
+        key = "include.path" if worktree_scope else f"includeIf.gitdir:{pattern}.path"
+        return exclude, common, user_rules, config, scope, key
+
+    @staticmethod
+    def _strip_native_exclude_blocks(existing: str, native: str, top: str) -> str:
+        """Remove only marked CAFE rules for the current provider."""
+        lines = existing.splitlines(keepends=True)
+        kept: list[str] = []
+        index = 0
+        while index < len(lines):
+            if (
+                lines[index].rstrip("\r\n") == "# CAFE native-skill CLI dir (auto-excluded)"
+                and index + 1 < len(lines)
+                and lines[index + 1].rstrip("\r\n") == f"/{top}/"
+            ):
+                index += 2
+                continue
+            if lines[index].rstrip("\r\n") == "# CAFE managed native skills (auto-excluded)":
+                index += 1
+                group = []
+                while index < len(lines) and not lines[index].startswith("#"):
+                    if not lines[index].startswith(f"/{native}/"):
+                        group.append(lines[index])
+                    index += 1
+                if group:
+                    kept.append("# CAFE managed native skills (auto-excluded)\n")
+                    kept.extend(group)
+                continue
+            kept.append(lines[index])
+            index += 1
+        return "".join(kept)
 
     def install_skills(
         self,

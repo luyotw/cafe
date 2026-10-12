@@ -307,3 +307,18 @@ def test_replacement_during_staging_is_preserved(bridge, monkeypatch):
     assert bridge.reconcile_project_skills()
     assert not target.is_symlink()
     assert (target / "SKILL.md").read_text() == "new user content"
+
+
+@pytest.mark.parametrize("header", [b"---\nname: [unterminated\n---\n", b"---\nname: \xff\n---\n"])
+def test_invalid_unselected_frontmatter_is_reported_without_exposure(bridge, header):
+    """U3: fresh discovery applies existing loader YAML/UTF-8 validation."""
+    local(bridge)
+    invalid = local(bridge, "invalid")
+    (invalid / "SKILL.md").write_bytes(header)
+    errors = bridge.reconcile_project_skills()
+    assert errors and "invalid" in " ".join(errors)
+    for cli in PROVIDERS:
+        root = bridge.get_native_skills_dir(cli)
+        assert (root / "local").is_symlink()
+        assert not (root / "invalid").exists()
+    assert (invalid / "SKILL.md").read_bytes() == header

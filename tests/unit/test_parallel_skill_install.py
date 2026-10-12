@@ -115,7 +115,13 @@ def test_install_skill_git_excludes_managed_paths(tmp_path: Path) -> None:
     )
     bridge.install_skill("cafe-plan", AgentCLI.CODEX)
 
-    exclude = (project / ".git" / "info" / "exclude").read_text(encoding="utf-8")
+    exclude_path = subprocess.run(
+        ["git", "-C", str(project), "config", "--path", "--get", "core.excludesFile"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    exclude = Path(exclude_path).read_text(encoding="utf-8")
     assert "/.codex/skills/cafe-plan" in exclude.splitlines()
     assert "/.codex/" not in exclude.splitlines()
 
@@ -142,7 +148,13 @@ def test_install_skill_git_exclude_is_idempotent(tmp_path: Path) -> None:
     bridge.install_skill("cafe-plan", AgentCLI.CODEX)
     bridge.install_skill("cafe-plan", AgentCLI.CODEX)
 
-    exclude = (project / ".git" / "info" / "exclude").read_text(encoding="utf-8")
+    exclude_path = subprocess.run(
+        ["git", "-C", str(project), "config", "--path", "--get", "core.excludesFile"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    exclude = Path(exclude_path).read_text(encoding="utf-8")
     assert exclude.splitlines().count("/.codex/skills/cafe-plan") == 1
     assert exclude.splitlines().count("/.codex/skills/.cafe-managed-skills.json") == 1
 
@@ -222,3 +234,61 @@ def test_managed_skills_stay_clean_with_reopened_skills_directory(
     assert (project / ".gitignore").read_text() == ignore
     assert "/local-only/" in exclude.read_text().splitlines()
     assert f"/{top}/" not in exclude.read_text().splitlines()
+
+
+@pytest.mark.parametrize("worktree_config", [False, True])
+def test_interleaved_real_worktrees_keep_managed_paths_hidden_and_user_paths_visible(
+    tmp_path, monkeypatch, worktree_config
+):
+    """U6/U8: excludes never cross worktree boundaries or drop user rules/updates."""
+    import subprocess
+
+    def git(root, *args):
+        return subprocess.run(
+            ["git", "-C", str(root), *args], check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+    repo = tmp_path / "repo [pair]"
+    repo.mkdir()
+    git(repo, "init", "-b", "main")
+    (repo / ".gitignore").write_text(".cafe/\n")
+    git(repo, "add", ".")
+    git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "base")
+    sibling = tmp_path / "sibling"
+    git(repo, "worktree", "add", "-b", "sibling", str(sibling))
+    if worktree_config:
+        git(repo, "config", "extensions.worktreeConfig", "true")
+    user_excludes = tmp_path / "user-ignore"
+    user_excludes.write_text("/user-ignored\n")
+    git(repo, "config", "core.excludesFile", str(user_excludes))
+    common_excludes = repo / ".git/info/exclude"
+    common_excludes.write_text("# user common rule\n/common-ignored\n")
+    bridges = []
+    for root, name in ((repo, "only-a"), (sibling, "only-b")):
+        skill_dir = root / ".cafe/skills" / name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(f"---\nname: {name}\ndescription: test\n---\n")
+        loader = SkillLoader(project_root=root, global_root=tmp_path / "global")
+        bridges.append(NativeSkillBridge(loader, project_root=root, home_dir=tmp_path / "home"))
+        (root / "user-ignored").write_text("user ignore")
+        (root / "common-ignored").write_text("common ignore")
+    bridges[0].reconcile_project_skills()
+    user_skill = repo / ".codex/skills/only-b/SKILL.md"
+    user_skill.parent.mkdir()
+    user_skill.write_text("user-owned")
+    for bridge in (bridges[1], bridges[0], bridges[1]):
+        assert bridge.reconcile_project_skills() == []
+        for root, managed in ((repo, "only-a"), (sibling, "only-b")):
+            status = git(root, "status", "--porcelain", "--untracked-files=all")
+            assert f"skills/{managed}" not in status
+            assert "user-ignored" not in status and "common-ignored" not in status
+        assert ".codex/skills/only-b/SKILL.md" in git(
+            repo, "status", "--porcelain", "--untracked-files=all"
+        )
+    user_excludes.write_text("/user-ignored\n/later-user-ignore\n")
+    (repo / "later-user-ignore").write_text("updated user rule")
+    bridges[0].reconcile_project_skills()
+    assert "later-user-ignore" not in git(repo, "status", "--porcelain", "--untracked-files=all")
+    assert common_excludes.read_text() == "# user common rule\n/common-ignored\n"
+    assert user_skill.read_text() == "user-owned"
+    assert user_excludes.read_text() == "/user-ignored\n/later-user-ignore\n"

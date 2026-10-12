@@ -203,3 +203,10 @@ remediation: preserve its contents and replace that layout with an ordinary
 provider directory. Never move/delete another provider's tree to repair it.
 Local Git exclusions cover only currently proven managed entries and the
 management file; they do not hide unrelated native skills or alter tracked files.
+Native rules use a private Git-directory exclude file selected by an exact
+`includeIf.gitdir` conditional include (or an existing worktree-config scope).
+CAFE does not enable Git repository extensions. User `info/exclude` rules are
+preserved; the original effective user excludes file is retained in the private
+Git helper configuration and reread at reconciliation, so its edits survive.
+Old marked CAFE native rules migrate out of the shared `info/exclude`, preventing
+one linked worktree from hiding or exposing another worktree's native skills.
