@@ -97,3 +97,18 @@ def test_i3_public_orphan_recovery_is_discoverable_and_typed(interrupted, monkey
     assert not records.results() and not calls
     assert BlackboardStore(runtime.issue_dir).load_read_only().current_step == 'user'
     assert repair_interrupted(interrupted)['status'] == 'no-op'
+
+
+def test_i5_real_interruption_pending_task_retry_and_completion_progress(interrupted):
+    from tests.unit.test_workflow_progress_renderer import _module
+    runtime = interrupted[0]
+    interrupt(runtime)
+    graph = {'steps': runtime.steps}
+    render = lambda: _module()._runtime_progress(runtime.issue_dir, graph)[0]['compose_custom']
+    assert render() == 'blocked'
+    runtime.blackboard_store.record_event(runtime.blackboard, 'step_started',
+        {'step': 'compose_custom', 'attempt': 2, 'iteration': 2})
+    assert render() == 'in_progress'
+    runtime.blackboard_store.record_event(runtime.blackboard, 'step_completed',
+        {'step': 'compose_custom', 'attempt': 2, 'iteration': 2})
+    assert render() == 'completed'
