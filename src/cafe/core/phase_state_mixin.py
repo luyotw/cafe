@@ -16,6 +16,21 @@ if TYPE_CHECKING:
     from cafe.core.git import GitOperations
 
 
+def persist_iteration_metadata(path: Path, metadata: dict) -> None:
+    """Persist control evidence without duplicating the executor-owned raw log.
+
+    Ordinary callers retain the restart reader's bound. Workspace writers keep
+    their existing reserved maximum separately; other paths gain no reserve.
+    """
+    from cafe.core.packet_io import atomic_write_bytes
+
+    control = {key: value for key, value in metadata.items() if key != "streaming_log"}
+    payload = json.dumps(control, ensure_ascii=False, indent=2).encode("utf-8")
+    if len(payload) > 1_048_576:
+        raise RuntimeError("Iteration control evidence exceeds existing recovery capacity")
+    atomic_write_bytes(path, payload)
+
+
 def next_runnable_iteration_number(phase_dir: Path) -> int:
     """Return the iteration number the phase executor will run next."""
     if not phase_dir.exists():

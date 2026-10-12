@@ -299,3 +299,19 @@ def test_managed_process_consumes_registry_post_output_wait(tmp_path, monkeypatc
         print(json.dumps({'type':'turn.completed','usage':{'input_tokens':1,'output_tokens':1}}), flush=True)
     """)
     assert 7 in waits
+
+
+def test_issue646_u2_same_iteration_correction_preserves_prior_available_records(tmp_path):
+    """A second successful invocation cannot truncate this iteration's raw log."""
+    original = [{'type': 'turn.completed', 'usage': {'input_tokens': 7}}]
+    path = tmp_path / 'stream.jsonl'
+    path.write_text(''.join(json.dumps(r) + '\n' for r in original))
+    result = run_fixture(tmp_path, """
+        import json
+        print(json.dumps({'type': 'thread.started', 'thread_id': 'fixture'}), flush=True)
+        print(json.dumps({'type': 'turn.completed', 'usage': {}}), flush=True)
+    """)
+    saved = [json.loads(line) for line in path.read_text().splitlines()]
+    assert saved[:len(original)] == original
+    assert len([r for r in saved if r.get('type') == 'turn.completed']) == 2
+    assert result.transport_result.completed

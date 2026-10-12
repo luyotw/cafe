@@ -58,6 +58,7 @@ from cafe.core.human_tasks import (
     AGENT_EXECUTION_INTERRUPTED_TASK_ID,
     AGENT_EXECUTION_INTERRUPTED_TRIGGER,
 )
+from cafe.core.phase_state_mixin import persist_iteration_metadata
 from cafe.core.packet_io import atomic_write_bytes
 from cafe.core.phase import Phase
 from cafe.core.playbook import resolve_playbook_skills, resolve_step_behavior
@@ -1706,6 +1707,7 @@ class GenericWorkflowStepExecutor(Phase):
     def _persist_workspace_metadata(self, path: Path, metadata: dict[str, Any]) -> None:
         # Include the entire record, JSON escaping/indentation and newline. Leave
         # room for the runtime interruption marker and later recovery bookkeeping.
+        metadata = {key: value for key, value in metadata.items() if key != "streaming_log"}
         payload = (json.dumps(metadata, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
         if len(payload) > 1_048_576 - 65_536:
             raise WorkspaceDiagnosticCapacityError(
@@ -2058,7 +2060,7 @@ class GenericWorkflowStepExecutor(Phase):
                 )
                 current = self._load_workspace_metadata(iteration_dir)
                 current["response"] = response
-                current.setdefault("streaming_log", []).extend(streaming_log or [])
+                current.pop("streaming_log", None)
                 self._persist_workspace_metadata(path, current)
             except WorkspaceDiagnosticCapacityError as error:
                 # Auxiliary telemetry must not replace a valid current human request.
@@ -2204,10 +2206,10 @@ class GenericWorkflowStepExecutor(Phase):
             if actual_cli != continuation.cli or actual_session != continuation.session_id:
                 raise RuntimeError("Report correction did not preserve the producing session")
             current["response"] = response
-            current.setdefault("streaming_log", []).extend(streaming_log or [])
+            current.pop("streaming_log", None)
             # Never trust provider writes to the persisted budget.
             current["artifact_correction"] = budget.to_dict()
-            context_file.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
+            persist_iteration_metadata(context_file, current)
 
     def _persist_agent_invocation_marker(
         self,
@@ -3650,11 +3652,7 @@ class GenericWorkflowStepExecutor(Phase):
 
     @staticmethod
     def _persist_plan_artifact_record(record_path: Path, record: dict[str, Any]) -> None:
-        temporary = record_path.with_name(f".{record_path.name}.{os.getpid()}.tmp")
-        temporary.write_text(
-            json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-        )
-        os.replace(temporary, record_path)
+        atomic_write_bytes(record_path, (json.dumps(record, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
 
     @staticmethod
     def _load_validated_plan_artifact(

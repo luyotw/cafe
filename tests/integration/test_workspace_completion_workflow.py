@@ -1018,8 +1018,12 @@ def test_u4_i4_human_correction_survives_auxiliary_telemetry_limit(
     assert len(metadata["stats"]["turn_usages"]) == (turns if turns == 20 else 0)
     budget = j.executor._load_workspace_completion(j.iteration)
     assert budget["consumed"] == 1
-    if diagnostic in ("usage", "stream"):
+    if diagnostic == "usage":
         assert any("capacity" in reason for reason in budget["rejections"])
+    elif diagnostic == "stream":
+        # issue646 U1/U2: large raw records no longer consume control capacity.
+        assert "streaming_log" not in metadata
+        assert not any("capacity" in reason for reason in budget["rejections"])
 
 
 @pytest.mark.parametrize("defect", ["malformed", "wrong-owner", "undeclared"])
@@ -1238,3 +1242,39 @@ def test_preparation_recovery_runs_new_session_then_corrects_handoff_before_publ
     # Another runtime reconstruction must not repeat the external effect.
     assert j.reconstruct().run().completed
     assert j.effects.count("after") == 1 and j.manager.deliveries == 1
+
+
+@pytest.mark.parametrize('path', ['ordinary', 'empty', 'error', 'checklist', 'workspace', 'report'])
+def test_issue646_i1_large_available_stream_remains_single_and_control_state_usable(journey, path):
+    """I1: reconstruct real runtime after six provider/save-path boundaries."""
+    from cafe.agents.executor import AgentExecutionError
+    from tests.integration.test_workflow_artifact_correction import REJECTED
+    raw_records = [{'sequence': i, 'text': 'x' * 2200} for i in range(600)]
+    submissions = [REJECTED, CORRECTED] if path == 'report' else [CORRECTED]
+    if path == 'error':
+        submissions = [AgentExecutionError('injected provider error', error_type='execution_error')]
+    j = journey(submissions, workspace=path == 'workspace',
+                workspace_action=change_then_commit if path == 'workspace' else None,
+                unchecked=path == 'checklist')
+    execute = j.manager.execute
+    def provider(*args, **kwargs):
+        stream = kwargs.get('streaming_output_file')
+        if stream:
+            with open(stream, 'a') as handle:
+                for record in raw_records:
+                    handle.write(json.dumps(record) + '\n')
+        result = execute(*args, **kwargs)
+        if path == 'checklist':
+            checklist = j.iteration / 'checklist.md'
+            if len(j.manager.calls) > 1:
+                checklist.write_text(checklist.read_text().replace('[ ]', '[x]'))
+        return (*result[:4], raw_records, result[5])
+    j.manager.execute = provider
+    j.runtime.run(start_step='inspect_custom')
+    saved = json.loads((j.iteration / 'iteration.json').read_text())
+    assert 'streaming_log' not in saved
+    assert saved['session_id'] == (None if path == 'error' else 'exact-report-session')
+    assert (j.iteration / 'iteration.json').stat().st_size <= 1_048_576
+    records = [json.loads(line) for line in (j.iteration / 'streaming.jsonl').read_text().splitlines()]
+    assert records == raw_records * len([call for call in j.manager.calls if call[3].get('streaming_output_file')])
+    j.reconstruct()

@@ -1586,7 +1586,7 @@ class AgentExecutor:
             streaming_line_index = 0
             if streaming_output_file:
                 try:
-                    streaming_file_handle = open(streaming_output_file, "w", encoding="utf-8")
+                    streaming_file_handle = open(streaming_output_file, "a", encoding="utf-8")
                 except Exception as e:
                     print(f"⚠️  Failed to open streaming output file: {e}")
 
