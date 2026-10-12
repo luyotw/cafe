@@ -239,3 +239,47 @@ def guard_execution_delivery(context, request, *, issue_dir, output_dir):
     if context.get("review_policy") == "single_native":
         require_verified_review(context, load_review_evidence(issue_dir / "execution_review.json"),
                                 source_revision=selected, observation=current)
+
+
+class DeliveryReadinessError(ValueError):
+    """Specific machine-schema correction versus changed execution authority."""
+    def __init__(self, category, detail):
+        self.category = category
+        super().__init__(detail)
+
+
+def validate_delivery_readiness(context, readiness, *, review_evidence=None,
+                                source_revision=None, observation=None):
+    """Producer and consumer share complete, current before_delivery evidence."""
+    fields = {'version', 'receipt_id', 'context_digest', 'authority_digest', 'revision',
+              'identity', 'boundary', 'round_id', 'parent_id', 'observed_at', 'snapshot',
+              'passed', 'findings'}
+    if not isinstance(readiness, dict) or not isinstance(readiness.get('checkpoint'), dict):
+        raise DeliveryReadinessError('schema', 'delivery readiness requires the full checkpoint object')
+    saved = readiness['checkpoint']
+    if not fields.issubset(saved) or not isinstance(saved.get('findings'), list):
+        raise DeliveryReadinessError('schema', 'delivery readiness checkpoint fields are incomplete')
+    try:
+        datetime.fromisoformat(saved['observed_at'])
+    except (TypeError, ValueError):
+        raise DeliveryReadinessError('schema', 'delivery checkpoint observation time is malformed')
+    if (readiness.get('authority_digest') != context['authority_digest']
+            or readiness.get('endpoint') != context.get('delivery_endpoint')
+            or not isinstance(context.get('delivery_endpoint'), dict)
+            or ('route' in readiness and readiness['route'] != context['delivery_endpoint'].get('route'))):
+        raise DeliveryReadinessError('authority', 'delivery readiness differs from the confirmed authority or endpoint')
+    require_checkpoint(context, saved, 'before_delivery', source_revision=source_revision, observation=observation)
+    if saved['findings']:
+        raise ValueError('passing delivery checkpoint contains unresolved findings')
+    if context.get('review_policy') == 'single_native':
+        require_verified_review(context, review_evidence, source_revision=source_revision, observation=observation)
+    return readiness
+
+
+def prepare_delivery_readiness(context, saved_checkpoint, *, review_evidence=None, **references):
+    """Serialize the actual saved object; receipt/reference alone never suffices."""
+    if set(references) - {'review_reference', 'checkpoint_reference'}:
+        raise ValueError('unsupported readiness reference')
+    readiness = dict(version=1, authority_digest=context['authority_digest'],
+                     endpoint=context['delivery_endpoint'], checkpoint=saved_checkpoint, **references)
+    return validate_delivery_readiness(context, readiness, review_evidence=review_evidence)

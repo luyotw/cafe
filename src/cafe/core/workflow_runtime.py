@@ -4006,21 +4006,29 @@ class BlackboardWorkflowRuntime:
                 load_review_evidence,
                 require_checkpoint,
                 require_verified_review,
+                validate_delivery_readiness, DeliveryReadinessError,
             )
             try:
                 iteration = self._latest_iteration_dir(current_step)
                 if self.execution_context is None or iteration is None:
                     raise ValueError("delivery requires current resolved execution evidence")
                 readiness = load_review_evidence(iteration / execution["delivery_evidence_artifact"])
-                if self.execution_context.get("review_policy") == "single_native":
-                    require_verified_review(self.execution_context, load_review_evidence(self.issue_dir / "execution_review.json"))
-                require_checkpoint(self.execution_context, readiness.get("checkpoint"), "before_delivery")
-                if (readiness.get("authority_digest") != self.execution_context["authority_digest"] or
-                        readiness.get("endpoint") != self.execution_context["delivery_endpoint"]):
-                    raise ValueError("delivery readiness differs from the confirmed endpoint")
+                review = (load_review_evidence(self.issue_dir / "execution_review.json")
+                          if self.execution_context.get("review_policy") == "single_native" else None)
+                validate_delivery_readiness(self.execution_context, readiness, review_evidence=review)
                 from cafe.core.execution_artifacts import bounded_execution_json
                 from cafe.core.packet_io import atomic_write_bytes
                 atomic_write_bytes(self.issue_dir / "execution_delivery.json", bounded_execution_json(readiness))
+            except DeliveryReadinessError as exc:
+                if exc.category == "schema":
+                    self.blackboard_store.record_event(self.blackboard, "delivery_readiness_rejected",
+                        {"step": current_step, "category": exc.category, "detail": str(exc)})
+                    result = self._pause_for_agent_execution_interruption(current_step=current_step,
+                        reason="agent_delivery_readiness_evidence", runtime=runtime)
+                    return PostContractResult(status_code="DELIVERY_READINESS_BLOCKED", terminal_result=result)
+                result = self._emit_pause(current_step=current_step, status_code="DELIVERY_READINESS_BLOCKED",
+                    runtime=runtime, reason=str(exc), pause_intent=HandoffIntent.NEED_CLARIFICATION)
+                return PostContractResult(status_code="DELIVERY_READINESS_BLOCKED", terminal_result=result)
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 result = self._emit_pause(current_step=current_step, status_code="DELIVERY_READINESS_BLOCKED",
                     runtime=runtime, reason=str(exc), pause_intent=HandoffIntent.NEED_CLARIFICATION)

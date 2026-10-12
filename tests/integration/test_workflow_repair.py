@@ -112,3 +112,37 @@ def test_i5_real_interruption_pending_task_retry_and_completion_progress(interru
     runtime.blackboard_store.record_event(runtime.blackboard, 'step_completed',
         {'step': 'compose_custom', 'attempt': 2, 'iteration': 2})
     assert render() == 'completed'
+
+
+from tests.integration.test_workflow_artifact_correction import journey, CORRECTED
+
+
+@pytest.mark.parametrize('missing_first', [True, False])
+def test_i6_custom_declared_producer_validates_full_checkpoint_before_handoff(journey, missing_first):
+    from cafe.core.execution_checkpoints import checkpoint
+    from cafe.core.blackboard import BlackboardStore
+    j = journey([CORRECTED], workspace=False)
+    context = {'version': 1, 'root': str(j.repo), 'baseline_commit': __import__('subprocess').check_output(
+        ['git', 'rev-parse', 'HEAD'], cwd=j.repo, text=True).strip(), 'paths': ['owned.txt'], 'preexisting': [],
+        'authority_digest': 'a' * 64, 'revision': 1,
+        'identity': {'issue_name': 'correction', 'workflow_id': j.runtime.blackboard.workflow_id},
+        'delivery_endpoint': {'route': 'local', 'source_branch': 'main'}}
+    declaration = {'checkpoints': ['before_delivery'], 'delivery_evidence_artifact': 'bespoke_ready.json'}
+    j.runtime.steps['inspect_custom']['execution'] = declaration
+    j.runtime.execution_context = context
+    execute = j.manager.execute
+    saved = checkpoint(context, 'before_delivery', round_id='delivery-round', parent_id='parent')
+    def provider(*args, **kwargs):
+        result = execute(*args, **kwargs)
+        if kwargs.get('phase_name') != 'deliver_custom':
+            artifact = {'authority_digest': context['authority_digest'], 'endpoint': context['delivery_endpoint'],
+                        'checkpoint': {'receipt_id': saved['receipt_id']} if missing_first and len(j.manager.calls) == 1 else saved}
+            (j.iteration / 'bespoke_ready.json').write_text(json.dumps(artifact))
+        return result
+    j.manager.execute = provider
+    j.runtime.run(start_step='inspect_custom', single_step=True)
+    assert len(j.manager.calls) == (2 if missing_first else 1)
+    readiness = json.loads((j.issue / 'execution_delivery.json').read_text())
+    assert readiness['checkpoint'] == saved
+    assert not __import__('cafe.core.human_task_records', fromlist=['HumanTaskRecordStore']).HumanTaskRecordStore(j.issue).tasks()
+    assert BlackboardStore(j.issue).load_read_only().current_step == 'deliver_custom'

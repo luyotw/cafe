@@ -662,6 +662,7 @@ class GenericWorkflowStepExecutor(Phase):
                 raise ValueError("execution_checkpoint_blocked: " + json.dumps(receipt["findings"]))
             instructions = "Resolved execution checkpoint context:\n" + json.dumps(execution_context)
             extra_prompt = (extra_prompt + "\n" if extra_prompt else "") + instructions
+        self._execution_context = execution_context
         self._resolved_execution_chains = (execution_context.get("phase_chains", {})
                                            if execution_context is not None else {})
         hybrid_portion = step_def.get("hybrid_portion")
@@ -2250,13 +2251,35 @@ class GenericWorkflowStepExecutor(Phase):
         metadata["artifact_correction"] = budget.to_dict()
         context_file.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    @staticmethod
-    def _validate_current_artifact(step_name: str, step_def: Dict[str, Any], output_file: Path) -> None:
+    def _validate_current_artifact(self, step_name: str, step_def: Dict[str, Any], output_file: Path) -> None:
         if output_file.exists():
             validate_artifact_syntax(
                 output_file.read_text(encoding="utf-8"), producer=step_name,
                 artifact=str(step_def.get("output_artifact", step_name)), path=str(output_file),
             )
+
+        declaration = step_def.get("execution", {})
+        if "before_delivery" in declaration.get("checkpoints", []):
+            from cafe.core.execution_checkpoints import (
+                DeliveryReadinessError, load_review_evidence, validate_delivery_readiness,
+            )
+            artifact = declaration.get("delivery_evidence_artifact")
+            if not isinstance(artifact, str) or Path(artifact).is_absolute() or ".." in Path(artifact).parts:
+                raise ValueError("delivery evidence needs an iteration-local declared artifact")
+            context = getattr(self, "_execution_context", None)
+            if context is None:
+                raise ValueError("delivery producer requires resolved execution context")
+            try:
+                path = output_file.parent / artifact
+                if not path.exists():
+                    raise DeliveryReadinessError("schema", "declared delivery readiness artifact is missing")
+                review = (load_review_evidence(self.issue_dir / "execution_review.json")
+                          if context.get("review_policy") == "single_native" else None)
+                validate_delivery_readiness(context, load_review_evidence(path), review_evidence=review)
+            except DeliveryReadinessError as error:
+                if error.category != "schema":
+                    raise
+                raise ArtifactFormatError(step_name, artifact, str(path), str(error)) from error
 
     def _correct_artifact_format(
         self, *, response: str, step_name: str, step_def: Dict[str, Any],
