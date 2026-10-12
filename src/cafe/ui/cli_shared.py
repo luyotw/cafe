@@ -591,6 +591,12 @@ def _consume_pending_chat_handoff(
     if not contract.has_meaningful_source and contract.to_step == blackboard.current_step:
         return None
 
+    # HumanTask continuations and interruption recovery belong to the runtime.
+    # Consuming them here erases their durable provenance and turns an ordinary
+    # resume into an explicit start override before runtime validation.
+    if contract.source.startswith("human_task.") or contract.source == "workflow.interrupted_step":
+        return None
+
     target_step = contract.to_step
     if (
         target_step not in {"user", "done"}

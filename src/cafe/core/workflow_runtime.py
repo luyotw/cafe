@@ -53,11 +53,12 @@ from cafe.core.human_task_records import (
 )
 from cafe.core.human_tasks import (
     AGENT_EXECUTION_INTERRUPTED_TRIGGER,
+    AGENT_EXECUTION_INTERRUPTED_TASK_ID,
     HumanTaskPolicy,
     agent_execution_interrupted_human_task,
     resolve_step_human_task,
 )
-from cafe.core.packet_io import atomic_write_bytes, sha256_bytes
+from cafe.core.packet_io import atomic_write_bytes, canonical_json, sha256_bytes
 from cafe.core.playbook import (
     resolve_step_attempt_limit,
     resolve_step_behavior,
@@ -4956,6 +4957,159 @@ class BlackboardWorkflowRuntime:
                 return event.data
         return None
 
+    def _has_completed_interruption_redirect(
+        self, contract: HandoffContract, *, require_current_target: bool = True,
+    ) -> bool:
+        """Distinguish a validated supervisor route from producer publication.
+
+        This exempts only a derived handoff candidate. An actual prepared,
+        unsettled feedback delivery is reconciled first and remains fenced.
+        """
+        if (
+            contract.to_owner != HandoffOwner.AGENT
+            or contract.intent != HandoffIntent.AWAIT_AGENT
+            or not isinstance(contract.from_step, str)
+            or not isinstance(contract.to_step, str)
+            or contract.from_step not in self.steps
+            or contract.to_step not in self.steps
+            or contract.to_step == contract.from_step
+            or (require_current_target and self.blackboard.current_step != contract.to_step)
+        ):
+            return False
+        completion = next((
+            event for event in reversed(self.blackboard.events)
+            if event.event_type == "human_task_completed" and event.step == contract.from_step
+        ), None)
+        if completion is None:
+            return False
+        data = completion.data
+        if (
+            data.get("supervisor_handoff") is not True
+            or data.get("trigger") != AGENT_EXECUTION_INTERRUPTED_TRIGGER
+            or data.get("task_id") != AGENT_EXECUTION_INTERRUPTED_TASK_ID
+            or data.get("to_step") != contract.to_step
+            or data.get("declared_to_step") != contract.from_step
+            or not isinstance(data.get("source"), str)
+            or contract.source != f"human_task.{data['source']}"
+        ):
+            return False
+        try:
+            records = HumanTaskRecordStore(self.issue_dir)
+            matching = [task for task in records.tasks() if (
+                task.workflow_id == self.blackboard.workflow_id
+                and task.step == contract.from_step
+                and task.iteration == self._human_task_iteration(contract.from_step)
+                and task.trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER
+                and task.policy_id == AGENT_EXECUTION_INTERRUPTED_TASK_ID
+                and task.status is HumanTaskStatus.COMPLETED
+                and task.superseded_by_task_id is None
+                and ("human_task_id" not in data or data["human_task_id"] == task.id)
+            )]
+            if len(matching) != 1:
+                return False
+            task = matching[0]
+            result = records.get_result(task.id)
+        except (HumanTaskRecordError, OSError, ValueError, TypeError, KeyError):
+            return False
+        if result is None:
+            return False
+        payload = result.payload
+        decision = payload.get("decision")
+        return (
+            result.workflow_id == self.blackboard.workflow_id
+            and result.task_id == task.id
+            and result.source == data["source"]
+            and ("result_id" not in data or data["result_id"] == result.id)
+            and payload.get("task") == task.policy_id
+            and decision in ("retry", "retry_fresh_session")
+            and task.continuations.get(decision) == contract.from_step
+            and payload.get("declared_continuation") == contract.from_step
+            and payload.get("supervisor_handoff_to") == contract.to_step
+            and payload.get("continuation") == contract.to_step
+        )
+
+    def _try_restore_rejected_interruption_redirect(self) -> bool:
+        """Recover the exact unconsumed decision rejected by the old classifier."""
+        contract = self.blackboard.handoff_contract
+        if (
+            contract is None
+            or contract.to_owner != HandoffOwner.AGENT
+            or contract.intent != HandoffIntent.AWAIT_AGENT
+            or self._latest_unreconciled_feedback_delivery() is not None
+        ):
+            return False
+        indexed = list(enumerate(self.blackboard.events))
+        completion = next(((i, e) for i, e in reversed(indexed)
+                           if e.event_type == "human_task_completed"), None)
+        if completion is None:
+            return False
+        index, event = completion
+        following = self.blackboard.events[index + 1:]
+        if (
+            len(following) < 3
+            or [e.event_type for e in following[:3]] != [
+                "step_reconciliation_failed", "workflow_feedback_delivery_rejected", "interrupted_handoff_reset",
+            ]
+            or any(e.step != event.step for e in following[:3])
+            or following[0].data.get("runtime") != "feedback_delivery_recovery"
+            or following[0].data.get("missing_evidence") not in (
+                ["checklist_complete", "feedback_delivery_prepared"],
+                ["feedback_delivery_prepared", "checklist_complete"],
+            )
+            or following[1].data.get("reason") != "feedback_delivery_recovery_failed"
+            or following[1].data.get("delivery_id") is not None
+            or following[2].data.get("reason") != "feedback_delivery_recovery_failed"
+        ):
+            return False
+        approved = replace(contract, from_step=event.step, to_step=event.data.get("to_step"),
+                           source=f"human_task.{event.data.get('source')}")
+        if not self._has_completed_interruption_redirect(approved, require_current_target=False):
+            return False
+        if self.blackboard.current_step not in {approved.from_step, approved.to_step}:
+            return False
+        preparation = {
+            "step": approved.from_step, "to_step": approved.to_step,
+            "completion_sha256": sha256_bytes(canonical_json(event.data)),
+        }
+        prepared = False
+        for entry in following[3:]:
+            if entry.event_type == "workflow_event_callback_enqueued":
+                continue
+            if (entry.event_type != "interrupted_supervisor_handoff_prepared"
+                    or entry.data != preparation or prepared):
+                return False
+            prepared = True
+        original_reset = (
+            contract.source == "workflow.interrupted_step"
+            and contract.from_step == approved.from_step
+            and contract.to_step == approved.from_step
+        )
+        partial_publication = (
+            prepared
+            and contract.source in {"unknown", approved.source}
+            and contract.to_next_step_dict() == approved.to_next_step_dict()
+        )
+        if not original_reset and not partial_publication:
+            return False
+        # Journal the correlated decision before touching either route file.
+        # A restart may reconcile only this exact partial publication; later
+        # producer work or changed evidence still invalidates recovery.
+        if not prepared:
+            self.blackboard_store.record_event(
+                self.blackboard, "interrupted_supervisor_handoff_prepared", preparation,
+            )
+        self.blackboard_store.set_current_step(self.blackboard, approved.to_step)
+        self.blackboard_store.update_handoff_contract(
+            self.blackboard, from_step=approved.from_step,
+            to_owner=approved.to_owner, to_step=approved.to_step,
+            intent=approved.intent, source=approved.source,
+        )
+        self.blackboard_store.record_event(self.blackboard, "interrupted_supervisor_handoff_restored", {
+            "step": approved.from_step, "to_step": approved.to_step,
+            "human_task_id": event.data.get("human_task_id"), "result_id": event.data.get("result_id"),
+        })
+        return True
+
     def _feedback_delivery_handoff_candidate(self) -> tuple[str, str | None] | None:
         """Find an uncommitted curator handoff that must have delivery evidence."""
         try:
@@ -4973,6 +5127,8 @@ class BlackboardWorkflowRuntime:
             or contract.to_step == current_step
             or not self._feedback_delivery_required(current_step=current_step)
         ):
+            return None
+        if self._has_completed_interruption_redirect(contract):
             return None
         output_artifact = self.steps[current_step].get("output_artifact")
         artifact = (
@@ -6109,6 +6265,7 @@ class BlackboardWorkflowRuntime:
             upgraded = self._upgrade_pending_restart_task()
             if upgraded is not None:
                 return self._finalize_observed_result(upgraded)
+        entry_checkpoint = None
         declared = any(step.get("execution", {}).get("checkpoints") for step in self.steps.values())
         if self.execution_context is not None or declared:
             from cafe.core.execution_checkpoints import checkpoint
@@ -6119,12 +6276,20 @@ class BlackboardWorkflowRuntime:
                 if self.execution_context is None:
                     raise ValueError("declared scope checkpoints require resolved execution context")
                 receipt = checkpoint(self.execution_context, "resume", round_id="runtime-entry", parent_id="runtime")
-                self.blackboard_store.record_event(self.blackboard, "execution_checkpoint", receipt)
                 if not receipt["passed"]:
+                    self.blackboard_store.record_event(self.blackboard, "execution_checkpoint", receipt)
                     raise ValueError(json.dumps(receipt["findings"]))
+                entry_checkpoint = receipt
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 return self._emit_pause(current_step=current_step, status_code="EXECUTION_CHECKPOINT_BLOCKED",
                     runtime="execution_checkpoints", reason=str(exc), pause_intent=HandoffIntent.NEED_CLARIFICATION)
+        # Validate scope first, then classify the durable pre-entry history.
+        # Record a successful checkpoint after recovery so it cannot obscure the
+        # legacy rejection evidence, including when this invocation is interrupted.
+        if start_step is None:
+            self._try_restore_rejected_interruption_redirect()
+        if entry_checkpoint is not None:
+            self.blackboard_store.record_event(self.blackboard, "execution_checkpoint", entry_checkpoint)
         if self._workflow_event_callback is not None:
             # Capture eligibility once; a failed open callback cannot be
             # selected again by events emitted later in this invocation.
