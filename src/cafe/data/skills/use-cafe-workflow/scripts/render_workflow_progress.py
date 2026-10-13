@@ -325,10 +325,14 @@ def _runtime_progress(
             identity = (event_iteration, _iteration_number(data.get("attempt")), _iteration_number(data.get("hop")))
             known = attempts.get(step)
             if known is not None:
-                # An event arriving later can still describe an older attempt.
-                if any(new is not None and old is not None and new < old for new, old in zip(identity, known)):
-                    continue
-                if event_type in {"step_completed", "single_step_completed", "step_interrupted", "workflow_interrupted"} and any(
+                if event_type == "step_started":
+                    # Hop/attempt counters restart with each invocation. A genuine
+                    # later audited start establishes the new current identity.
+                    # Replayed starts from an older artifact or time cannot do so.
+                    if (event_iteration is not None and known[0] is not None and event_iteration < known[0]
+                            or _after(latest_starts.get(step), event.get("timestamp"))):
+                        continue
+                elif any(
                     new is not None and old is not None and new != old for new, old in zip(identity, known)
                 ):
                     continue

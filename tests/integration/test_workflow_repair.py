@@ -6,6 +6,47 @@ from cafe.ui.cli import app
 from tests.unit.test_workflow_repair import legacy, events
 
 
+@pytest.mark.parametrize('single_step', [False, True])
+def test_issue646_blk002_real_retry_completion_survives_runtime_hop_reset(tmp_path, single_step):
+    from cafe.agents.executor import AgentExecutionError
+    from cafe.core.workflow_models import StepExecutionResult
+    from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
+    from cafe.core.human_task_records import HumanTaskRecordStore
+    from tests.unit.test_workflow_progress_renderer import _module
+    issue = tmp_path / '.cafe/issues/hop-case'
+    graph = {'playbook': {'id': 'custom'}, 'steps': {
+        'alpha': {'skill': 'custom', 'role': 'writer', 'behavior': {'completion': 'baton'},
+                  'output_artifact': 'a', 'on': {'await_agent': 'beta'}},
+        'beta': {'skill': 'custom', 'role': 'writer', 'behavior': {'completion': 'baton'},
+                 'output_artifact': 'b', 'on': {'await_agent': '_done'}}}}
+    failed = False
+    def execute(step, definition, state, **kwargs):
+        nonlocal failed
+        directory = issue / step / 'iteration_001'
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / 'iteration.json').write_text(json.dumps({'iteration': 1,
+            'session_id': 'original', 'cli': 'codex', 'model': 'original'}))
+        if step == 'beta' and not failed:
+            failed = True
+            raise AgentExecutionError('provider boundary failure', error_type='execution_error')
+        path = directory / 'output.md'; path.write_text('Saved bounded result\n')
+        (issue / 'next_step.txt').write_text('{"version":1,"intent":"await_agent"}')
+        return StepExecutionResult(response='', artifacts={definition['output_artifact']: str(path)})
+    runtime = BlackboardWorkflowRuntime(issue_dir=issue, playbook=graph, executor=execute)
+    runtime._notify_new_human_task = lambda task: None
+    assert not runtime.run(start_step='alpha').completed
+    render = lambda: _module()._runtime_progress(issue, graph)[0]['beta']
+    assert render() == 'blocked'
+    records = HumanTaskRecordStore(issue); task = records.tasks()[0]
+    # Separate simulated user decision; repair/rendering never answers a task.
+    records.complete(workflow_id=task.workflow_id, task_id=task.id,
+        payload={'decision': 'retry', 'continuation': 'beta'}, source='fixture-user')
+    assert render() == 'blocked'
+    resumed = BlackboardWorkflowRuntime(issue_dir=issue, playbook=graph, executor=execute)
+    assert resumed.run(start_step='beta', single_step=single_step).completed
+    assert render() == 'completed'
+
+
 def invoke(legacy, monkeypatch, execute=True):
     monkeypatch.chdir(legacy[0].parents[2])
     args = ['repair', '--issue', 'repair-case', '--kind', 'iteration',

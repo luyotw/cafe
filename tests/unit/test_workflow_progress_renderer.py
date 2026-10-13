@@ -2250,3 +2250,30 @@ def test_issue646_u10_old_block_metadata_cannot_override_matching_later_start(tm
     (directory / 'iteration.json').write_text(json.dumps({'status_code': 'INTERRUPTED',
         'agent_interruption': {'id': '2026-09-20T09:01:00+08:00'}}))
     assert _module()._runtime_progress(issue, _custom_playbook())[0]['資料盤點'] == 'in_progress'
+
+
+@pytest.mark.parametrize('old_attempt,new_attempt', [(1, 1), (1, 2), (3, 1)])
+def test_issue646_blk002_later_start_resets_invocation_counters_without_admitting_stale_events(tmp_path, old_attempt, new_attempt):
+    issue = tmp_path / 'issue'
+    issue.mkdir()
+    step = '資料盤點'
+    old = {'iteration': 1, 'attempt': old_attempt, 'hop': 2}
+    new = {'iteration': 1, 'attempt': new_attempt, 'hop': 1}
+    _write_runtime_state(issue, {'current_step': step, 'events': [
+        {'step': step, 'event_type': 'step_started', 'timestamp': '2026-10-01T01:00:00Z', 'data': old},
+        {'step': step, 'event_type': 'step_interrupted', 'timestamp': '2026-10-01T01:01:00Z', 'data': old}]})
+    render = lambda: _module()._runtime_progress(issue, _custom_playbook())[0][step]
+    assert render() == 'blocked'
+    _append_runtime_event(issue, {'step': step, 'event_type': 'human_task_completed',
+                                 'timestamp': '2026-10-01T01:02:00Z', 'data': old})
+    assert render() == 'blocked'
+    _append_runtime_event(issue, {'step': step, 'event_type': 'step_started',
+                                 'timestamp': '2026-10-01T01:03:00Z', 'data': new})
+    assert render() == 'in_progress'
+    for kind in ('step_started', 'step_completed', 'step_interrupted', 'workflow_paused'):
+        _append_runtime_event(issue, {'step': step, 'event_type': kind,
+            'timestamp': '2026-10-01T01:00:00Z', 'data': dict(old, status_code='INTERRUPTED')})
+        assert render() == 'in_progress'
+    _append_runtime_event(issue, {'step': step, 'event_type': 'step_completed',
+                                 'timestamp': '2026-10-01T01:04:00Z', 'data': new})
+    assert render() == 'completed'
