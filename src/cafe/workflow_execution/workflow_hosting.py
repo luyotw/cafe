@@ -2,23 +2,18 @@
 
 from __future__ import annotations
 
-import os
-import threading
 import uuid
 import time
-from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
 from cafe.utils.file_lock import (
-    _release_advancement_process_lock,
-    _try_advancement_process_lock,
+    _release_advancement_process_lock as _release_advancement_process_lock,
+    _try_advancement_process_lock as _try_advancement_process_lock,
+    advancement_execution_lock as advancement_execution_lock,
+    WorkerAlreadyRunningError as WorkerAlreadyRunningError,
 )
-
-
-class WorkerAlreadyRunningError(RuntimeError):
-    """Another live worker owns workflow advancement."""
 
 
 @dataclass(frozen=True)
@@ -27,30 +22,6 @@ class HostRunResult:
     worker_id: str
     result: Any = None
     pid: int | None = None
-
-
-_advancement_scopes = threading.local()
-
-
-@contextmanager
-def advancement_execution_lock(issue_dir: Path):
-    """Reuse only this thread's actual live process-lock handle for this issue."""
-    path = Path(issue_dir).resolve() / ".workflow-advancement.lock"
-    scopes = getattr(_advancement_scopes, 'handles', {})
-    existing = scopes.get(path)
-    if existing is not None and existing[0] == os.getpid() and not existing[1].closed:
-        yield False
-        return
-    handle = _try_advancement_process_lock(path)
-    if handle is None:
-        raise WorkerAlreadyRunningError("workflow advancement is owned by another worker")
-    _advancement_scopes.handles = scopes
-    scopes[path] = (os.getpid(), handle)
-    try:
-        yield True
-    finally:
-        scopes.pop(path, None)
-        _release_advancement_process_lock(handle)
 
 
 class WorkflowHost:
@@ -74,7 +45,7 @@ class WorkflowHost:
     ) -> HostRunResult:
         if hosting not in {"foreground", "background"}:
             raise ValueError("hosting must be 'foreground' or 'background'")
-        with advancement_execution_lock(self.issue_dir):
+        with advancement_execution_lock(self.issue_dir, reuse_existing=False):
             identity = worker_id or str(uuid.uuid4())
             while True:
                 result = runtime()

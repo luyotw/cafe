@@ -6491,7 +6491,7 @@ class BlackboardWorkflowRuntime:
         self, *, max_transitions: int = 30, start_step: Optional[str] = None,
         single_step: bool = False,
     ) -> PlaybookRunResult:
-        from cafe.workflow_execution.workflow_hosting import advancement_execution_lock
+        from cafe.utils.file_lock import advancement_execution_lock
         from cafe.core.workflow_repair import recover_pending_interruption, _quiescent
         with advancement_execution_lock(self.issue_dir) as acquired:
             if acquired:

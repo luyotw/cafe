@@ -3,6 +3,8 @@
 import errno
 import os
 import stat
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import IO, TextIO
 
@@ -86,3 +88,31 @@ def _release_advancement_process_lock(handle: IO[str]) -> None:
             msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
     finally:
         handle.close()
+
+
+class WorkerAlreadyRunningError(RuntimeError):
+    """Another live worker owns workflow advancement."""
+
+
+_advancement_scopes = threading.local()
+
+
+@contextmanager
+def advancement_execution_lock(issue_dir: Path, *, reuse_existing: bool = True):
+    """Reuse only this thread's actual live process-lock handle for this issue."""
+    path = Path(issue_dir).resolve() / ".workflow-advancement.lock"
+    scopes = getattr(_advancement_scopes, 'handles', {})
+    existing = scopes.get(path)
+    if reuse_existing and existing is not None and existing[0] == os.getpid() and not existing[1].closed:
+        yield False
+        return
+    handle = _try_advancement_process_lock(path)
+    if handle is None:
+        raise WorkerAlreadyRunningError("workflow advancement is owned by another worker")
+    _advancement_scopes.handles = scopes
+    scopes[path] = (os.getpid(), handle)
+    try:
+        yield True
+    finally:
+        scopes.pop(path, None)
+        _release_advancement_process_lock(handle)

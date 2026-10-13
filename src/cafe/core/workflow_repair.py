@@ -320,7 +320,7 @@ def recover_pending_interruption(issue):
     """Recover only the current unfinished original preparation on execution entry."""
     from cafe.core.blackboard import HandoffContract, HandoffOwner
     from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
-    from cafe.workflow_execution.workflow_hosting import advancement_execution_lock
+    from cafe.utils.file_lock import advancement_execution_lock
 
     issue = Path(issue).absolute()
     if not (issue / 'blackboard.json').exists():
@@ -353,14 +353,17 @@ def recover_pending_interruption(issue):
             directory = _selected(issue, step, iteration)
             if any(p.name > directory.name for p in directory.parent.glob('iteration_[0-9][0-9][0-9]')):
                 return None
-            if any(task.status is HumanTaskStatus.PENDING and task.handoff_key != key for task in tasks):
-                raise ValueError('another pending decision owns the workflow')
-            context_path = directory / 'iteration.json'
+            # A coherent pending handoff is already published. Leave its legacy
+            # metadata and any configured-choice upgrade to normal user routing.
             if (len(matching) == 1 and same and state.current_step == 'user'
-                    and context_path.exists()
-                    and sha256_bytes(_read(context_path, 1_048_576)[0]) == prepared['context_target_sha256']
+                    and matching[0].workflow_id == state.workflow_id
+                    and matching[0].step == step and matching[0].iteration == iteration
+                    and matching[0].expected_result == prepared['expected_result']
+                    and matching[0].continuations == prepared['continuations']
                     and _json(_read(issue / 'next_step.txt', 4096)[0]) == contract.to_next_step_dict()):
                 return None
+            if any(task.status is HumanTaskStatus.PENDING and task.handoff_key != key for task in tasks):
+                raise ValueError('another pending decision owns the workflow')
             result = _interruption(issue, state, directory, step, iteration, True)
             return dict(result, step=step, reason=prepared['reason'])
 
