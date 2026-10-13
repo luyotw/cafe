@@ -287,7 +287,7 @@ def prepare_pr_reconciliation(issue, root, context, record, directory):
     authority or actual execution receipt remains refused, never reconstructed
     from current HEAD or a convenient PR URL.
     """
-    import hashlib, json, re
+    import json, re
     from cafe.core.capabilities import ExecutionRequest, canonical_request_fingerprint
     from cafe.core.execution_checkpoints import context_digest, load_review_evidence, validate_delivery_readiness
     from cafe.core.git_delivery import remote_configuration, configuration_identity

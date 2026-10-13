@@ -8,9 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import stat
-import uuid
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -19,7 +17,7 @@ from typing import Callable
 from cafe.core.audit_events import AuditEventStore
 from cafe.core.blackboard import BlackboardState, BlackboardStore
 from cafe.core.packet_io import atomic_write_bytes, sha256_bytes
-from cafe.core.workspace_lock import workspace_execution_lock
+from cafe.core.workspace_lock import workspace_execution_lock, WorkspaceLeaseBusyError
 from cafe.workflow_execution.workflow_hosting import (
     _release_advancement_process_lock,
     _try_advancement_process_lock,
@@ -110,26 +108,47 @@ def _quiescent(issue):
             'stopped', 'completed', 'startup_failed', 'failed', 'exited'
         }:
             raise ValueError('live or uncertain worker launch owns execution')
+        pid = record.get('pid')
+        if pid is not None:
+            if type(pid) is not int or pid <= 0: raise ValueError('registered worker PID is uncertain')
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                pass
+            except PermissionError as error:
+                raise ValueError('registered worker liveness cannot be verified') from error
+            else:
+                raise ValueError('registered worker PID is still live or reused; ownership is uncertain')
 
 
 @contextmanager
 def _guard(issue):
     _safe_parents(issue)
     _safe_parents(issue / '.workflow-advancement.lock')
-    lease = _try_advancement_process_lock(issue / '.workflow-advancement.lock')
+    try:
+        lease = _try_advancement_process_lock(issue / '.workflow-advancement.lock')
+    except RuntimeError as error:
+        raise ValueError(str(error)) from error
     if lease is None: raise ValueError('workflow advancement lease is busy')
     try:
         _quiescent(issue)
         # Preserve the runtime's advancement -> workspace -> store lock order.
-        with workspace_execution_lock(issue.parents[2]):
+        with workspace_execution_lock(issue.parents[2], blocking=False):
             _quiescent(issue)
             yield
+    except WorkspaceLeaseBusyError as error:
+        raise ValueError(str(error)) from error
     finally:
         _release_advancement_process_lock(lease)
 
 
+def _safe_component(value):
+    return (isinstance(value, str) and bool(value) and value.strip() == value
+            and value not in {'.', '..'} and not any(char in value for char in ['/', '\\', '\x00']))
+
+
 def _selected(issue, step, iteration):
-    if not isinstance(step, str) or not re.fullmatch(r'[A-Za-z0-9_-]+', step):
+    if not _safe_component(step):
         raise ValueError('explicit safe step selection required')
     if type(iteration) is not int or not 1 <= iteration <= 999:
         raise ValueError('explicit iteration in 1..999 required')
@@ -142,6 +161,16 @@ def _selected(issue, step, iteration):
 def _repair_events(audit, state, step, iteration, kinds):
     high = audit.high_water(state.workflow_id)
     if high > 100_000: raise ValueError('audit attribution exceeds bounded repair inspection')
+    # Existing store writers may hydrate audit history. Bound that exceptional
+    # repair workload before using them, without changing any normal store limit.
+    total = 0
+    for sequence in range(1, high + 1):
+        path = audit._path(sequence)
+        if path.is_symlink(): raise ValueError('unsafe audit evidence alias')
+        if path.exists():
+            total += path.stat().st_size
+            if total > LEGACY_METADATA_BYTES:
+                raise ValueError('audit attribution exceeds bounded repair evidence capacity')
     selected = []
     for sequence in range(1, high + 1):
         record = audit.read(state.workflow_id, sequence, bounded=True)
@@ -194,6 +223,9 @@ def _iteration(issue, state, directory, step, iteration, execute, progress):
     content, identity = _read(path, LEGACY_METADATA_BYTES)
     metadata = _json(content)
     if not isinstance(metadata, dict): raise ValueError('iteration must be a mapping')
+    if (('iteration' in metadata and (type(metadata['iteration']) is not int or metadata['iteration'] != iteration))
+            or metadata.get('step_name', step) != step or metadata.get('workflow_id', state.workflow_id) != state.workflow_id):
+        raise ValueError('legacy metadata conflicts with selected workflow/step/iteration')
     audit = AuditEventStore(issue)
     records = _repair_events(audit, state, step, iteration, {'iteration_repair_prepared', 'iteration_repair_completed'})
     prepared = [r['data'] for r in records if r['event_type'] == 'iteration_repair_prepared']
@@ -228,7 +260,10 @@ def _iteration(issue, state, directory, step, iteration, execute, progress):
         raise ValueError('embedded stream is missing or exceeds exceptional bound')
     raw = _raw_proof(raw_path, embedded, progress)
     target = {k: v for k, v in metadata.items() if k != 'streaming_log'}
-    workspace = any(k in metadata for k in ('workspace_completion', 'workspace_publication'))
+    # An over-reserve legacy file could not have been admitted by the existing
+    # workspace writer. Retained workspace fields do not impose its lower
+    # ceiling on ordinary/checklist/report writes or their explicit repair.
+    workspace = len(content) <= 983_040 and any(k in metadata for k in ('workspace_completion', 'workspace_publication'))
     payload = (json.dumps(target, ensure_ascii=False, indent=2) + ('\n' if workspace else '')).encode()
     if len(payload) > (983_040 if workspace else 1_048_576):
         raise ValueError('non-log metadata exceeds its existing path-specific bound')
@@ -285,7 +320,8 @@ def _interruption(issue, state, directory, step, iteration, execute):
     from cafe.utils.issue_config import read_issue_config_strict
 
     path = directory / 'iteration.json'
-    content, identity = _read(path, 1_048_576)
+    absent = not path.exists() and not path.is_symlink()
+    content, identity = (None, None) if absent else _read(path, 1_048_576)
     context = load_restart_context(path)
     audit = AuditEventStore(issue)
     histories = _repair_events(audit, state, step, iteration, {'agent_interruption_prepared', 'interruption_repair_completed'})
@@ -297,11 +333,14 @@ def _interruption(issue, state, directory, step, iteration, execute):
         # all source bindings still have to match the exact selected iteration.
         prepared = candidates[-1]
         contract = HandoffContract.from_dict(prepared['contract'])
+        marker = context.get(prepared['marker_key']) if prepared.get('marker_key') else None
         if marker and marker.get('id') not in {contract.created_at, (prepared.get('marker') or {}).get('id')}:
             raise ValueError('interruption marker conflicts with prepared identity')
-        if sha256_bytes(content) not in {prepared['context_original_sha256'], prepared['context_target_sha256']}:
+        observed_hash = sha256_bytes(content) if content is not None else None
+        if observed_hash not in {prepared['context_original_sha256'], prepared['context_target_sha256']}:
             raise ValueError('interruption context changed since durable preparation')
     else:
+        if absent: raise ValueError('absent legacy context has no durable pre-image proof')
         if (current is None or current.from_step != step or current.to_owner is not HandoffOwner.USER
                 or current.intent is not HandoffIntent.MANUAL_HANDOFF
                 or current.source != 'workflow.agent_execution_interrupted'):
@@ -320,8 +359,7 @@ def _interruption(issue, state, directory, step, iteration, execute):
         policy, binding = agent_execution_interrupted_human_task(step_name=step,
             restart_policy=resolve_restart_policy(read_issue_config_strict(config) if config.exists() else {}),
             interruption_reason=reason)
-        from dataclasses import replace
-        policy = policy.model_copy(update={'prompt': policy.prompt})
+        policy = policy.for_locale(state.conversation_locale)
         proposed = dict(context, agent_interruption=dict(id=contract.created_at, reason=reason,
                 workflow_id=state.workflow_id, step=step, iteration=iteration), workflow_completion_trusted=False)
         prepared = dict(step=step, iteration=iteration, reason=reason, runtime='explicit-repair',
@@ -359,7 +397,9 @@ def _interruption(issue, state, directory, step, iteration, execute):
             BlackboardStore(issue).load_or_create(step, playbook_id=state.playbook_id)
         return {'status': 'no-op', 'task_id': tasks[0].id}
     if not execute: return {'status': 'proposed', 'handoff_key': key}
-    if _read(path, 1_048_576) != (content, identity): raise ValueError('interruption evidence changed')
+    if absent:
+        if path.exists() or path.is_symlink(): raise ValueError('absent original context changed')
+    elif _read(path, 1_048_576) != (content, identity): raise ValueError('interruption evidence changed')
     if not candidates: _event(audit, state, step, 'agent_interruption_prepared', prepared)
     store = BlackboardStore(issue)
     with records.transaction():
@@ -382,7 +422,6 @@ def _original_context(issue, state, source):
     from cafe.core.execution_checkpoints import context_digest
     if source is None: raise ValueError('original saved --execution-context-file is required')
     path = Path(source).absolute()
-    if not path.is_relative_to(issue): raise ValueError('execution context must be retained inside the selected issue')
     content, _ = _read(path, 256 * 1024)
     context = _json(content)
     context_digest(context)
@@ -390,7 +429,7 @@ def _original_context(issue, state, source):
             or context.get('identity', {}).get('issue_name') != issue.name
             or Path(context.get('root', '')).resolve() != issue.parents[2].resolve()):
         raise ValueError('saved context belongs to another original execution')
-    return context, {'path': str(path.relative_to(issue)), 'sha256': sha256_bytes(content)}
+    return context, {'path': str(path.relative_to(issue)) if path.is_relative_to(issue) else str(path), 'sha256': sha256_bytes(content)}
 
 
 def _saved_terminal(path, session):

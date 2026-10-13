@@ -1443,9 +1443,8 @@ def repair(
 ) -> None:
     """Repair saved machine evidence without executing workflow work."""
     import json
-    import re
-    from cafe.core.workflow_repair import repair_workflow
-    if not re.fullmatch(r'[A-Za-z0-9_-]+', issue):
+    from cafe.core.workflow_repair import repair_workflow, _safe_component
+    if not _safe_component(issue):
         typer.echo(json.dumps({'status': 'refused', 'reason': 'explicit safe issue name required'}))
         raise typer.Exit(2)
     result = repair_workflow(

@@ -193,3 +193,27 @@ def test_issue646_u12_public_consumer_routes_machine_omission_to_specific_recove
     task = HumanTaskRecordStore(issue).tasks()[0]
     assert task.policy_id == 'agent-execution-interrupted'
     assert json.loads((issue / 'ship_bespoke/iteration_001/iteration.json').read_text())['agent_interruption']['reason'] == 'agent_delivery_readiness_evidence'
+
+
+@pytest.mark.parametrize('review_status', ['passing', 'missing', 'blocking', 'wrong_parent'])
+def test_issue646_u11_readiness_preserves_required_independent_native_review(execution_context, review_status):
+    from datetime import datetime, timezone
+    from cafe.core.execution_checkpoints import checkpoint, validate_delivery_readiness
+    context = dict(execution_context, delivery_endpoint={'route': 'local'}, review_policy='single_native',
+                   review_configuration={'cli': 'codex', 'model': 'review-model', 'read_only': True})
+    review_checkpoint = checkpoint(context, 'before_review', round_id='review-round', parent_id='parent')
+    findings = [{'severity': 'blocking', 'detail': 'Unresolved invariant'}] if review_status == 'blocking' else []
+    invocation = {'parent_id': 'other' if review_status == 'wrong_parent' else 'parent',
+        'reviewer_id': 'independent', 'configuration': context['review_configuration'], 'terminal': 'result',
+        'exit_status': 0, 'findings': findings, 'targeted_tests': ['targeted invariant passes'], 'result_reference': 'native/result'}
+    observed = dict(invocation, parent_id='parent', receipt_id=review_checkpoint['receipt_id'],
+                    observed_at=datetime.now(timezone.utc).isoformat())
+    review = {'version': 1, 'round_id': 'review-round', 'checkpoint': review_checkpoint,
+        'invocations': [invocation], 'native_observations': {'version': 1, 'parent_id': 'parent', 'observations': [observed]}}
+    saved = checkpoint(context, 'before_delivery', round_id='delivery-round', parent_id='parent')
+    readiness = {'authority_digest': context['authority_digest'], 'endpoint': context['delivery_endpoint'], 'checkpoint': saved}
+    if review_status == 'passing':
+        assert validate_delivery_readiness(context, readiness, review_evidence=review) == readiness
+    else:
+        with pytest.raises(ValueError):
+            validate_delivery_readiness(context, readiness, review_evidence=None if review_status == 'missing' else review)

@@ -841,6 +841,7 @@ class GenericWorkflowStepExecutor(Phase):
             runtime_context=context,
         )
 
+        self._completion_baton_path = portion_baton_path or baton_path
         last_prompt: List[str] = []
         allowed_tools = self._build_allowed_tools(
             step_name=step_name,
@@ -2260,6 +2261,17 @@ class GenericWorkflowStepExecutor(Phase):
 
         declaration = step_def.get("execution", {})
         if "before_delivery" in declaration.get("checkpoints", []):
+            # Machine readiness applies to advancement. A genuine human handoff
+            # keeps its existing authority route and does not enter correction.
+            handoff_path = getattr(self, "_completion_baton_path", self.issue_dir / "next_step.txt")
+            try:
+                handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                handoff = None
+            if isinstance(handoff, dict) and (handoff.get("to_owner") == "user" or handoff.get("intent") in {
+                "need_permission", "need_clarification", "confirm_output"
+            }):
+                return
             from cafe.core.execution_checkpoints import (
                 DeliveryReadinessError, load_review_evidence, validate_delivery_readiness,
             )

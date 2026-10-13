@@ -314,3 +314,55 @@ def test_i9_public_historical_approval_receipt_is_not_consumed_or_answered(histo
     assert result.exit_code == 0 and json.loads(result.stdout)['status'] == 'verified'
     assert (p['issue'] / 'human_tasks.json').read_bytes() == before
     assert sum(kind == 'publish' for kind, _ in p['calls']) == 1
+
+
+def test_i9_original_context_external_saved_path_keeps_original_binding(unknown_publication, monkeypatch):
+    p = unknown_publication
+    context = p['root'].parent / 'original-context.json'
+    context.write_bytes((p['issue'] / 'saved-context.json').read_bytes())
+    monkeypatch.chdir(p['root'])
+    result = CliRunner().invoke(app, ['repair', '--issue', 'pr-case', '--kind', 'pr-result',
+        '--step', 'ship_custom', '--iteration', '1', '--execution-context-file', str(context), '--execute'])
+    assert result.exit_code == 0 and json.loads(result.stdout)['status'] == 'verified'
+    assert sum(kind == 'publish' for kind, _ in p['calls']) == 1
+
+
+def test_i2_public_unicode_selection_remains_exact_and_path_safe(legacy, monkeypatch):
+    issue, path, _, _ = legacy
+    (issue / 'compose_custom').rename(issue / '建置_自訂')
+    renamed = issue.with_name('修復案例')
+    issue.rename(renamed)
+    monkeypatch.chdir(renamed.parents[2])
+    result = CliRunner().invoke(app, ['repair', '--issue', '修復案例', '--kind', 'iteration',
+        '--step', '建置_自訂', '--iteration', '1', '--execute'])
+    assert result.exit_code == 0 and json.loads(result.stdout)['status'] == 'repaired'
+
+
+def test_i7_verified_saved_repair_supersedes_original_interruption_progress(saved_delivery):
+    from tests.unit.test_workflow_progress_renderer import _module
+    j = saved_delivery[0]
+    j.runtime.blackboard_store.record_event(j.runtime.blackboard, 'step_interrupted',
+        {'step': 'inspect_custom', 'iteration': 1, 'reason': 'readiness_omission'})
+    render = lambda: _module()._runtime_progress(j.issue, {'steps': j.runtime.steps})[0]['inspect_custom']
+    assert render() == 'blocked'
+    assert saved_repair(saved_delivery)['status'] == 'repaired'
+    assert render() == 'completed'
+
+
+def test_i6_genuine_human_permission_handoff_is_not_machine_readiness_correction(journey):
+    import subprocess
+    from cafe.core.human_task_records import HumanTaskRecordStore
+    j = journey([(CORRECTED, 'need_permission')], human='need_permission', workspace=False)
+    context = {'version': 1, 'root': str(j.repo), 'baseline_commit': subprocess.check_output(
+        ['git', 'rev-parse', 'HEAD'], cwd=j.repo, text=True).strip(), 'paths': ['owned.txt'], 'preexisting': [],
+        'authority_digest': 'a' * 64, 'revision': 1,
+        'identity': {'issue_name': 'correction', 'workflow_id': j.runtime.blackboard.workflow_id},
+        'delivery_endpoint': {'route': 'local'}}
+    j.runtime.steps['inspect_custom']['execution'] = {'checkpoints': ['before_delivery'], 'delivery_evidence_artifact': 'bespoke_ready.json'}
+    j.runtime.steps['inspect_custom']['human_tasks'] = [{'trigger': 'need_permission', 'task_id': 'decision', 'outcomes': {'feedback': 'inspect_custom'}}]
+    j.runtime.execution_context = context
+    j.runtime.run(start_step='inspect_custom')
+    assert len(j.manager.calls) == 1
+    tasks = HumanTaskRecordStore(j.issue).tasks()
+    assert len(tasks) == 1 and tasks[0].trigger == 'need_permission'
+    assert not (j.issue / 'execution_delivery.json').exists()

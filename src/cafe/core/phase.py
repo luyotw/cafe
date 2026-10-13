@@ -27,6 +27,7 @@ from cafe.core.phase_sandbox_mixin import PhaseSandboxMixin
 # Backward-compat re-export for test imports
 from cafe.core.phase_state_mixin import (
     persist_iteration_metadata,
+    load_iteration_control_metadata,
     PhaseStateMixin,
     ensure_agent_file_exists,  # noqa: F401
 )
@@ -189,7 +190,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         context_data: Dict[str, Any] = {}
         if context_file.exists():
             try:
-                loaded = json.loads(context_file.read_text(encoding="utf-8"))
+                loaded = load_iteration_control_metadata(context_file)
             except (OSError, UnicodeDecodeError, json.JSONDecodeError):
                 loaded = None
             if isinstance(loaded, dict):
@@ -273,8 +274,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
 
         # Read existing context data
         if context_file.exists():
-            with open(context_file, "r", encoding="utf-8") as f:
-                context_data = json.load(f)
+            context_data = load_iteration_control_metadata(context_file)
         else:
             # If file does not exist, create basic structure
             context_data = {
@@ -383,7 +383,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         if not context_file.exists():
             return
         try:
-            context_data = json.loads(context_file.read_text(encoding="utf-8"))
+            context_data = load_iteration_control_metadata(context_file)
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             return
         if not isinstance(context_data, dict):

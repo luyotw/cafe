@@ -16,6 +16,19 @@ if TYPE_CHECKING:
     from cafe.core.git import GitOperations
 
 
+def load_iteration_control_metadata(path: Path) -> dict:
+    """Normal execution cannot implicitly discard unverified legacy raw records."""
+    from cafe.core.restart_policy import load_restart_context
+
+    try:
+        control = load_restart_context(path)
+    except ValueError as error:
+        raise RuntimeError("Iteration state requires explicit bounded repair before execution") from error
+    if control.get("streaming_log"):
+        raise RuntimeError("Legacy streaming_log requires explicit verified iteration repair")
+    return control
+
+
 def persist_iteration_metadata(path: Path, metadata: dict) -> None:
     """Persist control evidence without duplicating the executor-owned raw log.
 

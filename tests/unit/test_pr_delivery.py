@@ -297,3 +297,15 @@ def test_u16_result_write_failure_reentry_retains_same_attempt(unknown_publicati
     assert pr_repair(p)['status'] == ('verified' if boundary == 'before' else 'no-op')
     assert pr_repair(p)['status'] == 'no-op'
     assert sum(kind == 'publish' for kind, _ in p['calls']) == 1
+
+
+def test_u16_original_commit_binding_survives_unrelated_current_head(unknown_publication):
+    p = unknown_publication
+    original = p['cli']['headRefOid']
+    git(p['root'], 'commit', '--allow-empty', '-qm', 'later unrelated bookkeeping')
+    assert git(p['root'], 'rev-parse', 'HEAD') != original
+    result = pr_repair(p)
+    assert result['status'] == 'verified', result
+    saved = json.loads((p['issue'] / 'delivery_result.json').read_text())
+    assert saved['commit'] == original and saved['reconciliation']['association']['commit'] == original
+    assert sum(kind == 'publish' for kind, _ in p['calls']) == 1

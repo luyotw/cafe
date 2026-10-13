@@ -476,3 +476,16 @@ def test_u1_ordinary_history_exact_admission_preserves_original_on_refusal(tmp_p
     else:
         phase._update_iteration_history(baseline)
         assert path.stat().st_size == size
+
+
+def test_u1_legacy_overload_requires_explicit_verified_repair(tmp_path):
+    phase = ConcretePhase(phase_dir=tmp_path)
+    phase.iteration = 1
+    directory = phase._get_iteration_dir(1)
+    directory.mkdir()
+    path = directory / 'iteration.json'
+    original = json.dumps({'streaming_log': [{'text': 'x' * 1_100_000}], 'session_id': 'original'}).encode()
+    path.write_bytes(original)
+    with pytest.raises(RuntimeError):
+        phase._update_iteration_history({'response': 'new attempt'})
+    assert path.read_bytes() == original

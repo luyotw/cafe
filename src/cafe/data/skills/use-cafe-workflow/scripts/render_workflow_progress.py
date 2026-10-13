@@ -9,6 +9,7 @@ import os
 import shlex
 import shutil
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -288,6 +289,14 @@ def _phase_order(playbook: Mapping[str, Any]) -> list[str]:
     return ordered
 
 
+def _after(left, right):
+    """Compare attributed event times across offsets; ambiguity never clears a stop."""
+    try:
+        return datetime.fromisoformat(left.replace("Z", "+00:00")) > datetime.fromisoformat(right.replace("Z", "+00:00"))
+    except (AttributeError, TypeError, ValueError):
+        return False
+
+
 def _runtime_progress(
     issue_dir: Path | None, playbook: Mapping[str, Any]
 ) -> tuple[dict[str, str], dict[str, int]]:
@@ -298,6 +307,7 @@ def _runtime_progress(
     verified_completion: set[str] = set()
     attempts: dict[str, tuple] = {}
     latest_starts: dict[str, str] = {}
+    latest_forward_evidence: dict[str, str] = {}
     if issue_dir is None:
         return statuses, iterations
     blackboard = _read_json(issue_dir / "blackboard.json")
@@ -325,15 +335,27 @@ def _runtime_progress(
             if event_type == "step_started":
                 attempts[step] = identity
                 latest_starts[step] = str(event.get("timestamp", ""))
+                latest_forward_evidence[step] = latest_starts[step]
             if event_iteration is not None:
                 iterations[step] = max(iterations.get(step, 0), event_iteration)
             if event_type == "step_started":
                 statuses[step] = "in_progress"
                 terminal_evidence.discard(step)
                 verified_completion.discard(step)
-            elif event_type in {"step_completed", "single_step_completed"}:
+            elif event_type in {"step_completed", "single_step_completed"} or (
+                event_type == "readiness_repair_completed"
+                and data.get("operation_id") and data.get("checkpoint_sha256")
+                and data.get("output_sha256") and data.get("checklist_sha256")
+                and isinstance(data.get("raw_proof"), Mapping)
+                and isinstance(data.get("contract"), Mapping)
+                and data.get("contract", {}).get("from_step") == step
+                and data.get("contract", {}).get("to_owner") in {"agent", "done"}
+            ):
                 statuses[step] = "completed"
                 verified_completion.add(step)
+                completed_at = str(event.get("timestamp", ""))
+                if not latest_forward_evidence.get(step) or _after(completed_at, latest_forward_evidence.get(step)):
+                    latest_forward_evidence[step] = completed_at
                 terminal_evidence.discard(step)
             elif event_type in {"step_skipped", "workflow_step_skipped"}:
                 statuses[step] = "skipped"
@@ -381,7 +403,7 @@ def _runtime_progress(
     handoff = blackboard.get("handoff_contract", {})
     if isinstance(handoff, Mapping):
         target = str(handoff.get("from_step", "")) if handoff.get("to_owner") == "user" else str(handoff.get("to_step", ""))
-        stale = bool(handoff.get("created_at") and latest_starts.get(target) and latest_starts[target] > handoff["created_at"])
+        stale = _after(latest_forward_evidence.get(target), handoff.get("created_at"))
         if not stale and target in statuses and str(handoff.get("status_code", "")).upper() in {
             "INTERRUPTED",
             "BLOCKED",
@@ -401,7 +423,7 @@ def _runtime_progress(
         old_iteration = _iteration_number(task.get("iteration"))
         if old_iteration and iterations.get(affected, 0) > old_iteration:
             continue
-        if task.get("created_at") and latest_starts.get(affected, "") > task["created_at"]:
+        if _after(latest_starts.get(affected), task.get("created_at")):
             continue
         statuses[affected] = "blocked"
         terminal_evidence.add(affected)
@@ -423,11 +445,13 @@ def _runtime_progress(
             continue
         if iteration < iterations.get(step, 0):
             continue
+        marker = metadata.get("agent_interruption") or metadata.get("restart_preparation_failure")
+        stale_stop = isinstance(marker, Mapping) and _after(latest_forward_evidence.get(step), marker.get("id"))
         code = str(metadata.get("status_code", "")).upper()
         if code == "SKIPPED":
             statuses[step] = "skipped"
             terminal_evidence.add(step)
-        elif code in {"INTERRUPTED", "BLOCKED"}:
+        elif not stale_stop and code in {"INTERRUPTED", "BLOCKED"}:
             statuses[step] = "blocked"
             terminal_evidence.add(step)
         elif metadata.get("timestamp") and statuses[step] == "pending":

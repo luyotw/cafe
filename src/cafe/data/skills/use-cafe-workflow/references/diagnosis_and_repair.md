@@ -116,7 +116,9 @@ cafe repair --issue example --kind pr-result --step ship_custom --iteration 1 \
 ```
 
 Every execute holds the existing nonblocking advancement lease, verifies worker
-quiescence, then uses the workspace lease before store transactions. A live or
+quiescence, then uses the existing workspace lease nonblocking before store transactions.
+Terminal launch status alone does not prove quiescence while its PID is live or
+reused; ownership uncertainty refuses. A live or
 uncertain launch, another repair, unsafe aliases, ambiguous identity, or an
 unresolved human decision refuses the applicable operation. Do not kill a
 worker, change ownership, or edit generated state to pass these prerequisites.
@@ -138,13 +140,17 @@ never fabricates a checkpoint/terminal/review/approval or answers a pending task
 
 Exceptional iteration verification admits at most 16 MiB metadata, 32 MiB raw
 JSONL, 100,000 records, 1 MiB per record including its newline, and 64 JSON nesting
-levels. Verification reports progress at each 1 MiB or 1,000 records. It rejects
+levels. Audit/task attribution is bounded to 16 MiB of retained evidence (at most
+100,000 audit slots); this does not change normal store capacities. Verification reports progress at each 1 MiB or 1,000 records. It rejects
 malformed/duplicate-key JSON, missing/reordered/truncated/extra raw records,
 symlinks, hard-link aliases, nonregular/substituted files, and remaining non-log
 overload without changing source bytes. These are repair-only resource bounds.
 The ordinary reader remains exactly 1,048,576 bytes; the existing workspace
 65,536-byte reserve and 983,040-byte writer maximum remain unchanged. Ordinary,
-checklist and report writers acquire no workspace reserve. Execution artifacts
+checklist and report writers acquire no workspace reserve. Retained workspace
+fields alone do not impose a lower legacy-repair ceiling: an old file above the
+workspace writer maximum was not admitted by that writer. Unverified legacy
+embedded records require explicit repair before normal execution writes. Execution artifacts
 and observation/result records retain their existing 256 KiB bound; repair
 observation history is bounded to 128 distinct fingerprints.
 
