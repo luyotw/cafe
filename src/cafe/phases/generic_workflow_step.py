@@ -2882,7 +2882,9 @@ class GenericWorkflowStepExecutor(Phase):
 
         def present(entries):
             from cafe.core.execution_entry import ExecutionEntry
-            return [ExecutionEntry.from_value(entry).as_dict() for entry in entries]
+            return [{key: sanitize_error_excerpt(value) if isinstance(value, str) else value
+                     for key, value in ExecutionEntry.from_value(entry).as_dict().items()}
+                    for entry in entries]
 
         effective = getattr(execution_config, "clis", None)
         if not isinstance(effective, list) or not effective:

@@ -18,7 +18,7 @@ from cafe.core.audit_events import AuditEventStore
 from cafe.core.blackboard import BlackboardState, BlackboardStore
 from cafe.core.packet_io import atomic_write_bytes, sha256_bytes
 from cafe.core.workspace_lock import workspace_execution_lock, WorkspaceLeaseBusyError
-from cafe.workflow_execution.workflow_hosting import (
+from cafe.utils.file_lock import (
     _release_advancement_process_lock,
     _try_advancement_process_lock,
 )

@@ -5,6 +5,7 @@ import json
 import pytest
 
 from cafe.agents.manager import AgentManager
+from cafe.core.execution_entry import ExecutionEntry
 from cafe.core.session_continuation import SessionContinuation
 from cafe.core.types import AgentCLI, AgentConfig, CliEntry
 
@@ -41,8 +42,8 @@ def test_invocation_bypasses_sticky_once_and_exact_session_still_wins(tmp_path, 
     manager = _manager(tmp_path, monkeypatch)
     sticky = manager.resolve_invocation_order("Writer", phase_name="compose")
     reset = manager.resolve_invocation_order("Writer", phase_name="compose", configured_order=True)
-    assert sticky.entries == (("gemini", "fallback"), ("codex", "current"))
-    assert reset.entries == (("codex", "current"), ("gemini", "fallback"))
+    assert sticky.entries == (ExecutionEntry("gemini", "fallback"), ExecutionEntry("codex", "current"))
+    assert reset.entries == (ExecutionEntry("codex", "current"), ExecutionEntry("gemini", "fallback"))
     assert reset.sticky_disposition == "bypassed"
     config = manager.get_execution_config(
         "Writer",
@@ -84,7 +85,7 @@ def test_current_configuration_invalidates_incompatible_preference(tmp_path, mon
         path.write_text(json.dumps({"Writer": {"cli": "gemini"}}))
     order = manager.resolve_invocation_order("Writer", phase_name="compose")
     assert order.sticky_disposition == "stale"
-    assert order.entries == tuple((e.cli.value, e.resolve_model("compose")) for e in base.clis)
+    assert order.entries == tuple(ExecutionEntry(e.cli.value, e.resolve_model("compose"), e.reasoning_effort) for e in base.clis)
 
 
 def test_single_entry_snapshot_never_adds_fallback(tmp_path, monkeypatch):

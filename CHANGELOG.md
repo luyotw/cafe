@@ -37,6 +37,10 @@ All notable changes to this project will be documented in this file.
   handoffs (#643), with bounded iteration and correction bookkeeping.
 - Price Codex workflow, chat and child requests from verified request usage;
   retain cost evidence across large native messages and bounded discovery (#644).
+- Preserve exact existing phase defaults and saved preferences during kickoff,
+  while requiring verified effort and rationale for new model selections.
+- Bind PR publication results to the authorized push repository when fetch and
+  push differ; keep restart diagnostics redacted and repair locks mode-neutral.
 
 See [the v0.11.0 release notes](docs/releases/v0.11.0.md) for compatibility,
 provider support and upgrade guidance.

@@ -23,6 +23,23 @@ def test_phase_selection_accepts_lossless_json_and_rejects_new_default_only_chai
         owner._parse_phase_chains(["bespoke=codex:gpt-5.5"], step_names={"bespoke"})
 
 
+def test_only_exact_configured_omission_can_round_trip(tmp_path, provider_clients):
+    owner = load_kickoff_module("format_kickoff_contract")
+    config = tmp_path / "phases.yaml"
+    config.write_text(json.dumps({"bespoke": {"name": "David", "clis": [{"cli": "codex", "model": "gpt-5.5"}]}}))
+    selected = owner._parse_phase_chains(["bespoke=codex:gpt-5.5"],
+        step_names={"bespoke"}, phase_config=config)
+    assert selected["bespoke"][0].reasoning_effort is None
+    with pytest.raises(ValueError, match="explicit reasoning_effort"):
+        owner._parse_phase_chains(["bespoke=codex:changed-model"],
+            step_names={"bespoke"}, phase_config=config)
+    config.write_text(json.dumps({"bespoke": {"name": "David", "clis": [
+        {"cli": "codex", "model": "gpt-5.5", "reasoning_effort": "high"}]}}))
+    with pytest.raises(ValueError, match="explicit reasoning_effort"):
+        owner._parse_phase_chains(["bespoke=codex:gpt-5.5"],
+            step_names={"bespoke"}, phase_config=config)
+
+
 def test_confirmation_and_execution_projection_preserve_per_entry_effort(provider_clients):
     from cafe.manager._schema import _validate_phases
     from cafe.manager._execution_projection import execution_inputs

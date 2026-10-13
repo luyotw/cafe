@@ -483,6 +483,7 @@ def _parse_phase_chains(
     values: list[str],
     *,
     step_names: set[str],
+    phase_config: Path | None = None,
 ) -> dict[str, ModelChain]:
     parsed: dict[str, ModelChain] = {}
     for value in values:
@@ -496,7 +497,15 @@ def _parse_phase_chains(
             raise ValueError(f"duplicate phase-chain step: {step_name}")
         selected = _parse_chain(raw_chain, step_name=step_name)
         if any(entry.reasoning_effort is None for entry in selected):
-            raise ValueError(f"newly selected chain for {step_name} requires explicit reasoning_effort on every entry; use STEP=JSON_ARRAY with verified tuples")
+            configured = None
+            if phase_config is not None:
+                try:
+                    configured = list(load_phase_step_model(
+                        step_name=step_name, local_path=phase_config).clis)
+                except ValueError:
+                    pass
+            if configured != selected:
+                raise ValueError(f"newly selected chain for {step_name} requires explicit reasoning_effort on every entry; use STEP=JSON_ARRAY with verified tuples")
         parsed[step_name] = selected
     return parsed
 
@@ -749,14 +758,15 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
     _preflight_reports(args)
     _manager_policy_rows(args)
     capability_choices = _capability_choices(args, model)
-    overrides = _parse_phase_chains(args.phase_chain, step_names=set(model.steps))
+    phase_config = _project_path(args.phase_config, project_root)
+    overrides = _parse_phase_chains(args.phase_chain, step_names=set(model.steps),
+                                   phase_config=phase_config)
     rationales = {}
     for raw in getattr(args, "phase_rationale", []):
         name, separator, value = raw.partition("=")
         if not separator or name not in model.steps or name in rationales:
             raise ValueError("phase rationale requires a distinct declared STEP=JSON_OBJECT")
         rationales[name] = json.loads(value)
-    phase_config = _project_path(args.phase_config, project_root)
     phases: list[dict[str, Any]] = []
     for step_name, step in model.steps.items():
         if step.assignee_type not in {"agent", "hybrid"}:
@@ -767,7 +777,13 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
                 step_name=step_name, role=step.role, phase_config=phase_config
             )
         if step_name in overrides and step_name not in rationales:
-            raise ValueError(f"new selection for {step_name} requires a capability band and model/effort rationale")
+            try:
+                configured, _ = _resolve_configured_chain(
+                    step_name=step_name, role=step.role, phase_config=phase_config)
+            except ValueError:
+                configured = None
+            if selected != configured:
+                raise ValueError(f"new selection for {step_name} requires a capability band and model/effort rationale")
         phases.append(
             {
                 **({"rationale": rationales[step_name]} if step_name in rationales else {}),

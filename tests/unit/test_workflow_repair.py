@@ -398,9 +398,9 @@ def test_u7_prepared_absent_context_can_recover_without_inventing_control_fields
 
 
 def test_u8_unsupported_lock_platform_refuses_before_repair_writes(legacy, monkeypatch):
-    from cafe.workflow_execution import workflow_hosting
-    monkeypatch.setattr(workflow_hosting, 'fcntl', None)
-    monkeypatch.setattr(workflow_hosting, 'msvcrt', None)
+    from cafe.utils import file_lock
+    monkeypatch.setattr(file_lock, 'fcntl', None)
+    monkeypatch.setattr(file_lock, 'msvcrt', None)
     original = legacy[1].read_bytes()
     assert repair(legacy)['status'] == 'refused'
     assert legacy[1].read_bytes() == original and not events(legacy[0])

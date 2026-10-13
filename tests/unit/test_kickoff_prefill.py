@@ -11,6 +11,7 @@ pytestmark = pytest.mark.usefixtures("isolated_global_catalog")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _kickoff_test_support import load_kickoff_module
+from test_reasoning_effort_adapters import provider_clients  # noqa: F401
 
 
 def _project(tmp_path):
@@ -196,7 +197,7 @@ def test_existing_workflow_locale_is_read_without_mutating_state(tmp_path):
     assert state.read_bytes() == before
 
 
-def test_partial_model_override_keeps_its_value_and_fills_other_custom_steps(tmp_path):
+def test_partial_model_override_keeps_its_value_and_fills_other_custom_steps(tmp_path, provider_clients):
     module = load_kickoff_module("kickoff_inputs")
     request = _project(tmp_path)
     playbook = tmp_path / ".cafe/playbooks/example.yaml"
@@ -205,9 +206,10 @@ def test_partial_model_override_keeps_its_value_and_fills_other_custom_steps(tmp
     config = tmp_path / ".cafe/phases.yaml"
     config.write_text(config.read_text() +
                       "compose: {name: Writer, role: writer, clis: [{cli: codex, model: second-model}]}\n")
-    request["formatter_inputs"] = {"phase_chain": ["outline=claude:chosen-model"]}
+    selected = 'outline=' + json.dumps([{"cli": "codex", "model": "gpt-5.5", "reasoning_effort": "high"}])
+    request["formatter_inputs"] = {"phase_chain": [selected]}
     report = module.assemble_kickoff(request)
-    assert report["formatter_draft"]["phase_chain"] == ["outline=claude:chosen-model", "compose=codex:second-model"]
+    assert report["formatter_draft"]["phase_chain"] == [selected, "compose=codex:second-model"]
 
 
 def test_issue_id_derives_checkout_cleanup_and_current_cli_without_creating_them(tmp_path, monkeypatch):
