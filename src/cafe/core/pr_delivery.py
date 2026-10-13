@@ -70,11 +70,9 @@ def publish_resolved_pr(issue_dir: Path, root: Path, output: Path, *, context, b
                 text=True, check=True, timeout=20).stdout.strip()
             if len(repository.split("/")) != 2 or any(not part for part in repository.split("/")):
                 raise ValueError("authorized repository identity could not be resolved")
-            from cafe.core.git_delivery import remote_configuration
-            fetch_url = remote_configuration(root, endpoint["remote"], "pr")["fetch"]
-            base_repository = repository if fetch_url == push_url else subprocess.run(
-                ["gh", "repo", "view", fetch_url, "--json", "nameWithOwner", "--jq", ".nameWithOwner"],
-                cwd=root, capture_output=True, text=True, check=True, timeout=20).stdout.strip()
+            # The registered publisher targets the authorized push repository.
+            # A fetch-only remote is not a separate PR destination grant.
+            base_repository = repository
             if not _repository(repository) or not _repository(base_repository):
                 raise ValueError("authorized head/base repository identity could not be resolved")
             record.update(head_repository=repository, base_repository=base_repository)

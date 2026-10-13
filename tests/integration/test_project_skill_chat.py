@@ -8,9 +8,8 @@ import pytest
 from cafe.core.types import AgentCLI
 from cafe.ui import chat
 from cafe.ui.chat import _prepare_chat_environment as real_prepare
-from tests.unit.test_conversation_transport import init
-
-pytest_plugins = ["tests.integration.test_conversation_transport_journeys"]
+from tests.unit.test_conversation_transport import init, provider_process  # noqa: F401
+from tests.integration.test_conversation_transport_journeys import phase_chat  # noqa: F401
 
 
 @pytest.mark.parametrize("interactive", [False, True])

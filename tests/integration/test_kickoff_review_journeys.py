@@ -13,6 +13,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'unit'))
 from _kickoff_test_support import load_kickoff_module
 from test_kickoff_prefill import _project as _base_project
+from test_reasoning_effort_adapters import provider_clients  # noqa: F401
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import kickoff_inputs
@@ -136,6 +137,7 @@ def test_saved_locale_precedes_inference_through_public_render(tmp_path, capsys,
     values = _formatter_inputs('new')
     values.update(project_root=str(project), playbook_id='example', effective_locale='en-US',
         locale_source=input_source, phase_chain=['outline=codex:configured-model'],
+        phase_config=str(project / '.cafe/phases.yaml'),
         user_required=[], manager_confirmable=[], proactive_review_decision=['outline=not_required'],
         cleanup=[], cleanup_description=[], capability_choice=[],
         current_checkout=True, manager_mode='unattended')
@@ -152,13 +154,17 @@ def test_saved_locale_precedes_inference_through_public_render(tmp_path, capsys,
     assert expected in proposal.read_text()
 
 
-def test_saved_families_reach_draft_and_current_values_override_without_authority(tmp_path, capsys):
+def test_saved_families_reach_draft_and_current_values_override_without_authority(tmp_path, capsys, provider_clients):
     cli = load_kickoff_module('prepare_kickoff')
     project = tmp_path / 'project'; project.mkdir()
     request = _project(project)
+    selected = [{"cli": "codex", "model": "gpt-5.5", "reasoning_effort": "high"},
+                {"cli": "claude", "model": "claude-opus-4-6", "reasoning_effort": "low"}]
+    chosen = 'outline=' + json.dumps(selected)
+    rationale = 'outline=' + json.dumps({"band": "balanced", "model": "bounded selection", "effort": "verify outline"})
     saved = {
         'worktree.convention': str(tmp_path / 'worktrees/{issue_name}'),
-        'phase.chains': {'roles': {'writer': ['codex:role-model', 'claude:fallback-model']}},
+        'phase.chains': {'roles': {'writer': selected}},
         'confirmation.assignments': {'user_required': [], 'manager_confirmable': []},
         'review.decisions': {'outline': 'not_required'},
         'cleanup.convention': {'cleanup': [], 'cleanup_description': []},
@@ -171,7 +177,7 @@ def test_saved_families_reach_draft_and_current_values_override_without_authorit
     assert code == 3
     fields = json.loads(draft.read_text())['formatter_inputs']
     assert fields['worktree'] == str(tmp_path / 'worktrees/new')
-    assert fields['phase_chain'] == ['outline=codex:role-model,claude:fallback-model']
+    assert fields['phase_chain'] == [chosen]
     assert fields['cleanup'] == []
     assert 'deliver' not in fields
     assert fields['user_required'] == fields['manager_confirmable'] == []
@@ -184,18 +190,20 @@ def test_saved_families_reach_draft_and_current_values_override_without_authorit
     for key in ('delivery_contract', 'update_preflight', 'catalog_preflight'):
         data['formatter_inputs'][key] = values[key]
     data['formatter_inputs']['manager_mode'] = 'unattended'
+    data['formatter_inputs']['phase_rationale'] = [rationale]
     data['formatter_inputs'].pop('event_manager', None)
     draft.write_text(json.dumps(data))
     assert _call(cli, capsys, ['render', '--request-file', str(draft), '--output', str(tmp_path / 'proposal.md'), *_settings(tmp_path)])[0] == 0
     # Current empty and false choices do not fall back to preferences.
+    current = 'outline=' + json.dumps([{"cli": "codex", "model": "gpt-5.5", "reasoning_effort": "medium"}])
     request['formatter_inputs'] = {'current_checkout': True, 'cleanup': [],
-                                  'phase_chain': ['outline=codex:current-model']}
+                                  'phase_chain': [current]}
     path = tmp_path / 'explicit.json'; path.write_text(json.dumps(request))
     code, report = _call(cli, capsys, ['assemble', '--request-file', str(path), *_settings(tmp_path)])
     fields = report['formatter_draft']
     assert 'worktree' not in fields and fields['current_checkout'] is True
     assert fields['cleanup'] == [] and 'deliver' not in fields
-    assert fields['phase_chain'] == ['outline=codex:current-model']
+    assert fields['phase_chain'] == [current]
     assert not (project / '.cafe/issues').exists()
 
 
@@ -258,12 +266,15 @@ def test_saved_action_preserves_current_description(tmp_path, capsys):
     assert not (project / '.cafe/issues').exists()
 
 
-def test_incompatible_preferences_survive_draft_roundtrip_until_resolution(tmp_path, capsys):
+def test_incompatible_preferences_survive_draft_roundtrip_until_resolution(tmp_path, capsys, provider_clients):
     """U01/U02/U14/I01/I06: generated defaults cannot resolve a rejected preference."""
     key = 'phase.chains'
     invalid = {'steps': {'absent': ['codex:model']}}
     fields = ['phase_chain']
-    resolution = {'phase_chain': ['outline=codex:chosen']}
+    resolution = {'phase_chain': ['outline=' + json.dumps([
+        {"cli": "codex", "model": "gpt-5.5", "reasoning_effort": "high"}])],
+        'phase_rationale': ['outline=' + json.dumps(
+            {"band": "balanced", "model": "bounded selection", "effort": "verify outline"})]}
     cli = load_kickoff_module('prepare_kickoff')
     project = tmp_path / 'project'; project.mkdir()
     request = _project(project)

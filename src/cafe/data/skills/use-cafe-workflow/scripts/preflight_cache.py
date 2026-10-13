@@ -433,6 +433,8 @@ def _parse_chain(raw_entries):
 
 
 def _runtime_fingerprint(chain=()) -> dict[str, Any]:
+    from cafe.core.execution_entry import ExecutionEntry
+    chain = tuple(ExecutionEntry.from_value(entry) for entry in chain)
     from cafe.constraints.context import context_for_tools
     from cafe.constraints.evidence import snapshot
     import cafe.agents.executor as executor_module

@@ -182,7 +182,7 @@ class TestContextSessionIDUpdate:
                 return AgentCLI.GEMINI
 
             def get_last_session_id(self):
-                return None
+                return "plan-gemini-session"
 
         mock_agent_manager = MockAgentManager()
 

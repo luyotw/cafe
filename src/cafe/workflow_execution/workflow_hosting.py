@@ -2,22 +2,16 @@
 
 from __future__ import annotations
 
-import errno
 import uuid
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import IO, Any, Callable
+from typing import Any, Callable
 
-try:
-    import fcntl
-except ImportError:  # pragma: no cover - unavailable on Windows.
-    fcntl = None  # type: ignore[assignment]
-
-try:
-    import msvcrt
-except ImportError:  # pragma: no cover - available only on Windows.
-    msvcrt = None  # type: ignore[assignment]
+from cafe.utils.file_lock import (
+    _release_advancement_process_lock,
+    _try_advancement_process_lock,
+)
 
 
 class WorkerAlreadyRunningError(RuntimeError):
@@ -30,44 +24,6 @@ class HostRunResult:
     worker_id: str
     result: Any = None
     pid: int | None = None
-
-
-def _try_advancement_process_lock(path: Path) -> IO[str] | None:
-    """Acquire the callable-duration lock without waiting for another worker."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    handle = path.open("a+", encoding="utf-8")
-    try:
-        if fcntl is not None:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return handle
-        if msvcrt is None:
-            raise RuntimeError("cross-process file locking is unavailable")
-        handle.seek(0, 2)
-        if handle.tell() == 0:
-            handle.write("\0")
-            handle.flush()
-        handle.seek(0)
-        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-        return handle
-    except OSError as exc:
-        handle.close()
-        if exc.errno in {errno.EACCES, errno.EAGAIN}:
-            return None
-        raise
-    except BaseException:
-        handle.close()
-        raise
-
-
-def _release_advancement_process_lock(handle: IO[str]) -> None:
-    try:
-        if fcntl is not None:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        elif msvcrt is not None:  # pragma: no branch - platform-specific.
-            handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-    finally:
-        handle.close()
 
 
 class WorkflowHost:

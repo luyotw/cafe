@@ -151,7 +151,8 @@ def request_schema() -> dict[str, Any]:
         "manager_cli": "Current calling Manager CLI; context, not a model choice. Codex sessions are also recognized by CODEX_THREAD_ID.",
         "generated_inputs": "Helper-owned provenance map retained in editable requests: field -> origin, dependency and value_fingerprint. Preserve it when editing formatter_inputs; unchanged source-backed values are revalidated at render. For deliberate same-value reassessment after invalidation, see kickoff_input_reference.md. It grants no authority.",
         "decision_examples": {
-            "phase_chain": ["develop=codex:<exact-model>"],
+            "phase_chain": ['develop=[{"cli":"codex","model":"<exact-model>","reasoning_effort":"<verified-effort>"}]'],
+            "phase_rationale": ['develop={"band":"balanced","model":"<model rationale>","effort":"<effort rationale>"}'],
             "capability_choice": ["pr.auto_create=true"],
             "cleanup": [],
         },
@@ -711,7 +712,8 @@ def _prefill_saved_inputs(values: dict[str, Any], *, store: Any, request: dict[s
         current = values.get("phase_chain", [])
         if not _is_string_list(current):
             raise ValueError("current phase_chain must remain explicitly correctable")
-        overrides = owner._parse_phase_chains(current, step_names=set(model.steps))
+        config = owner._project_path(Path(values.get("phase_config", ".cafe/phases.yaml")), root)
+        overrides = owner._parse_phase_chains(current, step_names=set(model.steps), phase_config=config)
         result = list(current)
         for name, step in phases.items():
             candidate = steps.get(name, roles.get(step.role))
@@ -720,10 +722,8 @@ def _prefill_saved_inputs(values: dict[str, Any], *, store: Any, request: dict[s
             if not isinstance(candidate, list) or not candidate:
                 raise ValueError("saved chain must be a nonempty entry array")
             selected = owner._parse_chain(json.dumps(candidate), step_name=name)
-            if any(entry.reasoning_effort is None for entry in selected):
-                raise ValueError(f"saved chain for {name} is a selection hint; select explicit reasoning_effort for every entry")
             entry = name + "=" + json.dumps([value.as_dict() for value in selected])
-            owner._parse_phase_chains([entry], step_names=set(model.steps))
+            owner._parse_phase_chains([entry], step_names=set(model.steps), phase_config=config)
             result.append(entry)
         return {"phase_chain": result}
     explicit_chain = values.get("phase_chain")
@@ -866,11 +866,18 @@ def _prefill_configured_inputs(values: dict[str, Any], *, project_root: Path, so
     # Put those exact values in the draft so the caller reviews instead of copies.
     supplied_chains = values.get("phase_chain", [])
     if "phase_chain" not in blocked and _is_string_list(supplied_chains):
-        overrides = owner._parse_phase_chains(supplied_chains, step_names=set(model.steps))
         config = owner._project_path(Path(values.get("phase_config", parser.get_default("phase_config"))), project_root)
+        overrides = owner._parse_phase_chains(supplied_chains, step_names=set(model.steps),
+                                             phase_config=config)
         for name, step in phases.items():
             if name not in overrides:
-                owner._resolve_configured_chain(step_name=name, role=step.role, phase_config=config)
+                chain, _source = owner._resolve_configured_chain(
+                    step_name=name, role=step.role, phase_config=config)
+                value = (json.dumps([entry.as_dict() for entry in chain])
+                         if any(entry.reasoning_effort is not None for entry in chain)
+                         else ",".join(f"{entry.cli}:{entry.model}" for entry in chain))
+                supplied_chains.append(f"{name}={value}")
+        fill("phase_chain", supplied_chains, "existing phase configuration")
         if "phase_config" not in values:
             values["phase_config"] = str(config)
             sources["phase_config"] = "existing phase configuration; explicit overrides retained; suitability still requires assessment"

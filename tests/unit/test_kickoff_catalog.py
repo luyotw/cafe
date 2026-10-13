@@ -297,7 +297,10 @@ def test_index_exposes_mandatory_tasks_and_capability_setup_questions(tmp_path: 
     )
     standard = next(item for item in report["candidates"] if item["id"] == "standard")
 
-    assert standard["mandatory_confirmation_gates"]
+    assert standard["mandatory_confirmation_gates"] == []
+    assert {"pr", "deliver"} <= set(standard["confirmation_gates"])
+    assert any(task["trigger"] == "need_permission" and task["task_id"] == "delivery-review"
+               for task in standard["steps"]["deliver"]["human_tasks"])
     assert "cafe.pr.publish" in standard["capability_requirements"]
     assert standard["capability_setup"]["cafe.pr.publish"]["setup_questions"]
 

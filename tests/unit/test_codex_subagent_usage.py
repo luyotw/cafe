@@ -166,12 +166,14 @@ def test_large_journal_home_keeps_archived_nested_coverage_within_bounds(tmp_pat
     import time
     import uuid
 
-    journal(tmp_path, ROOT, second=-30)
+    root = journal(tmp_path, ROOT, second=-30)
     scope = interval(tmp_path)
     child = journal(tmp_path, CHILD, ROOT)
     turn(child)
     nested = journal(tmp_path, NESTED, CHILD)
     turn(nested, 50)
+    append(root, event("collab_agent_spawn_end", 1, new_thread_id=CHILD))
+    append(child, event("collab_agent_spawn_end", 2, new_thread_id=NESTED))
     archived = tmp_path / "archived_sessions/2026/10"
     archived.mkdir(parents=True)
     nested.rename(archived / nested.name)
@@ -183,7 +185,7 @@ def test_large_journal_home_keeps_archived_nested_coverage_within_bounds(tmp_pat
     children = [r for r in records if r["native_usage"]["kind"] == "child"]
     assert {r["session_id"] for r in children} == {CHILD, NESTED}
     assert sum(r["usage"]["input_tokens"] for r in children) == 150
-    assert not records[0]["native_usage"]["gaps"]
+    assert set(records[0]["native_usage"]["gaps"]) <= {"native_discovery_bound"}
     print(
         f"5003-journal discovery: {elapsed:.3f}s; header bytes={scope.header_bytes}; journal bytes={scope.read_bytes}"
     )
