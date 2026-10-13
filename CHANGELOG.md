@@ -4,6 +4,43 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.11.0] - 2026-10-13
+
+### Added
+
+- Configure reasoning effort per phase CLI/model entry, retaining each entry's
+  choice through fallback, retry, exact resume, native review and Manager
+  selection. Validate supported provider/model combinations and record
+  configured, applied and reported evidence (#408, #641).
+- Share active project skills with provider CLIs through managed live links,
+  preserving local changes and selected-skill rendering (#645, #649).
+- Add read-only previews and bounded `cafe repair` operations for saved
+  iteration, interruption, delivery readiness and unknown PR-result evidence.
+  Preserve original authority, audit history and retry budgets (#646).
+
+### Changed
+
+- Make final delivery-result confirmation assignable across all twelve adopting
+  development playbooks; new Manager proposals default to Manager confirmation.
+  Existing contracts retain their recorded ownership and action permission.
+- Accept verified local-only development delivery and its matching leave
+  closeout result without inventing an external publication.
+
+### Fixed
+
+- Preserve workspace recovery authority across CLI/model/session changes and
+  interrupted publication (#648).
+- Validate original readiness, handoffs and exact durable completion receipts
+  before publishing terminal success; recover saved evidence without replaying
+  provider work or external effects.
+- Correct manual workflow startup, compact progress and outcome-only chat
+  handoffs (#643), with bounded iteration and correction bookkeeping.
+- Price Codex workflow, chat and child requests from verified request usage;
+  retain cost evidence across large native messages and bounded discovery (#644).
+
+See [the v0.11.0 release notes](docs/releases/v0.11.0.md) for compatibility,
+provider support and upgrade guidance.
+
 ## [0.10.0] - 2026-10-11
 
 ### Added

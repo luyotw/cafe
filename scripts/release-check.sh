@@ -198,12 +198,35 @@ import sys
 for arguments, options in (
     (["manager", "chat", "--help"], ("--issue",)),
     (["chat", "--help"], ("--read-only", "--phase", "--prompt")),
+    (["repair", "--help"], ("--issue", "--kind", "--iteration", "--execute")),
 ):
     result = subprocess.run([sys.argv[1], *arguments], capture_output=True, text=True, check=True)
     for option in options:
         if option not in result.stdout:
             raise SystemExit(f"Installed command {arguments!r} is missing {option}")
 PYCODE
+
+echo "Verifying packaged effort entries and read-only repair refusal..."
+"$SMOKE_VENV/bin/python" - "$SMOKE_VENV/bin/cafe" <<'PYEFFORTREPAIR'
+import json
+import subprocess
+import sys
+from cafe.core.types import AgentCLI, CliEntry
+
+entries = [
+    CliEntry(cli=AgentCLI.CODEX, model="fixture-primary", reasoning_effort="high"),
+    CliEntry(cli=AgentCLI.CLAUDE, model="fixture-fallback", reasoning_effort="low"),
+]
+assert [entry.model_dump(mode="json")["reasoning_effort"] for entry in entries] == ["high", "low"]
+assert CliEntry(cli=AgentCLI.CODEX, model="legacy").reasoning_effort is None
+result = subprocess.run(
+    [sys.argv[1], "repair", "--issue", "../outside", "--kind", "iteration",
+     "--step", "custom", "--iteration", "1"],
+    capture_output=True, text=True,
+)
+assert result.returncode == 2, (result.stdout, result.stderr)
+assert json.loads(result.stdout)["status"] == "refused"
+PYEFFORTREPAIR
 
 echo "Verifying packaged planning, bug and compact playbooks..."
 for playbook in subagent-flow subagent-flow-qa bug streamlined; do
