@@ -39,6 +39,110 @@ pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
 runner = CliRunner()
 
+@pytest.mark.parametrize("evidence", ["valid", "missing_result", "changed_artifact", "changed_continuation"])
+def test_cli_resume_preserves_confirmed_feedback_delivery(tmp_path, monkeypatch, evidence):
+    """A settled output confirmation survives the real CLI resume boundary."""
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+    from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
+    from cafe.ui.human_tasks import apply_human_task_payload
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".gitignore").write_text(".cafe/\n")
+    for args in (["init", "-q"], ["add", "."],
+                 ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "baseline"]):
+        subprocess.run(["git", *args], check=True, capture_output=True)
+    issue_name = "confirmed-feedback"
+    issue = tmp_path / ".cafe/issues" / issue_name
+    _write_local_only_publication_contract(issue)
+    graph = {
+        "playbook": {"id": "confirmation-feedback"},
+        "steps": {
+            "curator": {
+                "skill": "cafe-spec", "role": "developer", "assignee_type": "agent",
+                "output_artifact": "curated_result",
+                "behavior": {
+                    "completion": "baton", "feedback_target": "curator",
+                    "feedback_artifact": "workflow_feedback", "feedback_source_kind": "external_note",
+                    "feedback_todo_source": "review_note", "feedback_todo_id_prefix": "REV",
+                },
+                "human_tasks": [{"trigger": "confirm_output", "task_id": "output-review",
+                                 "outcomes": {"confirm": "consumer", "revise": "curator"}}],
+                "on": {"confirm_output": "curator", "await_agent": "consumer"},
+            },
+            "consumer": {"skill": "phase", "role": "developer", "assignee_type": "agent",
+                         "on": {"await_agent": "_done"}},
+        },
+    }
+    ledger = WorkflowFeedbackLedger(issue)
+    identity = "external:reviewed"
+    ledger.record(source_identity=identity, source_kind="external_note", target_step="curator",
+                  content="Informational review note.")
+    directory = issue / "curator/iteration_001"
+    directory.mkdir(parents=True)
+    output = directory / "output.md"
+    output.write_text("## Todo List\n\nNo actionable work.\n")
+    (directory / "checklist.md").write_text("[x] Complete review\n")
+    (directory / "iteration.json").write_text(json.dumps({
+        "iteration": 1, "step_name": "curator", "agent_invoked": True,
+    }))
+    calls = []
+
+    def execute(step_name, _step, state, **_kwargs):
+        calls.append(step_name)
+        store = BlackboardStore(issue)
+        if step_name == "curator":
+            ledger.write_pending_snapshot(path=directory / "workflow_feedback_batch.json",
+                                          target_step="curator", limit=20)
+            store.update_handoff_contract(state, from_step=step_name, to_owner=HandoffOwner.USER,
+                                          to_step="user", intent=HandoffIntent.CONFIRM_OUTPUT,
+                                          source="test.producer")
+            return StepExecutionResult(response="reviewed", artifacts={"curated_result": str(output)},
+                                       agent_invoked=True, feedback_source_identities=(identity,))
+        assert step_name == "consumer"
+        store.update_handoff_contract(state, from_step=step_name, to_owner=HandoffOwner.DONE,
+                                      to_step="done", intent=HandoffIntent.WORKFLOW_COMPLETE,
+                                      source="test.consumer")
+        return StepExecutionResult(response="consumed", artifacts={})
+
+    runtime = BlackboardWorkflowRuntime(issue_dir=issue, playbook=graph, executor=execute)
+    assert runtime.run(start_step="curator").final_status_code == "BATON_CONFIRM_OUTPUT"
+    records = HumanTaskRecordStore(issue)
+    task = next(t for t in records.tasks() if t.status is HumanTaskStatus.PENDING)
+    applied = apply_human_task_payload(
+        issue_dir=issue, playbook_data=graph, blackboard=runtime.blackboard,
+        from_step="curator", trigger="confirm_output", source="command",
+        raw_payload={"human_task_id": task.id, "task": "output-review", "decision": "confirm"},
+    )
+    assert applied.target == "consumer", applied.rejection
+    if evidence == "changed_artifact":
+        output.write_text("Changed after confirmation.\n")
+    elif evidence != "valid":
+        raw = json.loads(records.file_path.read_text())
+        if evidence == "missing_result":
+            raw["results"] = []
+        else:
+            raw["results"][0]["payload"]["continuation"] = "curator"
+        records.file_path.write_text(json.dumps(raw))
+    original_task_bytes = records.file_path.read_bytes()
+    original_output_bytes = output.read_bytes()
+    original_ledger_bytes = ledger.path.read_bytes()
+
+    with (
+        patch("cafe.ui.commands.workflow.PlaybookLoader.load", return_value=graph),
+        patch("cafe.ui.cli._build_workflow_step_executor",
+              return_value=SimpleNamespace(execute_step=execute)),
+        patch("cafe.ui.cli._check_agent_clis_available", return_value=[]),
+    ):
+        result = runner.invoke(app, ["workflow", "--execute", "--issue", issue_name,
+                                     "--playbook", "confirmation-feedback"])
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    state = BlackboardStore(issue).load_read_only()
+    assert calls == (["curator", "consumer"] if evidence == "valid" else ["curator"])
+    assert state.current_step == ("done" if evidence == "valid" else "curator")
+    assert records.file_path.read_bytes() == original_task_bytes
+    assert output.read_bytes() == original_output_bytes
+    assert ledger.path.read_bytes() == original_ledger_bytes
+
 @pytest.mark.parametrize("single_step,extra_dir", [(False, False), (True, False), (False, True)])
 def test_foreground_machine_wait_releases_lock_before_optional_background_handoff(
     tmp_path, monkeypatch, single_step, extra_dir,
