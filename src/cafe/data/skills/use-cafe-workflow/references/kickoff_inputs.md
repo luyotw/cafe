@@ -68,9 +68,10 @@ to copy them from the discovery report:
   supplies the event Manager, not a phase model or a new provider choice;
 - `.cafe/worktrees/issue<id>` in the main repository, or the explicitly named
   issue's equivalent path; non-Git first tasks use the current checkout;
-- cleanup: close the explicitly identified GitHub issue in the current repository
-  when a GitHub remote is available, then `cafe close`; without that binding,
-  propose only `cafe close`;
+- cleanup: for phase-owned development delivery, close the verified bound GitHub
+  issue and use `cleanup_worktree.py` to archive and remove the exact feature
+  worktree and bound branches; without a separate feature worktree, archive only.
+  Non-adopting graphs retain their existing `cafe close` default;
 - repository content language through the existing strategic-context resolver;
 - conversation language through the existing workflow/playbook locale owner
   when no current preference was supplied;
@@ -111,7 +112,7 @@ does not repair stale evidence. Supplied false and empty values are preserved.
 An empty `phase_chain` requests no per-phase overrides; assembly fills configured
 chains for the selected graph. Product fields use the existing `DeliveryContractV3`
 schema. `implementation_direction` is a string; list fields are arrays.
-The formatter builds the separate Manager `closeout_contract` for phase-owned graphs. `closeout_choice` selects cleanup, archive, leave, or pending; confirmation authorizes the displayed choice. The adopting graph owns exact integration review later; kickoff accepts cleanup only. A null cleanup slot may receive a valid default; explicit `[]` excludes cleanup. Deliberate `cleanup` choices are literal
+The formatter builds the separate Manager `closeout_contract` for phase-owned graphs. Default `closeout_choice` to cleanup and retain the generated applicable actions. Choose archive, leave or explicit `[]` only for an explicit user preservation/exclusion choice, shown in the proposal. Confirmation authorizes the displayed choice. The adopting graph owns exact integration review later; local delivery still requires integration into the base branch. Kickoff accepts cleanup only. A null cleanup slot may receive a valid default. Deliberate `cleanup` choices are literal
 argv arrays, with one description per action. `schema` exposes all field types
 and the existing parser's allowed values without conditional filtering.
 An unknown or invalid field blocks rendering but preserves the editable values

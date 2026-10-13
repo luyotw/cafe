@@ -31,10 +31,9 @@ def _prepare_action_context(kwargs, binding, reason=""):
         "delivery_stage": "prepare_action", "delivery_complete": "false",
         "delivery_publication_file": entry.path,
         "continuation_prompt": (
-            "For explicitly requested artifact-only delivery, write delivery_request.json "
-            "with only mode local-only, summarize the local workspace and reviewed evidence, "
-            "and request confirm_output. This performs no integration or external actions. "
-            "Otherwise prepare the delivery integration strategy, target and verification plan. "
+            "Prepare integration into the confirmed base branch and its verification plan. "
+            "Local delivery uses mode local and a clean destination checkout; local artifacts "
+            "alone do not complete development delivery. "
             "Read the declared PR input at " + entry.path + ". Use repository policy "
             "or recommend a concrete strategy in the complete action bundle. "
             "Write delivery_request.json beside the output and request need_permission. "

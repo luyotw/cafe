@@ -2,6 +2,8 @@
 
 For an adopting graph, the declared delivery phase owns exact integration and selected issue effects, durable receipts, recovery and final result acceptance under the confirmed gate ownership. New bundled development kickoff proposals default that assignable result gate to `manager_confirmable`; existing confirmed contracts retain their recorded ownership. Manager verifies the current complete result and receipts before proxy confirmation, which grants no action or cleanup authority. Manager observes this phase once and retains coordination and separately confirmed cleanup. Unknown, partial or approval-pending actions remain nonterminal. Manager must never replay an action through closeout or a Git conflict repair fallback. Send implementation conflicts and changed code to the declared Develop correction route; revised action selection returns to the declared PR review.
 
+For local development delivery, require host receipts proving the reviewed source was integrated into the confirmed base branch and agreed checks passed. A source-branch commit, clean workspace, PR draft or artifact-only acceptance is insufficient. If an existing historical contract explicitly excluded integration, report that limited outcome and its remaining integration work accurately; do not rewrite its authority or describe it as integrated delivery.
+
 Fresh nested contract version 5 has cleanup only. Default a separate feature worktree to full cleanup through `scripts/cleanup_worktree.py`, which archives before removing its exact local and remote resources without repeating integration. Retain archive-only as the explicit preservation choice. Existing contracts and compact routes keep their original authority and receipts; a new default never broadens their approved commands.
 
 # Completion And Action Authority
@@ -289,9 +291,13 @@ Do not invent integration state, executor, or cleanup behavior here. Outside a
 confirmed argv plan, inspect the completed issue's remaining lifecycle state
 read-only and ask only for missing scoped authority. An ambiguous request such
 as "merge and close" must not be silently reduced to an issue closure. Cleanup
-is not a prerequisite for workflow completion; for new contracts, however, the
-confirmed default cleanup plan closes the verified bound GitHub issue and then
-runs `cafe close` unless the user chose otherwise.
+is separate from the runtime's terminal state; execute the already-confirmed
+applicable cleanup plan before reporting overall closeout complete. For new
+phase-owned contracts, full cleanup closes the verified bound GitHub issue,
+archives CAFE state and removes the exact feature worktree and bound branches
+through `cleanup_worktree.py`. Use archive-only when there is no separate feature
+worktree. Preserve resources only for an explicit user choice. Report any blocked
+or excluded action and retained resources; `next=done` alone is not cleanup proof.
 
 Completion and closeout replies still end with `workflow_progress.md` output.
 After lifecycle cleanup archives the issue, render from the exact archive path
