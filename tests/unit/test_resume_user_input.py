@@ -117,6 +117,12 @@ def test_is_resume_iteration_when_process_ended_without_trusted_handoff() -> Non
     )
 
 
+def test_issue646_blk005_pending_completion_receipt_retains_same_session_resume() -> None:
+    assert is_resume_iteration(iteration=1, previous_iteration_data=None,
+        current_iteration_data={'cli': 'codex', 'session_id': 'original', 'end_time': 'saved',
+                                'workflow_completion_trusted': {'workflow_id': 'original', 'sequence': 3}})
+
+
 def test_load_prior_run_context_does_not_treat_completed_correction_as_resume() -> None:
     prev = {"cli": "codex", "session_id": "abc", "end_time": "done"}
     assert (

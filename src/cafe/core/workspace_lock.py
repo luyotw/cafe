@@ -19,8 +19,12 @@ def _thread_lock(repo: Path) -> threading.RLock:
         return _locks.setdefault(repo, threading.RLock())
 
 
+class WorkspaceLeaseBusyError(RuntimeError):
+    """The existing workspace lease is held by another operation."""
+
+
 @contextmanager
-def workspace_execution_lock(repo: Path) -> Iterator[None]:
+def workspace_execution_lock(repo: Path, *, blocking: bool = True) -> Iterator[None]:
     """Serialize workspace writers and consumers for one active repository.
 
     The thread lock covers concurrent CAFE work in one process. The adjacent
@@ -31,11 +35,19 @@ def workspace_execution_lock(repo: Path) -> Iterator[None]:
     lock_dir = root / ".cafe"
     lock_dir.mkdir(parents=True, exist_ok=True)
     lock_path = lock_dir / "workspace-use.lock"
-    with _thread_lock(root):
+    thread_lock = _thread_lock(root)
+    if not thread_lock.acquire(blocking=blocking):
+        raise WorkspaceLeaseBusyError("workspace lease is busy")
+    try:
         descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+            except BlockingIOError as error:
+                raise WorkspaceLeaseBusyError("workspace lease is busy") from error
             yield
         finally:
             fcntl.flock(descriptor, fcntl.LOCK_UN)
             os.close(descriptor)
+    finally:
+        thread_lock.release()

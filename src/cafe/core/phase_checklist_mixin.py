@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Callable, List, Optional
 
+from cafe.core.phase_state_mixin import persist_iteration_metadata
 from cafe.core.session_continuation import SessionContinuation
 from cafe.core.status_codes import PhaseStatusCode
 from cafe.core.types import AgentCLI
@@ -211,6 +212,11 @@ independent output contracts still apply.
                         **execute_kwargs,
                     )
                 )
+                # This retry does not stream to a file; persist its returned
+                # available records exactly once, including incomplete retries.
+                with open(iteration_dir / "streaming.jsonl", "a", encoding="utf-8") as handle:
+                    for record in retry_streaming_log:
+                        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
                 self._merge_iteration_token_usage(retry_token_usage)
 
                 actual_cli = getattr(self.agent_manager, "get_last_cli", lambda: None)()
@@ -301,34 +307,16 @@ independent output contracts still apply.
                 if retry_result.is_complete:
                     print(f"✅ Checklist validation passed after retry {retry_count}")
 
-                    # Merge streaming logs
                     context_file = self._resolve_iteration_context_file(iteration_dir)
-                    original_streaming_log = []
-                    original_response = ""
-                    if context_file.exists():
-                        with open(context_file, "r", encoding="utf-8") as f:
-                            context_data = json.load(f)
-                            original_streaming_log = context_data.get("streaming_log", [])
-                            original_response = context_data.get("response", "")
 
-                    merged_streaming_log = original_streaming_log + retry_streaming_log
-
-                    # Merge streaming.jsonl files
-                    streaming_jsonl_file = iteration_dir / "streaming.jsonl"
-                    if streaming_jsonl_file.exists():
-                        # Append retry streaming log to existing file
-                        with open(streaming_jsonl_file, "a", encoding="utf-8") as f:
-                            for log_entry in retry_streaming_log:
-                                f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
-
-                    # Update iteration.json with final response and merged streaming_log
+                    # Update control metadata with the final response; raw records remain in JSONL.
                     # Note: response is NOT merged, only keep the last one
                     if context_file.exists():
                         with open(context_file, "r", encoding="utf-8") as f:
                             context_data = json.load(f)
 
                         context_data["response"] = retry_response  # Keep last response only
-                        context_data["streaming_log"] = merged_streaming_log
+                        context_data.pop("streaming_log", None)
                         context_data["checklist_validation_attempts"] = retry_count
                         context_data["status_code"] = (
                             retry_status_code.value if retry_status_code else None
@@ -337,8 +325,7 @@ independent output contracts still apply.
                         if retry_model is not None:
                             context_data["model"] = retry_model
 
-                        with open(context_file, "w", encoding="utf-8") as f:
-                            json.dump(context_data, f, ensure_ascii=False, indent=2)
+                        persist_iteration_metadata(context_file, context_data)
 
                     return retry_response, retry_status_code, True
 

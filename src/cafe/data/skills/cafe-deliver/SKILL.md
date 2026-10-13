@@ -44,7 +44,15 @@ capability or confirmed closeout adapter to execute the endpoint after worker
 quiescence.
 
 Write delivery_readiness.json with the confirmed authority digest, route, exact
-endpoint, current review reference and final checkpoint receipt. A changed or
+endpoint, current review reference and a `checkpoint` containing the FULL actual
+saved `before_delivery` object: version, receipt_id, context_digest,
+authority_digest, revision, identity, boundary, round_id, parent_id, observed_at,
+snapshot, passed and findings. A receipt ID or file reference alone is insufficient.
+Use `prepare_delivery_readiness` / `validate_delivery_readiness` from
+`cafe.core.execution_checkpoints`; preserve the saved receipt and observation time.
+A missing machine field enters the existing bounded artifact correction before
+handoff; do not substitute a generic human clarification for this omission.
+A changed or
 missing target or effects, unavailable review, or scope violation requires the
 existing focused user handoff. Do not re-ask an unchanged already-granted decision.
 Mandatory host approvals remain human-owned. Preserve normal Git hooks and

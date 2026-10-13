@@ -138,3 +138,82 @@ def test_shared_observation_preserves_each_receipts_authority_and_identity(execu
     with pytest.raises(ValueError):
         require_checkpoint(execution_context, receipt, "before_review", observation=observation,
                            source_revision=execution_context["baseline_commit"])
+
+
+@pytest.mark.parametrize('defect', [None, 'receipt_only', 'missing', 'failed', 'boundary',
+    'authority', 'revision', 'identity', 'content', 'endpoint', 'required_review', 'shape'])
+def test_issue646_u11_complete_readiness_contract(execution_context, defect):
+    from copy import deepcopy
+    from cafe.core.execution_checkpoints import checkpoint, prepare_delivery_readiness, validate_delivery_readiness
+    context = dict(execution_context, delivery_endpoint={'route': 'local', 'source_branch': 'main'})
+    saved = checkpoint(context, 'before_delivery', round_id='delivery-round', parent_id='parent')
+    readiness = prepare_delivery_readiness(context, saved)
+    candidate = deepcopy(readiness)
+    if defect == 'receipt_only': candidate['checkpoint'] = {'receipt_id': saved['receipt_id']}
+    elif defect == 'missing': candidate.pop('checkpoint')
+    elif defect == 'failed': candidate['checkpoint']['passed'] = False
+    elif defect == 'boundary': candidate['checkpoint']['boundary'] = 'before_review'
+    elif defect == 'authority': candidate['authority_digest'] = 'b' * 64
+    elif defect == 'revision': candidate['checkpoint']['revision'] = 2
+    elif defect == 'identity': candidate['checkpoint']['identity'] = {'workflow_id': 'different'}
+    elif defect == 'content': (Path(context['root']) / 'allowed').write_text('changed')
+    elif defect == 'endpoint': candidate['endpoint'] = {'route': 'other'}
+    elif defect == 'shape': candidate['checkpoint'].pop('findings')
+    elif defect == 'required_review': context['review_policy'] = 'single_native'
+    if defect:
+        with pytest.raises(ValueError): validate_delivery_readiness(context, candidate)
+    else:
+        assert validate_delivery_readiness(context, candidate) == readiness
+        assert readiness['checkpoint'] == saved
+
+
+def test_issue646_u12_public_consumer_routes_machine_omission_to_specific_recovery(execution_context):
+    import json
+    from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
+    from cafe.core.workflow_models import StepExecutionResult
+    from cafe.core.human_task_records import HumanTaskRecordStore
+    context = dict(execution_context, delivery_endpoint={'route': 'local'})
+    issue = Path(context['root']) / '.cafe/issues/sample'
+    graph = {'playbook': {'id': 'custom'}, 'steps': {'ship_bespoke': {
+        'skill': 'custom', 'role': 'author', 'behavior': {'completion': 'baton'},
+        'execution': {'checkpoints': ['before_delivery'], 'delivery_evidence_artifact': 'bespoke.json'},
+        'on': {'await_agent': '_done'}}}}
+    def provider(*args, **kwargs):
+        directory = issue / 'ship_bespoke/iteration_001'
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / 'iteration.json').write_text(json.dumps({'iteration': 1, 'session_id': 'original'}))
+        (directory / 'output.md').write_text('Saved terminal work\n')
+        (directory / 'bespoke.json').write_text(json.dumps({'authority_digest': context['authority_digest'],
+            'endpoint': context['delivery_endpoint'], 'checkpoint': {'receipt_id': 'reference-only'}}))
+        (issue / 'next_step.txt').write_text(json.dumps({'version': 1, 'intent': 'await_agent'}))
+        return StepExecutionResult(response='', artifacts={'report': str(directory / 'output.md')})
+    runtime = BlackboardWorkflowRuntime(issue_dir=issue, playbook=graph, executor=provider, execution_context=context)
+    result = runtime.run(start_step='ship_bespoke', single_step=True)
+    assert not result.completed
+    task = HumanTaskRecordStore(issue).tasks()[0]
+    assert task.policy_id == 'agent-execution-interrupted'
+    assert json.loads((issue / 'ship_bespoke/iteration_001/iteration.json').read_text())['agent_interruption']['reason'] == 'agent_delivery_readiness_evidence'
+
+
+@pytest.mark.parametrize('review_status', ['passing', 'missing', 'blocking', 'wrong_parent'])
+def test_issue646_u11_readiness_preserves_required_independent_native_review(execution_context, review_status):
+    from datetime import datetime, timezone
+    from cafe.core.execution_checkpoints import checkpoint, validate_delivery_readiness
+    context = dict(execution_context, delivery_endpoint={'route': 'local'}, review_policy='single_native',
+                   review_configuration={'cli': 'codex', 'model': 'review-model', 'read_only': True})
+    review_checkpoint = checkpoint(context, 'before_review', round_id='review-round', parent_id='parent')
+    findings = [{'severity': 'blocking', 'detail': 'Unresolved invariant'}] if review_status == 'blocking' else []
+    invocation = {'parent_id': 'other' if review_status == 'wrong_parent' else 'parent',
+        'reviewer_id': 'independent', 'configuration': context['review_configuration'], 'terminal': 'result',
+        'exit_status': 0, 'findings': findings, 'targeted_tests': ['targeted invariant passes'], 'result_reference': 'native/result'}
+    observed = dict(invocation, parent_id='parent', receipt_id=review_checkpoint['receipt_id'],
+                    observed_at=datetime.now(timezone.utc).isoformat())
+    review = {'version': 1, 'round_id': 'review-round', 'checkpoint': review_checkpoint,
+        'invocations': [invocation], 'native_observations': {'version': 1, 'parent_id': 'parent', 'observations': [observed]}}
+    saved = checkpoint(context, 'before_delivery', round_id='delivery-round', parent_id='parent')
+    readiness = {'authority_digest': context['authority_digest'], 'endpoint': context['delivery_endpoint'], 'checkpoint': saved}
+    if review_status == 'passing':
+        assert validate_delivery_readiness(context, readiness, review_evidence=review) == readiness
+    else:
+        with pytest.raises(ValueError):
+            validate_delivery_readiness(context, readiness, review_evidence=None if review_status == 'missing' else review)

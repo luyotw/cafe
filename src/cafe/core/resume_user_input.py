@@ -54,6 +54,9 @@ def is_interrupted_iteration(
         if (
             not current_iteration_data.get("end_time")
             or current_iteration_data.get("workflow_completion_trusted") is False
+            # Context-only callers cannot authenticate an audit receipt. The
+            # owning iteration reader verifies it before selecting a new round.
+            or isinstance(current_iteration_data.get("workflow_completion_trusted"), dict)
         ):
             return True
     return False

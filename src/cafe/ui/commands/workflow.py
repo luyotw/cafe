@@ -1431,3 +1431,27 @@ def _dispatch_interruption_callback(runtime: Any, error: Exception) -> None:
         runtime._dispatch_workflow_event("workflow_interruption", {"error": type(error).__name__})
     except Exception:
         pass
+
+
+def repair(
+    issue: str = typer.Option(..., '--issue', help='Exact prepared issue name'),
+    kind: str = typer.Option(..., '--kind', help='iteration, interruption, readiness or pr-result'),
+    step: str = typer.Option(..., '--step', help='Exact source step'),
+    iteration: int = typer.Option(..., '--iteration', min=1, max=999),
+    execute: bool = typer.Option(False, '--execute', help='Apply verified repair; default is read-only preview'),
+    execution_context_file: Optional[Path] = typer.Option(None, '--execution-context-file', help='Original saved resolved execution context for readiness or PR repair'),
+) -> None:
+    """Repair saved machine evidence without executing workflow work."""
+    import json
+    from cafe.core.workflow_repair import repair_workflow, _safe_component
+    if not _safe_component(issue):
+        typer.echo(json.dumps({'status': 'refused', 'reason': 'explicit safe issue name required'}))
+        raise typer.Exit(2)
+    result = repair_workflow(
+        Path.cwd() / '.cafe' / 'issues' / issue, kind=kind, step=step,
+        iteration=iteration, execute=execute, execution_context_file=execution_context_file,
+        progress=lambda event: typer.echo(json.dumps(event), err=True),
+    )
+    typer.echo(json.dumps(result, ensure_ascii=False))
+    code = {'refused': 2, 'unresolved': 3, 'interrupted': 4, 'mismatch': 5}.get(result['status'], 0)
+    raise typer.Exit(result.get('exit_code', code))

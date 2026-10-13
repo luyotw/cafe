@@ -192,3 +192,11 @@ def test_i8_hook_result_byte_boundary_retains_replay_safety(tmp_path, extra):
         assert executor()._run_workspace_publication_hook(**kwargs) == result
         assert executor()._run_workspace_publication_hook(**kwargs) == result
     assert len(calls) == 1
+
+
+def test_issue646_u1_workspace_slims_logs_before_existing_reserve_check(tmp_path):
+    path = tmp_path / 'iteration.json'
+    metadata = {'session_id': 'same', 'workspace_completion': {'consumed': 2},
+                'streaming_log': [{'value': 'x' * 1_100_000}]}
+    executor()._persist_workspace_metadata(path, metadata)
+    assert json.loads(path.read_text()) == {k: v for k, v in metadata.items() if k != 'streaming_log'}

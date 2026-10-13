@@ -26,6 +26,8 @@ from cafe.core.phase_sandbox_mixin import PhaseSandboxMixin
 
 # Backward-compat re-export for test imports
 from cafe.core.phase_state_mixin import (
+    persist_iteration_metadata,
+    load_iteration_control_metadata,
     PhaseStateMixin,
     ensure_agent_file_exists,  # noqa: F401
 )
@@ -188,7 +190,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         context_data: Dict[str, Any] = {}
         if context_file.exists():
             try:
-                loaded = json.loads(context_file.read_text(encoding="utf-8"))
+                loaded = load_iteration_control_metadata(context_file)
             except (OSError, UnicodeDecodeError, json.JSONDecodeError):
                 loaded = None
             if isinstance(loaded, dict):
@@ -209,8 +211,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             context_data.update(phase_specific_data)
 
         # Save as iteration.json file
-        with open(iteration_dir / "iteration.json", "w", encoding="utf-8") as f:
-            json.dump(context_data, f, ensure_ascii=False, indent=2)
+        persist_iteration_metadata(iteration_dir / "iteration.json", context_data)
 
     def _load_user_input(self, iteration: int) -> str:
         """Load user_input from user_input.md.
@@ -273,8 +274,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
 
         # Read existing context data
         if context_file.exists():
-            with open(context_file, "r", encoding="utf-8") as f:
-                context_data = json.load(f)
+            context_data = load_iteration_control_metadata(context_file)
         else:
             # If file does not exist, create basic structure
             context_data = {
@@ -291,8 +291,6 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             context_data["response"] = None
         if "permission_denials" not in context_data:
             context_data["permission_denials"] = []
-        if "streaming_log" not in context_data:
-            context_data["streaming_log"] = []
 
         # Initialize agent metadata fields if not present (ensures all fields exist)
         if "prompt" not in context_data:
@@ -344,8 +342,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
 
         # Save updated iteration.json file
         context_file = iteration_dir / "iteration.json"
-        with open(context_file, "w", encoding="utf-8") as f:
-            json.dump(context_data, f, ensure_ascii=False, indent=2)
+        persist_iteration_metadata(context_file, context_data)
 
         # Note: streaming.jsonl is saved earlier in _execute_agent_iteration
         # to preserve raw format before iteration.json processing
@@ -386,7 +383,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         if not context_file.exists():
             return
         try:
-            context_data = json.loads(context_file.read_text(encoding="utf-8"))
+            context_data = load_iteration_control_metadata(context_file)
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             return
         if not isinstance(context_data, dict):
@@ -398,10 +395,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         if persist_metadata is not None:
             persist_metadata(context_file, context_data)
         else:
-            (iteration_dir / "iteration.json").write_text(
-                json.dumps(context_data, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+            persist_iteration_metadata(iteration_dir / "iteration.json", context_data)
 
     def _configured_primary_cli_value(self, agent_name: str) -> Optional[str]:
         """Crew-configured primary CLI for this agent as a plain string, if resolvable."""
@@ -1005,8 +999,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             context_data["denied_tools"] = denied_tools
             context_data["cli_command_args"] = cli_command_args
             context_data["cli_environment"] = cli_environment_preview
-            with open(context_file, "w", encoding="utf-8") as f:
-                json.dump(context_data, f, ensure_ascii=False, indent=2)
+            persist_iteration_metadata(context_file, context_data)
 
         # 4. Execute agent (with error recovery)
         # Prepare streaming.jsonl file path for real-time writing
@@ -1257,8 +1250,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                     if failed_attempts:
                         context_data["failed_attempts"] = failed_attempts
 
-                    with open(context_file, "w", encoding="utf-8") as f:
-                        json.dump(context_data, f, ensure_ascii=False, indent=2)
+                    persist_iteration_metadata(context_file, context_data)
 
                 error_file = iteration_dir / "error.json"
                 error_data = {
@@ -1382,8 +1374,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                         # Explicitly mark as None, convenient for subsequent debugging to see "no available CLI arguments"
                         history_data.setdefault("cli_command_args", None)
 
-                    with open(context_file, "w", encoding="utf-8") as f:
-                        json.dump(history_data, f, ensure_ascii=False, indent=2)
+                    persist_iteration_metadata(context_file, history_data)
 
                 # Re-raise to let phase handle failure
                 raise
@@ -2124,8 +2115,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                     with open(context_file, "r", encoding="utf-8") as f:
                         context_data = json.load(f)
                     context_data["status_code"] = status_code.value if status_code else None
-                    with open(context_file, "w", encoding="utf-8") as f:
-                        json.dump(context_data, f, ensure_ascii=False, indent=2)
+                    persist_iteration_metadata(context_file, context_data)
 
                 # Save progress (phase-specific logic)
                 if hasattr(self, "_save_progress") and status_code is not None:
@@ -2146,8 +2136,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                 with open(context_file, "r", encoding="utf-8") as f:
                     context_data = json.load(f)
                 context_data["status_code"] = status_code.value
-                with open(context_file, "w", encoding="utf-8") as f:
-                    json.dump(context_data, f, ensure_ascii=False, indent=2)
+                persist_iteration_metadata(context_file, context_data)
 
         # Use base class method to handle standard status codes
         result = self._handle_standard_status_codes(

@@ -30,6 +30,53 @@ CORRECTED = (FIXTURES / "corrected.md").read_text()
 MISSING_PLAN_TODO = "<!-- plan-stage: detailed-plan -->\n# Missing tasks\n"
 
 
+def test_issue646_blk001_full_report_reservation_refuses_before_dispatch(journey, monkeypatch):
+    j = journey([REJECTED, CORRECTED], workspace=False)
+    correct = GenericWorkflowStepExecutor._correct_artifact_format
+    originals = []
+    def seed(self, **kwargs):
+        path = kwargs['iteration_dir'] / 'iteration.json'
+        data = json.loads(path.read_text())
+        data['padding'] = ''
+        data['padding'] = 'x' * (1_048_576 - len(json.dumps(data, ensure_ascii=False, indent=2).encode()))
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+        originals.append(path.read_bytes())
+        return correct(self, **kwargs)
+    monkeypatch.setattr(GenericWorkflowStepExecutor, '_correct_artifact_format', seed)
+    # Interruption preparation may also refuse added evidence at this exact
+    # ordinary ceiling; neither refusal can publish an unreadable replacement.
+    try:
+        j.runtime.run(start_step='inspect_custom')
+    except (RuntimeError, ValueError):
+        pass
+    assert originals and (j.iteration / 'iteration.json').read_bytes() == originals[0]
+    assert len(j.manager.calls) == 1 and j.manager.deliveries == 0
+    assert j.effects == ['prepare']
+    from cafe.core.restart_policy import load_restart_context
+    assert load_restart_context(j.iteration / 'iteration.json')['session_id'] == 'exact-report-session'
+
+
+def test_issue646_blk001_user_recovery_bookkeeping_refuses_before_consuming_evidence(journey):
+    j = journey([REJECTED, REJECTED, REJECTED, CORRECTED], workspace=False)
+    assert not j.runtime.run(start_step='inspect_custom').completed
+    records = HumanTaskRecordStore(j.issue)
+    task = records.tasks()[0]
+    # This is an explicit simulated user action in an isolated repository.
+    records.complete(workflow_id=task.workflow_id, task_id=task.id,
+        payload={'decision': 'retry', 'continuation': 'inspect_custom'}, source='fixture-user')
+    path = j.iteration / 'iteration.json'
+    data = json.loads(path.read_text()); data['padding'] = ''
+    data['padding'] = 'x' * (1_048_576 - len(json.dumps(data, ensure_ascii=False, indent=2).encode()))
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+    original, tasks = path.read_bytes(), (j.issue / 'human_tasks.json').read_bytes()
+    with pytest.raises(RuntimeError):
+        j.executor._consume_artifact_recovery_authorization(j.iteration,
+            workflow_id=task.workflow_id, step_name='inspect_custom')
+    assert path.read_bytes() == original and (j.issue / 'human_tasks.json').read_bytes() == tasks
+    assert json.loads(path.read_text())['artifact_correction']['consumed'] == 2
+    assert len(j.manager.calls) == 3
+
+
 def _assert_correction_context_preserved(manager):
     first = manager.calls[0]
     assert all(value == manager.checklists[0] for value in manager.checklists)
