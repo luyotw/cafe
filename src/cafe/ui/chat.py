@@ -545,6 +545,11 @@ def _warn_if_chat_handoff_missing(
     valid_steps: list[str],
 ) -> None:
     store = BlackboardStore(issue_dir)
+    # Ordinary success is an outcome-only result. The workflow runtime owns
+    # its route and completion gates; chat must not parse it as a full baton
+    # or clear the saved handoff while a user task is still pending.
+    if store.next_step_path.exists() and store.load_outcome_only_handoff() is not None:
+        return
     blackboard = store.load_or_create(current_step)
     contract = store.load_handoff_contract(blackboard, allowed_steps=valid_steps)
     if contract.source == "chat.bootstrap":
