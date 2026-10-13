@@ -159,3 +159,43 @@ def test_local_delivery_revision_binds_immutable_feedback_batch(local_action, tm
         batch.write_text('{"version":1,"entries":[]}')
     accepted = accept(context, task)
     assert accepted.target == (None if change_batch else "done"), accepted.rejection
+
+
+@pytest.mark.parametrize("damage", [None, "report", "source", "binding"])
+def test_manager_recognizes_accepted_local_results_for_leave(local_action, tmp_path, damage):
+    from cafe.manager.closeout import inspect_closeout
+    from tests.integration.test_manager_closeout_journey import activate
+
+    context = prepare(local_action, tmp_path)
+    root, _, issue, state, _, _, engine, kwargs, _, _ = context
+    activate(context, ["unselected-cleanup"], choice="leave")
+    result = hook(engine, "publish_output", "DevelopmentDeliveryOutcome", kwargs)
+    task = HumanTaskRecordStore(issue).tasks()[-1]
+    with pytest.raises(ValueError):
+        inspect_closeout(issue, state.workflow_id)
+    assert accept(context, task).target == "done"
+    BlackboardStore(issue).set_current_step(state, "done")
+    if damage == "report":
+        Path(result.context_updates["delivery_receipts_file"]).write_text('{}')
+    elif damage == "source":
+        (root / "changed.txt").write_text("changed")
+    elif damage == "binding":
+        step = kwargs["step_def"]
+        assert step["delivery"]["result_task"] == task.policy_id
+        records = HumanTaskRecordStore(issue)
+        other = records.materialize(
+            workflow_id=state.workflow_id, step=task.step, iteration=2,
+            trigger="confirm_output", policy_id="foreign-result-task", prompt=task.prompt,
+            expected_result=task.expected_result, continuations=task.continuations, assignee_type="user",
+        )
+        assert records.get_result(other.id) is None
+    if damage in {"report", "source"}:
+        with pytest.raises(ValueError):
+            inspect_closeout(issue, state.workflow_id)
+    else:
+        selection = inspect_closeout(issue, state.workflow_id)
+        assert selection["status"] == "accepted"
+        assert selection["selection"]["choice"] == "leave"
+        assert selection["selection"]["task_id"] == task.id
+        assert selection["selection"]["mode"] == "local-only"
+        assert "snapshot" not in selection["selection"]

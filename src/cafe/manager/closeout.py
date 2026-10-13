@@ -85,7 +85,7 @@ def accepted_delivery_result(issue_dir, workflow_id, *, archived=False, binding=
         for t in records.tasks()
         if t.workflow_id == workflow_id
         and t.trigger == "confirm_output"
-        and "Action snapshot SHA256:" in t.prompt
+        and ("Action snapshot SHA256:" in t.prompt or "Local delivery SHA256:" in t.prompt)
         and not t.capability_approval
         and (binding is None or (t.step == binding["step"] and t.policy_id == binding["task_id"]))
     ]
@@ -100,6 +100,31 @@ def accepted_delivery_result(issue_dir, workflow_id, *, archived=False, binding=
     decision = result.payload.get("decision")
     if decision not in TERMINAL_DECISIONS:
         return None
+    if "Local delivery SHA256:" in task.prompt:
+        # Artifact acceptance has no integration snapshot or effect receipts.
+        # Reuse its owning validator rather than infer success from task status.
+        from cafe.core.blackboard import BlackboardStore
+        from cafe.delivery.local_result import validate_result
+        from cafe.playbooks.loader import PlaybookLoader
+
+        if archived:
+            raise ValueError("local delivery acceptance requires its retained workspace")
+        state = BlackboardStore(issue_dir).load_read_only()
+        root = issue_dir.resolve().parents[2]
+        step = PlaybookLoader(project_root=root, read_only=True,
+                              resolve_presentation=False).load(state.playbook_id)["steps"][task.step]
+        declaration = DeliveryBinding.model_validate(step["delivery"])
+        continuation = task.continuations.get("confirm")
+        if (task.policy_id != declaration.result_task or decision != "confirm"
+                or not continuation or result.payload.get("continuation", continuation) != continuation):
+            raise ValueError("local acceptance does not match its declared result outcome")
+        validate_result(issue_dir, state, step, declaration, task)
+        marker = re.search(r"Local delivery SHA256: ([0-9a-f]{64})", task.prompt)
+        if marker is None:
+            raise ValueError("local acceptance has no displayed result identity")
+        return {"task_id": task.id, "result_id": result.id, "mode": "local-only",
+                "local_result": marker[1], "decision": decision,
+                "authority": completion_authority(records, task, result)}
     match = re.search(r"Action snapshot SHA256: ([0-9a-f]{64})", task.prompt)
     if not match:
         raise ValueError("archived acceptance has no exact displayed plan and snapshot")
