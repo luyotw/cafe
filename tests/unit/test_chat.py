@@ -432,8 +432,10 @@ class TestLaunchChatSession:
 
 def test_prepare_chat_environment_installs_chat_skills_only() -> None:
     with (
-        patch("cafe.ui.chat.SkillLoader.discover"),
+        patch("cafe.ui.chat.NativeSkillBridge.reconcile_project_skills"),
         patch("cafe.ui.chat.NativeSkillBridge.synchronize_skills") as mock_synchronize,
+        patch("cafe.phases.generic_phase.GenericPhase.prepare_skills"),
+        patch("cafe.phases.generic_phase.GenericPhase.project_invocation_instructions"),
     ):
         _prepare_chat_environment(
             agent_cli=AgentCLI.CODEX,
@@ -941,3 +943,38 @@ def test_launch_chat_session_nonzero_exit_reports_generic_cli_error(
     assert result == 2
     printed = " ".join(str(call) for call in mock_print.call_args_list)
     assert "Chat CLI exited with code 2: authentication failed" in printed
+
+
+def test_writable_chat_keeps_local_skills_and_renders_supplied_context(tmp_path, monkeypatch):
+    """U5/U7/I2: chat reconciliation and prompt rendering use the explicit root."""
+    from cafe.ui import chat
+    from cafe.skills.loader import SkillLoader as RealLoader
+
+    for name in ("chosen", "unselected"):
+        directory = tmp_path / ".cafe/skills" / name
+        directory.mkdir(parents=True)
+        (directory / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: project\n---\n{name} {{issue_name}} {{iteration_dir}}\n"
+        )
+    monkeypatch.setattr(
+        chat,
+        "SkillLoader",
+        lambda **kwargs: RealLoader(
+            project_root=kwargs.get("project_root", tmp_path),
+            global_root=tmp_path / "global",
+            builtin_root=tmp_path / "builtin",
+        ),
+    )
+    prompt = _prepare_chat_environment(
+        agent_cli=AgentCLI.CODEX,
+        playbook={"skills": {"chat": {"shared": ["chosen"]}}},
+        role="researcher",
+        step_name="arbitrary",
+        project_root=tmp_path,
+        context={"issue_name": "current"},
+    )
+    assert "chosen current {iteration_dir}" in prompt
+    assert "unselected current" not in prompt
+    for cli in (AgentCLI.CODEX, AgentCLI.CLAUDE, AgentCLI.COPILOT):
+        root = tmp_path / NativeSkillBridge.CLI_SKILL_DIRS[cli]
+        assert (root / "chosen").is_symlink() and (root / "unselected").is_symlink()

@@ -793,6 +793,8 @@ class GenericWorkflowStepExecutor(Phase):
             step_name=step_name,
         )
         managed_skill_names = [*workflow_skill_names, skill_name]
+        context["invocation_skill_names"] = managed_skill_names
+        self.generic_phase.skill_bridge.reconcile_project_skills()
         runtime_agent_clis = self._configured_clis_from_config(effective_agent_config)
 
         shared_invocations_by_skill: List[Dict[AgentCLI, str]] = [{} for _ in workflow_skill_names]

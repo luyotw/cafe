@@ -1064,6 +1064,17 @@ def prepare(
                 console.print(f"[dim]Creating and switching to branch '{feature_branch}'...[/dim]")
                 git_ops.create_branch(feature_branch)
 
+        # Expose only skills present in the resulting active checkout/worktree.
+        from cafe.skills.loader import SkillLoader
+        from cafe.skills.native_bridge import NativeSkillBridge
+
+        active_root = worktree_abs if use_worktree else Path.cwd().resolve()
+        skill_conflicts = NativeSkillBridge(
+            SkillLoader(project_root=active_root), project_root=active_root
+        ).reconcile_project_skills()
+        for conflict in skill_conflicts:
+            console.print(f"[yellow]Project skill reconciliation incomplete: {conflict}[/yellow]")
+
         # 11. Write issue.yaml (after git operations succeed)
         issue_config_file = issue_dir / "issue.yaml"
         with open(issue_config_file, "w", encoding="utf-8") as f:

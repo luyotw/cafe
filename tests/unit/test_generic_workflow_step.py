@@ -9557,8 +9557,87 @@ def test_build_context_forwards_the_workflow_language_to_the_agent(
     assert "en-US" in content_line
     if stored_locale is None:
         assert state.conversation_locale is None
-        assert "conversation_locale" not in json.loads(
-            store.file_path.read_text(encoding="utf-8")
+        assert "conversation_locale" not in json.loads(store.file_path.read_text(encoding="utf-8"))
+
+
+def test_custom_steps_keep_all_local_skills_and_current_prompts(tmp_path, monkeypatch):
+    """U7/U9/I2/I3: public step launch forwards all selection/root/context data."""
+    monkeypatch.chdir(tmp_path)
+    phase = _build_loader(tmp_path)
+    for name in ("alpha-local", "beta-local", "unselected-local"):
+        directory = tmp_path / ".cafe/skills" / name
+        directory.mkdir(parents=True)
+        (directory / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: project\n---\n{name}: {{issue_dir}} {{iteration_dir}}\n"
+        )
+    agent_file = tmp_path / ".cafe/agents/researcher/David.md"
+    agent_file.parent.mkdir(parents=True)
+    agent_file.write_text("---\nname: David\ndescription: Researcher\n---\nRead current sources.\n")
+    issue_dir = tmp_path / ".cafe/issues/custom-project"
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("alpha-step")
+    playbook = {
+        "playbook": {"id": "custom-local"},
+        "steps": {
+            "alpha-step": {
+                "skill": "alpha-local",
+                "role": "researcher",
+                "on": {"await_agent": "beta-step"},
+            },
+            "beta-step": {
+                "skill": "beta-local",
+                "role": "researcher",
+                "on": {"await_agent": "_done"},
+            },
+        },
+        "skills": {"workflow": {"shared": ["unselected-local"]}},
+    }
+    manager = FakeAgentManager(["ready", "ready"])
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="custom-project",
+        playbook=playbook,
+        generic_phase=phase,
+        agent_manager=manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"researcher": "David"},
+    )
+    for step in ("alpha-step", "beta-step"):
+        executor.execute_step(step, playbook["steps"][step], state)
+        prompt = manager.prompts[-1]
+        assert f"{playbook['steps'][step]['skill']}: ./.cafe/issues/custom-project" in prompt
+        assert "unselected-local: ./.cafe/issues/custom-project" in prompt
+        for cli in (AgentCLI.CODEX, AgentCLI.CLAUDE, AgentCLI.COPILOT):
+            for name in ("alpha-local", "beta-local", "unselected-local"):
+                link = phase.skill_bridge.get_native_skills_dir(cli) / name
+                assert link.is_symlink() and link.resolve() == tmp_path / ".cafe/skills" / name
+    assert "alpha-step/iteration_001" not in manager.prompts[-1]
+    from cafe.ui import chat
+
+    monkeypatch.setattr(chat, "SkillLoader", lambda **kwargs: phase.skill_loader)
+    chat._prepare_chat_environment(
+        agent_cli=AgentCLI.CODEX,
+        project_root=tmp_path,
+        playbook={"skills": {"chat": {"shared": ["unselected-local"]}}},
+        role="researcher",
+        step_name="custom-chat",
+        context={"issue_dir": "current-chat"},
+    )
+    added = tmp_path / ".cafe/skills/added-after-chat"
+    added.mkdir()
+    (added / "SKILL.md").write_text("---\nname: added-after-chat\ndescription: added\n---\n")
+    chat._prepare_chat_environment(
+        agent_cli=AgentCLI.CODEX,
+        project_root=tmp_path,
+        playbook={"skills": {"chat": {"shared": []}}},
+        role="researcher",
+        step_name="custom-chat",
+    )
+    for cli in (AgentCLI.CODEX, AgentCLI.CLAUDE, AgentCLI.COPILOT):
+        root = phase.skill_bridge.get_native_skills_dir(cli)
+        assert (root / "added-after-chat").is_symlink()
+        assert all(
+            (root / name).is_symlink() for name in ("alpha-local", "beta-local", "unselected-local")
         )
 
 

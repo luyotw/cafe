@@ -93,29 +93,61 @@ class GenericPhase:
         context: Optional[Dict[str, str]] = None,
     ) -> str:
         """Install one skill for the target CLI and return its invocation syntax."""
-        installed_dir = self.skill_bridge.install_skill(skill_name, agent_cli, context=context)
+        with global_catalog_lock(self.skill_loader.global_root):
+            installed_dir = self.skill_bridge.install_skill(skill_name, agent_cli, context=context)
+            if not installed_dir.is_symlink():
+                rendered = self.render_skill_instruction(skill_name, context or {})
+                (installed_dir / "SKILL.md").write_text(rendered, encoding="utf-8")
+                self.skill_bridge.record_rendered_copy(
+                    agent_cli, installed_dir, self.skill_loader.get_skill_dir(skill_name)
+                )
+        return self.skill_bridge.get_invocation(skill_name, agent_cli)
+
+    def render_skill_instruction(self, skill_name: str, context: Dict[str, str]) -> str:
+        """Render a fresh instruction without modifying its authoritative source."""
+        rendered = (self.skill_loader.get_skill_dir(skill_name) / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        for key, value in context.items():
+            rendered = rendered.replace(f"{{{key}}}", str(value))
         contract = self.skill_loader.get_workflow_declaration(skill_name)
-        prompt_references = self._render_prompt_references(
+        references = self._render_prompt_references(
             skill_name=skill_name,
             references=contract.prompt_references,
-            context=context or {},
+            context=context,
         )
-        resolved_inputs = [
-            (mapping.placeholder, str((context or {})[mapping.placeholder]))
+        for placeholder, content in references.items():
+            rendered = rendered.replace(f"{{{placeholder}}}", content)
+        inputs = [
+            (mapping.placeholder, str(context[mapping.placeholder]))
             for mapping in contract.prompt_inputs
-            if (context or {}).get(mapping.placeholder)
+            if context.get(mapping.placeholder)
         ]
-        if prompt_references or resolved_inputs:
-            skill_file = installed_dir / "SKILL.md"
-            rendered = skill_file.read_text(encoding="utf-8")
-            for placeholder, content in prompt_references.items():
-                rendered = rendered.replace(f"{{{placeholder}}}", content)
-            if resolved_inputs:
-                rendered += "\n\n## Workflow Inputs\n" + "\n".join(
-                    f"- {placeholder}: {path}" for placeholder, path in resolved_inputs
-                )
-            skill_file.write_text(rendered, encoding="utf-8")
-        return self.skill_bridge.get_invocation(skill_name, agent_cli)
+        if inputs:
+            rendered += "\n\n## Workflow Inputs\n" + "\n".join(
+                f"- {placeholder}: {path}" for placeholder, path in inputs
+            )
+        return rendered
+
+    def project_invocation_instructions(self, names: list[str], context: Dict[str, str]) -> str:
+        """Provide selected active-local templates with invocation-local values."""
+        sections: list[str] = []
+        seen: set[Path] = set()
+        for name in names:
+            if not self.skill_bridge.is_active_project_skill(name):
+                continue
+            source = self.skill_loader.get_skill_dir(name)
+            if source in seen:
+                continue
+            seen.add(source)
+            sections.append(
+                f"### Project skill: {source.name}\nAuthority directory: {source}\n"
+                "Use these rendered instructions for this invocation. Resolve relative "
+                "references/scripts against the authority directory. The native SKILL.md "
+                "is the unrendered source template.\n\n"
+                + self.render_skill_instruction(name, context)
+            )
+        return "\n\n".join(sections)
 
     def _render_prompt_references(
         self,
@@ -183,6 +215,11 @@ class GenericPhase:
                 "",
             ]
         )
+
+        selected_names = (context or {}).get("invocation_skill_names", [skill_name])
+        project_instructions = self.project_invocation_instructions(selected_names, context or {})
+        if project_instructions:
+            lines.extend(["Invocation-local project instructions:", project_instructions, ""])
 
         if output_file is not None:
             runtime_files.append(f"output_file={output_file}")

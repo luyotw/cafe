@@ -490,24 +490,22 @@ def _prepare_chat_environment(
     playbook: dict,
     role: str,
     step_name: str,
-) -> None:
-    """Install chat skills resolved from the active playbook."""
+    project_root: Path | None = None,
+    context: dict[str, str] | None = None,
+) -> str:
+    """Reconcile writable chat skills and return current project instructions."""
     if not isinstance(agent_cli, AgentCLI):
-        return
+        return ""
+    from cafe.phases.generic_phase import GenericPhase
 
-    loader = SkillLoader()
-    loader.discover()
-    bridge = NativeSkillBridge(loader)
-
-    bridge.synchronize_skills(
-        resolve_playbook_skills(
-            playbook,
-            channel="chat",
-            role=role,
-            step_name=step_name,
-        ),
-        agent_cli,
-    )
+    loader = SkillLoader(project_root=project_root) if project_root is not None else SkillLoader()
+    bridge = NativeSkillBridge(loader, project_root=project_root)
+    bridge.reconcile_project_skills()
+    names = resolve_playbook_skills(playbook, channel="chat", role=role, step_name=step_name)
+    bridge.synchronize_skills(names, agent_cli, install=False)
+    phase = GenericPhase(loader, skill_bridge=bridge)
+    phase.prepare_skills(skill_names=names, agent_cli=agent_cli, context=context)
+    return phase.project_invocation_instructions(names, context or {})
 
 
 def _format_cli_specific_error(agent_cli: AgentCLI, stderr: str, stdout: str) -> Optional[str]:
@@ -782,12 +780,23 @@ def _launch_chat_session(
         _playbook_id = playbook_id
     else:
         _current_step, _valid_steps, _playbook_id = _prepare_chat_handoff_state(issue_dir)
-        _prepare_chat_environment(
+        project_instructions = _prepare_chat_environment(
             agent_cli=agent_cli,
             playbook=chat_playbook,
             role=role,
             step_name=execution_step,
+            project_root=issue_dir.resolve().parents[2],
+            context={
+                "issue_name": issue_name,
+                "issue_dir": str(issue_dir.resolve()),
+                "current_step": execution_step,
+                "playbook_id": _playbook_id,
+            },
         )
+        if isinstance(project_instructions, str) and project_instructions:
+            initial_prompt = "\n\n".join(filter(None, [initial_prompt, project_instructions]))
+            if prompt is not None:
+                prompt = f"{prompt}\n\n{project_instructions}"
     chat_env = {
         "CAFE_ISSUE_NAME": issue_name,
         "CAFE_ISSUE_DIR": str(issue_dir),

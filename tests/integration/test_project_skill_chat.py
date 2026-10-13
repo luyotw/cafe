@@ -1,0 +1,98 @@
+"""I2/I3/U7: real chat preparation reaches both public transport paths."""
+
+from pathlib import Path
+from unittest.mock import MagicMock
+
+import pytest
+
+from cafe.core.types import AgentCLI
+from cafe.ui import chat
+from cafe.ui.chat import _prepare_chat_environment as real_prepare
+from tests.unit.test_conversation_transport import init
+
+pytest_plugins = ["tests.integration.test_conversation_transport_journeys"]
+
+
+@pytest.mark.parametrize("interactive", [False, True])
+def test_chat_launch_forwards_current_project_instructions_and_keeps_all_links(
+    phase_chat, provider_process, monkeypatch, interactive
+):
+    issue, _metadata = phase_chat
+    authority = Path.cwd() / ".cafe/skills"
+    for name in ("chosen", "unselected"):
+        directory = authority / name
+        directory.mkdir(parents=True)
+        (directory / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: test\n---\n{name}: {{issue_dir}} {{current_step}}\n"
+        )
+    source = authority / "chosen/SKILL.md"
+    before = source.read_bytes()
+    monkeypatch.setattr(chat, "_prepare_chat_environment", real_prepare)
+    monkeypatch.setattr(
+        chat.PlaybookLoader,
+        "load",
+        lambda *args: {
+            "entry": "implementation",
+            "steps": {"implementation": {"role": "developer"}},
+            "skills": {"chat": {"shared": ["chosen"]}},
+        },
+    )
+    if interactive:
+        original_run = __import__("subprocess").run
+        launch = MagicMock(return_value=__import__("subprocess").CompletedProcess([], 0))
+        monkeypatch.setattr(
+            "subprocess.run",
+            lambda command, **kwargs: (
+                launch(command, **kwargs)
+                if command[0] == "claude"
+                else original_run(command, **kwargs)
+            ),
+        )
+        kwargs = {"initial_prompt": "current-message"}
+    else:
+        launch = provider_process([init("fresh"), dict(type="result", content="reply")])
+        kwargs = {"prompt": "current-message"}
+    assert chat.launch_chat_session("developer", "x", phase_name="implementation", **kwargs) == 0
+    command = launch.call_args.args[0]
+    prompt = " ".join(command)
+    assert "current-message" in prompt
+    assert f"chosen: {issue.resolve()} implementation" in prompt
+    assert "unselected:" not in prompt and "{issue_dir}" not in prompt
+    assert source.read_bytes() == before
+    for cli in (AgentCLI.CODEX, AgentCLI.CLAUDE, AgentCLI.COPILOT):
+        root = (
+            Path.cwd()
+            / {AgentCLI.CODEX: ".codex", AgentCLI.CLAUDE: ".claude", AgentCLI.COPILOT: ".copilot"}[
+                cli
+            ]
+            / "skills"
+        )
+        assert (root / "chosen").resolve() == source.parent
+        assert (root / "unselected").is_symlink()
+
+
+def test_requested_chat_conflict_prevents_agent_process(phase_chat, provider_process, monkeypatch):
+    """U7: an unmanaged selected name never launches an unintended native skill."""
+    source = Path.cwd() / ".cafe/skills/chosen"
+    source.mkdir(parents=True)
+    (source / "SKILL.md").write_text("---\nname: chosen\ndescription: project\n---\n")
+    collision = Path.cwd() / ".claude/skills/chosen"
+    collision.mkdir(parents=True)
+    (collision / "SKILL.md").write_text("user-owned")
+    monkeypatch.setattr(chat, "_prepare_chat_environment", real_prepare)
+    monkeypatch.setattr(
+        chat.PlaybookLoader,
+        "load",
+        lambda *args: {
+            "entry": "implementation",
+            "steps": {"implementation": {"role": "developer"}},
+            "skills": {"chat": {"shared": ["chosen"]}},
+        },
+    )
+    launch = provider_process([])
+    from cafe.skills.exceptions import SkillDiscoveryError
+
+    with pytest.raises(SkillDiscoveryError):
+        chat.launch_chat_session("developer", "x", phase_name="implementation", prompt="hello")
+    launch.assert_not_called()
+    assert (collision / "SKILL.md").read_text() == "user-owned"
