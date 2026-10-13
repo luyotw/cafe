@@ -355,6 +355,25 @@ def _runtime_progress(
                 and data.get("contract", {}).get("from_step") == step
                 and data.get("contract", {}).get("to_owner") in {"agent", "done"}
             ):
+                proof = data.get("completion_metadata")
+                if isinstance(proof, Mapping):
+                    from cafe.core.restart_policy import load_restart_context
+                    from cafe.core.phase_state_mixin import validated_completion_receipt
+                    try:
+                        relative = Path(proof["path"])
+                        if relative.is_absolute() or ".." in relative.parts:
+                            continue
+                        path = issue_dir / relative
+                        metadata = load_restart_context(path)
+                        marker = metadata.get("workflow_completion_trusted")
+                        if marker is False:
+                            continue
+                        if isinstance(marker, dict):
+                            committed = validated_completion_receipt(path.parent, metadata)
+                            if committed is None or committed["event_id"] != event["event_id"]:
+                                continue
+                    except (OSError, ValueError, KeyError, TypeError):
+                        continue
                 statuses[step] = "completed"
                 verified_completion.add(step)
                 completed_at = str(event.get("timestamp", ""))

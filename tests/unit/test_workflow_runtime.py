@@ -32,7 +32,8 @@ from cafe.ui.human_tasks import resolve_step_human_task
 pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
 
-def test_validated_cached_completion_starts_new_iteration_after_review_return(tmp_path):
+@pytest.mark.parametrize('deferred_compaction', [False, True])
+def test_validated_cached_completion_starts_new_iteration_after_review_return(tmp_path, monkeypatch, deferred_compaction):
     from cafe.core.phase_state_mixin import next_runnable_iteration_number
 
     issue = tmp_path / ".cafe" / "issues" / "cached-completion"
@@ -80,19 +81,29 @@ def test_validated_cached_completion_starts_new_iteration_after_review_return(tm
         return StepExecutionResult(response="", artifacts={declaration["output_artifact"]: str(output)})
 
     runtime = BlackboardWorkflowRuntime(issue_dir=issue, playbook=playbook, executor=executor)
+    if deferred_compaction:
+        import cafe.core.workflow_runtime as module
+        write = module.atomic_write_bytes
+        def fail_compaction(path, payload):
+            if path == metadata and 'workflow_completion_trusted' not in json.loads(payload):
+                raise OSError('optional marker compaction remains unavailable')
+            return write(path, payload)
+        monkeypatch.setattr(module, 'atomic_write_bytes', fail_compaction)
     with pytest.raises(RuntimeError, match="max transition limit"):
         runtime.run(start_step="producer", max_transitions=2)
 
     assert calls == [("producer", 1), ("reviewer", 1)]
     assert runtime.blackboard.current_step == "producer"
-    assert json.loads(metadata.read_text()) == retained
+    actual = json.loads(metadata.read_text())
+    assert {key: value for key, value in actual.items() if key != 'workflow_completion_trusted'} == retained
+    assert ('workflow_completion_trusted' in actual) is deferred_compaction
     assert next_runnable_iteration_number(issue / "producer") == 2
     assert runtime.blackboard.artifacts["review_feedback"].updated_by == "reviewer"
     resumed = BlackboardWorkflowRuntime(issue_dir=issue, playbook=playbook, executor=executor)
     with pytest.raises(RuntimeError, match="max transition limit"):
         resumed.run(max_transitions=1)
     assert calls[-1] == ("producer", 2)
-    assert json.loads(metadata.read_text()) == retained
+    assert {key: value for key, value in json.loads(metadata.read_text()).items() if key != 'workflow_completion_trusted'} == retained
 
 
 @pytest.mark.parametrize("case", ["missing_end", "malformed", "oversize", "serialized_oversize", "write_failure"])

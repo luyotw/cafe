@@ -99,6 +99,24 @@ it preserves the kickoff contract.
 
 ## Explicit saved-evidence repair
 
+Normal completion passes required native/readiness gates before publishing its
+terminal audit or closing a retained untrusted iteration. During publication,
+`workflow_completion_trusted` may retain an exact `{workflow_id, sequence}`
+receipt for its reserved existing audit slot. A reservation alone is incomplete:
+the owning iteration reader requires the matching committed completion record,
+selected iteration path and original control hash. Marker read/size/write failure
+publishes no successful terminal; an absent terminal record keeps that iteration
+retryable. A valid committed receipt remains sufficient if optional marker
+compaction fails. Do not manually delete the marker or interpret provider exit as
+completion.
+
+Existing legal runtime reentry revalidates the prepared original artifacts,
+outbound handoff, capability receipts and required gates before completing a
+partial publication. It stops at the declared handoff without rerunning the
+provider, hooks or publication, answering a task, or resetting budgets. A pending
+human decision or conflicting control/artifact identity cannot be repaired by
+guessing success; use the existing authorized handoff.
+
 `cafe repair` is a supported local machine-evidence operation. It does not run a
 phase or continue the workflow. Use the current authorized issue/worktree and
 select one exact source step and iteration. Preview is read-only by default;

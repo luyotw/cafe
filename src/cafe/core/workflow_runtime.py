@@ -3404,7 +3404,21 @@ class BlackboardWorkflowRuntime:
         runtime: str,
         attempt_count: Optional[int] = None,
         hop_count: Optional[int] = None,
-    ) -> None:
+        post_contract: HandoffContract | None = None,
+    ) -> PlaybookRunResult | None:
+        contract = post_contract
+        if contract is None:
+            try:
+                contract = self._load_step_handoff_contract(current_step=current_step)
+            except BatonRejected:
+                execution = self.steps[current_step].get("execution", {})
+                if execution.get("checkpoints") or execution.get("review_policy") == "single_native":
+                    raise
+        if contract is not None:
+            gate = self._execution_completion_gate(
+                current_step=current_step, post_contract=contract, runtime=runtime)
+            if gate is not None:
+                return gate.terminal_result
         payload: Dict[str, Any] = {
             "step": current_step,
             "status_code": status_code,
@@ -3414,15 +3428,154 @@ class BlackboardWorkflowRuntime:
             payload["attempt"] = attempt_count
         if hop_count is not None:
             payload["hop"] = hop_count
+        preparation = self._prepare_step_completion(current_step, event_type, payload, contract)
         self.blackboard_store.record_event(
             self.blackboard,
             event_type,
             payload,
+            before_commit=(lambda record: self._bind_step_completion(record, preparation))
+                if preparation is not None else None,
         )
-        self._mark_latest_iteration_completion_trusted(current_step)
+        if preparation is not None:
+            # The receipt already resolves to a durable terminal record. Its
+            # compaction is optional and cannot invalidate that committed result.
+            try:
+                self._mark_latest_iteration_completion_trusted(current_step)
+            except (OSError, RuntimeError):
+                pass
         if self._pending_phase_terminal is not None:
             self._flush_phase_terminal()
         self._pending_phase_terminal = payload
+        return None
+
+    def _completion_artifact_hashes(self, current_step: str) -> dict[str, str]:
+        import hashlib
+        hashes = {}
+        for artifact in self.blackboard.artifacts.values():
+            if artifact.updated_by != current_step or not artifact.path:
+                continue
+            path = Path(artifact.path)
+            if not path.is_absolute(): path = self.issue_dir.parents[2] / path
+            if path.is_symlink() or not path.is_file():
+                raise RuntimeError("Completion artifact is unavailable")
+            original = path.stat()
+            digest = hashlib.sha256()
+            remaining = original.st_size
+            with path.open("rb") as handle:
+                while remaining:
+                    chunk = handle.read(min(remaining, 65_536))
+                    if not chunk: raise RuntimeError("Completion artifact changed while hashing")
+                    remaining -= len(chunk)
+                    digest.update(chunk)
+                if handle.read(1): raise RuntimeError("Completion artifact changed while hashing")
+            identity = lambda value: (value.st_dev, value.st_ino, value.st_size,
+                                      value.st_mtime_ns, value.st_ctime_ns)
+            if identity(path.stat()) != identity(original):
+                raise RuntimeError("Completion artifact identity changed while hashing")
+            hashes[str(path)] = digest.hexdigest()
+        return hashes
+
+    def _prepare_step_completion(self, current_step, event_type, payload, contract):
+        from cafe.core.packet_io import canonical_json
+        directory = self._latest_iteration_dir(current_step)
+        if directory is None: return None
+        path = directory / "iteration.json"
+        if not path.exists() and not path.is_symlink(): return None
+        try:
+            context = load_restart_context(path)
+        except ValueError as error:
+            raise RuntimeError("Invalid control evidence for completion publication") from error
+        marker = context.get("workflow_completion_trusted")
+        if marker is not False and not isinstance(marker, dict): return None
+        if not context.get("end_time"):
+            # A pre-execution interruption may leave bookkeeping without any
+            # provider result. Never promote that unfinished iteration marker.
+            return None
+        if contract is None:
+            raise RuntimeError("Completion publication requires saved terminal and handoff evidence")
+        control = {key: value for key, value in context.items() if key != "workflow_completion_trusted"}
+        proof = {"step": current_step, "event_type": event_type, "payload": dict(payload),
+            "path": str(path.relative_to(self.issue_dir)),
+            "metadata_sha256": sha256_bytes(canonical_json(control)),
+            "contract": contract.to_next_step_dict(),
+            "artifacts": self._completion_artifact_hashes(current_step)}
+        if not any(event.event_type == "step_completion_prepared" and event.data == proof
+                   for event in reversed(self.blackboard.events)):
+            self.blackboard_store.record_event(self.blackboard, "step_completion_prepared", proof)
+        return proof
+
+    def _bind_step_completion(self, record, preparation):
+        from cafe.core.packet_io import canonical_json
+        path = self.issue_dir / preparation["path"]
+        context = load_restart_context(path)
+        control = {key: value for key, value in context.items() if key != "workflow_completion_trusted"}
+        if sha256_bytes(canonical_json(control)) != preparation["metadata_sha256"]:
+            raise RuntimeError("Completion control evidence changed after validation")
+        if self._completion_artifact_hashes(preparation["step"]) != preparation["artifacts"]:
+            raise RuntimeError("Completion artifacts changed after validation")
+        context["workflow_completion_trusted"] = {
+            "workflow_id": record["workflow_id"], "sequence": record["sequence"]}
+        content = json.dumps(context, ensure_ascii=False, indent=2).encode("utf-8") + b"\n"
+        if len(content) > 1_048_576:
+            raise RuntimeError("Completion control evidence exceeds existing recovery capacity")
+        record["data"]["completion_metadata"] = {
+            "path": preparation["path"], "sha256": preparation["metadata_sha256"]}
+        atomic_write_bytes(path, content)
+
+    def _try_recover_step_completion(self, current_step):
+        from cafe.core.packet_io import canonical_json
+        from cafe.core.phase_state_mixin import validated_completion_receipt
+        if self.blackboard.current_step != current_step: return None
+        directory = self._latest_iteration_dir(current_step)
+        if directory is None: return None
+        context = load_restart_context(directory / "iteration.json")
+        marker = context.get("workflow_completion_trusted")
+        if marker is not False and not isinstance(marker, dict): return None
+        completed = validated_completion_receipt(directory, context)
+        proof = next((event.data for event in reversed(self.blackboard.events)
+            if event.event_type == "step_completion_prepared" and event.step == current_step), None)
+        if proof is None: return None
+        failed = PlaybookRunResult(final_step=current_step,
+            final_status_code="COMPLETION_PUBLICATION_BLOCKED", completed=False)
+        if isinstance(marker, dict):
+            if (set(marker) != {"workflow_id", "sequence"}
+                    or marker["workflow_id"] != self.blackboard.workflow_id
+                    or type(marker["sequence"]) is not int or marker["sequence"] < 1
+                    or marker["sequence"] > self.blackboard_store.audit.high_water(self.blackboard.workflow_id)):
+                return failed
+            reserved = self.blackboard_store.audit.read(self.blackboard.workflow_id, marker["sequence"], bounded=True)
+            if reserved is not None and completed is None: return failed
+        records = HumanTaskRecordStore(self.issue_dir)
+        if records.exists and any(task.workflow_id == self.blackboard.workflow_id
+                and task.step == current_step and task.status is HumanTaskStatus.PENDING
+                for task in records.tasks()):
+            return failed
+        control = {key: value for key, value in context.items() if key != "workflow_completion_trusted"}
+        if (proof.get("path") != str((directory / "iteration.json").relative_to(self.issue_dir))
+                or proof.get("metadata_sha256") != sha256_bytes(canonical_json(control))
+                or proof.get("artifacts") != self._completion_artifact_hashes(current_step)):
+            return failed
+        result = self._validate_reconciled_handoff(current_step=current_step)
+        if not result.reconciled or result.contract.to_next_step_dict() != proof.get("contract"):
+            # A committed receipt can outlive optional compaction and a genuine
+            # later return from review. It must not block that new iteration.
+            return None if completed is not None else failed
+        gate = self._execution_completion_gate(current_step=current_step,
+            post_contract=result.contract, runtime="completion_publication_recovery")
+        if gate is not None: return gate.terminal_result
+        if completed is None:
+            payload = proof["payload"]
+            rejection = self._record_step_completion(event_type=proof["event_type"],
+                current_step=current_step, status_code=payload["status_code"], runtime=payload["runtime"],
+                attempt_count=payload.get("attempt"), hop_count=payload.get("hop"), post_contract=result.contract)
+            if rejection is not None: return rejection
+        else:
+            self._pending_phase_terminal = completed["data"]
+            try: self._mark_latest_iteration_completion_trusted(current_step)
+            except (OSError, RuntimeError): pass
+        return self._apply_reconciled_handoff(current_step=current_step,
+            runtime="completion_publication_recovery", result=result,
+            completion_validated=True, patch_metadata=False)
 
     def _dispatch_workflow_event(self, event_type: str, payload: Mapping[str, Any]) -> None:
         """Dispatch a bounded callback envelope after its state is durable.
@@ -3738,7 +3891,7 @@ class BlackboardWorkflowRuntime:
     def _mark_latest_iteration_completion_trusted(self, current_step: str) -> None:
         """Close a validated iteration even when its provider response was reused.
 
-        The caller has published the artifacts and recorded workflow completion.
+        The caller has passed required gates and durably recorded completion.
         Provider termination alone must never clear an interrupted completion.
         Preserve its saved end time and every budget/publication record.
         """
@@ -3756,7 +3909,14 @@ class BlackboardWorkflowRuntime:
             raise RuntimeError("Cannot mark invalid iteration context as completed") from exc
         if not isinstance(context, dict):
             raise RuntimeError("Cannot mark invalid iteration context as completed")
-        if context.get("workflow_completion_trusted") is not False or not context.get("end_time"):
+        marker = context.get("workflow_completion_trusted")
+        if isinstance(marker, dict):
+            from cafe.core.phase_state_mixin import validated_completion_receipt
+            if validated_completion_receipt(iteration_dir, context) is None:
+                raise RuntimeError("Completion receipt has not committed its matching terminal record")
+        elif marker is not False:
+            return
+        if not context.get("end_time"):
             return
         del context["workflow_completion_trusted"]
         payload = json.dumps(context, ensure_ascii=False, indent=2).encode("utf-8") + b"\n"
@@ -4089,6 +4249,7 @@ class BlackboardWorkflowRuntime:
         status_code: str,
         runtime: str,
         update_contract_on_transition: bool,
+        completion_validated: bool = False,
     ) -> Optional[PostContractResult]:
         post_contract = self._load_step_handoff_contract(current_step=current_step)
         if post_contract is None:
@@ -4106,9 +4267,10 @@ class BlackboardWorkflowRuntime:
         resolved_status_code = (
             post_contract.status_code or f"BATON_{post_contract.intent.value.upper()}"
         )
-        gate = self._execution_completion_gate(current_step=current_step, post_contract=post_contract, runtime=runtime)
-        if gate is not None:
-            return gate
+        if not completion_validated:
+            gate = self._execution_completion_gate(current_step=current_step, post_contract=post_contract, runtime=runtime)
+            if gate is not None:
+                return gate
         if post_contract.to_owner == HandoffOwner.USER:
             result = self._emit_pause(
                 current_step=current_step,
@@ -4788,18 +4950,22 @@ class BlackboardWorkflowRuntime:
         current_step: str,
         runtime: str,
         result: HandoffReconciliationResult,
+        completion_validated: bool = False,
+        patch_metadata: bool = True,
     ) -> PlaybookRunResult:
         if result.contract is None:
             raise RuntimeError("Cannot apply reconciliation without a valid handoff contract")
 
         contract = result.contract
         status_code = result.status_code
-        gate = self._execution_completion_gate(
-            current_step=current_step, post_contract=contract, runtime=runtime
-        )
-        if gate is not None:
-            return gate.terminal_result
-        self._patch_reconciled_iteration_metadata(result)
+        if not completion_validated:
+            gate = self._execution_completion_gate(
+                current_step=current_step, post_contract=contract, runtime=runtime
+            )
+            if gate is not None:
+                return gate.terminal_result
+        if patch_metadata:
+            self._patch_reconciled_iteration_metadata(result)
 
         # Reconciliation validates the baton directly from disk.  Publish that
         # recovered contract to the in-memory state before following the normal
@@ -5430,14 +5596,6 @@ class BlackboardWorkflowRuntime:
                 raise RuntimeError(f"Step '{current_step}' did not produce a valid baton")
             self._store_artifacts(frame.artifacts, frame.artifact_metadata)
             last_status_code = status_code
-            self._record_step_completion(
-                event_type=completion_event_type,
-                current_step=current_step,
-                status_code=status_code,
-                runtime=runtime_label,
-                attempt_count=attempt_count,
-                hop_count=hop_count,
-            )
             next_step = contract.to_step
 
             if (
@@ -5484,6 +5642,12 @@ class BlackboardWorkflowRuntime:
                     },
                 )
                 self.blackboard_store.set_current_step(self.blackboard, "user")
+                completion = self._record_step_completion(
+                    event_type=completion_event_type, current_step=current_step,
+                    status_code=status_code, runtime=runtime_label,
+                    attempt_count=attempt_count, hop_count=hop_count,
+                    post_contract=self.blackboard.handoff_contract)
+                if completion is not None: return completion
                 self._flush_phase_terminal(
                     event_type="human_task",
                     extra={
@@ -5572,10 +5736,11 @@ class BlackboardWorkflowRuntime:
                     delivery=feedback_delivery,
                 )
 
-            gate = self._execution_completion_gate(
-                current_step=current_step, post_contract=contract, runtime=runtime_label)
-            if gate is not None:
-                return gate.terminal_result
+            completion = self._record_step_completion(
+                event_type=completion_event_type, current_step=current_step,
+                status_code=status_code, runtime=runtime_label,
+                attempt_count=attempt_count, hop_count=hop_count, post_contract=contract)
+            if completion is not None: return completion
 
             if next_step == "done":
                 return self._emit_complete(
@@ -5830,19 +5995,22 @@ class BlackboardWorkflowRuntime:
                     post_contract.status_code or f"BATON_{post_contract.intent.value.upper()}"
                 )
                 last_status_code = status_code
-                self._record_step_completion(
+                completion = self._record_step_completion(
                     event_type=completion_event_type,
                     current_step=current_step,
                     status_code=status_code,
                     runtime=runtime_label,
                     attempt_count=attempt_count,
                     hop_count=hop_count,
+                    post_contract=post_contract,
                 )
+                if completion is not None: return completion
                 post_contract_result = self._handle_post_contract(
                     current_step=current_step,
                     status_code=status_code,
                     runtime=runtime_label,
                     update_contract_on_transition=False,
+                    completion_validated=True,
                 )
                 if post_contract_result is not None:
                     status_code = post_contract_result.status_code
@@ -5955,20 +6123,23 @@ class BlackboardWorkflowRuntime:
                 status_code = status_code_obj.value
                 last_status_code = status_code
 
-            self._record_step_completion(
+            completion = self._record_step_completion(
                 event_type=completion_event_type,
                 current_step=current_step,
                 status_code=status_code,
                 runtime=runtime_label,
                 attempt_count=attempt_count,
                 hop_count=hop_count,
+                post_contract=post_contract,
             )
+            if completion is not None: return completion
 
             post_contract_result = self._handle_post_contract(
                 current_step=current_step,
                 status_code=status_code,
                 runtime=runtime_label,
                 update_contract_on_transition=False,
+                completion_validated=True,
             )
             if post_contract_result is not None:
                 status_code = post_contract_result.status_code
@@ -6225,6 +6396,11 @@ class BlackboardWorkflowRuntime:
         )
         if recovered_transition is not None and single_step:
             return self._finalize_observed_result(recovered_transition)
+        completion_step = start_step or self.blackboard.current_step
+        if completion_step in self.steps:
+            recovered_completion = self._try_recover_step_completion(completion_step)
+            if recovered_completion is not None:
+                return self._finalize_observed_result(recovered_completion)
         if single_step:
             resolution = (
                 RuntimePositionResolution(current_step=start_step)
