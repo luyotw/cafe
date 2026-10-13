@@ -3419,6 +3419,7 @@ class BlackboardWorkflowRuntime:
             event_type,
             payload,
         )
+        self._mark_latest_iteration_completion_trusted(current_step)
         if self._pending_phase_terminal is not None:
             self._flush_phase_terminal()
         self._pending_phase_terminal = payload
@@ -3733,6 +3734,35 @@ class BlackboardWorkflowRuntime:
             return int(iteration_dir.name.removeprefix("iteration_"))
         except ValueError:
             return 1
+
+    def _mark_latest_iteration_completion_trusted(self, current_step: str) -> None:
+        """Close a validated iteration even when its provider response was reused.
+
+        The caller has published the artifacts and recorded workflow completion.
+        Provider termination alone must never clear an interrupted completion.
+        Preserve its saved end time and every budget/publication record.
+        """
+        iteration_dir = self._latest_iteration_dir(current_step)
+        if iteration_dir is None:
+            return
+        context_file = iteration_dir / "iteration.json"
+        if context_file.is_symlink() or not context_file.is_file():
+            return
+        if context_file.stat().st_size > 1_048_576:
+            raise RuntimeError("Iteration context is too large to mark as completed")
+        try:
+            context = json.loads(context_file.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("Cannot mark invalid iteration context as completed") from exc
+        if not isinstance(context, dict):
+            raise RuntimeError("Cannot mark invalid iteration context as completed")
+        if context.get("workflow_completion_trusted") is not False or not context.get("end_time"):
+            return
+        del context["workflow_completion_trusted"]
+        payload = json.dumps(context, ensure_ascii=False, indent=2).encode("utf-8") + b"\n"
+        if len(payload) > 1_048_576:
+            raise RuntimeError("Iteration context is too large to mark as completed")
+        atomic_write_bytes(context_file, payload)
 
     def _mark_latest_iteration_completion_untrusted(self, current_step: str) -> None:
         """Keep a clean provider exit retryable when workflow completion was unusable."""

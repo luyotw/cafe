@@ -23,6 +23,31 @@ def change_then_commit(repo, iteration, call):
 
 
 @pytest.mark.parametrize("mode", ["baton", "legacy"])
+def test_validated_workspace_completion_closes_retained_interruption_marker(journey, mode):
+    from cafe.core.phase_state_mixin import next_runnable_iteration_number
+
+    def retain_interruption(repo, iteration, call):
+        path = iteration / "iteration.json"
+        metadata = json.loads(path.read_text())
+        metadata["workflow_completion_trusted"] = False
+        path.write_text(json.dumps(metadata, indent=2))
+
+    j = journey([CORRECTED], mode=mode, workspace=True,
+                workspace_action=change_then_commit, post_submission=retain_interruption)
+    j.runtime.run(start_step="inspect_custom")
+    metadata = json.loads((j.iteration / "iteration.json").read_text())
+
+    assert metadata.get("workflow_completion_trusted") is not False
+    assert metadata["end_time"]
+    assert metadata["workspace_completion"]["consumed"] == 1
+    assert metadata["workspace_publication"]["hooks"]
+    assert next_runnable_iteration_number(j.issue / "inspect_custom") == 2
+    assert len(j.manager.calls) == 2
+    assert j.manager.deliveries == 1 and j.effects == ["prepare", "after"]
+    assert not HumanTaskRecordStore(j.issue).tasks()
+
+
+@pytest.mark.parametrize("mode", ["baton", "legacy"])
 @pytest.mark.parametrize("base_branch", [None, "main"])
 def test_i1_custom_step_corrects_before_effects_in_exact_context(journey, mode, base_branch):
     j = journey([CORRECTED], mode=mode, workspace=True, workspace_action=change_then_commit,
