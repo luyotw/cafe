@@ -1695,7 +1695,7 @@ class GenericWorkflowStepExecutor(Phase):
         if metadata.get("artifact_correction_recovery_result") == result.id:
             return False
         metadata["artifact_correction_recovery_result"] = result.id
-        context_file.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+        persist_iteration_metadata(context_file, metadata)
         return True
 
     def _load_workspace_metadata(self, iteration_dir: Path) -> dict[str, Any]:
@@ -2250,7 +2250,7 @@ class GenericWorkflowStepExecutor(Phase):
         context_file = self._resolve_iteration_context_file(iteration_dir)
         metadata = json.loads(context_file.read_text(encoding="utf-8"))
         metadata["artifact_correction"] = budget.to_dict()
-        context_file.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+        persist_iteration_metadata(context_file, metadata)
 
     def _validate_current_artifact(self, step_name: str, step_def: Dict[str, Any], output_file: Path) -> None:
         if output_file.exists():
@@ -2409,10 +2409,7 @@ class GenericWorkflowStepExecutor(Phase):
         if context_data.get("agent_invoked") is True and not agent_invoked:
             return
         context_data["agent_invoked"] = agent_invoked
-        context_file.write_text(
-            json.dumps(context_data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        persist_iteration_metadata(context_file, context_data)
 
     def _build_backup_takeover_context(
         self,
@@ -2567,7 +2564,7 @@ class GenericWorkflowStepExecutor(Phase):
         # ``effective_inputs`` is the only persisted decision.  Discard the
         # obsolete projection so status cannot diverge from launch inputs.
         raw.pop("context_packets", None)
-        path.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+        persist_iteration_metadata(path, raw)
 
     @staticmethod
     def _persist_todo_projection_snapshot(
@@ -2582,7 +2579,7 @@ class GenericWorkflowStepExecutor(Phase):
         if not isinstance(raw, dict):
             raise ValueError("Invalid iteration metadata for Todo projection provenance")
         raw["todo_projections"] = projections
-        path.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+        persist_iteration_metadata(path, raw)
 
     @staticmethod
     def _load_todo_projection_snapshot(iteration_dir: Path) -> list[dict[str, Any]] | None:
@@ -2971,7 +2968,7 @@ class GenericWorkflowStepExecutor(Phase):
             "invocation_id": str(uuid4()),
         }
         context["agent_invoked"] = True
-        atomic_write_bytes(context_file, json.dumps(context, ensure_ascii=False, indent=2).encode())
+        persist_iteration_metadata(context_file, context)
 
     def _selected_fresh_session_recovery(
         self,
@@ -4275,9 +4272,7 @@ class GenericWorkflowStepExecutor(Phase):
             }
             for binding in materialized.projections
         ]
-        metadata_path.write_text(
-            json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        persist_iteration_metadata(metadata_path, metadata)
 
     def _rebuild_checklist_for_iteration(self, iteration: int) -> None:
         if self.phase_name not in self.playbook.get("steps", {}):
