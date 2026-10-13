@@ -32,6 +32,112 @@ from cafe.ui.human_tasks import resolve_step_human_task
 pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
 
+def test_validated_cached_completion_starts_new_iteration_after_review_return(tmp_path):
+    from cafe.core.phase_state_mixin import next_runnable_iteration_number
+
+    issue = tmp_path / ".cafe" / "issues" / "cached-completion"
+    iteration = issue / "producer" / "iteration_001"
+    iteration.mkdir(parents=True)
+    metadata = iteration / "iteration.json"
+    retained = {
+        "iteration": 1,
+        "end_time": "2026-10-13T08:24:00+08:00",
+        "cli": "codex",
+        "model": "original-model",
+        "session_id": "original-session",
+        "effective_inputs": {"spec_file": {"mode": "full", "path": "spec.md"}},
+        "workspace_completion": {"consumed": 3, "rejections": ["original"]},
+        "workspace_publication": {"hooks": {"original": {"state": "completed"}}},
+    }
+    metadata.write_text(json.dumps({**retained, "workflow_completion_trusted": False}))
+    calls = []
+    playbook = {
+        "playbook": {"id": "cached-completion"},
+        "steps": {
+            "producer": {"skill": "producer", "role": "developer", "output_artifact": "code",
+                         "on": {"await_agent": "reviewer"}},
+            "reviewer": {"skill": "reviewer", "role": "reviewer", "output_artifact": "review_feedback",
+                         "on": {"manual_handoff": "producer"}},
+        },
+    }
+
+    def executor(step, declaration, state):
+        number = next_runnable_iteration_number(issue / step)
+        calls.append((step, number))
+        directory = issue / step / f"iteration_{number:03d}"
+        directory.mkdir(parents=True, exist_ok=True)
+        if step != "producer" or number != 1:
+            (directory / "iteration.json").write_text(json.dumps({
+                "iteration": number, "end_time": "2026-10-13T09:26:00+08:00",
+            }))
+        output = directory / "output.md"
+        output.write_text("Saved committed result" if step == "producer" else "Fix the blocking defect")
+        _write_baton(
+            issue, from_step=step, to_owner="agent",
+            to_step="reviewer" if step == "producer" else "producer",
+            intent="await_agent" if step == "producer" else "manual_handoff",
+        )
+        return StepExecutionResult(response="", artifacts={declaration["output_artifact"]: str(output)})
+
+    runtime = BlackboardWorkflowRuntime(issue_dir=issue, playbook=playbook, executor=executor)
+    with pytest.raises(RuntimeError, match="max transition limit"):
+        runtime.run(start_step="producer", max_transitions=2)
+
+    assert calls == [("producer", 1), ("reviewer", 1)]
+    assert runtime.blackboard.current_step == "producer"
+    assert json.loads(metadata.read_text()) == retained
+    assert next_runnable_iteration_number(issue / "producer") == 2
+    assert runtime.blackboard.artifacts["review_feedback"].updated_by == "reviewer"
+    resumed = BlackboardWorkflowRuntime(issue_dir=issue, playbook=playbook, executor=executor)
+    with pytest.raises(RuntimeError, match="max transition limit"):
+        resumed.run(max_transitions=1)
+    assert calls[-1] == ("producer", 2)
+    assert json.loads(metadata.read_text()) == retained
+
+
+@pytest.mark.parametrize("case", ["missing_end", "malformed", "oversize", "serialized_oversize", "write_failure"])
+def test_completion_marker_failure_preserves_original_context(tmp_path, monkeypatch, case):
+    issue = tmp_path / ".cafe" / "issues" / "completion-marker"
+    directory = issue / "producer" / "iteration_001"
+    directory.mkdir(parents=True)
+    path = directory / "iteration.json"
+    context = {"end_time": "saved", "workflow_completion_trusted": False, "workspace_completion": {"consumed": 3}}
+    payload = json.dumps(context).encode()
+    if case == "missing_end":
+        del context["end_time"]
+        payload = json.dumps(context).encode()
+    elif case == "malformed":
+        payload = b"[invalid"
+    elif case == "oversize":
+        payload += b" " * (1_048_577 - len(payload))
+    elif case == "serialized_oversize":
+        context["history"] = [{"key": "value"}] * 16
+        context["padding"] = ""
+        size = len(json.dumps(context, separators=(",", ":")).encode())
+        context["padding"] = "p" * (1_048_576 - size)
+        payload = json.dumps(context, separators=(",", ":")).encode()
+        assert len(payload) <= 1_048_576
+        cleared = dict(context)
+        del cleared["workflow_completion_trusted"]
+        assert len((json.dumps(cleared, indent=2) + "\n").encode()) > 1_048_576
+    path.write_bytes(payload)
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue,
+        playbook={"playbook": {"id": "marker"}, "steps": {"producer": {"on": {"await_agent": "_done"}}}},
+        executor=lambda *args: None,
+    )
+    if case == "write_failure":
+        def fail(*args):
+            raise OSError("atomic write failed before replacement")
+        monkeypatch.setattr("cafe.core.workflow_runtime.atomic_write_bytes", fail)
+    if case == "missing_end":
+        runtime._mark_latest_iteration_completion_trusted("producer")
+    else:
+        with pytest.raises((RuntimeError, OSError)):
+            runtime._mark_latest_iteration_completion_trusted("producer")
+    assert path.read_bytes() == payload
+
+
 def _canonicalize_board_fixture(issue_dir: Path) -> None:
     """Give hand-written workflow fixtures the new prepared authorities."""
     board_path = issue_dir / "blackboard.json"
