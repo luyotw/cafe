@@ -614,13 +614,24 @@ def _pr_result(issue, state, directory, step, iteration, execute, context_file):
     if len(observations) > 128: raise ValueError('read-only observation history exceeds bounded record capacity')
     found = [item for item in observations if item.get('fingerprint') == fingerprint]
     if len(found) > 1: raise ValueError('ambiguous observation identity')
-    if found: return {'status': 'no-op', 'effective_status': previous['effective_status'], 'association_id': association['id']}
     status = observation['status']
     outcome = {'verified': 'succeeded', 'unresolved': 'unknown', 'mismatch': 'mismatch'}[status]
+    # Historical equality does not identify the currently applied observation.
+    # Legacy records applied their last appended observation; retain their
+    # history and track subsequent revisits separately without duplicate entries.
+    current = previous.get('current_fingerprint', observations[-1]['fingerprint'] if observations else None) if previous else None
+    if (found and current == fingerprint and previous.get('effective_status') == outcome
+            and previous.get('effective_delivered') is (status == 'verified')):
+        return {'status': 'no-op', 'effective_status': outcome, 'association_id': association['id'],
+                'exit_code': {'verified': 0, 'unresolved': 3, 'mismatch': 5}[status]}
+    if not found and len(observations) >= 128:
+        raise ValueError('new observation would exceed bounded record capacity')
     if not execute: return {'status': status, 'association_id': association['id'], 'preview': True}
     if _read(path, 256 * 1024) != (content, identity): raise ValueError('original result changed while observing')
-    observations.append({'fingerprint': fingerprint, 'observed_at': datetime.now().astimezone().isoformat(), **observation})
+    if not found:
+        observations.append({'fingerprint': fingerprint, 'observed_at': datetime.now().astimezone().isoformat(), **observation})
     result = dict(original, reconciliation={'original': original, 'original_sha256': previous['original_sha256'] if previous else sha256_bytes(content),
-        'association': association, 'observations': observations, 'effective_status': outcome, 'effective_delivered': status == 'verified'})
+        'association': association, 'observations': observations, 'current_fingerprint': fingerprint,
+        'effective_status': outcome, 'effective_delivered': status == 'verified'})
     atomic_write_bytes(path, bounded_execution_json(result))
     return {'status': status, 'association_id': association['id'], 'effective_status': outcome}

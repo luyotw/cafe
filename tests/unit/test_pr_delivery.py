@@ -309,3 +309,50 @@ def test_u16_original_commit_binding_survives_unrelated_current_head(unknown_pub
     saved = json.loads((p['issue'] / 'delivery_result.json').read_text())
     assert saved['commit'] == original and saved['reconciliation']['association']['commit'] == original
     assert sum(kind == 'publish' for kind, _ in p['calls']) == 1
+
+
+def test_issue646_blk003_legacy_reconciliation_without_current_marker_uses_fresh_observation(unknown_publication):
+    p = unknown_publication
+    path = p['issue'] / 'delivery_result.json'
+    p['cli']['headRefName'] = 'different'
+    assert pr_repair(p)['status'] == 'mismatch'
+    p['cli']['headRefName'] = 'feature'
+    assert pr_repair(p)['status'] == 'verified'
+    old = json.loads(path.read_text())
+    old['reconciliation'].pop('current_fingerprint')
+    path.write_text(json.dumps(old))
+    original = path.read_bytes()
+    p['cli']['headRefName'] = 'different'
+    assert pr_repair(p, False)['status'] == 'mismatch'
+    assert path.read_bytes() == original
+    assert pr_repair(p)['status'] == 'mismatch'
+    saved = json.loads(path.read_text())
+    assert saved['reconciliation']['effective_delivered'] is False
+    assert saved['reconciliation']['observations'] == old['reconciliation']['observations']
+    assert saved['reconciliation']['original_sha256'] == old['reconciliation']['original_sha256']
+
+
+@pytest.mark.parametrize('boundary', ['before', 'after'])
+def test_issue646_blk003_reapplied_observation_recovers_same_receipt_after_write_failure(unknown_publication, monkeypatch, boundary):
+    from cafe.core import workflow_repair
+    p = unknown_publication
+    p['cli']['headRefName'] = 'different'
+    assert pr_repair(p)['status'] == 'mismatch'
+    p['cli']['headRefName'] = 'feature'
+    assert pr_repair(p)['status'] == 'verified'
+    path = p['issue'] / 'delivery_result.json'
+    before = json.loads(path.read_text())
+    p['cli']['headRefName'] = 'different'
+    write = workflow_repair.atomic_write_bytes
+    def fail(path, payload):
+        if boundary == 'after': write(path, payload)
+        raise OSError('result publication boundary')
+    monkeypatch.setattr(workflow_repair, 'atomic_write_bytes', fail)
+    assert pr_repair(p)['status'] == 'interrupted'
+    monkeypatch.setattr(workflow_repair, 'atomic_write_bytes', write)
+    assert pr_repair(p)['status'] == ('mismatch' if boundary == 'before' else 'no-op')
+    saved = json.loads(path.read_text())
+    assert saved['reconciliation']['effective_delivered'] is False
+    assert saved['reconciliation']['observations'] == before['reconciliation']['observations']
+    assert saved['receipt'] == before['receipt']
+    assert sum(kind == 'publish' for kind, _ in p['calls']) == 1

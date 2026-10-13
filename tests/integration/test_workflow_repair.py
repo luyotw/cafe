@@ -368,6 +368,71 @@ def test_i9_original_context_external_saved_path_keeps_original_binding(unknown_
     assert sum(kind == 'publish' for kind, _ in p['calls']) == 1
 
 
+@pytest.mark.parametrize('sequence', [('mismatch', 'verified', 'mismatch'),
+    ('verified', 'mismatch', 'verified'), ('unresolved', 'verified', 'unresolved')])
+def test_issue646_blk003_public_reobservation_applies_current_outcome_without_replay(unknown_publication, monkeypatch, sequence):
+    import subprocess
+    p = unknown_publication
+    path = p['issue'] / 'delivery_result.json'
+    original = json.loads(path.read_text())
+    args = ['repair', '--issue', 'pr-case', '--kind', 'pr-result', '--step', 'ship_custom',
+            '--iteration', '1', '--execution-context-file', str(p['issue'] / 'saved-context.json'), '--execute']
+    unavailable = False
+    def read(argv, **kwargs):
+        if unavailable and (argv[:3] == ['gh', 'pr', 'view'] or argv[:2] == ['gh', 'api']):
+            raise subprocess.CalledProcessError(8, argv)
+        return p['transport'](argv, **kwargs)
+    monkeypatch.setattr(subprocess, 'run', read)
+    monkeypatch.chdir(p['root'])
+    for status in sequence:
+        unavailable = status == 'unresolved'
+        p['cli']['headRefName'] = 'different' if status == 'mismatch' else 'feature'
+        result = CliRunner().invoke(app, args)
+        assert result.exit_code == {'verified': 0, 'mismatch': 5, 'unresolved': 3}[status]
+        assert json.loads(result.stdout)['status'] == status
+        saved = json.loads(path.read_text())
+        assert {k: v for k, v in saved.items() if k != 'reconciliation'} == original
+        assert saved['reconciliation']['effective_delivered'] is (status == 'verified')
+        assert saved['reconciliation']['effective_status'] == {'verified': 'succeeded', 'mismatch': 'mismatch', 'unresolved': 'unknown'}[status]
+    assert len(saved['reconciliation']['observations']) == 2
+    before = path.read_bytes()
+    repeated = CliRunner().invoke(app, args)
+    assert json.loads(repeated.stdout)['status'] == 'no-op'
+    assert repeated.exit_code == {'verified': 0, 'mismatch': 5, 'unresolved': 3}[sequence[-1]]
+    assert path.read_bytes() == before
+    assert sum(kind == 'publish' for kind, _ in p['calls']) == 1
+
+
+def test_issue646_blk004_public_history_limit_plus_one_preserves_admitted_reentry(unknown_publication, monkeypatch):
+    p = unknown_publication
+    path = p['issue'] / 'delivery_result.json'
+    original = json.loads(path.read_text())
+    args = ['repair', '--issue', 'pr-case', '--kind', 'pr-result', '--step', 'ship_custom',
+            '--iteration', '1', '--execution-context-file', str(p['issue'] / 'saved-context.json'), '--execute']
+    monkeypatch.chdir(p['root'])
+    for index in range(128):
+        p['cli']['headRefName'] = f'different-{index}'
+        assert CliRunner().invoke(app, args).exit_code == 5
+    admitted = path.read_bytes()
+    assert len(json.loads(admitted)['reconciliation']['observations']) == 128
+    p['cli']['headRefName'] = 'different-128'
+    for _ in range(2):
+        result = CliRunner().invoke(app, args)
+        assert result.exit_code == 2 and json.loads(result.stdout)['status'] == 'refused'
+        assert path.read_bytes() == admitted
+    p['cli']['headRefName'] = 'different-127'
+    repeated = CliRunner().invoke(app, args)
+    assert json.loads(repeated.stdout)['status'] == 'no-op' and repeated.exit_code == 5
+    assert path.read_bytes() == admitted
+    # A retained earlier observation remains applicable at the exact bound.
+    p['cli']['headRefName'] = 'different-0'
+    assert CliRunner().invoke(app, args).exit_code == 5
+    saved = json.loads(path.read_text())
+    assert len(saved['reconciliation']['observations']) == 128
+    assert {k: v for k, v in saved.items() if k != 'reconciliation'} == original
+    assert sum(kind == 'publish' for kind, _ in p['calls']) == 1
+
+
 def test_i2_public_unicode_selection_remains_exact_and_path_safe(legacy, monkeypatch):
     issue, path, _, _ = legacy
     (issue / 'compose_custom').rename(issue / '建置_自訂')

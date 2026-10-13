@@ -152,7 +152,14 @@ fields alone do not impose a lower legacy-repair ceiling: an old file above the
 workspace writer maximum was not admitted by that writer. Unverified legacy
 embedded records require explicit repair before normal execution writes. Execution artifacts
 and observation/result records retain their existing 256 KiB bound; repair
-observation history is bounded to 128 distinct fingerprints.
+observation history is bounded to 128 distinct fingerprints. A new fingerprint
+at that maximum refuses before writing and preserves the admitted record.
+Revisiting a retained fingerprint applies its freshly observed outcome without
+duplicating history; `reconciliation.current_fingerprint` identifies the currently
+applied observation. Older records without this field use their last observation.
+An immediate identical repeat is a no-op and preserves the original bytes;
+its exit status still reports 3 for unresolved or 5 for mismatch, rather than
+implying verified success.
 
 Before legacy replacement, existing audit APIs durably save and read back the
 original/target metadata hashes, canonical raw identity/hash/count and ordered
