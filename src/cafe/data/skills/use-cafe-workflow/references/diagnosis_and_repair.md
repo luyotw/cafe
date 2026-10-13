@@ -110,6 +110,15 @@ retryable. A valid committed receipt remains sufficient if optional marker
 compaction fails. Do not manually delete the marker or interpret provider exit as
 completion.
 
+Before binding that receipt, the runtime measures the complete serialized terminal
+audit envelope, including its message, data, patch and newline, against the existing
+256 KiB receipt-reader bound. Over-capacity publication leaves the original control
+bytes and identity intact, without a terminal or advanced handoff. Required receipt
+authentication after commit is also a completion gate; its failure cannot be treated
+as an optional compaction failure. Reenter through the existing authorized route
+after the concrete obstruction is resolved, preserving the original budget and
+saved evidence rather than replaying work or raising limits.
+
 Existing legal runtime reentry revalidates the prepared original artifacts,
 outbound handoff, capability receipts and required gates before completing a
 partial publication. It stops at the declared handoff without rerunning the

@@ -3437,8 +3437,12 @@ class BlackboardWorkflowRuntime:
                 if preparation is not None else None,
         )
         if preparation is not None:
-            # The receipt already resolves to a durable terminal record. Its
-            # compaction is optional and cannot invalidate that committed result.
+            from cafe.core.phase_state_mixin import validated_completion_receipt
+            context_file = self.issue_dir / preparation["path"]
+            context = load_restart_context(context_file)
+            if validated_completion_receipt(context_file.parent, context) is None:
+                raise RuntimeError("Completion receipt cannot authenticate its terminal record")
+            # Required receipt verification is separate from optional compaction.
             try:
                 self._mark_latest_iteration_completion_trusted(current_step)
             except (OSError, RuntimeError):
@@ -3505,6 +3509,7 @@ class BlackboardWorkflowRuntime:
         return proof
 
     def _bind_step_completion(self, record, preparation):
+        from cafe.core.audit_events import MAX_EVENT_BYTES
         from cafe.core.packet_io import canonical_json
         path = self.issue_dir / preparation["path"]
         context = load_restart_context(path)
@@ -3520,6 +3525,12 @@ class BlackboardWorkflowRuntime:
             raise RuntimeError("Completion control evidence exceeds existing recovery capacity")
         record["data"]["completion_metadata"] = {
             "path": preparation["path"], "sha256": preparation["metadata_sha256"]}
+        # BlackboardStore regenerates this message after binding. Measure the
+        # same complete envelope (including patch and newline) before either
+        # companion or terminal publication, using the existing audit serializer.
+        record["message"] = json.dumps(record["data"], ensure_ascii=False)
+        if len(self.blackboard_store.audit._event_bytes(record)) > MAX_EVENT_BYTES:
+            raise RuntimeError("Completion terminal evidence exceeds existing receipt capacity")
         atomic_write_bytes(path, content)
 
     def _try_recover_step_completion(self, current_step):
