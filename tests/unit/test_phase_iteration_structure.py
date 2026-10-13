@@ -478,7 +478,7 @@ def test_u1_ordinary_history_exact_admission_preserves_original_on_refusal(tmp_p
         assert path.stat().st_size == size
 
 
-def test_u1_legacy_overload_requires_explicit_verified_repair(tmp_path):
+def test_u1_legacy_overload_is_rejected_without_replacing_original_state(tmp_path):
     phase = ConcretePhase(phase_dir=tmp_path)
     phase.iteration = 1
     directory = phase._get_iteration_dir(1)

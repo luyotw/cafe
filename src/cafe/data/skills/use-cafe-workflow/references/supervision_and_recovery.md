@@ -188,16 +188,16 @@ blockers still prohibit delivery advancement.
 
 When the worker is quiescent and explicit local repair is already within the
 current authority, use the preview/execute operations in
-`diagnosis_and_repair.md`. Choose `iteration` for verified legacy deduplication,
-`interruption` for either orphan direction, `readiness` for valid saved evidence
-with an omitted machine field/handoff, or `pr-result` for read-only publication
-observation. Repair leases coordinate writes and do not authorize task answers,
+`diagnosis_and_repair.md`. Ordinary execution already restores an unfinished
+interruption preparation and eligible readiness omissions through their owning
+gates. Choose `interruption` for explicit orphan inspection/recovery, or
+`pr-result` for read-only publication observation. Repair leases coordinate writes and do not authorize task answers,
 provider execution, fresh sessions, model changes or publication replay.
 
 A repaired interruption exposes the original pending HumanTask through normal
 inspection/completion. Present its declared choices; do not infer a retry from
-repair success. Readiness repair stops at the already legal handoff and never
-executes its target. PR reconciliation preserves the original unknown result
+repair success. Automatic checkpoint restoration grants no completion or action
+authority; the existing delivery gates still apply. PR reconciliation preserves the original unknown result
 and adds its observations/effective outcome; absent data remains unresolved and
 conflicts remain explicit. Follow the existing human/ownership boundary after
 inspection. The existing transient retry rules and budgets remain separate from

@@ -974,6 +974,17 @@ def workflow(
         pending_start_step = start_step
         explicit_start_step_pending = start_step is not None
         while True:
+            from cafe.core.workflow_repair import recover_pending_interruption
+            if validated_worker_id is not None:
+                recovered = WorkflowHost(issue_dir).run_worker(
+                    lambda: recover_pending_interruption(issue_dir),
+                    worker_id=validated_worker_id,
+                ).result
+            else:
+                recovered = recover_pending_interruption(issue_dir)
+            if recovered is not None:
+                console.print(f"[yellow]Recovered original interruption task[/yellow] task={recovered['task_id']}")
+                return
             interactive = _interactive_mode()
             has_explicit_start_step = explicit_start_step_pending
             pending_start_step = _consume_pending_chat_handoff(
@@ -1435,11 +1446,11 @@ def _dispatch_interruption_callback(runtime: Any, error: Exception) -> None:
 
 def repair(
     issue: str = typer.Option(..., '--issue', help='Exact prepared issue name'),
-    kind: str = typer.Option(..., '--kind', help='iteration, interruption, readiness or pr-result'),
+    kind: str = typer.Option(..., '--kind', help='interruption or pr-result'),
     step: str = typer.Option(..., '--step', help='Exact source step'),
     iteration: int = typer.Option(..., '--iteration', min=1, max=999),
     execute: bool = typer.Option(False, '--execute', help='Apply verified repair; default is read-only preview'),
-    execution_context_file: Optional[Path] = typer.Option(None, '--execution-context-file', help='Original saved resolved execution context for readiness or PR repair'),
+    execution_context_file: Optional[Path] = typer.Option(None, '--execution-context-file', help='Original saved resolved execution context for PR repair'),
 ) -> None:
     """Repair saved machine evidence without executing workflow work."""
     import json

@@ -151,6 +151,8 @@ operation replaces it.
 
 For graphs declaring `delivery`, integration and selected follow-up issue creation belong to the development delivery phase. Kickoff confirms the product outcome and separately proposed cleanup. Do not supply Manager `deliver` argv or descriptions, infer them from templates, or execute phase operations through closeout.
 
+Propose local integration into the base branch when remote PR publication is not requested or available. Describe the destination and integration outcome explicitly; “local” must not mean accepting a feature-branch commit or draft without integration. Do not silently substitute artifact-only delivery, `leave`, archive-only or an empty cleanup list to make the workflow finish. Only an explicit user preservation/exclusion choice may reduce the applicable cleanup default. A saved preservation preference must be shown as such in the proposal; ambiguous prior wording is not an exclusion.
+
 Repository delivery discovery retains descriptive conventions, source coverage, freshness and gaps. Resolve exact PR/source/target/strategy or local destination when the PR action review presents actual immutable artifacts. The authorized decision owner selects an explicit subset of original Review drafts or an empty selection. The displayed PR decision covers action selection and its host capability boundaries together, while preserving distinct durable approvals. Final result acceptance remains a separate decision governed by the confirmed gate ownership: assignable delivery gates default to `manager_confirmable`; mandatory gates remain user-owned. Action execution additionally requires the shown bundle's task and capability approvals; delegation of result acceptance alone does not supply them. Legacy proposals without displayed host boundaries retain separate capability approval.
 
 The formatter produces version-6 product `delivery_contract` facts and a separate version-1 Manager `closeout_contract` for adopting graphs. Keep exact literal cleanup argv and one description per action. The default is full cleanup: close a verified bound GitHub issue, then use `scripts/cleanup_worktree.py` to archive CAFE state and remove the exact feature worktree, local branch, and bound remote branch. This is a Manager skill default; explicit current decisions and repository preferences retain precedence. The preparation helper fills literal interpreter, script, repository, worktree, issue, and remote arguments. Explain all deletion effects before kickoff confirmation. Never remove the canonical checkout; when no separate feature worktree exists, propose archive-only and explain that limitation. Ordinary `cafe close` can integrate a local branch and is not a fresh phase-owned cleanup fallback. The PR decision explicitly covers the displayed action and host capability boundaries together. Kickoff confirmation selects the displayed Manager closeout action. Delivery acceptance only confirms results; Manager executes the already-confirmed choice after completion without a second terminal question.
@@ -619,9 +621,11 @@ consolidated helper requires none of those execution examples.
 
 ### Manager closeout selection
 
-For phase-owned development delivery, propose `closeout_choice: cleanup` for a
-non-empty cleanup plan and `leave` for an empty plan unless the user requests
-archive or a later decision (`pending`). The formatter displays this selection
+For phase-owned development delivery, retain the generated applicable cleanup
+plan and propose `closeout_choice: cleanup`. Use archive-only when no separate
+feature worktree exists. An empty plan and `leave` require an explicit user
+exclusion; `pending` requires an explicit choice to decide later. Never empty the
+plan merely to avoid executing cleanup. The formatter displays this selection
 and persists a separate Manager `closeout_contract`; kickoff confirmation
 authorizes execution after workflow completion and delivery acceptance. Do not
 move cleanup selection into deliver or add a second terminal prompt for an

@@ -126,6 +126,17 @@ provider, hooks or publication, answering a task, or resetting budgets. A pendin
 human decision or conflicting control/artifact identity cannot be repaired by
 guessing success; use the existing authorized handoff.
 
+
+Ordinary execution entry automatically reconnects an unfinished original
+interruption preparation before user-wait routing or provider execution. It
+restores the same pending decision and stops; it does not answer or retry it.
+The delivery consumer can restore an omitted full checkpoint only from one
+complete checkpoint saved in the producing iteration, with the same session,
+context, authority, current content, endpoint and required independent review.
+It then passes the existing completion gates. Missing, conflicting or stale
+proof follows the original correction/human route; no standalone readiness
+repair command is supported.
+
 `cafe repair` is a supported local machine-evidence operation. It does not run a
 phase or continue the workflow. Use the current authorized issue/worktree and
 select one exact source step and iteration. Preview is read-only by default;
@@ -133,11 +144,7 @@ select one exact source step and iteration. Preview is read-only by default;
 permission to answer a HumanTask, change a CLI/model/session, or publish again.
 
 ```bash
-cafe repair --issue example --kind iteration --step build_custom --iteration 1
-cafe repair --issue example --kind iteration --step build_custom --iteration 1 --execute
 cafe repair --issue example --kind interruption --step build_custom --iteration 1 --execute
-cafe repair --issue example --kind readiness --step ship_custom --iteration 1 \
-  --execution-context-file .cafe/issues/example/saved-execution-context.json --execute
 cafe repair --issue example --kind pr-result --step ship_custom --iteration 1 \
   --execution-context-file .cafe/issues/example/saved-execution-context.json --execute
 ```
@@ -153,49 +160,31 @@ Status/show/inspection never deduplicate iteration state.
 
 | Kind | Verified source and local result | Next action |
 | --- | --- | --- |
-| `iteration` | Exact ordered equality between the embedded legacy stream and the complete available canonical `streaming.jsonl`; atomically remove only `streaming_log`. Preserve all other control fields and raw bytes/inode. | Inspect the repaired control state and use the existing task/continuation route. |
 | `interruption` | Genuine original interruption and handoff/prepared identity; materialize or reconnect exactly one pending HumanTask and coherent user owner. Completed/cancelled/ambiguous tasks refuse. | Inspect that pending task and present its existing choices to its owner; repair supplies no answer. |
-| `readiness` | Uniquely attributable saved full `before_delivery` checkpoint, matching successful structured terminal/process exit, output/checklist, original context, endpoint and required independent review. Complete only the already legal handoff through normal gates, stopping at its boundary. | Inspect the handoff; ordinary authorized advancement remains the workflow owner's action. |
 | `pr-result` | Original attempt, saved context/checkpoint and a genuine retained execution receipt, then exact trusted PR observations. Add reconciliation history and effective outcome to the existing result record. | Inspect `reconciliation.effective_status` and the preserved original attempt; never repeat push/create to resolve an unknown result. |
 
-Readiness and PR repair require the original saved resolved execution context,
+PR repair requires the original saved resolved execution context,
 with the selected workflow/issue/root, authority, revision, content and endpoint
 still provable. A reference or receipt ID cannot replace a full checkpoint.
 Missing machine schema enters existing bounded producer correction; changed
 execution authority or a real decision retains its existing human route. Repair
 never fabricates a checkpoint/terminal/review/approval or answers a pending task.
 
-Exceptional iteration verification admits at most 16 MiB metadata, 32 MiB raw
-JSONL, 100,000 records, 1 MiB per record including its newline, and 64 JSON nesting
-levels. Audit/task attribution is bounded to 16 MiB of retained evidence (at most
-100,000 audit slots); this does not change normal store capacities. Verification reports progress at each 1 MiB or 1,000 records. It rejects
-malformed/duplicate-key JSON, missing/reordered/truncated/extra raw records,
-symlinks, hard-link aliases, nonregular/substituted files, and remaining non-log
-overload without changing source bytes. These are repair-only resource bounds.
-The ordinary reader remains exactly 1,048,576 bytes; the existing workspace
-65,536-byte reserve and 983,040-byte writer maximum remain unchanged. Ordinary,
-checklist and report writers acquire no workspace reserve. Retained workspace
-fields alone do not impose a lower legacy-repair ceiling: an old file above the
-workspace writer maximum was not admitted by that writer. Unverified legacy
-embedded records require explicit repair before normal execution writes. Execution artifacts
-and observation/result records retain their existing 256 KiB bound; repair
-observation history is bounded to 128 distinct fingerprints. A new fingerprint
-at that maximum refuses before writing and preserves the admitted record.
-Revisiting a retained fingerprint applies its freshly observed outcome without
-duplicating history; `reconciliation.current_fingerprint` identifies the currently
-applied observation. Older records without this field use their last observation.
-An immediate identical repeat is a no-op and preserves the original bytes;
-its exit status still reports 3 for unresolved or 5 for mismatch, rather than
-implying verified success.
+JSON nesting is bounded to 64 levels. Audit/task attribution is bounded to 16 MiB of retained evidence (at most 100,000 audit
+slots). Unsafe files, malformed evidence and ambiguous attribution refuse
+without changing source bytes. These repair-only bounds do not change the
+ordinary 1,048,576-byte reader, 983,040-byte workspace writer or 65,536-byte
+workspace reserve. Execution artifacts and observation/result records retain
+their existing 256 KiB bound; PR observation history remains bounded to 128
+distinct fingerprints.
 
-Before legacy replacement, existing audit APIs durably save and read back the
-original/target metadata hashes, canonical raw identity/hash/count and ordered
-record equality proof under one stable operation identity. Reentry revalidates
-the original pre-image, or completes only missing audit from the exact committed
-post-image. A durable-but-return-failed event is reused. Conflicting metadata/raw
-identity or missing/ambiguous proof never manufactures an original hash. A fully
-completed repeat is a no-op. Records already discarded by error sanitization
-cannot be restored by this operation; retention repair remains #492.
+A new fingerprint at that maximum refuses before writing and preserves the
+admitted record. Revisiting a retained fingerprint applies its freshly observed
+outcome without duplicating history; `reconciliation.current_fingerprint`
+identifies the currently applied observation. Older records without this field
+use their last observation. An immediate identical repeat is a no-op and
+preserves the original bytes; its exit status still reports 3 for unresolved
+or 5 for mismatch, rather than implying verified success.
 
 Historical PR attempts containing only `delivered`, `status`, `authority_digest`
 and `commit` do not need future fields. A uniquely matching original context,

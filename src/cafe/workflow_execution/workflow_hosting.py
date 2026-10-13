@@ -9,13 +9,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 from cafe.utils.file_lock import (
-    _release_advancement_process_lock,
-    _try_advancement_process_lock,
+    _release_advancement_process_lock as _release_advancement_process_lock,
+    _try_advancement_process_lock as _try_advancement_process_lock,
+    advancement_execution_lock as advancement_execution_lock,
+    WorkerAlreadyRunningError as WorkerAlreadyRunningError,
 )
-
-
-class WorkerAlreadyRunningError(RuntimeError):
-    """Another live worker owns workflow advancement."""
 
 
 @dataclass(frozen=True)
@@ -47,10 +45,7 @@ class WorkflowHost:
     ) -> HostRunResult:
         if hosting not in {"foreground", "background"}:
             raise ValueError("hosting must be 'foreground' or 'background'")
-        process_lock = _try_advancement_process_lock(self.advancement_lock_path)
-        if process_lock is None:
-            raise WorkerAlreadyRunningError("workflow advancement is owned by another worker")
-        try:
+        with advancement_execution_lock(self.issue_dir, reuse_existing=False):
             identity = worker_id or str(uuid.uuid4())
             while True:
                 result = runtime()
@@ -62,5 +57,3 @@ class WorkflowHost:
                 # Phase execution has unwound its workspace lease; only workflow
                 # advancement ownership remains. No agent or timer service is used.
                 time.sleep(delay)
-        finally:
-            _release_advancement_process_lock(process_lock)

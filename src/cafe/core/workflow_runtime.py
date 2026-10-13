@@ -4208,16 +4208,18 @@ class BlackboardWorkflowRuntime:
                 load_review_evidence,
                 require_checkpoint,
                 require_verified_review,
-                validate_delivery_readiness, DeliveryReadinessError,
+                load_or_restore_delivery_readiness, DeliveryReadinessError,
             )
             try:
                 iteration = self._latest_iteration_dir(current_step)
                 if self.execution_context is None or iteration is None:
                     raise ValueError("delivery requires current resolved execution evidence")
-                readiness = load_review_evidence(iteration / execution["delivery_evidence_artifact"])
                 review = (load_review_evidence(self.issue_dir / "execution_review.json")
                           if self.execution_context.get("review_policy") == "single_native" else None)
-                validate_delivery_readiness(self.execution_context, readiness, review_evidence=review)
+                from cafe.core.workspace_lock import workspace_execution_lock
+                with workspace_execution_lock(Path(self.execution_context['root'])):
+                    readiness = load_or_restore_delivery_readiness(self.execution_context,
+                        iteration / execution['delivery_evidence_artifact'], review_evidence=review)
                 from cafe.core.execution_artifacts import bounded_execution_json
                 from cafe.core.packet_io import atomic_write_bytes
                 atomic_write_bytes(self.issue_dir / "execution_delivery.json", bounded_execution_json(readiness))
@@ -6489,26 +6491,42 @@ class BlackboardWorkflowRuntime:
         self, *, max_transitions: int = 30, start_step: Optional[str] = None,
         single_step: bool = False,
     ) -> PlaybookRunResult:
-        # A long-lived worker must observe authoritative changes made while asleep.
-        if self.blackboard.host_wait is not None:
-            self.blackboard = self.blackboard_store.load_or_create(
-                self.start_step, playbook_id=self.playbook_id, tolerate_invalid_baton=True,
-            )
-            if self.blackboard.host_wait is not None and (
-                self.blackboard.host_wait["step"] != self.blackboard.current_step
-            ):
-                self.blackboard.host_wait = None
-                self.blackboard_store.save(self.blackboard)
-        try:
-            return self._run_impl(
-                max_transitions=max_transitions, start_step=start_step, single_step=single_step,
-            )
-        except StepWaiting as waiting:
-            self._flush_phase_terminal()
-            return PlaybookRunResult(
-                final_step=waiting.step, final_status_code="HOST_WAITING",
-                completed=False, detail=waiting.detail, wait_seconds=waiting.delay,
-            )
+        from cafe.utils.file_lock import advancement_execution_lock
+        from cafe.core.workflow_repair import recover_pending_interruption, _quiescent
+        with advancement_execution_lock(self.issue_dir) as acquired:
+            if acquired:
+                _quiescent(self.issue_dir)
+            recovered = recover_pending_interruption(self.issue_dir)
+            if recovered is not None:
+                self.blackboard = self.blackboard_store.load_or_create(
+                    self.start_step, playbook_id=self.playbook_id, tolerate_invalid_baton=True,
+                )
+                task = HumanTaskRecordStore(self.issue_dir).get_task(recovered['task_id'])
+                if task is not None:
+                    self._notify_new_human_task(task)
+                return PlaybookRunResult(final_step=recovered['step'],
+                    final_status_code='INTERRUPTED:' + recovered['reason'], completed=False,
+                    detail=recovered['task_id'])
+            # A long-lived worker must observe authoritative changes made while asleep.
+            if self.blackboard.host_wait is not None:
+                self.blackboard = self.blackboard_store.load_or_create(
+                    self.start_step, playbook_id=self.playbook_id, tolerate_invalid_baton=True,
+                )
+                if self.blackboard.host_wait is not None and (
+                    self.blackboard.host_wait["step"] != self.blackboard.current_step
+                ):
+                    self.blackboard.host_wait = None
+                    self.blackboard_store.save(self.blackboard)
+            try:
+                return self._run_impl(
+                    max_transitions=max_transitions, start_step=start_step, single_step=single_step,
+                )
+            except StepWaiting as waiting:
+                self._flush_phase_terminal()
+                return PlaybookRunResult(
+                    final_step=waiting.step, final_status_code="HOST_WAITING",
+                    completed=False, detail=waiting.detail, wait_seconds=waiting.delay,
+                )
 
     def _run_impl(
         self,

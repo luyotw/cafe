@@ -2,7 +2,7 @@
 name: cafe-deliver_development
 description: Verify development delivery with approved project tools, help close missing
   verification work, and request acceptance of complete results.
-version: 1.4.0
+version: 1.4.1
 workflow:
   execution_profile:
     workload: publication
@@ -106,7 +106,7 @@ Read your agent file: {agent_file}
 
 ## Instructions
 
-When the confirmed scope requests only local artifacts, use artifact-only delivery: write `delivery_request.json` beside {output_file} with exactly `{"mode":"local-only"}`. Read the declared workspace, PR content and available Review/QA evidence, then summarize the current local results in {output_file} and request `confirm_output`. The host validates the clean workspace and binds the exact inputs, source branch/commit and summary to the final result task; it creates no integration approval or operation receipt. Describe retained local results accurately without claiming publication, integration or post-integration verification. Existing pending action approval or action history must be resolved through its original route; changing the mode cannot erase effects or authority. On retry, preserve the unchanged summary and request; revise changed evidence in a new iteration. This path retains the same final acceptance gate and separate Manager closeout. The remaining instructions apply to integration delivery.
+Local development delivery means integrating the reviewed source into the confirmed base branch in its clean destination checkout. A feature-branch commit, PR draft, clean workspace or acceptance of local artifacts alone does not complete delivery. Use `mode: local` and the existing host action review and receipts; do not choose `mode: local-only` to finish this phase. If the user explicitly excludes integration, resolve that scope through the declared clarification route instead of reporting development delivery complete. Local integration does not imply a push; include a push only through an explicitly authorized execution path.
 
 For integration delivery, prepare the integration plan here, after PR content confirmation. Read the declared PR publication input, supplied user direction, and repository guidance such as root agent instructions, `CONTRIBUTING.md`, and referenced engineering or delivery policy. For GitHub integration, select the strategy in this order: an explicit current user choice, repository policy, then the workflow proposal default `merge` (merge commit). An authorized user exception does not override platform or branch restrictions. When no policy is found, recommend `merge` and label it as the workflow default; do not infer a repository preference from the merge methods GitHub permits. If that choice is unavailable, propose a supported alternative in the same action review rather than silently substituting it. Missing strategy configuration is not a separate questionnaire. Explain material conflicts and request clarification only for an unresolved target, unavailable local checkout or a decision that cannot be safely proposed.
 
@@ -126,7 +126,7 @@ The host executes only the exact approved tool bytes and options under the revie
 
 For a failed required check, normalize corrections into the existing Todo List and use the injected correction route. Unknown or missing evidence never proves success. Tools and verification scope changed after approval need fresh delivery action review; preserve completed integration effects and never edit old approval bytes. Legacy snapshots missing verification scope follow that review route.
 
-For integration delivery, only when `delivery_complete` is true, including every agreed verification or an explicitly approved no-verification reason, request the declared user `confirm_output` handoff. Display only the completed delivery results and verification evidence. The reply accepts or revises those results. Manager owns the separately confirmed closeout choice and plan, and executes it after workflow completion. This phase does not display or select cleanup, archive, or resource retention.
+Only when `delivery_complete` is true and the host receipts prove integration into the confirmed base branch, including every agreed verification or an explicitly approved no-verification reason, request the declared user `confirm_output` handoff. Display the actual target branch, integration commit and verification evidence. The reply accepts or revises those results. Manager owns the separately confirmed closeout choice and plan, and executes it after workflow completion. This phase does not display or select cleanup, archive, or resource retention.
 
 ## Output
 

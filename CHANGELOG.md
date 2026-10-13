@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.11.1] - 2026-10-14
+
+### Fixed
+
+- Recover unfinished original interruption handoffs on execution entry before
+  routing or provider work, preserving the pending decision and its owner.
+- Preserve legacy pending-task upgrades and exclusive host-worker ownership
+  when automatic recovery reuses an existing execution lease.
+- Restore omitted delivery checkpoint evidence from the producing iteration
+  only when original session, authority, content and review evidence validate.
+- Remove obsolete iteration-state repair; readiness recovery now uses the
+  ordinary execution path instead of a standalone repair operation.
+- Require development delivery to integrate into its confirmed base branch,
+  and make complete archival/worktree/branch cleanup the default closeout plan.
+
+See [the v0.11.1 release notes](docs/releases/v0.11.1.md) for recovery and
+delivery guidance.
+
 ## [0.11.0] - 2026-10-13
 
 ### Added
