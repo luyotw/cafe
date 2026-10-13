@@ -31,7 +31,10 @@ def _prepare_action_context(kwargs, binding, reason=""):
         "delivery_stage": "prepare_action", "delivery_complete": "false",
         "delivery_publication_file": entry.path,
         "continuation_prompt": (
-            "Prepare the delivery integration strategy, target and verification plan. "
+            "For explicitly requested artifact-only delivery, write delivery_request.json "
+            "with only mode local-only, summarize the local workspace and reviewed evidence, "
+            "and request confirm_output. This performs no integration or external actions. "
+            "Otherwise prepare the delivery integration strategy, target and verification plan. "
             "Read the declared PR input at " + entry.path + ". Use repository policy "
             "or recommend a concrete strategy in the complete action bundle. "
             "Write delivery_request.json beside the output and request need_permission. "
@@ -496,6 +499,25 @@ class DevelopmentDeliveryOutcome(NoOpHook):
             return HookResult()
         try:
             binding = _binding(kwargs)
+            from cafe.delivery import local_result
+
+            if local_result.requested(kwargs["output_file"]):
+                state = kwargs["blackboard_state"]
+                report = local_result.build_result(
+                    phase.issue_dir, state, kwargs["step_def"], binding,
+                    kwargs["step_name"], phase.iteration, kwargs["output_file"],
+                )
+                path = local_result.result_path(
+                    phase.issue_dir, state.workflow_id, kwargs["step_name"], phase.iteration,
+                )
+                if path.exists() and json.loads(local_result.read_bounded(path)) != report:
+                    raise ValueError("shown local delivery evidence changed; revise in a new iteration")
+                atomic_write_bytes(path, canonical_json(report))
+                _task(kwargs, f"Local delivery SHA256: {digest(report)}\n\n"
+                      + kwargs["output_file"].read_text()
+                      + "\n\n" + json.dumps(report, ensure_ascii=False, indent=2))
+                return HookResult(context_updates={"delivery_receipts_file": str(path),
+                                                   "delivery_complete": "true"})
             snapshot = approved_snapshot(
                 phase.issue_dir, workflow_id=kwargs["blackboard_state"].workflow_id, binding=binding
             )

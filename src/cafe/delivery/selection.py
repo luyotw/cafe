@@ -136,10 +136,11 @@ def validate_task_response(issue_dir, step_definition, policy, task, raw_payload
                 "The exact host-produced action/result task is required before this response."
             )
         return
-    validate_response(issue_dir, binding, task, _parse_payload(policy, raw_payload))
+    validate_response(issue_dir, binding, task, _parse_payload(policy, raw_payload),
+                      step_definition=step_definition)
 
 
-def validate_response(issue_dir, binding, task, payload):
+def validate_response(issue_dir, binding, task, payload, *, step_definition=None):
     """Validate only the declared delivery tasks; no universal terminal validator."""
     if not isinstance(payload, dict):
         raise ValueError("use the declared response format")
@@ -175,6 +176,15 @@ def validate_response(issue_dir, binding, task, payload):
     from cafe.delivery.closeout import TERMINAL_DECISIONS, validate_choice
 
     if task.policy_id == binding.result_task and payload.get("decision") in TERMINAL_DECISIONS:
+        if "Local delivery SHA256:" in task.prompt:
+            from cafe.core.blackboard import BlackboardStore
+            from cafe.delivery.local_result import validate_result
+
+            if payload["decision"] != "confirm" or step_definition is None:
+                raise ValueError("local delivery accepts results without terminal action selection")
+            validate_result(issue_dir, BlackboardStore(issue_dir).load_read_only(),
+                            step_definition, binding, task)
+            return
         snapshot = approved_snapshot(issue_dir, workflow_id=task.workflow_id, binding=binding)
         validate_snapshot_authority(issue_dir, snapshot)
         path = issue_dir / "delivery" / snapshot.digest / "result.json"
