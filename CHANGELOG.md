@@ -10,6 +10,8 @@ All notable changes to this project will be documented in this file.
 
 - Recover unfinished original interruption handoffs on execution entry before
   routing or provider work, preserving the pending decision and its owner.
+- Preserve legacy pending-task upgrades and exclusive host-worker ownership
+  when automatic recovery reuses an existing execution lease.
 - Restore omitted delivery checkpoint evidence from the producing iteration
   only when original session, authority, content and review evidence validate.
 - Remove obsolete iteration-state repair; readiness recovery now uses the
