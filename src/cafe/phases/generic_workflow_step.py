@@ -58,7 +58,7 @@ from cafe.core.human_tasks import (
     AGENT_EXECUTION_INTERRUPTED_TASK_ID,
     AGENT_EXECUTION_INTERRUPTED_TRIGGER,
 )
-from cafe.core.phase_state_mixin import persist_iteration_metadata
+from cafe.core.phase_state_mixin import load_iteration_control_metadata, persist_iteration_metadata
 from cafe.core.packet_io import atomic_write_bytes
 from cafe.core.phase import Phase
 from cafe.core.playbook import resolve_playbook_skills, resolve_step_behavior
@@ -1691,7 +1691,7 @@ class GenericWorkflowStepExecutor(Phase):
         if task.continuations.get(decision) != step_name:
             return False
         context_file = self._resolve_iteration_context_file(iteration_dir)
-        metadata = json.loads(context_file.read_text(encoding="utf-8"))
+        metadata = load_iteration_control_metadata(context_file)
         if metadata.get("artifact_correction_recovery_result") == result.id:
             return False
         metadata["artifact_correction_recovery_result"] = result.id
@@ -2241,14 +2241,14 @@ class GenericWorkflowStepExecutor(Phase):
 
     def _load_artifact_correction(self, iteration_dir: Path) -> ArtifactCorrectionBudget:
         context_file = self._resolve_iteration_context_file(iteration_dir)
-        metadata = json.loads(context_file.read_text(encoding="utf-8")) if context_file.exists() else {}
+        metadata = load_iteration_control_metadata(context_file) if context_file.exists() else {}
         return ArtifactCorrectionBudget.from_dict(metadata.get("artifact_correction", {}))
 
     def _save_artifact_correction(
         self, iteration_dir: Path, budget: ArtifactCorrectionBudget,
     ) -> None:
         context_file = self._resolve_iteration_context_file(iteration_dir)
-        metadata = json.loads(context_file.read_text(encoding="utf-8"))
+        metadata = load_iteration_control_metadata(context_file)
         metadata["artifact_correction"] = budget.to_dict()
         persist_iteration_metadata(context_file, metadata)
 
@@ -2399,7 +2399,7 @@ class GenericWorkflowStepExecutor(Phase):
         context_data: object = {}
         if context_file.exists():
             try:
-                context_data = json.loads(context_file.read_text(encoding="utf-8"))
+                context_data = load_iteration_control_metadata(context_file)
             except (OSError, UnicodeError, json.JSONDecodeError):
                 return
         if not isinstance(context_data, dict):
@@ -2555,7 +2555,7 @@ class GenericWorkflowStepExecutor(Phase):
         path = iteration_dir / "iteration.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            raw = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+            raw = load_iteration_control_metadata(path) if path.exists() else {}
         except (OSError, json.JSONDecodeError) as exc:
             raise ValueError("Unable to persist context packet diagnostics") from exc
         if not isinstance(raw, dict):
@@ -2573,7 +2573,7 @@ class GenericWorkflowStepExecutor(Phase):
         """Pin the source identity rendered for this invocation in iteration metadata."""
         path = iteration_dir / "iteration.json"
         try:
-            raw = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+            raw = load_iteration_control_metadata(path) if path.exists() else {}
         except (OSError, json.JSONDecodeError) as exc:
             raise ValueError("Unable to persist Todo projection provenance") from exc
         if not isinstance(raw, dict):
@@ -2957,7 +2957,7 @@ class GenericWorkflowStepExecutor(Phase):
         recovery = getattr(self, "_restart_recovery", None)
         if recovery is None:
             return
-        context = load_restart_context(context_file)
+        context = load_iteration_control_metadata(context_file)
         marker = context.get("restart_recovery_consumption", {})
         if isinstance(marker, Mapping) and marker.get("result_id") == recovery["result_id"]:
             return
@@ -4259,7 +4259,7 @@ class GenericWorkflowStepExecutor(Phase):
         self._effective_checklist = materialized
         metadata_path = output_file.parent / "iteration.json"
         try:
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata = load_iteration_control_metadata(metadata_path)
         except (OSError, ValueError):
             metadata = {}
         if not isinstance(metadata, dict):

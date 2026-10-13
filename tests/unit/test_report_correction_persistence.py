@@ -56,3 +56,21 @@ def test_issue646_blk001_budget_atomic_failure_keeps_original(tmp_path, monkeypa
     monkeypatch.setattr(packet_io, 'atomic_write_bytes', refuse)
     with pytest.raises(OSError): executor._save_artifact_correction(tmp_path, ArtifactCorrectionBudget(consumed=1))
     assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize('operation', ['budget', 'invocation', 'restart', 'packets', 'todos'])
+def test_issue646_blk001_bookkeeping_cannot_discard_unverified_legacy_stream(tmp_path, operation):
+    executor = object.__new__(GenericWorkflowStepExecutor)
+    path = tmp_path / 'iteration.json'
+    path.write_text(json.dumps({'session_id': 'original', 'streaming_log': [{'text': 'unverified available record'}]}))
+    before = path.read_bytes()
+    executor._restart_recovery = {'human_task_id': 'task', 'result_id': 'result', 'interruption': {'id': 'original'}}
+    actions = {
+        'budget': lambda: executor._save_artifact_correction(tmp_path, ArtifactCorrectionBudget(consumed=1)),
+        'invocation': lambda: executor._persist_agent_invocation_marker(iteration_dir=tmp_path, agent_invoked=True),
+        'restart': lambda: executor._consume_restart_recovery(path),
+        'packets': lambda: executor._persist_context_packet_diagnostics(tmp_path, {}),
+        'todos': lambda: executor._persist_todo_projection_snapshot(tmp_path, []),
+    }
+    with pytest.raises(RuntimeError): actions[operation]()
+    assert path.read_bytes() == before
