@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from hashlib import sha256
 from pathlib import Path
 
-from cafe.agents.cli.codex_usage import _open_journal
+from cafe.agents.cli.codex_usage import _open_journal, reconcile_request_usage
 from cafe.core.cost import COUNTERS, normalized_counters
 
 
@@ -54,7 +54,7 @@ SUPPORTED_VERSION = "0.159.3"
 MAX_NODES = 256
 MAX_DEPTH = 16
 MAX_FILES = 8192
-MAX_LINE = 256 * 1024
+MAX_LINE = 512 * 1024
 MAX_JOURNAL = 4 * 1024 * 1024
 MAX_BYTES = 16 * 1024 * 1024
 MAX_SECONDS = 3
@@ -182,17 +182,23 @@ class NativeInterval:
             raise ValueError("unsafe native source home")
         return path
 
-    def _header(self, path):
+    def _header(self, path, *, discovery=False):
         path = self._safe_path(path)
-        if getattr(self, "header_bytes", 0) >= MAX_BYTES:
+        if time.monotonic() > self.deadline:
+            raise ValueError("native observation time exceeds bound")
+        # Exploration cannot spend the budget reserved for known source reads.
+        counter = "discovery_header_bytes" if discovery else "observation_header_bytes"
+        limit = MAX_BYTES // 4 if discovery else MAX_BYTES - MAX_BYTES // 4
+        used = getattr(self, counter, 0) + (0 if discovery else getattr(self, "read_bytes", 0))
+        remaining = limit - used
+        if remaining <= 0:
             raise ValueError("native metadata read exceeds bound")
         with _open_journal(path) as handle:
-            line = handle.readline(MAX_LINE + 1)
-        if len(line) > MAX_LINE or not line.endswith(b"\n"):
-            raise ValueError("invalid native metadata")
+            line = handle.readline(min(MAX_LINE + 1, remaining))
+        setattr(self, counter, getattr(self, counter, 0) + len(line))
         self.header_bytes = getattr(self, "header_bytes", 0) + len(line)
-        if self.header_bytes > MAX_BYTES:
-            raise ValueError("native metadata read exceeds bound")
+        if len(line) > MAX_LINE or not line.endswith(b"\n"):
+            raise ValueError("invalid or bounded native metadata")
         row = json.loads(line)
         if row.get("type") != "session_meta" or not isinstance(row.get("payload"), dict):
             raise ValueError("invalid native metadata")
@@ -216,62 +222,130 @@ class NativeInterval:
         return parent
 
     def _discover(self):
-        self.deadline = time.monotonic() + MAX_SECONDS
-        self.header_bytes = 0
-        gaps, metadata, visited = [], {}, 0
+        began = time.monotonic()
+        self.deadline = began + MAX_SECONDS
+        exploration_deadline = began + MAX_SECONDS / 3
+        self.header_bytes = self.discovery_header_bytes = self.observation_header_bytes = 0
+        self.read_bytes = 0
+        self._observations = {}
+        gaps, metadata, paths, visited = [], {}, {}, 0
         pending = [self.home / "sessions", self.home / "archived_sessions"]
+        inventory_complete = True
+        # First inspect names only, so unrelated large headers cannot hide a
+        # known ID. Complete inventory is needed to rule out duplicate IDs.
         while pending:
             directory = pending.pop()
             if directory.is_symlink():
                 gaps.append("unsafe_native_directory")
+                inventory_complete = False
                 continue
             try:
                 with os.scandir(directory) as entries:
                     for entry in entries:
                         visited += 1
-                        if visited > MAX_FILES or time.monotonic() > self.deadline:
+                        if visited > MAX_FILES or time.monotonic() > exploration_deadline:
                             gaps.append("native_discovery_bound")
+                            inventory_complete = False
                             pending.clear()
                             break
                         if entry.is_dir(follow_symlinks=False):
                             pending.append(Path(entry.path))
                         elif entry.name.endswith(".jsonl"):
                             try:
-                                meta = self._header(Path(entry.path))
-                                identity = meta["id"]
-                                if identity in metadata:
-                                    gaps.append("duplicate_native_identity")
-                                    metadata[identity] = None
-                                else:
-                                    metadata[identity] = (Path(entry.path), meta)
-                            except (OSError, ValueError, TypeError, KeyError):
+                                identity = session_id(entry.name[-42:-6])
+                            except (ValueError, TypeError):
                                 gaps.append("native_metadata_unavailable")
+                                continue
+                            paths.setdefault(identity, []).append(Path(entry.path))
             except FileNotFoundError:
                 continue
             except OSError:
                 gaps.append("native_directory_unavailable")
+                inventory_complete = False
+        if not inventory_complete:
+            # An incomplete name inventory cannot certify source uniqueness.
+            return {}, sorted(set([*gaps, "root_native_source_unavailable"]))
+        for identity, candidates in paths.items():
+            if len(candidates) != 1:
+                metadata[identity] = None
+                gaps.append("duplicate_native_identity")
+
+        def known(identity):
+            if identity in metadata:
+                return
+            candidates = paths.get(identity, [])
+            if len(candidates) != 1:
+                gaps.append("native_observation_unavailable")
+                return
+            try:
+                data = self._read(candidates[0])
+                self._parent(data[0])
+                metadata[identity] = (candidates[0], data[0])
+            except (OSError, ValueError, TypeError, KeyError, AttributeError):
+                metadata[identity] = None
+                gaps.append("native_observation_unavailable")
+                return
+            # Events prioritize candidates; metadata and normal admission still
+            # prove ancestry and ownership. They do not authorize arbitrary IDs.
+            for row in data[1]:
+                payload = row["payload"]
+                field = {
+                    "collab_agent_spawn_end": "new_thread_id",
+                    "collab_resume_end": "receiver_thread_id",
+                    "collab_agent_interaction_end": "receiver_thread_id",
+                }.get(payload.get("type"))
+                if field:
+                    target = payload.get(field)
+                    if target in paths and target not in prioritized:
+                        prioritized[target] = None
+
+        prioritized = {self.root: None, **{identity: None for identity in self.baselines}}
+        processed = set()
+        while len(processed) < MAX_NODES:
+            targets = [identity for identity in prioritized if identity not in processed]
+            if not targets:
+                break
+            identity = targets[0]
+            processed.add(identity)
+            known(identity)
+        if set(prioritized) - processed:
+            gaps.append("native_tree_node_bound")
+        # Keep metadata fallback: missing spawn events do not imply no children.
+        for identity, candidates in paths.items():
+            if identity in metadata:
+                continue
+            if (time.monotonic() > exploration_deadline
+                    or self.discovery_header_bytes >= MAX_BYTES // 4):
+                gaps.append("native_discovery_bound")
+                break
+            try:
+                meta = self._header(candidates[0], discovery=True)
+                self._parent(meta)
+                metadata[identity] = (candidates[0], meta)
+            except (OSError, ValueError, TypeError, KeyError, AttributeError):
+                gaps.append("native_metadata_unavailable")
+
         found = {}
-        if self.root in metadata and metadata[self.root] is not None:
+        if metadata.get(self.root) is not None and self.root in metadata:
             found[self.root] = metadata[self.root][0]
         else:
             gaps.append("root_native_source_unavailable")
-        parents = {
-            identity: self._parent(value[1]) for identity, value in metadata.items() if value
-        }
+        parents = {identity: self._parent(value[1])
+                   for identity, value in metadata.items() if value}
         for identity, value in metadata.items():
             if not value or identity == self.root:
                 continue
-            parent, visited = parents.get(identity), {identity}
+            parent, ancestors = parents.get(identity), {identity}
             for _ in range(MAX_DEPTH):
                 if parent == self.root:
                     found[identity] = value[0]
                     break
                 if parent is None:
                     break
-                if parent in visited:
+                if parent in ancestors:
                     gaps.append("native_ancestry_cycle")
                     break
-                visited.add(parent)
+                ancestors.add(parent)
                 parent = parents.get(parent)
             else:
                 gaps.append("native_tree_depth_bound")
@@ -281,12 +355,15 @@ class NativeInterval:
         return found, sorted(set(gaps))
 
     def _read(self, path):
+        if path in getattr(self, "_observations", {}):
+            return self._observations[path]
         meta = self._header(path)
         with _open_journal(self._safe_path(path)) as handle:
             file_info = os.fstat(handle.fileno())
             size = file_info.st_size
             observed_bytes = min(size, MAX_JOURNAL)
-            if getattr(self, "read_bytes", 0) + observed_bytes > MAX_BYTES:
+            if (getattr(self, "read_bytes", 0) + observed_bytes
+                    + getattr(self, "observation_header_bytes", 0) > MAX_BYTES - MAX_BYTES // 4):
                 raise ValueError("native journal exceeds bounded observation")
             self.read_bytes = getattr(self, "read_bytes", 0) + observed_bytes
             rows = []
@@ -347,7 +424,7 @@ class NativeInterval:
                 )
             handle.seek(max(0, size - 128))
             anchor = sha256(handle.read(128)).hexdigest()
-        return (
+        result = (
             meta,
             rows,
             dict(
@@ -359,6 +436,8 @@ class NativeInterval:
                 source_gaps=source_gaps,
             ),
         )
+        self._observations[path] = result
+        return result
 
     def _record(
         self,
@@ -428,6 +507,8 @@ class NativeInterval:
             counters=normalized_counters(baseline["counters"])[0],
         )
         latest, models, turns, active = {}, set(), [], None
+        request_observations, request_model, request_context_turn = [], None, None
+        missing_request_model = False
         cutoff_offset = baseline["offset"]
         last_at = self.started
         prior_counters = start["counters"]
@@ -443,6 +524,7 @@ class NativeInterval:
             cutoff_offset = row["end_offset"]
             last_at = row["at"]
             if kind == "task_started":
+                request_model = request_context_turn = None
                 if active is not None:
                     gaps.append("concurrent_child_turns")
                 active = payload.get("turn_id")
@@ -450,6 +532,8 @@ class NativeInterval:
                     turns.append(active)
             if row["type"] == "turn_context":
                 model = payload.get("model")
+                request_model = model
+                request_context_turn = payload.get("turn_id") or active
                 if isinstance(model, str) and 0 < len(model) <= 512:
                     models.add(model)
             own_record = (
@@ -471,10 +555,21 @@ class NativeInterval:
                 )
                 current, invalid = normalized_counters(raw)
                 gaps.extend(invalid)
+                observation_model = request_model
+                if own_record and request_context_turn != payload.get("turn_id"):
+                    observation_model = None
+                if current != prior_counters and not (
+                    isinstance(observation_model, str) and 0 < len(observation_model) <= 512
+                ):
+                    missing_request_model = True
                 if any(current.get(k, v) < v for k, v in prior_counters.items()):
                     gaps.append("counter_reset")
                 latest = current
                 prior_counters = current
+                request_observations.append((
+                    observation_model, raw,
+                    payload.get("usage") if own_record else info.get("last_token_usage"),
+                ))
             if kind in {"task_complete", "turn_aborted"}:
                 if kind == "turn_aborted":
                     gaps.append("child_interrupted")
@@ -501,7 +596,15 @@ class NativeInterval:
             )
         ):
             delta = {}
-        if len(models) != 1:
+        usage = {k: v for k, v in delta.items() if k != "total_tokens"}
+        requests = []
+        try:
+            requests = reconcile_request_usage(
+                request_observations, usage, baseline=start["counters"]
+            )
+        except (ValueError, TypeError, KeyError, AttributeError):
+            pass  # Aggregate pricing still applies when its context band is provable.
+        if (len(models) != 1 and not requests) or missing_request_model:
             gaps.append("actual_model_unavailable")
         parent = self._parent(meta)
         segment = physical_id(identity, start)
@@ -549,14 +652,13 @@ class NativeInterval:
                 semantics="codex-rust-v0.159.3",
             ),
         )
-        usage = {k: v for k, v in delta.items() if k != "total_tokens"}
         from cafe.core.cost import account_cost
         from cafe.core.types import TokenUsage
 
         priced = account_cost(
-            TokenUsage(**usage),
+            TokenUsage(**usage, **({"turn_usages": requests} if requests else {})),
             cli="codex",
-            model=next(iter(models)) if len(models) == 1 else None,
+            model=next(iter(models)) if len(models) == 1 and not missing_request_model else None,
             state=self.rate,
             invocation_id="native:" + segment,
             complete=not bool(gaps),

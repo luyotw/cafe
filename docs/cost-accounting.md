@@ -289,16 +289,28 @@ explicit begin/finalize brackets use the same evidence and preserve their entry
 checkpoint after interruption.
 
 Local discovery supports the inspected `codex-cli 0.159.3` journal format.
-Bounded read-only `session_meta` discovery in `sessions` and `archived_sessions`
-is the sole ancestry source, including nested descendants. Mutable SQLite index
-metadata is neither a discovery requirement nor execution-model proof. A fixture
-with 5,003 journals, including archived nested descendants, took 0.490 seconds
-and read 851,480 header bytes and 2,356 selected journal bytes; this measurement
-provided no need for an index optimization. Symlinks, special files, conflicting
-identities and read/depth/node/time bounds leave coverage gaps. Limits are 256
-tree nodes, 16 levels, 8,192 directory entries, 256 KiB per line, a 4 MiB tail per
-journal, 16 MiB per collection and three seconds per collection. Skipped owned
-ranges remain incomplete; a verified tail can establish an entry snapshot. The
+Each collection inventories filenames before reading metadata, so it can verify
+unique IDs without letting unrelated large headers consume known-source reads.
+The root, retained entry baselines and targets named by verified parent
+spawn/resume/interaction events are read first. Parent metadata still proves
+ancestry, and normal interval admission proves ownership; an event alone does
+not admit a child's usage. Bounded `session_meta` fallback in `sessions` and
+`archived_sessions` retains discovery of nested descendants whose spawn events
+are absent. A truncated filename inventory cannot certify identity uniqueness.
+Mutable SQLite metadata is not a discovery requirement or execution-model proof.
+
+Exploration has its own 4 MiB metadata budget and at most the first second of
+the three-second collection window. Known-source observation retains the other
+12 MiB; cached verified observations are reused rather than charged again after
+exploration. The total byte allowance remains 16 MiB. Limits also include 256
+tree nodes, 16 levels, 8,192 directory entries, 512 KiB per line and a 4 MiB tail
+per selected journal. Oversized or malformed unrelated metadata and discovery
+bounds mark coverage incomplete without invalidating already verified root or
+child observations. These limits do not guarantee exhaustive discovery in a
+large home. Regression fixtures use realistic large unrelated headers as well
+as archived nested descendants; a small-header file-count benchmark alone does
+not establish that a real home fits the metadata allowance. Symlinks, special
+files, duplicate identities and skipped owned ranges remain incomplete. The
 collector never waits for, terminates or creates an agent.
 
 The implementation interpretation is grounded in the version-matched
@@ -327,6 +339,19 @@ A new non-fork/non-referenced child born during exclusively admitted work can us
 the verified initial-zero semantics. Missing or reset baseline categories stay
 unknown. Sanitized replay tests use these protocol shapes and never issue paid
 model calls.
+
+Child pricing uses the same request reconciliation as caller pricing. Within
+the verified owned range, each `last_token_usage` must equal the change in
+`token_count` cumulative counters. For per-thread `token_usage_record` evidence,
+the request's `usage` must equal the change in that thread's
+`thread_token_usage`, excluding inherited fork history. Duplicated cumulative
+endpoints do not create requests. Every priced request has an actual model and
+the request categories must sum exactly to the owned interval's known usage.
+Verified requests select their individual context rates even when a child's
+aggregate crosses the short-context boundary. Missing or mismatched request
+proof preserves the existing aggregate rule and its unavailable-price marker;
+it never guesses a rate or turns missing counters into zero. Cutoff-excluded
+records and prior resumed/fork usage cannot contribute to the price.
 
 Each child record preserves workflow/caller/attempt identity, root/immediate
 parent/session identity, agent path, owned turns, start/end offsets and cumulative

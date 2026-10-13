@@ -200,6 +200,39 @@ def prepare_resumed_usage(command, environment, *, selected_session=None):
     return project
 
 
+def reconcile_request_usage(observations, known, *, baseline=None):
+    """Verify each native request against its cumulative delta and owned totals.
+
+    The caller supplies only observations from its verified range, with the
+    matching counter source and actual model. This also supports forked child
+    per-thread counters without assuming stdout or an initial exec session.
+    """
+    previous = _counters(baseline) if baseline is not None else None
+    requests = []
+    for model, cumulative, last_usage in observations:
+        current = _counters(cumulative)
+        if previous == current:
+            continue
+        last = _counters(last_usage)
+        if previous is None:
+            previous = dict.fromkeys(current, 0)
+        if (current.keys() != previous.keys() or current.keys() != last.keys()
+                or any(current[key] - previous[key] != last[key] for key in current)
+                or not isinstance(model, str) or not model.strip() or len(model) > 512):
+            raise ValueError("native request counters/model do not reconcile")
+        requests.append(dict(kind="codex_request", model=model, usage=last,
+                             model_source="native_journal"))
+        previous = current
+    required = {"input_tokens", "output_tokens", "cache_read_input_tokens"}
+    keys = known.keys() & _COUNTERS - {"total_cost_usd"}
+    if (not requests or not required <= keys
+            or any(key not in request["usage"] for key in keys for request in requests)
+            or any(sum(request["usage"][key] for request in requests) != known[key]
+                   for key in keys)):
+        raise ValueError("native requests do not cover invocation usage")
+    return requests
+
+
 def prepare_request_usage(command, environment, *, selected_session=None):
     """Reconcile native request counters with this fresh/resumed invocation.
 
@@ -250,13 +283,15 @@ def prepare_request_usage(command, environment, *, selected_session=None):
                 if size - offset > _REQUEST_BYTES:
                     raise ValueError("native request range exceeds bound")
                 handle.seek(offset)
-                requests, model = [], None
+                observations, model = [], None
                 while handle.tell() < size:
                     line = handle.readline(min(_LINE_BYTES + 1, size - handle.tell()))
                     if len(line) > _LINE_BYTES or not line.endswith(b"\n"):
                         raise ValueError("native request line exceeds bound")
                     row = json.loads(line)
                     payload = row.get("payload", {})
+                    if row.get("type") == "event_msg" and payload.get("type") == "task_started":
+                        model = None
                     if row.get("type") == "turn_context":
                         model = payload.get("model")
                     if row.get("type") != "event_msg" or payload.get("type") != "token_count":
@@ -264,27 +299,10 @@ def prepare_request_usage(command, environment, *, selected_session=None):
                     info = payload.get("info")
                     if info is None:
                         continue
-                    current = _counters(info["total_token_usage"])
-                    if previous == current:
-                        continue  # Repeated usage telemetry is not a new request.
-                    last = _counters(info["last_token_usage"])
-                    if previous is None:
-                        previous = {key: 0 for key in current}
-                    if (current.keys() != previous.keys() or current.keys() != last.keys()
-                            or any(current[key] - previous[key] != last[key] for key in current)
-                            or not isinstance(model, str) or not model.strip() or len(model) > 512):
-                        raise ValueError("native request counters/model do not reconcile")
-                    requests.append(dict(kind="codex_request", model=model, usage=last,
-                                         model_source="native_journal"))
-                    previous = current
+                    observations.append((model, info["total_token_usage"],
+                                         info["last_token_usage"]))
             known = usage.model_dump(exclude_unset=True)
-            required = {"input_tokens", "output_tokens", "cache_read_input_tokens"}
-            keys = known.keys() & _COUNTERS - {"total_cost_usd"}
-            if (not requests or not required <= keys
-                    or any(key not in request["usage"] for key in keys for request in requests)
-                    or any(sum(request["usage"][key] for request in requests) != known[key]
-                           for key in keys)):
-                raise ValueError("native requests do not cover invocation usage")
+            requests = reconcile_request_usage(observations, known, baseline=previous)
             return usage.model_copy(update={"turn_usages": requests})
         except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
             return usage

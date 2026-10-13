@@ -175,3 +175,14 @@ def test_explicit_provider_cost_still_takes_precedence(tmp_path):
     record, = account_cost(observed, cli="codex", model="gpt-test", state=state()).cost_records
     assert record["provenance"] == "reported" and record["amount_usd"] == "0.0"
     assert "request_estimates" not in record
+
+
+def test_request_reader_does_not_carry_model_across_native_turns(tmp_path):
+    observe, usage, lines, journal = project(tmp_path)
+    rows = [json.loads(line) for line in journal.read_text().splitlines()]
+    rows.insert(-1, dict(type='event_msg', payload=dict(type='task_started', turn_id='second')))
+    journal.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+    observed = observe(usage, lines)
+    assert observed is usage
+    record, = account_cost(observed, cli='codex', model='gpt-test', state=state()).cost_records
+    assert record['amount_usd'] is None
