@@ -23,9 +23,9 @@ def load_iteration_control_metadata(path: Path) -> dict:
     try:
         control = load_restart_context(path)
     except ValueError as error:
-        raise RuntimeError("Iteration state requires explicit bounded repair before execution") from error
+        raise RuntimeError("Iteration state cannot be admitted under the current bounded schema") from error
     if control.get("streaming_log"):
-        raise RuntimeError("Legacy streaming_log requires explicit verified iteration repair")
+        raise RuntimeError("Legacy iteration contains unsupported duplicated streaming data")
     return control
 
 

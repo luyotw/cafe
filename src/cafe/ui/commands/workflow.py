@@ -1435,7 +1435,7 @@ def _dispatch_interruption_callback(runtime: Any, error: Exception) -> None:
 
 def repair(
     issue: str = typer.Option(..., '--issue', help='Exact prepared issue name'),
-    kind: str = typer.Option(..., '--kind', help='iteration, interruption, readiness or pr-result'),
+    kind: str = typer.Option(..., '--kind', help='interruption, readiness or pr-result'),
     step: str = typer.Option(..., '--step', help='Exact source step'),
     iteration: int = typer.Option(..., '--iteration', min=1, max=999),
     execute: bool = typer.Option(False, '--execute', help='Apply verified repair; default is read-only preview'),

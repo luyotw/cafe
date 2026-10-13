@@ -188,8 +188,7 @@ blockers still prohibit delivery advancement.
 
 When the worker is quiescent and explicit local repair is already within the
 current authority, use the preview/execute operations in
-`diagnosis_and_repair.md`. Choose `iteration` for verified legacy deduplication,
-`interruption` for either orphan direction, `readiness` for valid saved evidence
+`diagnosis_and_repair.md`. Choose `interruption` for either orphan direction, `readiness` for valid saved evidence
 with an omitted machine field/handoff, or `pr-result` for read-only publication
 observation. Repair leases coordinate writes and do not authorize task answers,
 provider execution, fresh sessions, model changes or publication replay.

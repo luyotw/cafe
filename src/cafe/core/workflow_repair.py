@@ -1,7 +1,7 @@
 """Explicit, guarded machine-evidence repair; never executes workflow work.
 
-Normal readers retain their limits. Exceptional legacy verification is bounded
-and preserves its verified pre-image in the existing audit before replacement.
+Normal readers retain their limits. Repairs preserve original handoff,
+checkpoint and publication evidence without replaying completed work.
 """
 from __future__ import annotations
 
@@ -189,7 +189,7 @@ def _event(audit, state, step, kind, proof):
     return record
 
 
-def _raw_proof(path, embedded, progress):
+def _raw_proof(path, progress):
     records = hashlib.sha256()
     byte_hash = hashlib.sha256()
     count = total = notified = 0
@@ -202,9 +202,7 @@ def _raw_proof(path, embedded, progress):
                 raise ValueError('raw record is oversized or truncated')
             decoded = _json(line)
             normalized = json.dumps(decoded, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
-            if embedded is not None and (count >= len(embedded) or normalized != json.dumps(embedded[count], sort_keys=True, ensure_ascii=False, separators=(',', ':'))):
-                raise ValueError('available raw records do not exactly match embedded stream')
-            records.update(json.dumps(decoded, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode())
+            records.update(normalized.encode())
             records.update(b'\n')
             byte_hash.update(line)
             count += 1
@@ -212,92 +210,24 @@ def _raw_proof(path, embedded, progress):
             if total - notified >= 1_048_576 or count % 1000 == 0:
                 progress({'kind': 'verification_progress', 'bytes': total, 'records': count})
                 notified = total
-        if embedded is not None and count != len(embedded):
-            raise ValueError('available raw stream is incomplete')
     return dict(raw_identity=identity, raw_sha256=byte_hash.hexdigest(), record_count=count,
                 ordered_record_sha256=records.hexdigest())
 
 
-def _iteration(issue, state, directory, step, iteration, execute, progress):
-    path, raw_path = directory / 'iteration.json', directory / 'streaming.jsonl'
-    content, identity = _read(path, LEGACY_METADATA_BYTES)
-    metadata = _json(content)
-    if not isinstance(metadata, dict): raise ValueError('iteration must be a mapping')
-    if (('iteration' in metadata and (type(metadata['iteration']) is not int or metadata['iteration'] != iteration))
-            or metadata.get('step_name', step) != step or metadata.get('workflow_id', state.workflow_id) != state.workflow_id):
-        raise ValueError('legacy metadata conflicts with selected workflow/step/iteration')
-    audit = AuditEventStore(issue)
-    records = _repair_events(audit, state, step, iteration, {'iteration_repair_prepared', 'iteration_repair_completed'})
-    prepared = [r['data'] for r in records if r['event_type'] == 'iteration_repair_prepared']
-    if len(prepared) > 1: raise ValueError('ambiguous prepared repair operation')
-    original_sha = sha256_bytes(content)
-    if prepared:
-        proof = prepared[0]
-        if proof.get('metadata_path') != str(path.relative_to(issue)) or proof.get('raw_path') != str(raw_path.relative_to(issue)):
-            raise ValueError('prepared repair selection differs')
-        raw = _raw_proof(raw_path, None, progress)
-        if any(proof.get(k) != v for k, v in raw.items()): raise ValueError('prepared raw identity or content changed')
-        if original_sha not in {proof['original_sha256'], proof['target_sha256']}:
-            raise ValueError('metadata differs from both prepared pre-image and post-image')
-        completed = [r for r in records if r['event_type'] == 'iteration_repair_completed']
-        if completed:
-            if len(completed) != 1 or completed[0]['data'] != proof or original_sha != proof['target_sha256']:
-                raise ValueError('completion audit conflicts with current evidence')
-            if state.applied_event_sequence < completed[0]['sequence']:
-                if execute:
-                    BlackboardStore(issue).load_or_create(step, playbook_id=state.playbook_id)
-                return {'status': 'repaired' if execute else 'proposed', 'operation_id': proof['operation_id']}
-            return {'status': 'no-op', 'operation_id': proof['operation_id']}
-        if original_sha == proof['target_sha256']:
-            if execute: _event(audit, state, step, 'iteration_repair_completed', proof)
-            return {'status': 'repaired' if execute else 'proposed', 'operation_id': proof['operation_id']}
-        if identity != proof['metadata_identity']: raise ValueError('prepared metadata identity changed')
-    elif 'streaming_log' not in metadata:
-        if len(content) > 1_048_576: raise ValueError('non-log metadata remains oversized')
-        return {'status': 'no-op', 'reason': 'no duplicated stream; no verified migration claimed'}
-    embedded = metadata.get('streaming_log')
-    if not isinstance(embedded, list) or len(embedded) > LEGACY_RECORDS:
-        raise ValueError('embedded stream is missing or exceeds exceptional bound')
-    raw = _raw_proof(raw_path, embedded, progress)
-    target = {k: v for k, v in metadata.items() if k != 'streaming_log'}
-    # An over-reserve legacy file could not have been admitted by the existing
-    # workspace writer. Retained workspace fields do not impose its lower
-    # ceiling on ordinary/checklist/report writes or their explicit repair.
-    workspace = len(content) <= 983_040 and any(k in metadata for k in ('workspace_completion', 'workspace_publication'))
-    payload = (json.dumps(target, ensure_ascii=False, indent=2) + ('\n' if workspace else '')).encode()
-    if len(payload) > (983_040 if workspace else 1_048_576):
-        raise ValueError('non-log metadata exceeds its existing path-specific bound')
-    candidate = dict(iteration=iteration, metadata_path=str(path.relative_to(issue)),
-                     raw_path=str(raw_path.relative_to(issue)), metadata_identity=identity,
-                     original_sha256=original_sha, target_sha256=sha256_bytes(payload),
-                     removed_field='streaming_log', equality='ordered decoded records; complete EOF',
-                     embedded_count=len(embedded), **raw)
-    operation = sha256_bytes(json.dumps([state.workflow_id, step, candidate], sort_keys=True).encode())
-    candidate['operation_id'] = operation
-    if prepared and candidate != proof: raise ValueError('revalidated pre-image proof differs')
-    proof = candidate
-    if not execute: return {'status': 'proposed', 'operation_id': operation, 'record_count': len(embedded)}
-    if not prepared: _event(audit, state, step, 'iteration_repair_prepared', proof)
-    # Recheck both selected regular files after durable preparation and immediately before replacement.
-    if _read(path, LEGACY_METADATA_BYTES) != (content, identity) or _raw_proof(raw_path, embedded, progress) != raw:
-        raise ValueError('evidence changed before replacement')
-    atomic_write_bytes(path, payload)
-    if _read(path, 1_048_576)[0] != payload: raise OSError('metadata post-image readback failed')
-    _event(audit, state, step, 'iteration_repair_completed', proof)
-    return {'status': 'repaired', 'operation_id': operation, 'record_count': len(embedded)}
 
 
 def repair_workflow(issue_dir: Path, *, kind: str, step: str, iteration: int,
                     execute: bool = False, progress: Callable[[dict], None] | None = None,
                     execution_context_file: Path | None = None) -> dict:
     """Preview by default; execution never dispatches an agent or publication."""
+    if kind not in {'interruption', 'readiness', 'pr-result'}:
+        return {'status': 'refused', 'reason': 'unsupported repair kind'}
     issue = Path(issue_dir).absolute()
     progress = progress or (lambda event: None)
     try:
         directory = _selected(issue, step, iteration)
         def operation():
             state = _snapshot(issue)
-            if kind == 'iteration': return _iteration(issue, state, directory, step, iteration, execute, progress)
             if kind == 'interruption': return _interruption(issue, state, directory, step, iteration, execute)
             if kind == 'readiness': return _readiness(issue, state, directory, step, iteration, execute, execution_context_file, progress)
             if kind == 'pr-result': return _pr_result(issue, state, directory, step, iteration, execute, execution_context_file)
@@ -497,7 +427,7 @@ def _readiness(issue, state, directory, step, iteration, execute, context_file, 
     if not output.strip() or not validate_checklist(directory / 'checklist.md').is_complete:
         raise ValueError('saved output and complete checklist are required')
     _saved_terminal(directory / 'streaming.jsonl', metadata.get('session_id'))
-    raw_proof = _raw_proof(directory / 'streaming.jsonl', None, progress)
+    raw_proof = _raw_proof(directory / 'streaming.jsonl', progress)
     review = load_review_evidence(issue / 'execution_review.json') if context.get('review_policy') == 'single_native' else None
     paths = list(directory.glob('*checkpoint*.json'))
     if len(paths) > 128: raise ValueError('checkpoint attribution exceeds bounded candidate count')
