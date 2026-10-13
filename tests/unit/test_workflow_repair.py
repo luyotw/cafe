@@ -82,8 +82,9 @@ def test_u6_fallible_context_preparation_publishes_no_handoff(interrupted):
     assert runtime.blackboard.current_step == 'compose_custom'
 
 
+@pytest.mark.parametrize('entry', ['repair', 'runtime', 'hosted'])
 @pytest.mark.parametrize('boundary', ['prepared', 'baton', 'task_before', 'task_after', 'owner', 'pause'])
-def test_u7_partial_interruption_converges_original_handoff_without_execution(interrupted, monkeypatch, boundary):
+def test_u7_partial_interruption_converges_original_handoff_without_execution(interrupted, monkeypatch, boundary, entry):
     from cafe.core.blackboard import BlackboardStore
     from cafe.core.human_task_records import HumanTaskRecordStore
     runtime, directory, controls, calls = interrupted
@@ -121,8 +122,13 @@ def test_u7_partial_interruption_converges_original_handoff_without_execution(in
     monkeypatch.setattr(BlackboardStore, 'set_current_step', after_owner)
     with pytest.raises(OSError): interrupt(runtime)
     before = json.loads((directory / 'iteration.json').read_text())
-    result = repair_interrupted(interrupted)
-    assert result['status'] == 'repaired'
+    if entry == 'repair':
+        result = repair_interrupted(interrupted)
+        assert result['status'] == 'repaired'
+    else:
+        from cafe.workflow_execution.workflow_hosting import WorkflowHost
+        result = runtime.run() if entry == 'runtime' else WorkflowHost(runtime.issue_dir).run(runtime.run, hosting='foreground').result
+        assert not result.completed
     records = HumanTaskRecordStore(runtime.issue_dir)
     assert len(records.tasks()) == 1 and not records.results()
     task = records.tasks()[0]
@@ -133,6 +139,10 @@ def test_u7_partial_interruption_converges_original_handoff_without_execution(in
     assert all(after[k] == v for k, v in controls.items())
     assert after['agent_interruption']['id'] == state.handoff_contract.created_at
     assert not calls
+    if entry != 'repair':
+        from cafe.core.workflow_repair import recover_pending_interruption
+        assert recover_pending_interruption(runtime.issue_dir) is None
+        repair_interrupted(interrupted)
     assert repair_interrupted(interrupted)['status'] == 'no-op'
     assert len(records.tasks()) == 1
 
@@ -151,6 +161,8 @@ def test_u7_terminal_decisions_never_reopen(interrupted, terminal):
         records.complete(workflow_id=task.workflow_id, task_id=task.id,
                          payload={'decision': 'retry', 'continuation': 'compose_custom'}, source='fixture-user')
     before = (runtime.issue_dir / 'human_tasks.json').read_bytes()
+    from cafe.core.workflow_repair import recover_pending_interruption
+    assert recover_pending_interruption(runtime.issue_dir) is None
     assert repair_interrupted(interrupted)['status'] == 'refused'
     assert (runtime.issue_dir / 'human_tasks.json').read_bytes() == before
 

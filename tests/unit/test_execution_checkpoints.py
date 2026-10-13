@@ -217,3 +217,112 @@ def test_issue646_u11_readiness_preserves_required_independent_native_review(exe
     else:
         with pytest.raises(ValueError):
             validate_delivery_readiness(context, readiness, review_evidence=None if review_status == 'missing' else review)
+
+
+@pytest.mark.parametrize('defect', [None, 'absent', 'ambiguous', 'session', 'reference',
+    'content', 'authority', 'endpoint', 'review', 'pending', 'iteration', 'workflow'])
+def test_automatic_checkpoint_restoration_requires_unique_current_original_proof(execution_context, defect):
+    import json
+    from cafe.core.execution_checkpoints import checkpoint, load_or_restore_delivery_readiness
+    from cafe.core.workspace_lock import workspace_execution_lock
+    context = dict(execution_context, delivery_endpoint={'route': 'local'})
+    issue = Path(context['root']) / '.cafe/issues/sample'
+    directory = issue / 'custom/iteration_001'
+    directory.mkdir(parents=True)
+    saved = checkpoint(context, 'before_delivery', round_id='custom', parent_id='original')
+    path = directory / 'ready.json'
+    readiness = {'authority_digest': context['authority_digest'], 'endpoint': context['delivery_endpoint'],
+                 'checkpoint': {'receipt_id': saved['receipt_id']}}
+    (directory / 'iteration.json').write_text(json.dumps({'iteration': 1, 'session_id': 'original'}))
+    (directory / 'delivery_checkpoint.json').write_text(json.dumps(saved))
+    if defect == 'absent': (directory / 'delivery_checkpoint.json').unlink()
+    elif defect == 'ambiguous':
+        (directory / 'other_checkpoint.json').write_text(json.dumps(dict(saved, receipt_id='different')))
+    elif defect == 'session':
+        (directory / 'iteration.json').write_text(json.dumps({'iteration': 1, 'session_id': 'other'}))
+    elif defect in {'iteration', 'workflow'}:
+        metadata = {'iteration': 2 if defect == 'iteration' else 1, 'session_id': 'original'}
+        if defect == 'workflow': metadata['workflow_id'] = 'other'
+        (directory / 'iteration.json').write_text(json.dumps(metadata))
+    elif defect == 'reference': readiness['checkpoint']['receipt_id'] = 'different'
+    elif defect == 'content': (Path(context['root']) / 'allowed').write_text('changed')
+    elif defect == 'authority': readiness['authority_digest'] = 'other'
+    elif defect == 'endpoint': readiness['endpoint'] = {'route': 'other'}
+    elif defect == 'review': context['review_policy'] = 'single_native'
+    elif defect == 'pending':
+        from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
+        runtime = BlackboardWorkflowRuntime(issue_dir=issue, playbook={
+            'playbook': {'id': 'custom'}, 'steps': {'custom': {'skill': 'custom', 'role': 'writer'}}}, executor=None)
+        runtime._notify_new_human_task = lambda task: None
+        runtime._pause_for_agent_execution_interruption(current_step='custom', reason='agent_error', runtime='fixture')
+    path.write_text(json.dumps(readiness))
+    original = path.read_bytes()
+    with workspace_execution_lock(Path(context['root'])):
+        if defect:
+            with pytest.raises(ValueError): load_or_restore_delivery_readiness(context, path)
+            assert path.read_bytes() == original
+        else:
+            result = load_or_restore_delivery_readiness(context, path)
+            assert result['checkpoint'] == saved
+            assert json.loads(path.read_text()) == result
+            assert load_or_restore_delivery_readiness(context, path) == result
+
+
+def test_consumer_restores_checkpoint_without_replaying_provider(execution_context):
+    import json
+    from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
+    from cafe.core.workflow_models import StepExecutionResult
+    from cafe.core.execution_checkpoints import checkpoint
+    from cafe.core.human_task_records import HumanTaskRecordStore
+    context = dict(execution_context, delivery_endpoint={'route': 'local'})
+    issue = Path(context['root']) / '.cafe/issues/sample'
+    graph = {'playbook': {'id': 'custom'}, 'steps': {'custom': {
+        'skill': 'custom', 'role': 'author', 'behavior': {'completion': 'baton'},
+        'output_artifact': 'report',
+        'execution': {'checkpoints': ['before_delivery'], 'delivery_evidence_artifact': 'ready.json'},
+        'on': {'await_agent': '_done'}}}}
+    calls = []
+    saved = checkpoint(context, 'before_delivery', round_id='custom', parent_id='original')
+    def provider(*args, **kwargs):
+        calls.append('provider')
+        directory = issue / 'custom/iteration_001'
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / 'iteration.json').write_text(json.dumps({'iteration': 1, 'session_id': 'original'}))
+        (directory / 'output.md').write_text('Completed original result\n')
+        (directory / 'delivery_checkpoint.json').write_text(json.dumps(saved))
+        (directory / 'ready.json').write_text(json.dumps({'authority_digest': context['authority_digest'],
+            'endpoint': context['delivery_endpoint'], 'checkpoint': {'receipt_id': saved['receipt_id']}}))
+        (issue / 'next_step.txt').write_text(json.dumps({'version': 1, 'intent': 'await_agent'}))
+        return StepExecutionResult(response='', artifacts={'report': str(directory / 'output.md')})
+    runtime = BlackboardWorkflowRuntime(issue_dir=issue, playbook=graph, executor=provider, execution_context=context)
+    assert runtime.run(start_step='custom', single_step=True).completed
+    assert not HumanTaskRecordStore(issue).tasks()
+    assert calls == ['provider']
+    assert json.loads((issue / 'execution_delivery.json').read_text())['checkpoint'] == saved
+
+
+def test_checkpoint_restoration_recovers_a_write_that_persisted_before_failure(execution_context, monkeypatch):
+    import json
+    from cafe.core import packet_io
+    from cafe.core.execution_checkpoints import checkpoint, load_or_restore_delivery_readiness
+    from cafe.core.workspace_lock import workspace_execution_lock
+    context = dict(execution_context, delivery_endpoint={'route': 'local'})
+    directory = Path(context['root']) / '.cafe/issues/sample/custom/iteration_001'
+    directory.mkdir(parents=True)
+    saved = checkpoint(context, 'before_delivery', round_id='custom', parent_id='original')
+    (directory / 'iteration.json').write_text(json.dumps({'iteration': 1, 'session_id': 'original'}))
+    source = directory / 'delivery_checkpoint.json'
+    source.write_text(json.dumps(saved))
+    path = directory / 'ready.json'
+    path.write_text(json.dumps({'authority_digest': context['authority_digest'],
+        'endpoint': context['delivery_endpoint'], 'checkpoint': {'receipt_id': saved['receipt_id']}}))
+    original_write = packet_io.atomic_write_bytes
+    def write(path, content):
+        original_write(path, content)
+        raise OSError('after persisted write')
+    monkeypatch.setattr(packet_io, 'atomic_write_bytes', write)
+    original = source.read_bytes()
+    with workspace_execution_lock(Path(context['root'])):
+        with pytest.raises(OSError): load_or_restore_delivery_readiness(context, path)
+        assert load_or_restore_delivery_readiness(context, path)['checkpoint'] == saved
+    assert source.read_bytes() == original

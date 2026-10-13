@@ -5,8 +5,9 @@ from typer.testing import CliRunner
 from cafe.ui.cli import app
 
 
+@pytest.mark.parametrize('kind', ['iteration', 'readiness'])
 @pytest.mark.parametrize('execute', [False, True])
-def test_removed_iteration_repair_refuses_without_touching_saved_evidence(tmp_path, monkeypatch, execute):
+def test_removed_repair_refuses_without_touching_saved_evidence(tmp_path, monkeypatch, execute, kind):
     from cafe.core.blackboard import BlackboardStore
 
     issue = tmp_path / '.cafe/issues/removed-repair'
@@ -20,7 +21,7 @@ def test_removed_iteration_repair_refuses_without_touching_saved_evidence(tmp_pa
     (directory / 'streaming.jsonl').write_text('{"text":"saved"}\n')
     before = {str(p.relative_to(issue)): p.read_bytes() for p in issue.rglob('*') if p.is_file()}
     monkeypatch.chdir(tmp_path)
-    args = ['repair', '--issue', issue.name, '--kind', 'iteration',
+    args = ['repair', '--issue', issue.name, '--kind', kind,
             '--step', 'compose_custom', '--iteration', '1']
     result = CliRunner().invoke(app, args + (['--execute'] if execute else []))
     assert result.exit_code == 2 and json.loads(result.stdout)['status'] == 'refused'
@@ -155,134 +156,6 @@ def test_i6_custom_declared_producer_validates_full_checkpoint_before_handoff(jo
     assert BlackboardStore(j.issue).load_read_only().current_step == 'deliver_custom'
 
 
-@pytest.fixture
-def saved_delivery(journey):
-    import subprocess, yaml
-    from cafe.core.execution_checkpoints import checkpoint
-    j = journey([CORRECTED], workspace=False)
-    context = {'version': 1, 'root': str(j.repo), 'baseline_commit': subprocess.check_output(
-        ['git', 'rev-parse', 'HEAD'], cwd=j.repo, text=True).strip(), 'paths': ['owned.txt'], 'preexisting': [],
-        'authority_digest': 'a' * 64, 'revision': 1,
-        'identity': {'issue_name': 'correction', 'workflow_id': j.runtime.blackboard.workflow_id},
-        'delivery_endpoint': {'route': 'local', 'source_branch': 'main'}}
-    declaration = {'checkpoints': ['before_delivery'], 'delivery_evidence_artifact': 'bespoke_ready.json'}
-    j.runtime.steps['inspect_custom']['execution'] = declaration
-    source = j.repo / '.cafe/playbooks/correction.yaml'
-    definition = yaml.safe_load(source.read_text())
-    definition['steps']['inspect_custom']['execution'] = declaration
-    source.write_text(yaml.safe_dump(definition))
-    j.runtime.execution_context = context
-    saved = checkpoint(context, 'before_delivery', round_id='inspect_custom', parent_id='exact-report-session')
-    execute = j.manager.execute
-    def provider(*args, **kwargs):
-        result = execute(*args, **kwargs)
-        readiness = {'authority_digest': context['authority_digest'], 'endpoint': context['delivery_endpoint'], 'checkpoint': saved}
-        (j.iteration / 'bespoke_ready.json').write_text(json.dumps(readiness))
-        (j.iteration / 'delivery_checkpoint.json').write_text(json.dumps(saved))
-        records = [{'type': 'thread.started', 'thread_id': 'exact-report-session'},
-                   {'type': 'turn.completed', 'usage': {}}, {'type': 'stderr_diagnostics', 'returncode': 0}]
-        (j.iteration / 'streaming.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in records))
-        return result
-    j.manager.execute = provider
-    j.runtime.run(start_step='inspect_custom', single_step=True)
-    # A process-stop fixture retains verified completed artifacts and its legal
-    # outbound handoff, while the producing owner update/readiness is omitted.
-    j.runtime.blackboard_store.set_current_step(j.runtime.blackboard, 'inspect_custom')
-    readiness = json.loads((j.iteration / 'bespoke_ready.json').read_text())
-    readiness['checkpoint'] = {'receipt_id': saved['receipt_id']}
-    (j.iteration / 'bespoke_ready.json').write_text(json.dumps(readiness))
-    context_path = j.issue / 'saved-execution-context.json'
-    context_path.write_text(json.dumps(context))
-    return j, context_path, saved
-
-
-def saved_repair(saved_delivery, execute=True):
-    from cafe.core.workflow_repair import repair_workflow
-    j, context_path, _ = saved_delivery
-    return repair_workflow(j.issue, kind='readiness', step='inspect_custom', iteration=1,
-                           execute=execute, execution_context_file=context_path)
-
-
-def test_i7_saved_complete_evidence_repairs_without_any_new_invocation(saved_delivery):
-    from cafe.core.blackboard import BlackboardStore
-    j, _, saved = saved_delivery
-    count = len(j.manager.calls), j.manager.deliveries
-    assert saved_repair(saved_delivery, False)['status'] == 'proposed'
-    assert saved_repair(saved_delivery)['status'] == 'repaired'
-    assert json.loads((j.iteration / 'bespoke_ready.json').read_text())['checkpoint'] == saved
-    assert BlackboardStore(j.issue).load_read_only().current_step == 'deliver_custom'
-    assert (len(j.manager.calls), j.manager.deliveries) == count
-    assert saved_repair(saved_delivery)['status'] == 'no-op'
-
-
-@pytest.mark.parametrize('defect', ['terminal', 'exit', 'stale', 'authority', 'endpoint', 'ambiguous', 'checklist'])
-def test_i7_saved_evidence_refusal_preserves_sources_and_no_replay(saved_delivery, defect):
-    j, context_path, saved = saved_delivery
-    if defect == 'terminal': (j.iteration / 'streaming.jsonl').write_text('{"type":"turn.started"}\n')
-    elif defect == 'exit':
-        p = j.iteration / 'streaming.jsonl'; p.write_text(p.read_text().replace('"returncode": 0', '"returncode": 1'))
-    elif defect == 'stale': (j.repo / 'owned.txt').write_text('changed')
-    elif defect in ['authority', 'endpoint']:
-        data = json.loads(context_path.read_text())
-        data['authority_digest' if defect == 'authority' else 'delivery_endpoint'] = 'b' * 64 if defect == 'authority' else {'route': 'other'}
-        context_path.write_text(json.dumps(data))
-    elif defect == 'ambiguous':
-        other = dict(saved, receipt_id='different')
-        (j.iteration / 'other_checkpoint.json').write_text(json.dumps(other))
-    elif defect == 'checklist': (j.iteration / 'checklist.md').write_text('[ ] Required gate\n')
-    before = (j.iteration / 'bespoke_ready.json').read_bytes(), (j.issue / 'next_step.txt').read_bytes()
-    calls = len(j.manager.calls)
-    assert saved_repair(saved_delivery)['status'] == 'refused'
-    assert ((j.iteration / 'bespoke_ready.json').read_bytes(), (j.issue / 'next_step.txt').read_bytes()) == before
-    assert len(j.manager.calls) == calls
-
-
-@pytest.mark.parametrize('boundary', ['readiness_after', 'completed_before', 'completed_after'])
-def test_i7_saved_readiness_partial_write_reentry_keeps_original_provenance(saved_delivery, monkeypatch, boundary):
-    from cafe.core import workflow_repair
-    from cafe.core.audit_events import AuditEventStore
-    j, _, saved = saved_delivery
-    replace, commit = workflow_repair.atomic_write_bytes, AuditEventStore.commit
-    failed = False
-    def write(path, content):
-        nonlocal failed
-        replace(path, content)
-        if boundary == 'readiness_after' and path == j.iteration / 'bespoke_ready.json' and not failed:
-            failed = True; raise OSError('after readiness replacement')
-    def audit(self, workflow_id, record):
-        nonlocal failed
-        if boundary.startswith('completed') and record['event_type'] == 'readiness_repair_completed' and not failed:
-            failed = True
-            if boundary.endswith('after'): commit(self, workflow_id, record)
-            raise OSError('completion audit boundary')
-        return commit(self, workflow_id, record)
-    monkeypatch.setattr(workflow_repair, 'atomic_write_bytes', write)
-    monkeypatch.setattr(AuditEventStore, 'commit', audit)
-    assert saved_repair(saved_delivery)['status'] == 'interrupted'
-    assert saved_repair(saved_delivery)['status'] in {'repaired', 'no-op'}
-    assert saved_repair(saved_delivery)['status'] == 'no-op'
-    assert json.loads((j.iteration / 'bespoke_ready.json').read_text())['checkpoint'] == saved
-    assert j.manager.deliveries == 0
-
-
-def test_i7_pending_real_decision_is_never_answered_by_readiness_repair(saved_delivery):
-    from cafe.core.human_task_records import HumanTaskRecordStore
-    j = saved_delivery[0]
-    j.runtime._pause_for_agent_execution_interruption(current_step='inspect_custom', reason='agent_error', runtime='fixture')
-    records = HumanTaskRecordStore(j.issue)
-    before = (j.issue / 'human_tasks.json').read_bytes()
-    assert saved_repair(saved_delivery)['status'] == 'refused'
-    assert not records.results() and (j.issue / 'human_tasks.json').read_bytes() == before
-
-
-def test_i7_saved_readiness_public_cli_stops_at_handoff(saved_delivery):
-    j, context, _ = saved_delivery
-    result = CliRunner().invoke(app, ['repair', '--issue', 'correction', '--kind', 'readiness',
-        '--step', 'inspect_custom', '--iteration', '1', '--execution-context-file', str(context), '--execute'])
-    assert result.exit_code == 0 and json.loads(result.stdout)['to_step'] == 'deliver_custom'
-    assert j.manager.deliveries == 0
-
-
 from tests.unit.test_pr_delivery import publication, unknown_publication, historical_publication
 from tests.unit.test_file_scope import repository
 
@@ -399,17 +272,6 @@ def test_issue646_blk004_public_history_limit_plus_one_preserves_admitted_reentr
     assert sum(kind == 'publish' for kind, _ in p['calls']) == 1
 
 
-def test_i7_verified_saved_repair_supersedes_original_interruption_progress(saved_delivery):
-    from tests.unit.test_workflow_progress_renderer import _module
-    j = saved_delivery[0]
-    j.runtime.blackboard_store.record_event(j.runtime.blackboard, 'step_interrupted',
-        {'step': 'inspect_custom', 'iteration': 1, 'reason': 'readiness_omission'})
-    render = lambda: _module()._runtime_progress(j.issue, {'steps': j.runtime.steps})[0]['inspect_custom']
-    assert render() == 'blocked'
-    assert saved_repair(saved_delivery)['status'] == 'repaired'
-    assert render() == 'completed'
-
-
 def test_i6_genuine_human_permission_handoff_is_not_machine_readiness_correction(journey):
     import subprocess
     from cafe.core.human_task_records import HumanTaskRecordStore
@@ -427,3 +289,37 @@ def test_i6_genuine_human_permission_handoff_is_not_machine_readiness_correction
     tasks = HumanTaskRecordStore(j.issue).tasks()
     assert len(tasks) == 1 and tasks[0].trigger == 'need_permission'
     assert not (j.issue / 'execution_delivery.json').exists()
+
+
+@pytest.mark.parametrize('background', [False, True])
+@pytest.mark.parametrize('orphan_owner', [False, True])
+def test_workflow_recovers_missing_original_task_before_user_wait_or_agent(journey, monkeypatch, orphan_owner, background):
+    from cafe.core.blackboard import BlackboardStore
+    from cafe.core.human_task_records import HumanTaskRecordStore
+    j = journey([CORRECTED], workspace=False)
+    materialize = HumanTaskRecordStore.materialize_with_status
+    def stop(*args, **kwargs):
+        raise OSError('task materialization boundary')
+    monkeypatch.setattr(HumanTaskRecordStore, 'materialize_with_status', stop)
+    with pytest.raises(OSError):
+        j.runtime._pause_for_agent_execution_interruption(current_step='inspect_custom',
+            reason='agent_error', runtime='original')
+    monkeypatch.setattr(HumanTaskRecordStore, 'materialize_with_status', materialize)
+    if orphan_owner:
+        j.runtime.blackboard_store.set_current_step(j.runtime.blackboard, 'user')
+    args = ['workflow', '--execute', '--issue', 'correction', '--playbook', 'correction']
+    if background:
+        from cafe.workflow_execution.worker_launch import WorkerLaunchStore
+        launches = WorkerLaunchStore(j.issue)
+        launch = launches.start()
+        launches.mark(launch['worker_id'], 'started')
+        args += ['--internal-worker-id', launch['worker_id'], '--internal-worker-token', launch['worker_token']]
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code == 0, result.stdout
+    assert 'Recovered original interruption task' in result.stdout
+    records = HumanTaskRecordStore(j.issue)
+    assert len(records.tasks()) == 1 and not records.results()
+    state = BlackboardStore(j.issue).load_read_only()
+    assert state.current_step == 'user'
+    assert records.tasks()[0].handoff_key.endswith(state.handoff_contract.created_at)
+    assert not j.manager.calls and not j.manager.deliveries

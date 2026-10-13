@@ -126,6 +126,17 @@ provider, hooks or publication, answering a task, or resetting budgets. A pendin
 human decision or conflicting control/artifact identity cannot be repaired by
 guessing success; use the existing authorized handoff.
 
+
+Ordinary execution entry automatically reconnects an unfinished original
+interruption preparation before user-wait routing or provider execution. It
+restores the same pending decision and stops; it does not answer or retry it.
+The delivery consumer can restore an omitted full checkpoint only from one
+complete checkpoint saved in the producing iteration, with the same session,
+context, authority, current content, endpoint and required independent review.
+It then passes the existing completion gates. Missing, conflicting or stale
+proof follows the original correction/human route; no standalone readiness
+repair command is supported.
+
 `cafe repair` is a supported local machine-evidence operation. It does not run a
 phase or continue the workflow. Use the current authorized issue/worktree and
 select one exact source step and iteration. Preview is read-only by default;
@@ -134,8 +145,6 @@ permission to answer a HumanTask, change a CLI/model/session, or publish again.
 
 ```bash
 cafe repair --issue example --kind interruption --step build_custom --iteration 1 --execute
-cafe repair --issue example --kind readiness --step ship_custom --iteration 1 \
-  --execution-context-file .cafe/issues/example/saved-execution-context.json --execute
 cafe repair --issue example --kind pr-result --step ship_custom --iteration 1 \
   --execution-context-file .cafe/issues/example/saved-execution-context.json --execute
 ```
@@ -152,19 +161,16 @@ Status/show/inspection never deduplicate iteration state.
 | Kind | Verified source and local result | Next action |
 | --- | --- | --- |
 | `interruption` | Genuine original interruption and handoff/prepared identity; materialize or reconnect exactly one pending HumanTask and coherent user owner. Completed/cancelled/ambiguous tasks refuse. | Inspect that pending task and present its existing choices to its owner; repair supplies no answer. |
-| `readiness` | Uniquely attributable saved full `before_delivery` checkpoint, matching successful structured terminal/process exit, output/checklist, original context, endpoint and required independent review. Complete only the already legal handoff through normal gates, stopping at its boundary. | Inspect the handoff; ordinary authorized advancement remains the workflow owner's action. |
 | `pr-result` | Original attempt, saved context/checkpoint and a genuine retained execution receipt, then exact trusted PR observations. Add reconciliation history and effective outcome to the existing result record. | Inspect `reconciliation.effective_status` and the preserved original attempt; never repeat push/create to resolve an unknown result. |
 
-Readiness and PR repair require the original saved resolved execution context,
+PR repair requires the original saved resolved execution context,
 with the selected workflow/issue/root, authority, revision, content and endpoint
 still provable. A reference or receipt ID cannot replace a full checkpoint.
 Missing machine schema enters existing bounded producer correction; changed
 execution authority or a real decision retains its existing human route. Repair
 never fabricates a checkpoint/terminal/review/approval or answers a pending task.
 
-Saved evidence verification is bounded to 32 MiB raw JSONL, 100,000 records,
-1 MiB per record including its newline, and 64 JSON nesting levels. Audit/task
-attribution is bounded to 16 MiB of retained evidence (at most 100,000 audit
+JSON nesting is bounded to 64 levels. Audit/task attribution is bounded to 16 MiB of retained evidence (at most 100,000 audit
 slots). Unsafe files, malformed evidence and ambiguous attribution refuse
 without changing source bytes. These repair-only bounds do not change the
 ordinary 1,048,576-byte reader, 983,040-byte workspace writer or 65,536-byte

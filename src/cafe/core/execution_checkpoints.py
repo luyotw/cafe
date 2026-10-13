@@ -283,3 +283,71 @@ def prepare_delivery_readiness(context, saved_checkpoint, *, review_evidence=Non
     readiness = dict(version=1, authority_digest=context['authority_digest'],
                      endpoint=context['delivery_endpoint'], checkpoint=saved_checkpoint, **references)
     return validate_delivery_readiness(context, readiness, review_evidence=review_evidence)
+
+
+def load_or_restore_delivery_readiness(context, path, *, review_evidence=None):
+    """Under the caller's workspace lease, fill only a missing checkpoint object.
+
+    The original invocation's unique saved checkpoint must pass the same current
+    validator. This changes no task, authority, completion receipt or owner.
+    """
+    from itertools import islice
+    from cafe.core.execution_artifacts import bounded_execution_json, load_execution_artifact, MAX_EXECUTION_ARTIFACT_BYTES
+    from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
+    from cafe.core.packet_io import atomic_write_bytes
+    from cafe.core.phase_state_mixin import load_iteration_control_metadata
+
+    readiness = load_execution_artifact(path)
+    try:
+        return validate_delivery_readiness(context, readiness, review_evidence=review_evidence)
+    except DeliveryReadinessError as error:
+        if error.category != 'schema' or not isinstance(readiness, dict):
+            raise
+        omission = error
+    def read_original():
+        if path.is_symlink() or not path.is_file():
+            raise ValueError('delivery readiness is not a regular file')
+        with path.open('rb') as handle:
+            content = handle.read(MAX_EXECUTION_ARTIFACT_BYTES + 1)
+        if len(content) > MAX_EXECUTION_ARTIFACT_BYTES:
+            raise ValueError('delivery readiness exceeds durable reader capacity')
+        return content
+    original = read_original()
+    if json.loads(original) != readiness:
+        raise ValueError('delivery readiness changed during checkpoint restoration')
+    directory = path.parent
+    issue = directory.parents[1]
+    if any(task.status is HumanTaskStatus.PENDING for task in HumanTaskRecordStore(issue).tasks()):
+        raise omission
+    metadata = load_iteration_control_metadata(directory / 'iteration.json')
+    session = metadata.get('session_id')
+    if (not isinstance(session, str) or not session
+            or type(metadata.get('iteration')) is not int
+            or directory.name != f"iteration_{metadata.get('iteration', 0):03d}"
+            or metadata.get('workflow_id') not in {None, context['identity']['workflow_id']}
+            or issue.name != context['identity']['issue_name']):
+        raise omission
+    partial = readiness.get('checkpoint')
+    if partial is not None and not isinstance(partial, dict):
+        raise omission
+    paths = list(islice(directory.glob('*checkpoint*.json'), 129))
+    if len(paths) > 128:
+        raise omission
+    candidates = {}
+    for candidate_path in paths:
+        candidate = load_execution_artifact(candidate_path)
+        if not isinstance(candidate, dict) or candidate.get('boundary') != 'before_delivery':
+            continue
+        candidates[json.dumps(candidate, sort_keys=True)] = candidate
+    if len(candidates) != 1:
+        raise omission
+    saved = next(iter(candidates.values()))
+    if saved.get('parent_id') != session or any(saved.get(k) != v for k, v in (partial or {}).items()):
+        raise omission
+    target = dict(readiness, checkpoint=saved)
+    validate_delivery_readiness(context, target, review_evidence=review_evidence)
+    content = bounded_execution_json(target)
+    if read_original() != original:
+        raise ValueError('delivery readiness changed before checkpoint restoration')
+    atomic_write_bytes(path, content)
+    return target
