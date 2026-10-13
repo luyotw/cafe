@@ -794,6 +794,7 @@ app.command()(workflow_commands.make)
 app.command()(workflow_commands.show)
 app.command()(workflow_commands.status)
 app.command()(workflow_commands.workflow)
+app.command()(workflow_commands.repair)
 
 app.command(name="audit")(audit_commands.audit)
 

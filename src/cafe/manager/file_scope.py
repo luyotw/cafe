@@ -46,6 +46,14 @@ def execution_scope_projection(issue_dir: Path, root: Path):
         skill_loader=SkillLoader(project_root=root, read_only=True), strict=True).model.model_dump(mode="json")
     if execution_graph_digest(graph) != contract["execution"]["graph_digest"]:
         raise ValueError("execution graph differs from confirmed authority")
+    from cafe.utils.phase_config import load_phase_step_model
+    from cafe.core.execution_entry import ExecutionEntry
+    from cafe.workflow_execution.phase_bindings import phase_config_paths_for_project
+    paths = phase_config_paths_for_project(project_root=root, catalog_resolver=resolver)
+    for phase in contract["phases"]:
+        current = load_phase_step_model(step_name=phase["name"], local_path=paths.local_path, repo_path=paths.repo_path)
+        if current.clis != tuple(ExecutionEntry.from_value(entry) for entry in phase["chain"]):
+            raise ValueError(f"phase '{phase['name']}' YAML differs from confirmed execution chain; reconfirm and regenerate context before launch/resume")
     review_policy = next((step["execution"]["review_policy"] for step in graph["steps"].values()
                           if step["execution"]["review_policy"]), None)
     declared = contract["execution"]

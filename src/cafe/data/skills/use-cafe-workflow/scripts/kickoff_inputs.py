@@ -18,7 +18,7 @@ from _kickoff_store import VersionedJsonStore, repository_identity
 _ALLOWED_FIELDS = {
     "playbook_id", "project_root", "issue_name", "delivery_contract", "cleanup",
     "cleanup_description", "closeout_choice", "update_preflight", "catalog_preflight",
-    "manager_mode", "poll_interval_seconds", "event_manager", "phase_chain", "phase_config",
+    "manager_mode", "poll_interval_seconds", "event_manager", "phase_chain", "phase_config", "phase_rationale",
     "effective_locale", "locale_source", "repository_content_locale", "capability_choice",
     "user_required", "manager_confirmable", "worktree", "current_checkout",
     "task_user_required", "task_manager_confirmable", "need_permission", "need_clarification",
@@ -36,7 +36,7 @@ _JSON_FLAGS = {
 }
 _REPEATED_FLAGS = {
     "cleanup_description": "--cleanup-description",
-    "event_manager": "--event-manager", "phase_chain": "--phase-chain",
+    "event_manager": "--event-manager", "phase_chain": "--phase-chain", "phase_rationale": "--phase-rationale",
     "capability_choice": "--capability-choice", "task_user_required": "--task-user-required",
     "task_manager_confirmable": "--task-manager-confirmable",
     "proactive_review_decision": "--proactive-review-decision",
@@ -151,7 +151,8 @@ def request_schema() -> dict[str, Any]:
         "manager_cli": "Current calling Manager CLI; context, not a model choice. Codex sessions are also recognized by CODEX_THREAD_ID.",
         "generated_inputs": "Helper-owned provenance map retained in editable requests: field -> origin, dependency and value_fingerprint. Preserve it when editing formatter_inputs; unchanged source-backed values are revalidated at render. For deliberate same-value reassessment after invalidation, see kickoff_input_reference.md. It grants no authority.",
         "decision_examples": {
-            "phase_chain": ["develop=codex:<exact-model>"],
+            "phase_chain": ['develop=[{"cli":"codex","model":"<exact-model>","reasoning_effort":"<verified-effort>"}]'],
+            "phase_rationale": ['develop={"band":"balanced","model":"<model rationale>","effort":"<effort rationale>"}'],
             "capability_choice": ["pr.auto_create=true"],
             "cleanup": [],
         },
@@ -711,16 +712,18 @@ def _prefill_saved_inputs(values: dict[str, Any], *, store: Any, request: dict[s
         current = values.get("phase_chain", [])
         if not _is_string_list(current):
             raise ValueError("current phase_chain must remain explicitly correctable")
-        overrides = owner._parse_phase_chains(current, step_names=set(model.steps))
+        config = owner._project_path(Path(values.get("phase_config", ".cafe/phases.yaml")), root)
+        overrides = owner._parse_phase_chains(current, step_names=set(model.steps), phase_config=config)
         result = list(current)
         for name, step in phases.items():
             candidate = steps.get(name, roles.get(step.role))
             if name in overrides or candidate is None:
                 continue
-            if not _is_string_list(candidate) or not candidate:
-                raise ValueError("saved chain must be a nonempty string array")
-            entry = name + "=" + ",".join(candidate)
-            owner._parse_phase_chains([entry], step_names=set(model.steps))
+            if not isinstance(candidate, list) or not candidate:
+                raise ValueError("saved chain must be a nonempty entry array")
+            selected = owner._parse_chain(json.dumps(candidate), step_name=name)
+            entry = name + "=" + json.dumps([value.as_dict() for value in selected])
+            owner._parse_phase_chains([entry], step_names=set(model.steps), phase_config=config)
             result.append(entry)
         return {"phase_chain": result}
     explicit_chain = values.get("phase_chain")
@@ -863,17 +866,21 @@ def _prefill_configured_inputs(values: dict[str, Any], *, project_root: Path, so
     # Put those exact values in the draft so the caller reviews instead of copies.
     supplied_chains = values.get("phase_chain", [])
     if "phase_chain" not in blocked and _is_string_list(supplied_chains):
-        overrides = owner._parse_phase_chains(supplied_chains, step_names=set(model.steps))
         config = owner._project_path(Path(values.get("phase_config", parser.get_default("phase_config"))), project_root)
-        chains = list(supplied_chains)
+        overrides = owner._parse_phase_chains(supplied_chains, step_names=set(model.steps),
+                                             phase_config=config)
         for name, step in phases.items():
-            if name in overrides:
-                continue
-            chain, _ = owner._resolve_configured_chain(step_name=name, role=step.role, phase_config=config)
-            chains.append(name + "=" + ",".join(f"{cli}:{model_name}" for cli, model_name in chain))
-        if chains != supplied_chains:
-            values["phase_chain"] = chains
-            sources["phase_chain"] = "configured phase chains; explicit overrides retained; suitability still requires assessment"
+            if name not in overrides:
+                chain, _source = owner._resolve_configured_chain(
+                    step_name=name, role=step.role, phase_config=config)
+                value = (json.dumps([entry.as_dict() for entry in chain])
+                         if any(entry.reasoning_effort is not None for entry in chain)
+                         else ",".join(f"{entry.cli}:{entry.model}" for entry in chain))
+                supplied_chains.append(f"{name}={value}")
+        fill("phase_chain", supplied_chains, "existing phase configuration")
+        if "phase_config" not in values:
+            values["phase_config"] = str(config)
+            sources["phase_config"] = "existing phase configuration; explicit overrides retained; suitability still requires assessment"
 
 
 def assemble_kickoff(

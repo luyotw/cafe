@@ -11,6 +11,7 @@ import shutil
 import stat
 import tempfile
 from contextlib import nullcontext
+from copy import deepcopy
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -47,7 +48,7 @@ from cafe.core.delta_packet import (
     persist_delta_packet,
 )
 from cafe.core.git import GitOperations
-from cafe.core.hooks import HookResult
+from cafe.core.hooks import HookResult, NoChangesNeededHandler, PermissionRetryHandler
 from cafe.core.human_task_records import (
     HumanTaskRecordError,
     HumanTaskRecordStore,
@@ -58,6 +59,7 @@ from cafe.core.human_tasks import (
     AGENT_EXECUTION_INTERRUPTED_TASK_ID,
     AGENT_EXECUTION_INTERRUPTED_TRIGGER,
 )
+from cafe.core.phase_state_mixin import load_iteration_control_metadata, persist_iteration_metadata
 from cafe.core.packet_io import atomic_write_bytes
 from cafe.core.phase import Phase
 from cafe.core.playbook import resolve_playbook_skills, resolve_step_behavior
@@ -661,6 +663,7 @@ class GenericWorkflowStepExecutor(Phase):
                 raise ValueError("execution_checkpoint_blocked: " + json.dumps(receipt["findings"]))
             instructions = "Resolved execution checkpoint context:\n" + json.dumps(execution_context)
             extra_prompt = (extra_prompt + "\n" if extra_prompt else "") + instructions
+        self._execution_context = execution_context
         self._resolved_execution_chains = (execution_context.get("phase_chains", {})
                                            if execution_context is not None else {})
         hybrid_portion = step_def.get("hybrid_portion")
@@ -792,6 +795,8 @@ class GenericWorkflowStepExecutor(Phase):
             step_name=step_name,
         )
         managed_skill_names = [*workflow_skill_names, skill_name]
+        context["invocation_skill_names"] = managed_skill_names
+        self.generic_phase.skill_bridge.reconcile_project_skills()
         runtime_agent_clis = self._configured_clis_from_config(effective_agent_config)
 
         shared_invocations_by_skill: List[Dict[AgentCLI, str]] = [{} for _ in workflow_skill_names]
@@ -839,6 +844,7 @@ class GenericWorkflowStepExecutor(Phase):
             runtime_context=context,
         )
 
+        self._completion_baton_path = portion_baton_path or baton_path
         last_prompt: List[str] = []
         allowed_tools = self._build_allowed_tools(
             step_name=step_name,
@@ -890,6 +896,7 @@ class GenericWorkflowStepExecutor(Phase):
 
         def run_agent(prompt: str) -> str:
             nonlocal producing_directories
+            recovery_authorized = False
             last_prompt[:] = [prompt]
             if before_agent is not None:
                 # A cached response can still dispatch completion corrections.
@@ -897,6 +904,21 @@ class GenericWorkflowStepExecutor(Phase):
                 before_agent()
             if workspace_eligible:
                 progress = self._load_workspace_publication(iteration_dir)
+                if progress is not None and self._is_control_only_publication(progress, step_def):
+                    recovery_authorized = self._consume_artifact_recovery_authorization(
+                        iteration_dir, workflow_id=blackboard_state.workflow_id, step_name=step_name
+                    )
+                    if recovery_authorized:
+                        metadata = self._load_workspace_metadata(iteration_dir)
+                        metadata["workspace_control_publication_recovery"] = {
+                            "publication": progress,
+                            "recovery_result": metadata["artifact_correction_recovery_result"],
+                        }
+                        del metadata["workspace_publication"]
+                        self._persist_workspace_metadata(
+                            self._resolve_iteration_context_file(iteration_dir), metadata
+                        )
+                        progress = None
                 if progress is not None:
                     # Revalidate the existing delivery and replay only conclusive hook results.
                     return progress["response"]
@@ -909,9 +931,10 @@ class GenericWorkflowStepExecutor(Phase):
             # A baton retry or automatic re-entry is still the same correction
             # sequence. Reserve its opportunity before invoking any provider.
             budget = self._load_artifact_correction(iteration_dir)
-            recovery_authorized = self._consume_artifact_recovery_authorization(
-                iteration_dir, workflow_id=blackboard_state.workflow_id, step_name=step_name
-            )
+            if not recovery_authorized:
+                recovery_authorized = self._consume_artifact_recovery_authorization(
+                    iteration_dir, workflow_id=blackboard_state.workflow_id, step_name=step_name
+                )
             if budget.rejections:
                 if not recovery_authorized:
                     budget.consume()
@@ -1497,6 +1520,7 @@ class GenericWorkflowStepExecutor(Phase):
                     output_key=output_key,
                     output_path=output_path,
                     updated_by=step_name,
+                    step_def=step_def,
                     persist=not workspace_eligible,
                 )
                 # Carry the complete producer record into the runtime publication
@@ -1671,11 +1695,11 @@ class GenericWorkflowStepExecutor(Phase):
         if task.continuations.get(decision) != step_name:
             return False
         context_file = self._resolve_iteration_context_file(iteration_dir)
-        metadata = json.loads(context_file.read_text(encoding="utf-8"))
+        metadata = load_iteration_control_metadata(context_file)
         if metadata.get("artifact_correction_recovery_result") == result.id:
             return False
         metadata["artifact_correction_recovery_result"] = result.id
-        context_file.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+        persist_iteration_metadata(context_file, metadata)
         return True
 
     def _load_workspace_metadata(self, iteration_dir: Path) -> dict[str, Any]:
@@ -1689,6 +1713,7 @@ class GenericWorkflowStepExecutor(Phase):
     def _persist_workspace_metadata(self, path: Path, metadata: dict[str, Any]) -> None:
         # Include the entire record, JSON escaping/indentation and newline. Leave
         # room for the runtime interruption marker and later recovery bookkeeping.
+        metadata = {key: value for key, value in metadata.items() if key != "streaming_log"}
         payload = (json.dumps(metadata, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
         if len(payload) > 1_048_576 - 65_536:
             raise WorkspaceDiagnosticCapacityError(
@@ -1724,6 +1749,40 @@ class GenericWorkflowStepExecutor(Phase):
         metadata = self._load_workspace_metadata(iteration_dir)
         metadata["workspace_publication"] = progress
         self._persist_workspace_metadata(path, metadata)
+
+    def _is_control_only_publication(
+        self, progress: dict[str, Any], step_def: dict[str, Any]
+    ) -> bool:
+        """Recognize only conclusive, inert builtin control hooks from old releases.
+
+        An empty result alone cannot prove an arbitrary hook had no side effect.
+        Unknown, overridden, started or publication hooks keep their checkpoint.
+        """
+        declared = (step_def.get("hooks") or {}).get("after_execute", [])
+        hooks = progress["hooks"]
+        if not hooks:
+            return False
+        trusted = (NoChangesNeededHandler, PermissionRetryHandler)
+        for key, item in hooks.items():
+            try:
+                identity = json.loads(key)
+            except (ValueError, TypeError):
+                return False
+            if not isinstance(identity, list) or len(identity) != 3:
+                return False
+            stage, index, name = identity
+            if (
+                stage != "after_execute"
+                or type(index) is not int
+                or index < 0
+                or index >= len(declared)
+                or not isinstance(name, str)
+                or declared[index] != name
+                or not any(self.generic_phase.hook_registry.get(name) is hook for hook in trusted)
+                or item != {"state": "completed", "result": asdict(HookResult())}
+            ):
+                return False
+        return True
 
     def _workspace_delivery_identity(
         self,
@@ -1946,13 +2005,52 @@ class GenericWorkflowStepExecutor(Phase):
             raise RuntimeError(
                 f"Workspace correction requires the exact producing session; consumed {budget['consumed']}: {reason}"
             )
+        execution_config = self._resolve_execution_config_for_iteration(
+            agent_name, step_name=step_name, continuation=continuation
+        )
+        configured_cli = getattr(execution_config.cli, "value", execution_config.cli)
+        if configured_cli != observed["cli"]:
+            raise RuntimeError("Workspace recovery cannot substitute the producing CLI")
+        recovery = self._workspace_recovery_request(
+            metadata=metadata, workflow_id=blackboard_state.workflow_id,
+            step_name=step_name, configured_model=execution_config.model,
+        )
+        expected_model = observed["model"]
+        history = metadata.get("workspace_recovery_history", [])
+        if recovery is not None:
+            expected_model = execution_config.model
+            if recovery["session_recovery"] is not None:
+                continuation = SessionContinuation.new()
+                selected = self._resolve_execution_config_for_iteration(
+                    agent_name, step_name=step_name, continuation=continuation
+                )
+                if (getattr(selected.cli, "value", selected.cli) != observed["cli"]
+                        or selected.model != expected_model):
+                    raise RuntimeError("Fresh workspace recovery changed the selected CLI/model")
         self._reserve_workspace_correction(iteration_dir, budget, reason)
+        if recovery is not None:
+            # Retain the old producer before a real recovery invocation. The
+            # existing budget still counts this attempt, including failures.
+            history = [*history, {
+                "version": 1, "task_id": recovery["task_id"],
+                "result_id": recovery["result_id"], "state": "prepared",
+                "previous": actual_context,
+                "previous_response_sha256": hashlib.sha256(
+                    json.dumps(metadata.get("response"), ensure_ascii=False).encode("utf-8")
+                ).hexdigest(),
+                "target": {"cli": observed["cli"], "model": expected_model,
+                           "session_policy": continuation.policy.value},
+            }]
+            prepared = self._load_workspace_metadata(iteration_dir)
+            prepared["workspace_recovery_history"] = history
+            self._persist_workspace_metadata(path, prepared)
         prompt = workspace_correction_prompt(
             reason,
             consumed=budget["consumed"],
             remaining=3 - budget["consumed"],
             locale=blackboard_state.conversation_locale,
         )
+        save_budget_on_exit = True
         try:
             self._refresh_and_validate_workspace_inputs(
                 step_def=step_def, blackboard_state=blackboard_state
@@ -1985,6 +2083,8 @@ class GenericWorkflowStepExecutor(Phase):
                 "workspace_publication"
             ) != metadata.get("workspace_publication"):
                 raise RuntimeError("Workspace correction changed pinned metadata")
+            if current.get("workspace_recovery_history", []) != history:
+                raise RuntimeError("Workspace correction changed recovery history")
             actual_cli = getattr(self.agent_manager, "get_last_cli", lambda: None)()
             actual_session = getattr(self.agent_manager, "get_last_session_id", lambda: None)()
             actual_model = (
@@ -1993,9 +2093,13 @@ class GenericWorkflowStepExecutor(Phase):
                 or getattr(self.agent_manager.get_agent(agent_name).config, "model", None)
             )
             if (
-                actual_cli != continuation.cli
-                or actual_session != continuation.session_id
-                or actual_model != observed["model"]
+                getattr(actual_cli, "value", actual_cli) != observed["cli"]
+                or actual_model != expected_model
+                or (continuation.is_exact and actual_session != continuation.session_id)
+                or (not continuation.is_exact and (
+                    not isinstance(actual_session, str) or not actual_session
+                    or actual_session == observed["session_id"]
+                ))
             ):
                 raise RuntimeError("Workspace correction did not preserve CLI/model/producing session")
             self._refresh_and_validate_workspace_inputs(
@@ -2007,9 +2111,54 @@ class GenericWorkflowStepExecutor(Phase):
                 )
                 current = self._load_workspace_metadata(iteration_dir)
                 current["response"] = response
-                current.setdefault("streaming_log", []).extend(streaming_log or [])
-                self._persist_workspace_metadata(path, current)
+                current.pop("streaming_log", None)
+                if recovery is not None:
+                    completed = {**history[-1], "state": "completed",
+                                 "actual": {"cli": observed["cli"], "model": actual_model,
+                                            "session_id": actual_session}}
+                    current["workspace_recovery_history"] = [*history[:-1], completed]
+                    next_continuation = SessionContinuation.resume_exact(
+                        AgentCLI(observed["cli"]), actual_session
+                    )
+                    current.update(model=actual_model, session_id=actual_session,
+                                   session_continuation=next_continuation.to_dict())
+                    if recovery["session_recovery"] is not None:
+                        current["session_recovery"] = recovery["session_recovery"]
+                    # Commit identity and its pin in one existing atomic write.
+                    next_context = {**actual_context, "metadata": {
+                        key: current.get(key) for key in observed
+                    }}
+                    current["workspace_completion"] = {**budget, "context": next_context}
+                try:
+                    self._persist_workspace_metadata(path, current)
+                except BaseException:
+                    if recovery is not None:
+                        # An atomic writer can commit before reporting failure.
+                        # Never overwrite an uncertain new identity with the old pin.
+                        save_budget_on_exit = False
+                        try:
+                            durable = self._load_workspace_metadata(iteration_dir)
+                        except Exception:
+                            durable = {}
+                        transition_fields = (
+                            "model", "session_id", "session_continuation", "response",
+                            "workspace_completion", "workspace_recovery_history",
+                        )
+                        if all(durable.get(key) == current.get(key) for key in transition_fields):
+                            budget["context"] = next_context
+                            self._session_continuation = next_continuation
+                            save_budget_on_exit = True
+                        elif (all(durable.get(key) == value for key, value in observed.items())
+                              and durable.get("workspace_completion", {}).get("context") == pinned
+                              and durable.get("workspace_recovery_history") == history):
+                            save_budget_on_exit = True
+                    raise
+                if recovery is not None:
+                    budget["context"] = next_context
+                    self._session_continuation = next_continuation
             except WorkspaceDiagnosticCapacityError as error:
+                if recovery is not None:
+                    raise  # An unpersisted producer transition cannot authorize a handoff.
                 # Auxiliary telemetry must not replace a valid current human request.
                 # Use the same producer classifier as the completion gate, after
                 # enforcing the original execution identity and input authority.
@@ -2039,29 +2188,114 @@ class GenericWorkflowStepExecutor(Phase):
             ][-8:]
             raise
         finally:
-            # A provider cannot replenish the count, including on interruption.
-            self._save_workspace_completion(iteration_dir, budget)
+            # The reservation is already durable when transition readback fails.
+            if save_budget_on_exit:
+                self._save_workspace_completion(iteration_dir, budget)
+
+    def _workspace_recovery_request(
+        self, *, metadata: dict[str, Any], workflow_id: str, step_name: str,
+        configured_model: str | None,
+    ) -> dict[str, Any] | None:
+        """Recognize one typed user recovery, never a configuration-only rotation."""
+        history = metadata.get("workspace_recovery_history", [])
+        required = {"version", "task_id", "result_id", "state", "previous", "target",
+                    "previous_response_sha256"}
+        if (not isinstance(history, list) or len(history) > 3
+                or any(not isinstance(item, dict) or item.get("version") != 1
+                       or item.get("state") not in {"prepared", "completed"}
+                       or set(item) != (required | ({"actual"} if item.get("state") == "completed" else set()))
+                       or any(not isinstance(item.get(key), str) or not item[key]
+                              for key in ("task_id", "result_id", "previous_response_sha256"))
+                       or not isinstance(item.get("previous"), dict)
+                       or not isinstance(item.get("target"), dict)
+                       or (item.get("state") == "completed" and not isinstance(item.get("actual"), dict))
+                       for item in history)):
+            raise ValueError("Invalid workspace recovery history")
+        if (len({item["result_id"] for item in history}) != len(history)
+                or len(history) > metadata.get("workspace_completion", {}).get("consumed", 0)):
+            raise ValueError("Workspace recovery history exceeds its reserved attempts")
+        records = HumanTaskRecordStore(self.issue_dir)
+        matching = [task for task in records.tasks()
+                    if task.workflow_id == workflow_id and task.step == step_name
+                    and task.iteration == self.iteration
+                    and task.trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER
+                    and task.policy_id == AGENT_EXECUTION_INTERRUPTED_TASK_ID] if records.exists else []
+        latest = max(matching, key=lambda task: (task.created_at, task.id)) if matching else None
+        result = records.get_result(latest.id) if latest and latest.status is HumanTaskStatus.COMPLETED else None
+        changed_model = configured_model != metadata.get("model")
+        if result is not None and not any(item["result_id"] == result.id for item in history):
+            decision = result.payload.get("decision")
+            declared = latest.expected_result.get("decisions", [])
+            if (latest.continuations.get(decision) == step_name
+                    and any(item.get("id") == decision for item in declared)):
+                session_recovery = None
+                if decision == AGENT_EXECUTION_FRESH_SESSION_DECISION:
+                    session_recovery = self._selected_fresh_session_recovery(
+                        workflow_id=workflow_id, current_data=metadata,
+                        configured_clis=[AgentCLI(metadata["cli"])],
+                    )
+                if ((decision == "retry" and changed_model) or session_recovery is not None):
+                    if not isinstance(configured_model, str) or not configured_model:
+                        raise RuntimeError("Workspace recovery requires an exact configured model")
+                    return {"task_id": latest.id, "result_id": result.id,
+                            "session_recovery": session_recovery}
+        if changed_model:
+            raise RuntimeError("Workspace model change requires an unused typed user recovery")
+        return None
 
     def _load_artifact_correction(self, iteration_dir: Path) -> ArtifactCorrectionBudget:
         context_file = self._resolve_iteration_context_file(iteration_dir)
-        metadata = json.loads(context_file.read_text(encoding="utf-8")) if context_file.exists() else {}
+        metadata = load_iteration_control_metadata(context_file) if context_file.exists() else {}
         return ArtifactCorrectionBudget.from_dict(metadata.get("artifact_correction", {}))
 
     def _save_artifact_correction(
         self, iteration_dir: Path, budget: ArtifactCorrectionBudget,
     ) -> None:
         context_file = self._resolve_iteration_context_file(iteration_dir)
-        metadata = json.loads(context_file.read_text(encoding="utf-8"))
+        metadata = load_iteration_control_metadata(context_file)
         metadata["artifact_correction"] = budget.to_dict()
-        context_file.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+        persist_iteration_metadata(context_file, metadata)
 
-    @staticmethod
-    def _validate_current_artifact(step_name: str, step_def: Dict[str, Any], output_file: Path) -> None:
+    def _validate_current_artifact(self, step_name: str, step_def: Dict[str, Any], output_file: Path) -> None:
         if output_file.exists():
             validate_artifact_syntax(
                 output_file.read_text(encoding="utf-8"), producer=step_name,
                 artifact=str(step_def.get("output_artifact", step_name)), path=str(output_file),
             )
+
+        declaration = step_def.get("execution", {})
+        if "before_delivery" in declaration.get("checkpoints", []):
+            # Machine readiness applies to advancement. A genuine human handoff
+            # keeps its existing authority route and does not enter correction.
+            handoff_path = getattr(self, "_completion_baton_path", self.issue_dir / "next_step.txt")
+            try:
+                handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                handoff = None
+            if isinstance(handoff, dict) and (handoff.get("to_owner") == "user" or handoff.get("intent") in {
+                "need_permission", "need_clarification", "confirm_output"
+            }):
+                return
+            from cafe.core.execution_checkpoints import (
+                DeliveryReadinessError, load_review_evidence, validate_delivery_readiness,
+            )
+            artifact = declaration.get("delivery_evidence_artifact")
+            if not isinstance(artifact, str) or Path(artifact).is_absolute() or ".." in Path(artifact).parts:
+                raise ValueError("delivery evidence needs an iteration-local declared artifact")
+            context = getattr(self, "_execution_context", None)
+            if context is None:
+                raise ValueError("delivery producer requires resolved execution context")
+            try:
+                path = output_file.parent / artifact
+                if not path.exists():
+                    raise DeliveryReadinessError("schema", "declared delivery readiness artifact is missing")
+                review = (load_review_evidence(self.issue_dir / "execution_review.json")
+                          if context.get("review_policy") == "single_native" else None)
+                validate_delivery_readiness(context, load_review_evidence(path), review_evidence=review)
+            except DeliveryReadinessError as error:
+                if error.category != "schema":
+                    raise
+                raise ArtifactFormatError(step_name, artifact, str(path), str(error)) from error
 
     def _correct_artifact_format(
         self, *, response: str, step_name: str, step_def: Dict[str, Any],
@@ -2153,10 +2387,10 @@ class GenericWorkflowStepExecutor(Phase):
             if actual_cli != continuation.cli or actual_session != continuation.session_id:
                 raise RuntimeError("Report correction did not preserve the producing session")
             current["response"] = response
-            current.setdefault("streaming_log", []).extend(streaming_log or [])
+            current.pop("streaming_log", None)
             # Never trust provider writes to the persisted budget.
             current["artifact_correction"] = budget.to_dict()
-            context_file.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
+            persist_iteration_metadata(context_file, current)
 
     def _persist_agent_invocation_marker(
         self,
@@ -2169,7 +2403,7 @@ class GenericWorkflowStepExecutor(Phase):
         context_data: object = {}
         if context_file.exists():
             try:
-                context_data = json.loads(context_file.read_text(encoding="utf-8"))
+                context_data = load_iteration_control_metadata(context_file)
             except (OSError, UnicodeError, json.JSONDecodeError):
                 return
         if not isinstance(context_data, dict):
@@ -2179,10 +2413,7 @@ class GenericWorkflowStepExecutor(Phase):
         if context_data.get("agent_invoked") is True and not agent_invoked:
             return
         context_data["agent_invoked"] = agent_invoked
-        context_file.write_text(
-            json.dumps(context_data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        persist_iteration_metadata(context_file, context_data)
 
     def _build_backup_takeover_context(
         self,
@@ -2328,7 +2559,7 @@ class GenericWorkflowStepExecutor(Phase):
         path = iteration_dir / "iteration.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            raw = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+            raw = load_iteration_control_metadata(path) if path.exists() else {}
         except (OSError, json.JSONDecodeError) as exc:
             raise ValueError("Unable to persist context packet diagnostics") from exc
         if not isinstance(raw, dict):
@@ -2337,7 +2568,7 @@ class GenericWorkflowStepExecutor(Phase):
         # ``effective_inputs`` is the only persisted decision.  Discard the
         # obsolete projection so status cannot diverge from launch inputs.
         raw.pop("context_packets", None)
-        path.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+        persist_iteration_metadata(path, raw)
 
     @staticmethod
     def _persist_todo_projection_snapshot(
@@ -2346,13 +2577,13 @@ class GenericWorkflowStepExecutor(Phase):
         """Pin the source identity rendered for this invocation in iteration metadata."""
         path = iteration_dir / "iteration.json"
         try:
-            raw = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+            raw = load_iteration_control_metadata(path) if path.exists() else {}
         except (OSError, json.JSONDecodeError) as exc:
             raise ValueError("Unable to persist Todo projection provenance") from exc
         if not isinstance(raw, dict):
             raise ValueError("Invalid iteration metadata for Todo projection provenance")
         raw["todo_projections"] = projections
-        path.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+        persist_iteration_metadata(path, raw)
 
     @staticmethod
     def _load_todo_projection_snapshot(iteration_dir: Path) -> list[dict[str, Any]] | None:
@@ -2512,7 +2743,7 @@ class GenericWorkflowStepExecutor(Phase):
     def _configured_clis_for_agent(self, agent_name: str) -> list[AgentCLI]:
         order = getattr(self, "_invocation_order", None)
         if order is not None:
-            return [AgentCLI(cli) for cli, _model in order.entries]
+            return [AgentCLI(entry.cli) for entry in order.entries]
         try:
             config = self.agent_manager.get_agent(agent_name).config
         except Exception:
@@ -2650,10 +2881,10 @@ class GenericWorkflowStepExecutor(Phase):
         order = getattr(self, "_invocation_order", None)
 
         def present(entries):
-            return [
-                {"cli": cli, "model": sanitize_error_excerpt(ValueError(model)) if model else None}
-                for cli, model in entries
-            ]
+            from cafe.core.execution_entry import ExecutionEntry
+            return [{key: sanitize_error_excerpt(value) if isinstance(value, str) else value
+                     for key, value in ExecutionEntry.from_value(entry).as_dict().items()}
+                    for entry in entries]
 
         effective = getattr(execution_config, "clis", None)
         if not isinstance(effective, list) or not effective:
@@ -2671,10 +2902,10 @@ class GenericWorkflowStepExecutor(Phase):
             "configured_order": present(
                 order.configured_entries
                 if order
-                else tuple((e.cli.value, e.resolve_model(self.phase_name)) for e in effective)
+                else tuple(e.model_copy(update={"model": e.resolve_model(self.phase_name)}) for e in effective)
             ),
             "effective_order": present(
-                tuple((e.cli.value, e.resolve_model(self.phase_name)) for e in effective)
+                tuple(e.model_copy(update={"model": e.resolve_model(self.phase_name)}) for e in effective)
             ),
             "sticky_disposition": order.sticky_disposition if order else "unknown",
             "override_reason": override,
@@ -2730,7 +2961,7 @@ class GenericWorkflowStepExecutor(Phase):
         recovery = getattr(self, "_restart_recovery", None)
         if recovery is None:
             return
-        context = load_restart_context(context_file)
+        context = load_iteration_control_metadata(context_file)
         marker = context.get("restart_recovery_consumption", {})
         if isinstance(marker, Mapping) and marker.get("result_id") == recovery["result_id"]:
             return
@@ -2741,7 +2972,7 @@ class GenericWorkflowStepExecutor(Phase):
             "invocation_id": str(uuid4()),
         }
         context["agent_invoked"] = True
-        atomic_write_bytes(context_file, json.dumps(context, ensure_ascii=False, indent=2).encode())
+        persist_iteration_metadata(context_file, context)
 
     def _selected_fresh_session_recovery(
         self,
@@ -2973,22 +3204,14 @@ class GenericWorkflowStepExecutor(Phase):
         return local_path, repo_path
 
     def _resolve_step_phase_config(self, step_name: str):
-        resolved = getattr(self, "_resolved_execution_chains", {}).get(step_name)
-        if resolved is not None:
-            from cafe.utils.phase_config import PhaseStepModelResolution
-            if not resolved:
-                raise ValueError("resolved execution chain is empty")
-            role = self.playbook["steps"][step_name]["role"]
-            name = self.role_agent_map.get(role) or self.playbook.get("roles", {}).get(role, {}).get("default_agent")
-            return PhaseStepModelResolution(name=name, role=role,
-                clis=tuple((entry["cli"], entry["model"]) for entry in resolved), model=resolved[0]["model"],
-                source="resolved_execution_context", chain=("resolved_execution_context",))
         local_path, repo_path = self._resolve_phase_config_paths()
-        return load_phase_step_model(
-            step_name=step_name,
-            local_path=local_path,
-            repo_path=repo_path,
-        )
+        phase = load_phase_step_model(step_name=step_name, local_path=local_path, repo_path=repo_path)
+        projected = getattr(self, "_resolved_execution_chains", {}).get(step_name)
+        if projected is not None:
+            from cafe.core.execution_entry import ExecutionEntry
+            if tuple(ExecutionEntry.from_value(entry) for entry in projected) != phase.clis:
+                raise ValueError(f"phase '{step_name}' execution projection conflicts with current configuration; reconfirm and regenerate launch/resume context")
+        return phase
 
     def _resolve_agent_name(self, step_name: str, step_def: Dict[str, Any]) -> str:
         role = str(step_def.get("role", "developer"))
@@ -3016,11 +3239,20 @@ class GenericWorkflowStepExecutor(Phase):
 
         raise ValueError(f"Unsupported playbook role '{role}' for workflow execution")
 
-    def _apply_step_agent_model(
-        self, *, step_name: str, step_def: Dict[str, Any], agent_name: str
-    ) -> None:
-        model = self._resolve_step_model(step_name=step_name, step_def=step_def)
-        self.agent_manager.get_agent(agent_name).config.model = model
+    def _apply_step_agent_model(self, *, step_name: str, step_def: Dict[str, Any], agent_name: str) -> None:
+        phase = self._resolve_step_phase_config(step_name)
+        if phase.role is not None and phase.role != step_def.get("role"):
+            raise ValueError("phase configuration role differs from the declared step")
+        config = self.agent_manager.get_agent(agent_name).config
+        entries = [CliEntry(**entry.as_dict()) for entry in phase.clis]
+        primary = entries[0]
+        if config.cli != primary.cli:
+            config.session_id = None
+        config.cli = primary.cli
+        config.model = primary.model
+        config.reasoning_effort = primary.reasoning_effort
+        config.clis = entries
+        config.backup_clis = [entry.cli for entry in entries[1:]]
 
     def _resolve_step_model(self, *, step_name: str, step_def: Dict[str, Any]) -> Optional[str]:
         # Phase-level config (worktree/repo/local) is authoritative for a step.
@@ -3599,11 +3831,7 @@ class GenericWorkflowStepExecutor(Phase):
 
     @staticmethod
     def _persist_plan_artifact_record(record_path: Path, record: dict[str, Any]) -> None:
-        temporary = record_path.with_name(f".{record_path.name}.{os.getpid()}.tmp")
-        temporary.write_text(
-            json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-        )
-        os.replace(temporary, record_path)
+        atomic_write_bytes(record_path, (json.dumps(record, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
 
     @staticmethod
     def _load_validated_plan_artifact(
@@ -3722,7 +3950,10 @@ class GenericWorkflowStepExecutor(Phase):
         artifact: ArtifactEntry,
         *,
         allow_missing_legacy_record: bool = False,
+        persist_legacy_metadata: bool = False,
     ) -> tuple[ArtifactEntry, tuple[Any, ...]]:
+        if not persist_legacy_metadata:
+            artifact = deepcopy(artifact)
         document, record, record_path, _actual_digest = cls._load_validated_plan_artifact(
             artifact_name,
             artifact,
@@ -3781,7 +4012,8 @@ class GenericWorkflowStepExecutor(Phase):
                 )
         if recorded_work is None:
             record["todo_work_identities"] = expected_work
-            cls._persist_plan_artifact_record(record_path, record)
+            if persist_legacy_metadata:
+                cls._persist_plan_artifact_record(record_path, record)
         artifact.todo_work_identities = expected_work
         return artifact, tuple(document.items)
 
@@ -3792,8 +4024,11 @@ class GenericWorkflowStepExecutor(Phase):
         artifact: ArtifactEntry,
         *,
         allow_missing_legacy_record: bool = False,
+        persist_legacy_metadata: bool = False,
     ) -> tuple[Optional[ArtifactEntry], tuple[Any, ...]]:
         """Resolve the last detailed plan through any provisional alignment."""
+        if not persist_legacy_metadata:
+            artifact = deepcopy(artifact)
         document, record, record_path, _actual_digest = cls._load_validated_plan_artifact(
             artifact_name,
             artifact,
@@ -3804,6 +4039,7 @@ class GenericWorkflowStepExecutor(Phase):
                 artifact_name,
                 artifact,
                 allow_missing_legacy_record=allow_missing_legacy_record,
+                persist_legacy_metadata=persist_legacy_metadata,
             )
 
         for candidate in (
@@ -3851,7 +4087,8 @@ class GenericWorkflowStepExecutor(Phase):
             }
         if recorded_baseline is None:
             record["todo_identity_baseline"] = baseline
-            cls._persist_plan_artifact_record(record_path, record)
+            if persist_legacy_metadata:
+                cls._persist_plan_artifact_record(record_path, record)
         artifact.todo_identity_baseline = baseline
         reference = baseline["artifact"]
         if reference is None:
@@ -3868,7 +4105,9 @@ class GenericWorkflowStepExecutor(Phase):
             path=reference["path"],
             content_sha256=reference["content_sha256"],
         )
-        return cls._validate_direct_plan_todo_authority(artifact_name, referenced)
+        return cls._validate_direct_plan_todo_authority(
+            artifact_name, referenced, persist_legacy_metadata=persist_legacy_metadata
+        )
 
     @classmethod
     def _prepare_todo_identity_input(
@@ -3888,7 +4127,11 @@ class GenericWorkflowStepExecutor(Phase):
             raise ValueError(
                 f"prior plan Todo authority {artifact_name!r} has an invalid selected artifact"
             )
-        cls._resolve_plan_todo_authority(artifact_name, prior)
+        # Legacy author metadata is prepared explicitly before invocation, never
+        # as a side effect of consumer validation or publication preflight.
+        cls._resolve_plan_todo_authority(
+            artifact_name, prior, persist_legacy_metadata=True
+        )
 
     @staticmethod
     def _step_input_artifacts(
@@ -4036,7 +4279,7 @@ class GenericWorkflowStepExecutor(Phase):
         self._effective_checklist = materialized
         metadata_path = output_file.parent / "iteration.json"
         try:
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata = load_iteration_control_metadata(metadata_path)
         except (OSError, ValueError):
             metadata = {}
         if not isinstance(metadata, dict):
@@ -4049,9 +4292,7 @@ class GenericWorkflowStepExecutor(Phase):
             }
             for binding in materialized.projections
         ]
-        metadata_path.write_text(
-            json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        persist_iteration_metadata(metadata_path, metadata)
 
     def _rebuild_checklist_for_iteration(self, iteration: int) -> None:
         if self.phase_name not in self.playbook.get("steps", {}):
@@ -4656,6 +4897,54 @@ class GenericWorkflowStepExecutor(Phase):
             "producer_step": workspace.producer_step,
         }
 
+    def _execution_report_plan_items(
+        self,
+        *,
+        step_def: Mapping[str, Any],
+        blackboard_state: BlackboardState,
+        output_path: str,
+    ) -> tuple[Any, ...]:
+        """Validate the invocation's pinned plan, never select a newer authority."""
+        from cafe.core.checklist import ProjectedTodo, load_materialization
+
+        materialized = load_materialization(Path(output_path).parent / "iteration.json")
+        if materialized is None or (
+            getattr(self, "_effective_checklist", materialized) != materialized
+        ):
+            raise ValueError("execution report plan binding is missing or changed")
+        bindings = [binding for binding in materialized.projections if binding["source"] == "plan"]
+        if not bindings:
+            raise ValueError("execution report has no pinned plan authority")
+        declared = step_def.get("input_artifacts")
+        selected_items: dict[str, Any] = {}
+        for binding in bindings:
+            name = binding["declaration_artifact"]
+            if not isinstance(declared, (list, tuple)) or name not in declared or binding["causal"] is not False:
+                raise ValueError("execution report plan source is not a declared direct input")
+            entry = blackboard_state.artifacts.get(name)
+            if not isinstance(entry, ArtifactEntry) or (
+                entry.name != binding["artifact"]
+                or entry.path != binding["path"]
+                or entry.version != binding["version"]
+                or (entry.content_sha256 is not None and entry.content_sha256 != binding["content_sha256"])
+            ):
+                raise ValueError("execution report plan source binding changed")
+            authority, items = self._resolve_plan_todo_authority(name, entry)
+            if authority is None or authority.path != entry.path or authority.content_sha256 != binding["content_sha256"]:
+                raise ValueError("execution report plan authority does not match its pinned source")
+            if [item.item_id for item in items] != binding["producer_ids"] or len(items) != len(binding["handles"]):
+                raise ValueError("execution report plan item identities changed")
+            rows = [ProjectedTodo(handle, item).checklist_row()
+                    for handle, item in zip(binding["handles"], items)]
+            if rows != binding["rows"]:
+                raise ValueError("execution report plan source fingerprints changed")
+            for item in items:
+                prior = selected_items.get(item.item_id)
+                if prior is not None and prior != item:
+                    raise ValueError("execution report has ambiguous plan item authorities")
+                selected_items[item.item_id] = item
+        return tuple(selected_items.values())
+
     def _write_artifact_record(
         self,
         *,
@@ -4664,6 +4953,7 @@ class GenericWorkflowStepExecutor(Phase):
         output_path: str,
         updated_by: str,
         persist: bool = True,
+        step_def: Optional[Mapping[str, Any]] = None,
     ) -> ArtifactEntry:
         previous = blackboard_state.artifacts.get(output_key)
         version = previous.version + 1 if previous else 1
@@ -4678,6 +4968,23 @@ class GenericWorkflowStepExecutor(Phase):
         )
         plan_document = syntax.plan_document
         todo_items = syntax.items
+        producer = step_def if step_def is not None else (
+            getattr(self, "playbook", {}).get("steps", {}).get(updated_by, {})
+        )
+        plan_author = (
+            producer.get("output_artifact") == output_key
+            and producer.get("todo_identity_input_artifact") == output_key
+            and output_key in (producer.get("input_artifacts") or [])
+        )
+        # Domain playbooks can explicitly publish a plan as a feedback source
+        # without declaring a prior-plan prompt input (including their first run).
+        routes = resolve_step_behavior(self.playbook, updated_by).feedback_routes if hasattr(self, "playbook") else None
+        plan_author = plan_author or any(
+            route.artifact == output_key and route.todo_source == "plan"
+            for route in (routes or {}).values()
+        )
+        if plan_document is not None and not plan_author:
+            raise ValueError("plan-stage publication requires a declared plan author contract")
         if (
             plan_document is not None
             and plan_document.kind is PlanTodoDocumentKind.PROVISIONAL_ALIGNMENT
@@ -4707,7 +5014,20 @@ class GenericWorkflowStepExecutor(Phase):
         elif todo_items is not None:
             continuity_proofs = syntax.continuity
             plan_items = [item for item in todo_items if item.source == "plan"]
-            if plan_items:
+            if plan_items and not plan_author:
+                if producer.get("output_artifact") != output_key:
+                    raise ValueError("execution report plan publication has an unknown producer contract")
+                authoritative = {item.item_id: item for item in self._execution_report_plan_items(
+                    step_def=producer, blackboard_state=blackboard_state, output_path=output_path
+                )}
+                for item in plan_items:
+                    prior = authoritative.get(item.item_id)
+                    if prior is None or _plan_work_identity(prior) != _plan_work_identity(item):
+                        raise ValueError(
+                            f"execution report plan item {item.item_id!r} changes the accepted plan; "
+                            "return to the plan author for a revision"
+                        )
+            elif plan_items:
                 todo_identities = {
                     item.item_id: hashlib.sha256(
                         "\x1f".join(

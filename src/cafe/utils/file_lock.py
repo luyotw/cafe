@@ -1,9 +1,20 @@
 """Descriptor-based opening for private process lock files."""
 
+import errno
 import os
 import stat
 from pathlib import Path
-from typing import TextIO
+from typing import IO, TextIO
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - unavailable on Windows.
+    fcntl = None  # type: ignore[assignment]
+
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover - available only on Windows.
+    msvcrt = None  # type: ignore[assignment]
 
 
 def open_lock_file(path: Path) -> TextIO:
@@ -19,8 +30,10 @@ def open_lock_file(path: Path) -> TextIO:
             os.close(directory_fd)
             directory_fd = child_fd
         file_fd = os.open(
-            path.name, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
-            0o600, dir_fd=directory_fd,
+            path.name,
+            os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
+            0o600,
+            dir_fd=directory_fd,
         )
         metadata = os.fstat(file_fd)
         if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
@@ -35,3 +48,41 @@ def open_lock_file(path: Path) -> TextIO:
             os.close(file_fd)
         if directory_fd is not None:
             os.close(directory_fd)
+
+
+def _try_advancement_process_lock(path: Path) -> IO[str] | None:
+    """Acquire the callable-duration lock without waiting for another worker."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = path.open("a+", encoding="utf-8")
+    try:
+        if fcntl is not None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return handle
+        if msvcrt is None:
+            raise RuntimeError("cross-process file locking is unavailable")
+        handle.seek(0, 2)
+        if handle.tell() == 0:
+            handle.write("\0")
+            handle.flush()
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        return handle
+    except OSError as exc:
+        handle.close()
+        if exc.errno in {errno.EACCES, errno.EAGAIN}:
+            return None
+        raise
+    except BaseException:
+        handle.close()
+        raise
+
+
+def _release_advancement_process_lock(handle: IO[str]) -> None:
+    try:
+        if fcntl is not None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        elif msvcrt is not None:  # pragma: no branch - platform-specific.
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    finally:
+        handle.close()

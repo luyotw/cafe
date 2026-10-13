@@ -347,7 +347,7 @@ class _AppServer:
                 raise _error("Codex app-server omitted a native RPC result.", "invalid_evidence")
             return event["result"]
 
-    def turn(self, thread, model, prompt, *, read_only=False, output_schema=None):
+    def turn(self, thread, model, prompt, *, read_only=False, output_schema=None, effort=None):
         previous = self.totals.get(thread, self.baselines.get(thread))
         account = prepare_cost_accounting("codex", self.environment)
         params = {
@@ -356,6 +356,8 @@ class _AppServer:
             "approvalPolicy": "never",
             "input": [{"type": "text", "text": prompt, "text_elements": []}],
         }
+        if effort is not None:
+            params["effort"] = effort
         if read_only:
             params["sandboxPolicy"] = {"type": "readOnly", "networkAccess": False}
         elif self.sandboxes.get(thread) == {"type": "dangerFullAccess"}:
@@ -564,6 +566,24 @@ def execute_native_review(
 ):
     """Run development, confirmed native review and exact parent continuation."""
     configuration = validate_configuration(executor.config)
+    from cafe.agents.cli.effort import reasoning_evidence, validate_effort
+    effort = executor.config.reasoning_effort
+    # Forks inherit the native parent's setting. Admit the independent child
+    # model too before any process can run; never silently force an unknown tuple.
+    if effort is not None:
+        validate_effort("codex", configuration["model"], effort, explicit=True)
+    effort_evidence = reasoning_evidence(executor.config, command)
+
+    def reconcile(settings):
+        nonlocal effort_evidence
+        record = {"type": "system", "reasoningEffort": settings.get("reasoningEffort")}
+        try:
+            effort_evidence = reasoning_evidence(executor.config, records=[record], native_applied_effort=effort)
+            effort_evidence["provenance"] = "native-thread-settings" if record["reasoningEffort"] is not None else "validated-native-rpc"
+        except ValueError as cause:
+            effort_evidence = getattr(cause, "reasoning_evidence", effort_evidence)
+            raise _error(str(cause), "reasoning_effort_mismatch") from cause
+
     enforcement = review_read_only_enforcement(configuration)
     unconfined = enforcement == "instruction_only"
     cwd = Path(working_directory or command[command.index("-C") + 1]).resolve()
@@ -609,12 +629,15 @@ def execute_native_review(
                         str((cwd / root).resolve()) for root in roots
                     ]
                 }
+            if effort is not None:
+                params.setdefault("config", {})["model_reasoning_effort"] = effort
             if executor.config.session_id:
                 params.update(threadId=executor.config.session_id, excludeTurns=True)
                 opened = server.request("thread/resume", params)
             else:
                 opened = server.request("thread/start", params)
                 baseline = {"input_tokens": 0, "output_tokens": 0}
+            reconcile(opened)
             parent = _verified_thread(
                 opened, model=executor.config.model, cwd=cwd, enforcement=enforcement
             )
@@ -630,12 +653,14 @@ def execute_native_review(
             # Normalized identity comes from the actual RPC response, not model text.
             server.record({"type": "thread.started", "thread_id": parent})
             context_prompt = "Your exact CAFE parent thread ID is " + parent + ".\n" + prompt
-            response = server.turn(parent, opened["model"], context_prompt)
+            response = server.turn(parent, opened["model"], context_prompt, effort=effort)
             request = _review_request(response)
             if request is not None:
                 review_prompt, receipt = request
                 observed_at = datetime.now(timezone.utc).isoformat()
                 child_config = _child_configuration(server, cwd)
+                if effort is not None:
+                    child_config["model_reasoning_effort"] = effort
                 fork = server.request(
                     "thread/fork",
                     {
@@ -656,6 +681,7 @@ def execute_native_review(
                         "config": child_config,
                     },
                 )
+                reconcile(fork)
                 child = _verified_thread(
                     fork,
                     model=configuration["model"],
@@ -673,6 +699,7 @@ def execute_native_review(
                     _PROMPT + "\n" + review_prompt,
                     read_only=not unconfined,
                     output_schema=_REVIEW_SCHEMA,
+                    effort=effort,
                 )
                 conclusion = _conclusion(result)
                 if not conclusion:
@@ -714,13 +741,16 @@ def execute_native_review(
                     + ".\n"
                     + json.dumps(observation)
                 )
-                response = server.turn(parent, opened["model"], continuation)
+                response = server.turn(parent, opened["model"], continuation, effort=effort)
                 if _review_request(response) is not None:
                     raise _error("A second native review requires the declared workflow self-loop.")
+            reconcile(opened)
             usage = server.usage
             executor._accumulate_usage(usage)
             return AgentResponse(
                 usage_accounted=True,
+                reasoning_evidence=effort_evidence,
+                cli=executor.config.cli,
                 response=response,
                 token_usage=usage,
                 usage_available=any(
@@ -739,6 +769,7 @@ def execute_native_review(
                 ),
             )
     except BaseException as exc:
+        exc.reasoning_evidence = effort_evidence
         from cafe.agents.executor import AgentExecutionError
 
         if not isinstance(exc, AgentExecutionError):
@@ -755,6 +786,7 @@ def execute_native_review(
             error = exc
         if not hasattr(error, "native_session_recoverable"):
             error.native_session_recoverable = False
+        error.reasoning_evidence = effort_evidence
         error.cli_command_args = command[1:]
         error.accounting_usage = server.usage
         error.transport_result = TransportResult(

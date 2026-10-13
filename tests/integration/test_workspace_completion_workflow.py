@@ -23,6 +23,31 @@ def change_then_commit(repo, iteration, call):
 
 
 @pytest.mark.parametrize("mode", ["baton", "legacy"])
+def test_validated_workspace_completion_closes_retained_interruption_marker(journey, mode):
+    from cafe.core.phase_state_mixin import next_runnable_iteration_number
+
+    def retain_interruption(repo, iteration, call):
+        path = iteration / "iteration.json"
+        metadata = json.loads(path.read_text())
+        metadata["workflow_completion_trusted"] = False
+        path.write_text(json.dumps(metadata, indent=2))
+
+    j = journey([CORRECTED], mode=mode, workspace=True,
+                workspace_action=change_then_commit, post_submission=retain_interruption)
+    j.runtime.run(start_step="inspect_custom")
+    metadata = json.loads((j.iteration / "iteration.json").read_text())
+
+    assert metadata.get("workflow_completion_trusted") is not False
+    assert metadata["end_time"]
+    assert metadata["workspace_completion"]["consumed"] == 1
+    assert metadata["workspace_publication"]["hooks"]
+    assert next_runnable_iteration_number(j.issue / "inspect_custom") == 2
+    assert len(j.manager.calls) == 2
+    assert j.manager.deliveries == 1 and j.effects == ["prepare", "after"]
+    assert not HumanTaskRecordStore(j.issue).tasks()
+
+
+@pytest.mark.parametrize("mode", ["baton", "legacy"])
 @pytest.mark.parametrize("base_branch", [None, "main"])
 def test_i1_custom_step_corrects_before_effects_in_exact_context(journey, mode, base_branch):
     j = journey([CORRECTED], mode=mode, workspace=True, workspace_action=change_then_commit,
@@ -218,6 +243,85 @@ def test_i8_same_iteration_reentry_never_replays_effects(journey, monkeypatch, a
     assert len(j.manager.calls) == 1
 
 
+@pytest.mark.parametrize("mode", ["baton", "legacy"])
+@pytest.mark.parametrize("authorize", [False, True])
+def test_user_retry_recovers_legacy_control_checkpoint_without_completing_pending_work(
+    journey, monkeypatch, mode, authorize
+):
+    """Old releases could record control hooks before rejecting completion."""
+    from dataclasses import asdict
+
+    from cafe.core.blackboard import BlackboardStore
+    from cafe.core.hooks import HookResult
+    from cafe.ui.human_tasks import apply_human_task_payload
+
+    j = journey([CORRECTED, (CORRECTED, "need_clarification")], mode=mode,
+                workspace=True, unchecked=True, human="need_clarification")
+    skill = j.repo / ".cafe/skills/custom-report/SKILL.md"
+    skill.write_text(skill.read_text().replace("pattern: revision_feedback", "pattern: answer_questions\n    questions_from_xml: true")
+                     .replace("input_schema: feedback", "input_schema: answers"))
+    step = j.playbook["steps"]["inspect_custom"]
+    step["human_tasks"] = [{"trigger": "need_clarification", "task_id": "decision",
+                            "outcomes": {"submit": "inspect_custom"}}]
+    step["hooks"]["after_execute"] = ["NoChangesNeededHandler", "PermissionRetryHandler"]
+    # The original rejected completion remains a genuine interruption task.
+    with monkeypatch.context() as patch:
+        patch.setattr(j.executor, "_validate_and_retry_checklist_completion",
+                      lambda **kwargs: (kwargs["completion_response"], None, False))
+        assert not j.runtime.run(start_step="inspect_custom").completed
+    assert len(j.manager.calls) == 1
+    path = j.iteration / "iteration.json"
+    metadata = json.loads(path.read_text())
+    historical = {"delivery": "a" * 64, "response": metadata["response"], "hooks": {
+        json.dumps(["after_execute", i, name]): {
+            "state": "completed", "result": asdict(HookResult())
+        } for i, name in enumerate(step["hooks"]["after_execute"])
+    }}
+    metadata["workspace_publication"] = historical
+    exhausted = {"consumed": 2, "rejections": [{"producer": "inspect_custom",
+                 "artifact": "evidence_bundle", "path": str(j.iteration / "output.md"),
+                 "diagnostic": "historical report rejection"}]}
+    metadata["artifact_correction"] = exhausted
+    path.write_text(json.dumps(metadata))
+    before = (j.iteration / "output.md").read_bytes(), (j.iteration / "checklist.md").read_bytes()
+    if not authorize:
+        monkeypatch.setattr(j.executor, "_get_next_iteration_number", lambda *args: 1)
+        (j.issue / "next_step.txt").write_text(json.dumps({"version": 1, "intent": "await_agent"}))
+        with pytest.raises(ValueError, match="checklist is incomplete"):
+            j.executor.execute_step("inspect_custom", step, j.runtime.blackboard)
+        assert len(j.manager.calls) == 1
+        assert json.loads(path.read_text())["workspace_publication"] == historical
+        assert "workspace_control_publication_recovery" not in json.loads(path.read_text())
+        return
+    records = HumanTaskRecordStore(j.issue)
+    task = records.tasks()[0]
+    application = apply_human_task_payload(
+        issue_dir=j.issue, playbook_data=j.playbook,
+        blackboard=BlackboardStore(j.issue).load_or_create("inspect_custom"),
+        from_step="inspect_custom", trigger=task.trigger,
+        raw_payload={"task": task.policy_id, "decision": "retry", "human_task_id": task.id},
+        source="test",
+    )
+    assert application.rejection is None
+    resumed = j.reconstruct()
+    assert not resumed.run().completed
+    assert len(j.manager.calls) == 2
+    assert j.manager.calls[-1][2].is_exact
+    assert j.manager.calls[-1][2].session_id == "exact-report-session"
+    assert j.effects.count("after") == 0 and j.manager.deliveries == 0
+    assert "custom_snapshot" not in resumed.blackboard.artifacts
+    assert (j.iteration / "output.md").read_bytes() == before[0]
+    assert (j.iteration / "checklist.md").read_bytes() == before[1]
+    assert b"[ ]" in before[1]
+    assert resumed.blackboard.handoff_contract.intent.value == "need_clarification"
+    records = HumanTaskRecordStore(j.issue)
+    assert [t.trigger for t in records.tasks() if t.status.value == "pending"] == ["need_clarification"]
+    saved = json.loads(path.read_text())
+    assert saved["workspace_control_publication_recovery"]["publication"] == historical
+    assert saved["artifact_correction"] == exhausted
+    assert saved["artifact_correction_recovery_result"] == records.get_result(task.id).id
+
+
 @pytest.mark.parametrize("mutation", ["none", "source", "evidence"])
 def test_i5_dirty_projected_evidence_enters_correction_and_revalidates(journey, mutation):
     def invalidate(iteration, call):
@@ -281,14 +385,229 @@ def test_i2_interrupted_reservation_survives_runtime_reconstruction(journey, dec
         raw_payload={"task": task.policy_id, "decision": decision, "human_task_id": task.id},
         source="test",
     )
+    if decision == "retry_fresh_session":
+        j.manager.get_last_session_id = lambda: (
+            "replacement-session" if len(j.manager.calls) >= 3 else "exact-report-session"
+        )
     resumed = j.reconstruct()
     resumed.run()
     after = json.loads((j.iteration / "iteration.json").read_text())["workspace_completion"]
     assert after["consumed"] == 3
     assert len(j.manager.calls) == 4
-    assert all(call[2].is_exact for call in j.manager.calls[2:])
+    if decision == "retry_fresh_session":
+        assert not j.manager.calls[2][2].is_exact
+        assert j.manager.calls[3][2].session_id == "replacement-session"
+    else:
+        assert all(call[2].is_exact for call in j.manager.calls[2:])
     assert j.manager.deliveries == 0 and j.effects.count("after") == 0
     assert not (j.issue / "inspect_custom" / "iteration_002").exists()
+
+
+@pytest.mark.parametrize("decision", ["retry", "retry_fresh_session"])
+def test_user_recovery_adopts_changed_model_only_after_a_real_invocation(journey, decision):
+    from cafe.agents.executor import AgentExecutionError
+    from cafe.core.blackboard import BlackboardStore
+    from cafe.ui.human_tasks import apply_human_task_payload
+
+    def work(repo, iteration, call):
+        if call == 1:
+            (repo / "owned.txt").write_text("unfinished repair\n")
+        elif call == 3:
+            saved = json.loads((iteration / "iteration.json").read_text())
+            assert saved["model"] == "test-model"
+            assert saved["workspace_completion"]["consumed"] == 2
+            git(repo, "add", "owned.txt")
+            git(repo, "commit", "-m", "finish authorized repair")
+
+    j = journey([CORRECTED, AgentExecutionError("capacity", error_type="provider_overloaded"),
+                 CORRECTED], workspace=True, workspace_action=work)
+    j.runtime.run(start_step="inspect_custom")
+    records = HumanTaskRecordStore(j.issue)
+    task = records.tasks()[0]
+    state = BlackboardStore(j.issue).load_or_create("inspect_custom")
+    apply_human_task_payload(issue_dir=j.issue, playbook_data=j.playbook, blackboard=state,
+                            from_step="inspect_custom", trigger=task.trigger,
+                            raw_payload={"task": task.policy_id, "decision": decision,
+                                         "human_task_id": task.id}, source="test")
+    config = j.repo / ".cafe/phases.yaml"
+    config.write_text(config.read_text().replace("test-model", "replacement-model"))
+    if decision == "retry_fresh_session":
+        j.manager.get_last_session_id = lambda: (
+            "replacement-session" if len(j.manager.calls) >= 3 else "exact-report-session"
+        )
+    result = j.reconstruct().run()
+    assert result.completed
+    assert len(j.manager.calls) == 3 and j.manager.deliveries == 1
+    saved = json.loads((j.iteration / "iteration.json").read_text())
+    assert saved["model"] == "replacement-model"
+    assert saved["workspace_completion"]["consumed"] == 2
+    previous = saved["workspace_recovery_history"][-1]
+    assert previous["previous"]["metadata"]["model"] == "test-model"
+    assert previous["previous"]["metadata"]["session_id"] == "exact-report-session"
+    assert previous["result_id"] == records.get_result(task.id).id
+    assert previous["state"] == "completed"
+    if decision == "retry_fresh_session":
+        assert not j.manager.calls[2][2].is_exact
+        assert saved["session_id"] == "replacement-session"
+    else:
+        assert j.manager.calls[2][2].session_id == "exact-report-session"
+        assert saved["session_id"] == "exact-report-session"
+    assert j.effects.count("after") == 1
+    before = len(j.manager.calls)
+    j.reconstruct().run()
+    assert len(j.manager.calls) == before
+
+
+
+@pytest.mark.parametrize("failure", ["before_commit", "after_commit", "unreadable_commit"])
+def test_workspace_recovery_write_failure_keeps_identity_and_pin_coherent(journey, failure):
+    from cafe.agents.executor import AgentExecutionError
+    from cafe.core.blackboard import BlackboardStore
+    from cafe.ui.human_tasks import apply_human_task_payload
+
+    j = journey([CORRECTED, AgentExecutionError("capacity", error_type="provider_overloaded"),
+                 CORRECTED], workspace=True,
+                workspace_action=lambda repo, iteration, call: (repo / "owned.txt").write_text("dirty"))
+    j.runtime.run(start_step="inspect_custom")
+    task = HumanTaskRecordStore(j.issue).tasks()[0]
+    state = BlackboardStore(j.issue).load_or_create("inspect_custom")
+    apply_human_task_payload(issue_dir=j.issue, playbook_data=j.playbook, blackboard=state,
+                            from_step="inspect_custom", trigger=task.trigger,
+                            raw_payload={"task": task.policy_id, "decision": "retry",
+                                         "human_task_id": task.id}, source="test")
+    config = j.repo / ".cafe/phases.yaml"
+    config.write_text(config.read_text().replace("test-model", "replacement-model"))
+    resumed = j.reconstruct()
+    executor = resumed.executor.__self__
+    persist = executor._persist_workspace_metadata
+    load = executor._load_workspace_metadata
+    committed = False
+    writes_after_failure = []
+
+    def fail_transition(path, metadata):
+        nonlocal committed
+        if committed:
+            writes_after_failure.append(metadata)
+        history = metadata.get("workspace_recovery_history", [])
+        if not committed and history and history[-1]["state"] == "completed":
+            if failure != "before_commit":
+                persist(path, metadata)
+            committed = True
+            raise OSError("transition write result unavailable")
+        return persist(path, metadata)
+
+    def readback(iteration):
+        if committed and failure == "unreadable_commit":
+            raise OSError("transition readback unavailable")
+        return load(iteration)
+
+    executor._persist_workspace_metadata = fail_transition
+    executor._load_workspace_metadata = readback
+    result = resumed.run()
+    assert not result.completed
+    saved = json.loads((j.iteration / "iteration.json").read_text())
+    model = "test-model" if failure == "before_commit" else "replacement-model"
+    assert saved["model"] == model
+    assert saved["workspace_completion"]["context"]["metadata"]["model"] == model
+    assert saved["workspace_completion"]["consumed"] == 2
+    assert saved["workspace_recovery_history"][-1]["previous"]["metadata"]["model"] == "test-model"
+    assert len(j.manager.calls) == 3
+    assert j.manager.deliveries == 0 and "after" not in j.effects
+    if failure == "unreadable_commit":
+        assert not writes_after_failure
+
+
+def test_changed_workspace_model_without_recovery_does_not_dispatch(journey):
+    def drift(iteration, call):
+        if call == 1:
+            j.manager.agent.config.model = "unapproved-replacement"
+
+    j = journey([CORRECTED], workspace=True, provider_mutation=drift,
+                workspace_action=lambda repo, iteration, call: (repo / "owned.txt").write_text("dirty"))
+    result = j.runtime.run(start_step="inspect_custom")
+    assert not result.completed
+    assert len(j.manager.calls) == 1
+    assert j.manager.deliveries == 0 and "after" not in j.effects
+    saved = json.loads((j.iteration / "iteration.json").read_text())
+    assert saved["model"] == "test-model"
+
+
+@pytest.mark.parametrize("failure", ["model", "session", "cli", "history", "exhausted"])
+def test_workspace_recovery_refuses_unverified_identity_or_exhausted_budget(journey, failure):
+    from cafe.agents.executor import AgentExecutionError
+    from cafe.core.blackboard import BlackboardStore
+    from cafe.core.types import AgentCLI
+    from cafe.ui.human_tasks import apply_human_task_payload
+
+    def mutate(iteration, call):
+        if call != 3:
+            return
+        if failure == "model":
+            j.manager.get_last_model = lambda: "unexpected-model"
+        elif failure == "session":
+            j.manager.get_last_session_id = lambda: "unexpected-session"
+        elif failure == "cli":
+            j.manager.get_last_cli = lambda: AgentCLI.CLAUDE
+        elif failure == "history":
+            path = iteration / "iteration.json"
+            saved = json.loads(path.read_text())
+            saved["workspace_recovery_history"][-1]["state"] = "completed"
+            path.write_text(json.dumps(saved))
+
+    j = journey([CORRECTED, AgentExecutionError("capacity", error_type="provider_overloaded"),
+                 CORRECTED], workspace=True, provider_mutation=mutate,
+                workspace_action=lambda repo, iteration, call: (repo / "owned.txt").write_text("dirty"))
+    j.runtime.run(start_step="inspect_custom")
+    records = HumanTaskRecordStore(j.issue)
+    task = records.tasks()[0]
+    state = BlackboardStore(j.issue).load_or_create("inspect_custom")
+    apply_human_task_payload(issue_dir=j.issue, playbook_data=j.playbook, blackboard=state,
+                            from_step="inspect_custom", trigger=task.trigger,
+                            raw_payload={"task": task.policy_id, "decision": "retry",
+                                         "human_task_id": task.id}, source="test")
+    config = j.repo / ".cafe/phases.yaml"
+    config.write_text(config.read_text().replace("test-model", "replacement-model"))
+    if failure == "exhausted":
+        path = j.iteration / "iteration.json"
+        saved = json.loads(path.read_text())
+        saved["workspace_completion"]["consumed"] = 3
+        path.write_text(json.dumps(saved))
+    result = j.reconstruct().run()
+    assert not result.completed
+    saved = json.loads((j.iteration / "iteration.json").read_text())
+    assert saved["model"] == "test-model"
+    assert saved["workspace_completion"]["context"]["metadata"]["model"] == "test-model"
+    assert saved["workspace_completion"]["consumed"] == (3 if failure == "exhausted" else 2)
+    assert len(j.manager.calls) == (2 if failure == "exhausted" else 3)
+    assert j.manager.deliveries == 0 and "after" not in j.effects
+
+
+def test_failed_model_recovery_cannot_reuse_the_completed_user_decision(journey):
+    from cafe.agents.executor import AgentExecutionError
+    from cafe.core.blackboard import BlackboardStore
+    from cafe.ui.human_tasks import apply_human_task_payload
+
+    j = journey([CORRECTED, AgentExecutionError("capacity", error_type="provider_overloaded")],
+                workspace=True,
+                workspace_action=lambda repo, iteration, call: (repo / "owned.txt").write_text("dirty"))
+    j.runtime.run(start_step="inspect_custom")
+    records = HumanTaskRecordStore(j.issue)
+    task = records.tasks()[0]
+    state = BlackboardStore(j.issue).load_or_create("inspect_custom")
+    apply_human_task_payload(issue_dir=j.issue, playbook_data=j.playbook, blackboard=state,
+                            from_step="inspect_custom", trigger=task.trigger,
+                            raw_payload={"task": task.policy_id, "decision": "retry",
+                                         "human_task_id": task.id}, source="test")
+    config = j.repo / ".cafe/phases.yaml"
+    config.write_text(config.read_text().replace("test-model", "replacement-model"))
+    j.reconstruct().run()
+    assert len(j.manager.calls) == 3
+    before = len(j.manager.calls)
+    j.reconstruct().run()
+    assert len(j.manager.calls) == before
+    saved = json.loads((j.iteration / "iteration.json").read_text())
+    assert saved["workspace_completion"]["consumed"] == 2
+    assert saved["workspace_recovery_history"][-1]["state"] == "prepared"
 
 
 @pytest.mark.parametrize("defect", ["missing", "malformed", "wrong-owner"])
@@ -939,8 +1258,12 @@ def test_u4_i4_human_correction_survives_auxiliary_telemetry_limit(
     assert len(metadata["stats"]["turn_usages"]) == (turns if turns == 20 else 0)
     budget = j.executor._load_workspace_completion(j.iteration)
     assert budget["consumed"] == 1
-    if diagnostic in ("usage", "stream"):
+    if diagnostic == "usage":
         assert any("capacity" in reason for reason in budget["rejections"])
+    elif diagnostic == "stream":
+        # issue646 U1/U2: large raw records no longer consume control capacity.
+        assert "streaming_log" not in metadata
+        assert not any("capacity" in reason for reason in budget["rejections"])
 
 
 @pytest.mark.parametrize("defect", ["malformed", "wrong-owner", "undeclared"])
@@ -1159,3 +1482,39 @@ def test_preparation_recovery_runs_new_session_then_corrects_handoff_before_publ
     # Another runtime reconstruction must not repeat the external effect.
     assert j.reconstruct().run().completed
     assert j.effects.count("after") == 1 and j.manager.deliveries == 1
+
+
+@pytest.mark.parametrize('path', ['ordinary', 'empty', 'error', 'checklist', 'workspace', 'report'])
+def test_issue646_i1_large_available_stream_remains_single_and_control_state_usable(journey, path):
+    """I1: reconstruct real runtime after six provider/save-path boundaries."""
+    from cafe.agents.executor import AgentExecutionError
+    from tests.integration.test_workflow_artifact_correction import REJECTED
+    raw_records = [{'sequence': i, 'text': 'x' * 2200} for i in range(600)]
+    submissions = [REJECTED, CORRECTED] if path == 'report' else [CORRECTED]
+    if path == 'error':
+        submissions = [AgentExecutionError('injected provider error', error_type='execution_error')]
+    j = journey(submissions, workspace=path == 'workspace',
+                workspace_action=change_then_commit if path == 'workspace' else None,
+                unchecked=path == 'checklist')
+    execute = j.manager.execute
+    def provider(*args, **kwargs):
+        stream = kwargs.get('streaming_output_file')
+        if stream:
+            with open(stream, 'a') as handle:
+                for record in raw_records:
+                    handle.write(json.dumps(record) + '\n')
+        result = execute(*args, **kwargs)
+        if path == 'checklist':
+            checklist = j.iteration / 'checklist.md'
+            if len(j.manager.calls) > 1:
+                checklist.write_text(checklist.read_text().replace('[ ]', '[x]'))
+        return (*result[:4], raw_records, result[5])
+    j.manager.execute = provider
+    j.runtime.run(start_step='inspect_custom')
+    saved = json.loads((j.iteration / 'iteration.json').read_text())
+    assert 'streaming_log' not in saved
+    assert saved['session_id'] == (None if path == 'error' else 'exact-report-session')
+    assert (j.iteration / 'iteration.json').stat().st_size <= 1_048_576
+    records = [json.loads(line) for line in (j.iteration / 'streaming.jsonl').read_text().splitlines()]
+    assert records == raw_records * len([call for call in j.manager.calls if call[3].get('streaming_output_file')])
+    j.reconstruct()

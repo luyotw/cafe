@@ -50,6 +50,8 @@ def discover(
         "mandatory_confirmation_gates": list(mandatory_confirmation_gate_steps(model)),
     }
     inputs = dict(request.get("compact_inputs", {}))
+    newly_selected = bool(inputs.get("phases")) and not confirmed
+    inputs["newly_selected_effort"] = newly_selected
     if not confirmed and isinstance(inputs.get("review_configuration"), dict):
         review = dict(inputs["review_configuration"])
         if review.get("cli") == "codex":
@@ -68,19 +70,18 @@ def discover(
         for name, step in model.steps.items():
             if step.assignee_type not in {"agent", "hybrid"}:
                 continue
-            explicit = next(
-                (v.split("=", 1)[1].split(",") for v in overrides if v.startswith(name + "=")), None
-            )
+            explicit = next((v for v in overrides if v.startswith(name + "=")), None)
             preferred = saved.get("steps", {}).get(name, saved.get("roles", {}).get(step.role))
             if explicit or preferred:
-                chain = [
-                    dict(zip(("cli", "model"), v.split(":", 1))) for v in explicit or preferred
-                ]
+                from format_kickoff_contract import _parse_phase_chains, _parse_chain
+                selected = _parse_phase_chains([explicit], step_names=set(model.steps))[name] if explicit else _parse_chain(json.dumps(preferred), step_name=name)
+                chain = [entry.as_dict() for entry in selected]
+                inputs["newly_selected_effort"] = True
             else:
                 try:
                     phase = load_phase_step_model(
                         step_name=name, local_path=catalog_args["project_root"] / ".cafe/phases.yaml")
-                    chain = [{"cli": cli, "model": model_name} for cli, model_name in phase.clis]
+                    chain = [entry.as_dict() for entry in phase.clis]
                 except ValueError:
                     chain = []
             chains.append({"name": name, "chain": chain})
@@ -197,11 +198,17 @@ def assemble(request, *, discovery):
     for phase in inputs.get("phases", []):
         if not phase.get("chain"):
             missing.append({"owner": "user", "requirement": "phase_chain:" + phase["name"]})
+        if inputs.get("newly_selected_effort"):
+            if any(entry.get("reasoning_effort") is None for entry in phase["chain"]):
+                missing.append({"owner": "user", "requirement": "explicit_effort:" + phase["name"]})
+            if not phase.get("rationale"):
+                missing.append({"owner": "user", "requirement": "model_effort_rationale:" + phase["name"]})
         for entry in phase["chain"]:
             if not any(
                 m["status"] == "hit"
                 and m["identity"]["provider"] == entry["cli"]
                 and m["identity"]["model"] == entry["model"]
+                and m["identity"].get("reasoning_effort") == entry.get("reasoning_effort")
                 for m in discovery.get("models", [])
             ):
                 missing.append(

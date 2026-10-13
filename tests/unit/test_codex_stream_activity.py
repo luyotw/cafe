@@ -265,6 +265,8 @@ def test_metric_interval_is_isolated_to_child_environment(
         assert child["OTEL_METRIC_EXPORT_INTERVAL"] == "1000"
         assert child is not environment
         assert ("CODEX_THREAD_ID" in child) is (supplied == "absent")
+        from cafe.core.types import AgentResponse, TokenUsage
+        return AgentResponse(response="captured", token_usage=TokenUsage())
 
     monkeypatch.setattr(executor, "_execute_streaming_process", capture)
     if positional:

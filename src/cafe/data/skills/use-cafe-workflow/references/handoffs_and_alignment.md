@@ -34,6 +34,19 @@ input`:
   assignable pause policy, stop for the user and repair the contract before
   continuing. Mandatory HumanTask gates are not members of that partition.
 
+Before presenting a GitHub integration permission task, independently check the
+strategy in the exact action bundle against current user direction and the
+repository guidance cited in the delivery output. Inspect the policy source;
+GitHub allowing a merge method is not evidence that the repository prefers it.
+Use the delivery skill's precedence: explicit current user choice, repository
+policy, then its `merge` proposal default. For a default, verify the reported
+policy search and make that fallback basis visible to the user. Check applicable
+platform and branch restrictions; a supported alternative or policy exception
+belongs in the existing action review, with its reason and exact effects.
+Missing or conflicting strategy evidence uses the existing correction route
+before approval presentation. This check adds no gate, grants no permission,
+and never changes a frozen action bundle or replaces the user's required answer.
+
 Then route by intent:
 
 - The unique active declared correction outcome is the sole Manager correction

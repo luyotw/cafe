@@ -286,3 +286,25 @@ def test_unpriced_coverage_survives_footer_snapshot_and_report(tmp_path):
     result = inclusive_report(root, "topic", "wf")
     assert result["worker"]["known"] == 1
     assert result["worker"]["incomplete"]
+
+
+def test_native_discovery_gap_keeps_caller_money_through_retention(tmp_path):
+    from datetime import datetime, timezone
+    from cafe.agents.cli.codex_subagent_usage import NativeInterval
+    from cafe.manager.costs import worker_footer
+
+    root, issue = cost_journey(tmp_path)
+    scope = NativeInterval(root / 'native', workflow_id='wf', caller_id='custom',
+                           attempt_id='native-attempt')
+    gap = scope.open_record(datetime.now(timezone.utc), final=True,
+                            gaps=['native_discovery_bound'])
+    path = issue / 'custom/iteration_001/iteration.json'
+    path.write_text(json.dumps({'stats': {'cost_records': [record('worker', '1.5'), gap],
+                                         'total_cost_usd': 1.5}}))
+    assert worker_cost(root, issue, 'topic', 'wf')['known'] == Decimal('1.5')
+    assert 'incomplete coverage' in worker_footer(issue, locale='en-US', project_root=root)
+    preserve_worker_cost(root, issue, 'topic', 'wf')
+    shutil.rmtree(issue)
+    summary = inclusive_report(root, 'topic', 'wf')['worker']
+    assert summary['known'] == Decimal('1.5')
+    assert summary['incomplete']

@@ -16,6 +16,59 @@ if TYPE_CHECKING:
     from cafe.core.git import GitOperations
 
 
+def load_iteration_control_metadata(path: Path) -> dict:
+    """Normal execution cannot implicitly discard unverified legacy raw records."""
+    from cafe.core.restart_policy import load_restart_context
+
+    try:
+        control = load_restart_context(path)
+    except ValueError as error:
+        raise RuntimeError("Iteration state requires explicit bounded repair before execution") from error
+    if control.get("streaming_log"):
+        raise RuntimeError("Legacy streaming_log requires explicit verified iteration repair")
+    return control
+
+
+def persist_iteration_metadata(path: Path, metadata: dict) -> None:
+    """Persist control evidence without duplicating the executor-owned raw log.
+
+    Ordinary callers retain the restart reader's bound. Workspace writers keep
+    their existing reserved maximum separately; other paths gain no reserve.
+    """
+    from cafe.core.packet_io import atomic_write_bytes
+
+    control = {key: value for key, value in metadata.items() if key != "streaming_log"}
+    payload = json.dumps(control, ensure_ascii=False, indent=2).encode("utf-8")
+    if len(payload) > 1_048_576:
+        raise RuntimeError("Iteration control evidence exceeds existing recovery capacity")
+    atomic_write_bytes(path, payload)
+
+
+def validated_completion_receipt(iteration_dir: Path, context: dict) -> dict | None:
+    """Resolve a pending marker against one bounded, exact terminal audit slot."""
+    from cafe.core.audit_events import AuditEventStore
+    from cafe.core.packet_io import canonical_json, sha256_bytes
+
+    receipt = context.get("workflow_completion_trusted")
+    if (not isinstance(receipt, dict) or set(receipt) != {"workflow_id", "sequence"}
+            or not isinstance(receipt["workflow_id"], str) or not receipt["workflow_id"]
+            or type(receipt["sequence"]) is not int or receipt["sequence"] < 1):
+        return None
+    issue = iteration_dir.parent.parent
+    try:
+        record = AuditEventStore(issue).read(receipt["workflow_id"], receipt["sequence"], bounded=True)
+        control = {key: value for key, value in context.items() if key != "workflow_completion_trusted"}
+        expected = {"path": str((iteration_dir / "iteration.json").relative_to(issue)),
+                    "sha256": sha256_bytes(canonical_json(control))}
+        if (record is not None and record["step"] == iteration_dir.parent.name
+                and record["event_type"] in {"step_completed", "single_step_completed"}
+                and record["data"].get("completion_metadata") == expected):
+            return record
+    except (OSError, ValueError, TypeError, KeyError):
+        pass
+    return None
+
+
 def next_runnable_iteration_number(phase_dir: Path) -> int:
     """Return the iteration number the phase executor will run next."""
     if not phase_dir.exists():
@@ -49,6 +102,8 @@ def next_runnable_iteration_number(phase_dir: Path) -> int:
         if (
             not last_iteration_data.get("end_time")
             or last_iteration_data.get("workflow_completion_trusted") is False
+            or (isinstance(last_iteration_data.get("workflow_completion_trusted"), dict)
+                and validated_completion_receipt(last_iter_dir, last_iteration_data) is None)
         ):
             return last_iteration
     except (json.JSONDecodeError, KeyError, FileNotFoundError):

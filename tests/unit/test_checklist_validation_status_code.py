@@ -135,3 +135,29 @@ class TestChecklistValidationPreservesStatusCode:
 
         assert passed is True
         assert status_code is None
+
+
+def test_issue646_u2_checklist_retry_large_stream_saves_once(plan_executor):
+    from cafe.core.types import TokenUsage
+    directory = plan_executor._get_iteration_dir(1)
+    directory.mkdir(parents=True)
+    checklist = directory / 'checklist.md'
+    checklist.write_text('[ ] Complete evidence\n')
+    controls = {'response': '', 'session_id': 'retained', 'padding': 'x' * 990_000}
+    (directory / 'iteration.json').write_text(json.dumps(controls))
+    first = {'index': 0}
+    (directory / 'streaming.jsonl').write_text(json.dumps(first) + '\n')
+    records = [{'index': i + 1, 'text': 'x' * 2000} for i in range(600)]
+    def retry(*args, **kwargs):
+        checklist.write_text('[x] Complete evidence\n')
+        return 'await_agent', TokenUsage(), [], [], records, None
+    plan_executor.agent_manager.execute.side_effect = retry
+    plan_executor._validate_projected_todo_completion_detail = lambda path: (True, '')
+    _, _, passed = plan_executor._validate_and_retry_checklist_completion(
+        agent_name='Roger', prompt='complete', user_input='', valid_intents=[], max_retries=1)
+    assert passed
+    saved = json.loads((directory / 'iteration.json').read_text())
+    assert 'streaming_log' not in saved
+    assert saved['session_id'] == 'retained'
+    assert saved['padding'] == controls['padding']
+    assert [json.loads(line) for line in (directory / 'streaming.jsonl').read_text().splitlines()] == [first, *records]

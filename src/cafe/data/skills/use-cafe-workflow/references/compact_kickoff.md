@@ -53,3 +53,11 @@ prepare choice; mandatory host approval is still separate. Bind the rendered
 --confirmed-by user --confirmed-at <actual timezone-aware confirmation time>`.
 Then use `run_workflow.py` with fresh contract facts. The owning projection
 passes the confirmed phase chains and current scope into the generic worker.
+Install those confirmed chains with `write_phase_config.py` before the first
+launch; compact mode does not remove the generic phase-binding prerequisite.
+For a manual-input cold start, pass the already confirmed requirements through
+`run_workflow.py --initial-input '<requirements>'`. Do not substitute a manually
+seeded iteration file or a direct `cafe workflow` call. The owning CLI persists
+the input before spawning its worker, which consumes it at the initial-input
+boundary. Once execution or a user handoff has begun, use the existing declared
+continuation instead of `--initial-input`.

@@ -84,6 +84,21 @@ You can contribute to this project in several ways:
 
 6.  Open a Pull Request to the `main` branch of the original repository. In the PR description, please detail your changes, their purpose, and any relevant Issue numbers.
 
+### PR merge policy
+
+CAFE defaults to **merge commits** for GitHub pull requests. This preserves the
+source commits referenced by development and review evidence while providing a
+PR-level history through `git log --first-parent`. Integrations between `main`,
+`develop`, and release branches should retain shared ancestry through merge
+commits.
+
+Squash is an explicit exception for a short-lived, single-target feature branch
+whose commits are mostly WIP or fixups and are better represented as one reviewed
+change. One feature containing several commits is not sufficient reason to
+choose squash. State the reason and obtain approval for the selected strategy
+in the existing delivery action review. Repository and branch restrictions still
+apply; a default or exception never authorizes a merge by itself.
+
 ## Testing policy (workflow)
 
 Plan, develop, and review skills enforce a **test invariants** policy: tests should protect business rules and user-journey outcomes, not fragile UI structure. See `src/cafe/data/skills/cafe-plan/references/test_invariants_policy.md` for what to test, what to avoid, and examples.
@@ -135,3 +150,63 @@ Built-in **plan** templates require three architecture sections in every plan ar
 
 *   This project follows the [PEP 8](https://www.python.org/dev/peps/pep-0008/) style guide.
 *   We use pre-commit hooks to automatically check and format code. Please ensure you have them set up before committing.
+
+## Project skills and native CLI exposure
+
+Maintain local skills in `.cafe/skills/<name>/`, with a valid `SKILL.md` and any
+`references/`, `scripts/` or other resources. The active checkout/worktree is the
+authority. `cafe prepare` reconciles skills after successful Git preparation in
+the resulting root; writable phase and chat launches reconcile again to discover
+new skills. Codex, Claude and Copilot each receive an ordinary skills directory
+with relative links per skill, for example:
+
+```text
+.codex/skills/example -> ../../.cafe/skills/example
+.claude/skills/example -> ../../.cafe/skills/example
+.copilot/skills/example -> ../../.cafe/skills/example
+```
+
+All valid local skills remain exposed regardless of the current phase/chat
+selection. Source edits are immediately visible through the links, including
+nested resources, without copying or publishing a same-name Global skill.
+Deletion or renaming of a source removes only its proven managed exposure on the
+next writable reconciliation. Cleanup unlinks links and never deletes authority
+contents. Canonical-checkout fallback skills selected from another worktree,
+builtin/Global skills and other provider destinations retain transient
+materialization; their selected environment has a separate exact-set lifecycle.
+Status, show, validation and explicitly read-only chat do not reconcile or repair
+native skills.
+
+Linked `SKILL.md` files are source templates. For selected local skills, CAFE
+renders the current context, declared prompt references and Workflow Inputs into
+the invocation prompt, together with the authority directory for relative
+resource access. It never writes those values through a link. Direct native CLI
+invocation outside CAFE sees the raw template; workflow placeholders require the
+CAFE invocation context. Chat supplies its available issue/step context and does
+not invent an iteration or reuse an earlier phase's artifact values.
+
+CAFE's existing `.cafe-managed-skills.json` records successful installations and
+binds ownership to the present entry's identity and contents/link target. Proven
+copies can migrate to links; correct links to the active authority can be adopted.
+A legacy name-only manifest, matching catalog name or identical directory bytes
+alone cannot authorize replacement. Missing/corrupt ownership metadata,
+externally changed entries and unmanaged same-name files/directories/links are
+preserved with conflict diagnostics. Unrelated safe entries can still reconcile;
+a selected conflict stops the agent launch before an unintended skill is used.
+
+For an ambiguous old rendered copy or a same-name user collision, inspect and
+back up the entry, relocate it outside the destination name, then rerun prepare
+or a writable launch. Do not fabricate ownership records. A dangling skills-root
+link can be removed without traversing its target and replaced with a directory.
+A valid root/ancestor link or occupied non-directory root requires explicit local
+remediation: preserve its contents and replace that layout with an ordinary
+provider directory. Never move/delete another provider's tree to repair it.
+Local Git exclusions cover only currently proven managed entries and the
+management file; they do not hide unrelated native skills or alter tracked files.
+Native rules use a private Git-directory exclude file selected by an exact
+`includeIf.gitdir` conditional include (or an existing worktree-config scope).
+CAFE does not enable Git repository extensions. User `info/exclude` rules are
+preserved; the original effective user excludes file is retained in the private
+Git helper configuration and reread at reconciliation, so its edits survive.
+Old marked CAFE native rules migrate out of the shared `info/exclude`, preventing
+one linked worktree from hiding or exposing another worktree's native skills.

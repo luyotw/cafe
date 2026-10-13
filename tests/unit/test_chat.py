@@ -11,6 +11,8 @@ from cafe.agents.cli import ClaudeCLI, CodexCLI, CopilotCLI, CursorCLI, GeminiCL
 from cafe.agents.executor import AgentExecutionError, AgentExecutor
 from tests.unit.test_conversation_transport import provider_process, init
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
+from cafe.core.workflow_models import BatonRejected
 from cafe.core.types import AgentCLI, AgentConfig, SessionData
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
@@ -20,6 +22,7 @@ from cafe.ui.chat import (
     _prepare_chat_environment,
     _prepare_chat_handoff_state,
     _resolve_configured_chat_session,
+    _warn_if_chat_handoff_missing,
     get_chat_next_step_path,
     launch_chat_session,
 )
@@ -150,8 +153,8 @@ class TestLaunchChatSession:
         mock_config.get.return_value = {
             "name": "David",
             "clis": [
-                {"cli": "claude", "develop": "sonnet"},
-                {"cli": "codex", "develop": "gpt-5.3-codex"},
+                {"cli": "claude", "model": "sonnet"},
+                {"cli": "codex", "model": "gpt-5.3-codex"},
             ],
         }
         mock_config_manager_cls.return_value = mock_config
@@ -432,8 +435,10 @@ class TestLaunchChatSession:
 
 def test_prepare_chat_environment_installs_chat_skills_only() -> None:
     with (
-        patch("cafe.ui.chat.SkillLoader.discover"),
+        patch("cafe.ui.chat.NativeSkillBridge.reconcile_project_skills"),
         patch("cafe.ui.chat.NativeSkillBridge.synchronize_skills") as mock_synchronize,
+        patch("cafe.phases.generic_phase.GenericPhase.prepare_skills"),
+        patch("cafe.phases.generic_phase.GenericPhase.project_invocation_instructions"),
     ):
         _prepare_chat_environment(
             agent_cli=AgentCLI.CODEX,
@@ -875,6 +880,73 @@ def test_prepare_chat_handoff_state_preserves_user_clarification_baton(
     assert reloaded.handoff_contract.source == "workflow.pause"
 
 
+@pytest.mark.parametrize("current_step", ["develop", "user"])
+def test_chat_success_outcome_preserves_workflow_authority(tmp_path, capsys, current_step):
+    """A chat result is not permission to complete a task or advance the graph."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue123"
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create(current_step, playbook_id="standard")
+    store.update_handoff_contract(
+        state,
+        from_step="develop",
+        to_owner=HandoffOwner.USER if current_step == "user" else HandoffOwner.AGENT,
+        to_step=current_step,
+        intent=HandoffIntent.MANUAL_HANDOFF if current_step == "user" else HandoffIntent.AWAIT_AGENT,
+        source="workflow.agent_execution_interrupted" if current_step == "user" else "chat.bootstrap",
+    )
+    records = HumanTaskRecordStore(issue_dir)
+    task = None
+    if current_step == "user":
+        task = records.materialize(
+            workflow_id=state.workflow_id,
+            step="develop",
+            iteration=1,
+            trigger="agent_execution_interrupted",
+            policy_id="agent-execution-interrupted",
+            prompt="Choose recovery",
+            expected_result={"input_schema": "decision"},
+            continuations={"retry": "develop"},
+            assignee_type="user",
+        )
+    iteration = issue_dir / "develop" / "iteration_001"
+    iteration.mkdir(parents=True)
+    metadata = iteration / "iteration.json"
+    metadata.write_text(json.dumps({"workspace_completion": {"consumed": 3}}))
+    store.next_step_path.write_text('{"version":1,"intent":"await_agent"}')
+    protected = [store.file_path, store.next_step_path, metadata]
+    if task is not None:
+        protected.append(records.file_path)
+    before = {path: path.read_bytes() for path in protected}
+
+    _warn_if_chat_handoff_missing(issue_dir, current_step, ["develop", "review"])
+
+    assert {path: path.read_bytes() for path in protected} == before
+    assert capsys.readouterr().out == ""
+    if task is not None:
+        assert records.get_task(task.id).status is HumanTaskStatus.PENDING
+        assert records.get_result(task.id) is None
+
+
+@pytest.mark.parametrize("payload", [
+    '{"version":2,"intent":"await_agent"}',
+    '{"version":1,"intent":"invalid"}',
+    '{"version":1,"intent":"await_agent","unexpected":true}',
+    '{"version":1,"intent":"await_agent"',
+])
+def test_chat_invalid_outcome_is_rejected_without_clearing_handoff(tmp_path, payload):
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue123"
+    store = BlackboardStore(issue_dir)
+    store.load_or_create("user", playbook_id="standard")
+    before = store.file_path.read_bytes()
+    store.next_step_path.write_text(payload)
+
+    with pytest.raises((BatonRejected, ValueError)):
+        _warn_if_chat_handoff_missing(issue_dir, "user", ["develop", "review"])
+
+    assert store.file_path.read_bytes() == before
+    assert store.next_step_path.read_text() == payload
+
+
 def test_launch_chat_session_warns_when_baton_missing(
     tmp_path,
     monkeypatch,
@@ -941,3 +1013,38 @@ def test_launch_chat_session_nonzero_exit_reports_generic_cli_error(
     assert result == 2
     printed = " ".join(str(call) for call in mock_print.call_args_list)
     assert "Chat CLI exited with code 2: authentication failed" in printed
+
+
+def test_writable_chat_keeps_local_skills_and_renders_supplied_context(tmp_path, monkeypatch):
+    """U5/U7/I2: chat reconciliation and prompt rendering use the explicit root."""
+    from cafe.ui import chat
+    from cafe.skills.loader import SkillLoader as RealLoader
+
+    for name in ("chosen", "unselected"):
+        directory = tmp_path / ".cafe/skills" / name
+        directory.mkdir(parents=True)
+        (directory / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: project\n---\n{name} {{issue_name}} {{iteration_dir}}\n"
+        )
+    monkeypatch.setattr(
+        chat,
+        "SkillLoader",
+        lambda **kwargs: RealLoader(
+            project_root=kwargs.get("project_root", tmp_path),
+            global_root=tmp_path / "global",
+            builtin_root=tmp_path / "builtin",
+        ),
+    )
+    prompt = _prepare_chat_environment(
+        agent_cli=AgentCLI.CODEX,
+        playbook={"skills": {"chat": {"shared": ["chosen"]}}},
+        role="researcher",
+        step_name="arbitrary",
+        project_root=tmp_path,
+        context={"issue_name": "current"},
+    )
+    assert "chosen current {iteration_dir}" in prompt
+    assert "unselected current" not in prompt
+    for cli in (AgentCLI.CODEX, AgentCLI.CLAUDE, AgentCLI.COPILOT):
+        root = tmp_path / NativeSkillBridge.CLI_SKILL_DIRS[cli]
+        assert (root / "chosen").is_symlink() and (root / "unselected").is_symlink()

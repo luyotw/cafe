@@ -121,6 +121,24 @@ def test_delivery_replacement_preserves_normal_progress_node_count():
     assert module._forward_targets(_delivery_graph(), "package") == ["ship"]
 
 
+def test_compact_delivery_renders_only_runtime_delivery_and_cleanup():
+    module = _module()
+    graph = PlaybookLoader(project_root=PROJECT_ROOT).load("streamlined")
+    policy = {"contract_mode": "compact", "delivery_contract": {"schema_version": 4}}
+    rendered = module.render_progress(
+        playbook=graph, contract=policy, manager_state={"cleanup": "pending"},
+    )
+    assert "○ develop · Pending" in rendered
+    assert "○ deliver · Pending" in rendered
+    assert "deliver (closeout)" not in rendered
+    assert "○ cleanup (closeout) · Pending" in rendered
+    with pytest.raises(ValueError, match="runtime phase 'deliver'"):
+        module.render_progress(
+            playbook=graph, contract=policy,
+            manager_state={"deliver": "pending", "cleanup": "pending"},
+        )
+
+
 @pytest.mark.parametrize("state,decision,iteration,blocked,expected", [
     ("pending", None, 1, False, "Awaiting confirmation"),
     ("completed", "confirm", 1, False, "Completed"),
@@ -227,7 +245,7 @@ def test_compact_pending_task_renders_with_user_owned_authority(compact_task_sta
         contract=contract,
         locale="en-US",
         issue_dir=issue_dir,
-        driver_state=_unknown_closeout_state(),
+        driver_state={"cleanup": "unknown"},
     )
     assert "build" in rendered
     assert _module()._active_task_authority(issue_dir)["resolution_owner"] == "user_required"
@@ -1104,6 +1122,9 @@ def test_retry_attempt_does_not_invalidate_confirmed_iteration(
         (iteration / "iteration.json").write_text('{"iteration": 5}', encoding="utf-8")
     else:
         event_data["iteration"] = {"number": 5}
+    _append_runtime_event(issue_dir, {
+        "event_type": "step_started", "step": "publish-draft", "data": event_data,
+    })
     _append_runtime_event(
         issue_dir,
         {"event_type": "step_completed", "step": "publish-draft", "data": event_data},
@@ -2118,7 +2139,7 @@ def test_audit_pause_overrides_finished_draft_without_an_iteration_status_code(
 @pytest.mark.parametrize(
     ("metadata", "expected"),
     [
-        ({"end_time": "2026-09-20T01:00:00+00:00"}, "✓ 資料盤點 · Completed"),
+        ({"end_time": "2026-09-20T01:00:00+00:00"}, "○ 資料盤點 · Pending"),
         ({"timestamp": "2026-09-20T01:00:00+00:00"}, "▶\ufe0e 資料盤點 · In progress"),
     ],
 )
@@ -2196,3 +2217,81 @@ def test_established_kickoff_uses_identity_bound_cost_source(tmp_path):
     output = formatter.render(args, confirmed_proposal=proposal)
     assert "Used cost (excluding Manager): USD unknown" in output
     assert "$1.0000" not in output
+
+
+@pytest.mark.parametrize('interruption', ['step_interrupted', 'workflow_interrupted', 'handoff'])
+def test_issue646_u9_u10_actual_interruption_and_matching_retry_progress(tmp_path, interruption):
+    """U9/U10/I5: provider termination cannot complete interrupted custom work."""
+    issue = tmp_path / 'issue'
+    directory = issue / '資料盤點/iteration_001'
+    directory.mkdir(parents=True)
+    state = {'current_step': 'user', 'events': [
+        {'step': '資料盤點', 'event_type': 'step_started', 'data': {'attempt': 1, 'iteration': 1}}]}
+    if interruption == 'handoff':
+        state['handoff_contract'] = {'to_owner': 'user', 'to_step': 'user', 'from_step': '資料盤點',
+            'status_code': 'INTERRUPTED', 'created_at': '2026-09-20T01:01:00+00:00'}
+    else:
+        state['events'].append({'step': '資料盤點', 'event_type': interruption,
+                               'data': {'attempt': 1, 'iteration': 1}})
+    _write_runtime_state(issue, state)
+    (directory / 'iteration.json').write_text(json.dumps({'end_time': '2026-09-20T01:00:00+00:00'}))
+    module = _module()
+    assert module._runtime_progress(issue, _custom_playbook())[0]['資料盤點'] == 'blocked'
+    _append_runtime_event(issue, {'timestamp': '2026-09-20T01:02:00+00:00', 'step': '資料盤點',
+        'event_type': 'step_started', 'data': {'attempt': 2, 'iteration': 2}})
+    assert module._runtime_progress(issue, _custom_playbook())[0]['資料盤點'] == 'in_progress'
+    _append_runtime_event(issue, {'step': '資料盤點', 'event_type': 'step_interrupted',
+                                'data': {'attempt': 1, 'iteration': 1}})
+    assert module._runtime_progress(issue, _custom_playbook())[0]['資料盤點'] == 'in_progress'
+    _append_runtime_event(issue, {'step': '資料盤點', 'event_type': 'step_completed',
+                                'data': {'attempt': 2, 'iteration': 2}})
+    assert module._runtime_progress(issue, _custom_playbook())[0]['資料盤點'] == 'completed'
+
+
+def test_issue646_u9_provider_end_and_human_answer_never_complete_phase(tmp_path):
+    issue = tmp_path / 'issue'
+    directory = issue / '資料盤點/iteration_001'
+    directory.mkdir(parents=True)
+    _write_runtime_state(issue, {'current_step': '資料盤點', 'events': [
+        {'step': '資料盤點', 'event_type': 'workflow_paused', 'data': {'status_code': 'BATON_NEED_CLARIFICATION'}},
+        {'step': '資料盤點', 'event_type': 'human_task_completed', 'data': {}}]})
+    (directory / 'iteration.json').write_text(json.dumps({'end_time': '2026-09-20T01:00:00+00:00'}))
+    assert _module()._runtime_progress(issue, _custom_playbook())[0]['資料盤點'] != 'completed'
+
+
+def test_issue646_u10_old_block_metadata_cannot_override_matching_later_start(tmp_path):
+    issue = tmp_path / 'issue'
+    directory = issue / '資料盤點/iteration_001'
+    directory.mkdir(parents=True)
+    _write_runtime_state(issue, {'current_step': '資料盤點', 'events': [
+        {'step': '資料盤點', 'event_type': 'step_started', 'timestamp': '2026-09-20T01:02:00+00:00', 'data': {'attempt': 2}}]})
+    (directory / 'iteration.json').write_text(json.dumps({'status_code': 'INTERRUPTED',
+        'agent_interruption': {'id': '2026-09-20T09:01:00+08:00'}}))
+    assert _module()._runtime_progress(issue, _custom_playbook())[0]['資料盤點'] == 'in_progress'
+
+
+@pytest.mark.parametrize('old_attempt,new_attempt', [(1, 1), (1, 2), (3, 1)])
+def test_issue646_blk002_later_start_resets_invocation_counters_without_admitting_stale_events(tmp_path, old_attempt, new_attempt):
+    issue = tmp_path / 'issue'
+    issue.mkdir()
+    step = '資料盤點'
+    old = {'iteration': 1, 'attempt': old_attempt, 'hop': 2}
+    new = {'iteration': 1, 'attempt': new_attempt, 'hop': 1}
+    _write_runtime_state(issue, {'current_step': step, 'events': [
+        {'step': step, 'event_type': 'step_started', 'timestamp': '2026-10-01T01:00:00Z', 'data': old},
+        {'step': step, 'event_type': 'step_interrupted', 'timestamp': '2026-10-01T01:01:00Z', 'data': old}]})
+    render = lambda: _module()._runtime_progress(issue, _custom_playbook())[0][step]
+    assert render() == 'blocked'
+    _append_runtime_event(issue, {'step': step, 'event_type': 'human_task_completed',
+                                 'timestamp': '2026-10-01T01:02:00Z', 'data': old})
+    assert render() == 'blocked'
+    _append_runtime_event(issue, {'step': step, 'event_type': 'step_started',
+                                 'timestamp': '2026-10-01T01:03:00Z', 'data': new})
+    assert render() == 'in_progress'
+    for kind in ('step_started', 'step_completed', 'step_interrupted', 'workflow_paused'):
+        _append_runtime_event(issue, {'step': step, 'event_type': kind,
+            'timestamp': '2026-10-01T01:00:00Z', 'data': dict(old, status_code='INTERRUPTED')})
+        assert render() == 'in_progress'
+    _append_runtime_event(issue, {'step': step, 'event_type': 'step_completed',
+                                 'timestamp': '2026-10-01T01:04:00Z', 'data': new})
+    assert render() == 'completed'

@@ -2,7 +2,7 @@
 name: cafe-deliver_development
 description: Verify development delivery with approved project tools, help close missing
   verification work, and request acceptance of complete results.
-version: 1.3.0
+version: 1.4.0
 workflow:
   execution_profile:
     workload: publication
@@ -106,7 +106,11 @@ Read your agent file: {agent_file}
 
 ## Instructions
 
-Prepare the integration plan here, after PR content confirmation. Read the declared PR publication input and existing repository policy. Recommend a concrete GitHub merge strategy consistent with that policy and platform settings; when no policy exists, propose a suitable strategy in the complete bundle for approval. Missing strategy configuration is not a separate questionnaire. Explain material conflicts and request clarification only for an unresolved target, unavailable local checkout or a decision that cannot be safely proposed.
+When the confirmed scope requests only local artifacts, use artifact-only delivery: write `delivery_request.json` beside {output_file} with exactly `{"mode":"local-only"}`. Read the declared workspace, PR content and available Review/QA evidence, then summarize the current local results in {output_file} and request `confirm_output`. The host validates the clean workspace and binds the exact inputs, source branch/commit and summary to the final result task; it creates no integration approval or operation receipt. Describe retained local results accurately without claiming publication, integration or post-integration verification. Existing pending action approval or action history must be resolved through its original route; changing the mode cannot erase effects or authority. On retry, preserve the unchanged summary and request; revise changed evidence in a new iteration. This path retains the same final acceptance gate and separate Manager closeout. The remaining instructions apply to integration delivery.
+
+For integration delivery, prepare the integration plan here, after PR content confirmation. Read the declared PR publication input, supplied user direction, and repository guidance such as root agent instructions, `CONTRIBUTING.md`, and referenced engineering or delivery policy. For GitHub integration, select the strategy in this order: an explicit current user choice, repository policy, then the workflow proposal default `merge` (merge commit). An authorized user exception does not override platform or branch restrictions. When no policy is found, recommend `merge` and label it as the workflow default; do not infer a repository preference from the merge methods GitHub permits. If that choice is unavailable, propose a supported alternative in the same action review rather than silently substituting it. Missing strategy configuration is not a separate questionnaire. Explain material conflicts and request clarification only for an unresolved target, unavailable local checkout or a decision that cannot be safely proposed.
+
+In the delivery output, state the selected strategy and its basis: the explicit user direction, or the policy path/section and exact supporting excerpt. When using the workflow default, name the repository guidance inspected and state that no merge policy was found there. Explain any proposed exception. Keep this rationale in the output; the existing delivery request and host bundle own the exact action and approval. A proposed default never grants integration authority.
 
 Before action permission, write `delivery_request.json` beside {output_file}, with only `mode` (`github` or `local`), `strategy`, `target_branch`, `destination` (absolute clean checkout for local), optional `issue_repository` for selected follow-ups, and `verification`. Derive verification from confirmed scope using `references/verification_tools.md`; prefer suitable existing tools. The host binds and displays the actual source, target, published PR, original Review proposals, tool and capability boundaries. Request `need_permission` for this exact bundle; `integrate_only` selects no follow-ups, `integrate_selected` selects only explicitly supplied `FUP-NNN` IDs, and `review_only`/`fix_now` authorize no action.
 
@@ -122,7 +126,7 @@ The host executes only the exact approved tool bytes and options under the revie
 
 For a failed required check, normalize corrections into the existing Todo List and use the injected correction route. Unknown or missing evidence never proves success. Tools and verification scope changed after approval need fresh delivery action review; preserve completed integration effects and never edit old approval bytes. Legacy snapshots missing verification scope follow that review route.
 
-Only when `delivery_complete` is true, including every agreed verification or an explicitly approved no-verification reason, request the declared user `confirm_output` handoff. Display only the completed delivery results and verification evidence. The reply accepts or revises those results. Manager owns the separately confirmed closeout choice and plan, and executes it after workflow completion. This phase does not display or select cleanup, archive, or resource retention.
+For integration delivery, only when `delivery_complete` is true, including every agreed verification or an explicitly approved no-verification reason, request the declared user `confirm_output` handoff. Display only the completed delivery results and verification evidence. The reply accepts or revises those results. Manager owns the separately confirmed closeout choice and plan, and executes it after workflow completion. This phase does not display or select cleanup, archive, or resource retention.
 
 ## Output
 

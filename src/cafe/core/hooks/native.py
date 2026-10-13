@@ -914,6 +914,16 @@ class InitialInputProviderResolver(NoOpHook):
             if isinstance(raw_user_input, str) and raw_user_input.strip():
                 return raw_user_input.strip()
 
+        # Detached workers receive the CLI's initial input through the phase-owned
+        # iteration file rather than the launching process's in-memory context.
+        iteration_dir = getattr(phase, "_get_iteration_dir", None)
+        if callable(iteration_dir):
+            saved = iteration_dir(getattr(phase, "iteration", 1)) / "user_input.md"
+            if saved.is_file():
+                raw_user_input = saved.read_text(encoding="utf-8")
+                if isinstance(raw_user_input, str) and raw_user_input.strip():
+                    return raw_user_input.strip()
+
         return None
 
     @staticmethod

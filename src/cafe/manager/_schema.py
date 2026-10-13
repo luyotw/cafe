@@ -271,7 +271,13 @@ def _validate_phases(value: Any, *, legacy: bool = False) -> list[dict[str, Any]
     names: set[str] = set()
     expected = {"name", "chain", "rationale"} if legacy else {"name", "chain"}
     for index, raw in enumerate(value):
-        phase = _mapping(raw, f"phases[{index}]", keys=expected)
+        optional = {"rationale"} if not legacy and isinstance(raw, Mapping) and "rationale" in raw else set()
+        phase = _mapping(raw, f"phases[{index}]", keys=expected | optional)
+        if not legacy and "rationale" in phase:
+            rationale = _mapping(phase["rationale"], "phase rationale", keys={"band", "model", "effort"})
+            if rationale["band"] not in {"efficiency", "balanced", "frontier"}:
+                raise ValueError("phase capability band is invalid")
+            phase["rationale"] = {key: _string(value, f"phase rationale {key}") for key, value in rationale.items()}
         for field in (("name", "rationale") if legacy else ("name",)):
             phase[field] = _string(phase[field], f"phases[{index}].{field}")
         if phase["name"] in names:
@@ -282,15 +288,20 @@ def _validate_phases(value: Any, *, legacy: bool = False) -> list[dict[str, Any]
         chain: list[dict[str, str]] = []
         seen_clis: set[str] = set()
         for chain_index, raw_entry in enumerate(phase["chain"]):
-            entry = _mapping(
-                raw_entry, f"phases[{index}].chain[{chain_index}]", keys={"cli", "model"}
-            )
+            optional = {"reasoning_effort"} if isinstance(raw_entry, Mapping) and "reasoning_effort" in raw_entry else set()
+            entry = _mapping(raw_entry, f"phases[{index}].chain[{chain_index}]", keys={"cli", "model"} | optional)
+            raw_effort = entry.get("reasoning_effort")
+            if optional:
+                from cafe.agents.cli.effort import validate_effort
+                validate_effort(entry["cli"], entry["model"], raw_effort, explicit=True)
             cli = _string(entry["cli"], "phase chain cli")
             try:
                 cli = AgentCLI(cli).value
             except ValueError as exc:
                 raise ValueError("phase chain CLI is unsupported") from exc
             entry = {"cli": cli, "model": _string(entry["model"], "phase chain model")}
+            if optional:
+                entry["reasoning_effort"] = raw_effort
             if entry["cli"] in seen_clis:
                 raise ValueError("phase chain CLIs must be distinct")
             seen_clis.add(entry["cli"])

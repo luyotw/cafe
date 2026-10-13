@@ -177,6 +177,8 @@ def test_build_prompt_injects_graph_once_and_current_route_catalog(tmp_path: Pat
     assert prompt.count(routes) == 1
     assert "valid to_step values:" not in prompt
     assert "this step's defined transitions" not in prompt
+    assert "only for an ordinary `await_agent` default route" in prompt
+    assert "full baton for human or exceptional routes" in prompt
 
 
 def test_build_prompt_includes_files_and_checklist_guard(tmp_path: Path) -> None:
@@ -2034,3 +2036,53 @@ def test_publication_revalidates_output_before_each_external_consumer(tmp_path, 
             execution_lease=(lambda: workspace_execution_lock(tmp_path)) if with_lease else None,
         )
     assert consumed == []
+
+
+def test_project_prompt_rendering_is_current_and_never_writes_source(tmp_path):
+    """U5/I3: selected project templates render only in each invocation prompt."""
+    loader = _setup_loader(tmp_path)
+    directory = loader.project_root / ".cafe/skills/custom-project"
+    (directory / "references").mkdir(parents=True)
+    (directory / "references/required.md").write_text("Required {issue_name}/{iteration_dir}")
+    (directory / "references/optional.md").write_text("Optional {notes_file}")
+    source = directory / "SKILL.md"
+    source.write_text("""---
+name: custom-project
+description: test
+workflow:
+  prompt_inputs:
+    - artifacts: [notes]
+      placeholder: notes_file
+      required: false
+  prompt_references:
+    required_instruction: required.md
+    optional_instruction: optional.md
+---
+Run {issue_name} {iteration_dir} {custom_value}.
+{required_instruction}
+{optional_instruction}
+""")
+    before = {p: p.read_bytes() for p in directory.rglob("*") if p.is_file()}
+    phase = GenericPhase(loader)
+    for issue, iteration, notes in (
+        ("alpha", "iteration_007", "alpha.md"),
+        ("beta", "iteration_009", None),
+    ):
+        context = {"issue_name": issue, "iteration_dir": iteration, "custom_value": "custom"}
+        if notes:
+            context["notes_file"] = notes
+        invocation = phase.prepare_skill(
+            skill_name="custom-project", agent_cli=AgentCLI.CODEX, context=context
+        )
+        prompt = phase.build_prompt(
+            skill_name="custom-project", skill_invocation=invocation, context=context
+        )
+        assert f"Run {issue} {iteration} custom." in prompt
+        assert f"Required {issue}/{iteration}" in prompt
+        assert str(directory) in prompt
+        if notes:
+            assert "Optional alpha.md" in prompt and "- notes_file: alpha.md" in prompt
+        else:
+            assert "Optional" not in prompt and "alpha.md" not in prompt
+        assert {p: p.read_bytes() for p in before} == before
+        assert (loader.project_root / ".codex/skills/custom-project").is_symlink()

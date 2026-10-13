@@ -236,7 +236,7 @@ def test_active_worktree_agent_and_phase_fields_take_precedence(tmp_path: Path) 
     )
 
     assert binding.agent.path == active_agent
-    assert binding.phase.clis == (("codex", "worktree-model"),)
+    assert [entry.as_dict() for entry in binding.phase.clis] == [{"cli": "codex", "model": "worktree-model"}]
 
 
 def test_resolve_all_bindings_skips_human_and_automatic_steps(tmp_path: Path) -> None:

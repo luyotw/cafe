@@ -272,3 +272,18 @@ def test_action_description_preserves_literal_braces_and_table_separators(case):
     assert r"\{a\: b\}" in comparison
     assert r"A \| B" in comparison
     assert r"A \\| B" not in comparison
+
+
+def test_explicit_effort_preference_offer_remember_round_trip_is_lossless(case, monkeypatch, tmp_path):
+    from tests.unit.test_reasoning_effort_adapters import install_provider_clients
+    (tmp_path / "clients").mkdir()
+    install_provider_clients(tmp_path / "clients", monkeypatch)
+    module, store, _, proposal, _ = case
+    chain = [{"cli": "codex", "model": "gpt-5.5", "reasoning_effort": "high"}, {"cli": "claude", "model": "claude-opus-4-6", "reasoning_effort": "low"}]
+    for phase in proposal["phases"]:
+        phase["chain"] = copy.deepcopy(chain)
+    result = build(case)
+    selected = next(e for e in result["entries"] if e["key"] == "phase.chains")
+    assert selected["value"] == chain
+    module.remember_offer(store, result, selections=[selected["id"]], reuse=True)
+    assert store.inspect(scope="repository")["phase.chains"]["value"]["steps"][selected["selector"]] == chain

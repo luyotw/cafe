@@ -65,6 +65,7 @@ class CliEntry(BaseModel):
 
     cli: AgentCLI
     model: Optional[str] = None
+    reasoning_effort: Optional[str] = None
     phase_models: Dict[str, str] = Field(default_factory=dict)
 
     def resolve_model(self, phase_name: Optional[str]) -> Optional[str]:
@@ -87,6 +88,7 @@ class AgentConfig(BaseModel):
     cli: AgentCLI
     session_id: Optional[str] = None
     model: Optional[str] = None
+    reasoning_effort: Optional[str] = None
     clis: List["CliEntry"] = Field(default_factory=list)
     backup_clis: List["AgentCLI"] = Field(default_factory=list)
     models_config: Dict[str, Dict[str, str]] = Field(default_factory=dict)
@@ -124,6 +126,8 @@ class AgentResponse(BaseModel):
     model: Optional[str] = None  # Model name
     cli: Optional[AgentCLI] = None  # Actual CLI that produced this response
     session_id: Optional[str] = None  # Actual session id after execution, if any
+    reasoning_evidence: Optional[Dict[str, Any]] = None
+    execution_attempts: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class PhaseResult(BaseModel):

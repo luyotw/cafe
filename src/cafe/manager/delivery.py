@@ -23,7 +23,8 @@ def phase_owned_graph(graph) -> bool:
 
 
 def phase_owned_contract(contract) -> bool:
-    return contract.get("delivery_contract", {}).get("schema_version") in {5, 6}
+    version = contract.get("delivery_contract", {}).get("schema_version")
+    return version in {5, 6} or (version == 4 and contract.get("contract_mode") == "compact")
 
 
 def delivery_result_steps(graph) -> set[str]:

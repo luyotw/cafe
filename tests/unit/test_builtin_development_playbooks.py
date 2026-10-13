@@ -54,6 +54,9 @@ def test_adopting_graphs_have_separate_action_review_and_result_acceptance():
         assert delivery.delivery.approval_step == "deliver"
         assert set(review.outcomes.values()) == {"deliver"}
         outcome = next(t for t in delivery.human_tasks if t.trigger == "confirm_output")
+        assert outcome.mandatory_confirmation is False, name
+        assert "deliver" in confirmation_gate_steps(model), name
+        assert "deliver" not in mandatory_confirmation_gate_steps(model), name
         assert outcome.outcomes == {
             "confirm": "_done", "revise": "deliver",
         }
@@ -374,12 +377,8 @@ def test_joint_spec_plan_has_one_planning_gate_and_same_phase_revisions(playbook
     if playbook_id == "subagent-flow-qa":
         expected_steps.insert(2, "qa")
     assert list(playbook.steps) == expected_steps
-    if playbook_id == "subagent-flow":
-        assert confirmation_gate_steps(playbook) == ("spec_plan", "pr", "deliver")
-        assert mandatory_confirmation_gate_steps(playbook) == ()
-    else:
-        assert confirmation_gate_steps(playbook) == ("spec_plan", "pr")
-        assert mandatory_confirmation_gate_steps(playbook) == ("deliver",)
+    assert confirmation_gate_steps(playbook) == ("spec_plan", "pr", "deliver")
+    assert mandatory_confirmation_gate_steps(playbook) == ()
     assert planning.output_artifact == "plan"
     assert planning.input_artifacts == ["plan"]
     assert planning.todo_identity_input_artifact == "plan"
@@ -741,7 +740,8 @@ def test_feedback_gate_assignment_preserves_legacy_default(mandatory):
     model.steps["pr"].human_tasks = [replacement if t is binding else t for t in model.steps["pr"].human_tasks]
     assert ("pr" in confirmation_gate_steps(model)) is (mandatory is False)
     assert ("pr" in mandatory_confirmation_gate_steps(model)) is (mandatory is not False)
-    assert "deliver" in mandatory_confirmation_gate_steps(model)
+    assert "deliver" in confirmation_gate_steps(model)
+    assert "deliver" not in mandatory_confirmation_gate_steps(model)
     permission = next(t for t in model.steps["deliver"].human_tasks if t.trigger == "need_permission")
     assert permission.task_id == model.steps["deliver"].delivery.approval_task
 

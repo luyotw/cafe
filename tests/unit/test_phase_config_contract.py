@@ -26,7 +26,7 @@ build:
 
     assert result.name == "Build step"
     assert result.role == "developer"
-    assert result.clis == (("claude", "gpt-5"), ("gemini", "gemini-2.5-pro"))
+    assert [entry.as_dict() for entry in result.clis] == [{"cli": "claude", "model": "gpt-5"}, {"cli": "gemini", "model": "gemini-2.5-pro"}]
     assert result.model == "gpt-5"
 
 
@@ -166,7 +166,7 @@ build:
     result = load_phase_step_model(step_name="build", local_path=worktree, repo_path=repo)
     assert result.name == "RepoName"
     assert result.role == "developer"
-    assert result.clis == (("gemini", "gpt-gemini"),)
+    assert [entry.as_dict() for entry in result.clis] == [{"cli": "gemini", "model": "gpt-gemini"}]
     assert result.model == "gpt-gemini"
 
 

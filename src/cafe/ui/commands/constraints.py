@@ -74,7 +74,7 @@ def issue_context(issue: str, step: str | None, cli: str | None = None) -> Conte
     phase = load_phase_step_model(
         step_name=step, local_path=root / ".cafe/phases.yaml", repo_path=root / ".cafe/phases.yaml"
     )
-    effective_cli = cli or phase.clis[0][0]
+    effective_cli = cli or phase.clis[0].cli
     consumers = ["authority"]
     if len(phase.clis) == 1:
         consumers.append("single-chain")

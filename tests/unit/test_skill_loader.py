@@ -479,7 +479,7 @@ def test_install_skill_uses_project_version_over_global(tmp_path: Path) -> None:
     assert "Project version" in installed.read_text(encoding="utf-8")
 
 
-def test_install_skill_recovers_when_skills_root_is_file(tmp_path: Path) -> None:
+def test_install_skill_preserves_occupied_skills_root_file(tmp_path: Path) -> None:
     global_root = tmp_path / "global" / "skills"
     _write_skill(global_root, "cafe-plan")
     project_root = tmp_path / "project"
@@ -495,9 +495,9 @@ def test_install_skill_recovers_when_skills_root_is_file(tmp_path: Path) -> None
     loader.discover()
     bridge = NativeSkillBridge(loader, project_root=project_root, home_dir=tmp_path / "home")
 
-    installed = bridge.synchronize_skills(["cafe-plan"], AgentCLI.COPILOT)[0]
-    assert installed.exists()
-    assert bad_root.is_dir()
+    with pytest.raises(SkillDiscoveryError):
+        bridge.synchronize_skills(["cafe-plan"], AgentCLI.COPILOT)
+    assert bad_root.read_text() == "not-a-directory"
 
 
 def test_install_skill_recovers_when_skills_root_is_broken_symlink(tmp_path: Path) -> None:
@@ -558,10 +558,10 @@ def test_install_skill_refuses_valid_symlink_to_external_directory(
 
 
 @pytest.mark.parametrize("manifest_contents", ["{broken", "{}"])
-def test_synchronize_skills_recovers_stale_skills_from_a_corrupted_manifest(
+def test_synchronize_skills_preserves_unproven_entries_after_manifest_corruption(
     tmp_path: Path, manifest_contents: str
 ) -> None:
-    """A damaged manifest still permits replace-style native skill cleanup."""
+    """U3: lost ownership metadata must not authorize destructive cleanup."""
     global_root = tmp_path / "global" / "skills"
     _write_skill(global_root, "cafe-plan")
     _write_skill(global_root, "cafe-stale")
@@ -580,7 +580,7 @@ def test_synchronize_skills_recovers_stale_skills_from_a_corrupted_manifest(
 
     bridge.synchronize_skills(["cafe-plan"], AgentCLI.COPILOT)
 
-    assert not (native_skills / "cafe-stale").exists()
+    assert (native_skills / "cafe-stale").exists()
     assert (native_skills / "cafe-plan" / "SKILL.md").is_file()
 
 

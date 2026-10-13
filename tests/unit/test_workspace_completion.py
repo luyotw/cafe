@@ -11,6 +11,65 @@ def executor():
     return object.__new__(GenericWorkflowStepExecutor)
 
 
+@pytest.mark.parametrize("history", [None, {}, [None], [{}], [{"version": 1,
+    "state": "completed", "result_id": "unbound"}]])
+def test_malformed_workspace_recovery_history_cannot_authorize_model_rotation(tmp_path, history):
+    runner = executor()
+    runner.issue_dir = tmp_path
+    runner.iteration = 1
+    with pytest.raises(ValueError):
+        runner._workspace_recovery_request(
+            metadata={"model": "original", "workspace_recovery_history": history},
+            workflow_id="workflow", step_name="custom_step", configured_model="replacement",
+        )
+
+
+@pytest.mark.parametrize("defect", [
+    None, "empty", "unknown", "override", "subclass", "publish", "started",
+    "result", "extra", "index", "bool_index", "name", "malformed",
+])
+def test_control_checkpoint_recovery_requires_inert_builtin_identity(defect):
+    from dataclasses import asdict
+    from types import SimpleNamespace
+
+    from cafe.core.hooks import HookResult, NoChangesNeededHandler, PermissionRetryHandler
+
+    runner = executor()
+    runner.generic_phase = SimpleNamespace(hook_registry={
+        "NoChangesNeededHandler": NoChangesNeededHandler,
+        "PermissionRetryHandler": PermissionRetryHandler,
+    })
+    declaration = {"hooks": {"after_execute": ["NoChangesNeededHandler", "PermissionRetryHandler"]}}
+    identity = ["after_execute", 0, "NoChangesNeededHandler"]
+    item = {"state": "completed", "result": asdict(HookResult())}
+    if defect == "unknown":
+        runner.generic_phase.hook_registry[identity[2]] = object
+    elif defect == "override":
+        runner.generic_phase.hook_registry[identity[2]] = lambda: NoChangesNeededHandler()
+    elif defect == "subclass":
+        runner.generic_phase.hook_registry[identity[2]] = type("Custom", (NoChangesNeededHandler,), {})
+    elif defect == "publish":
+        identity[0] = "publish_output"
+    elif defect == "started":
+        item = {"state": "started"}
+    elif defect == "result":
+        item["result"]["events"] = [{"type": "external_effect"}]
+    elif defect == "extra":
+        item["unknown"] = True
+    elif defect == "index":
+        identity[1] = 2
+    elif defect == "bool_index":
+        identity[1] = False
+    elif defect == "name":
+        identity[2] = "PermissionRetryHandler"
+    hooks = {json.dumps(identity): item}
+    if defect == "empty":
+        hooks = {}
+    elif defect == "malformed":
+        hooks = {"bad": item}
+    assert runner._is_control_only_publication({"hooks": hooks}, declaration) is (defect is None)
+
+
 @pytest.mark.parametrize(
     "malformed",
     [
@@ -133,3 +192,11 @@ def test_i8_hook_result_byte_boundary_retains_replay_safety(tmp_path, extra):
         assert executor()._run_workspace_publication_hook(**kwargs) == result
         assert executor()._run_workspace_publication_hook(**kwargs) == result
     assert len(calls) == 1
+
+
+def test_issue646_u1_workspace_slims_logs_before_existing_reserve_check(tmp_path):
+    path = tmp_path / 'iteration.json'
+    metadata = {'session_id': 'same', 'workspace_completion': {'consumed': 2},
+                'streaming_log': [{'value': 'x' * 1_100_000}]}
+    executor()._persist_workspace_metadata(path, metadata)
+    assert json.loads(path.read_text()) == {k: v for k, v in metadata.items() if k != 'streaming_log'}

@@ -3965,6 +3965,8 @@ def _plan_step_playbook() -> dict:
                 "skill": "plan",
                 "role": "developer",
                 "output_artifact": "plan",
+                "input_artifacts": ["spec", "plan"],
+                "todo_identity_input_artifact": "plan",
                 "allowed_tools": ["Read"],
                 "valid_intents": ["ready_for_review", "need_clarification", "confirmed"],
                 "on": {
@@ -4879,6 +4881,10 @@ def _minimal_spec_executor(
         "playbook": {"id": "default"},
         "roles": {"pm": {"default_agent": "Roger"}},
         "steps": {
+            "plan": {
+                "input_artifacts": ["plan"], "output_artifact": "plan",
+                "todo_identity_input_artifact": "plan",
+            },
             "spec": {
                 "skill": "spec_first",
                 "role": "pm",
@@ -7633,6 +7639,9 @@ def test_renamed_plan_artifact_preserves_baseline_across_alignment_rounds(
     executor.phase_dir = tmp_path / "issue" / "plan"
     state = BlackboardStore(tmp_path / "issue").load_or_create("plan")
     artifact_name = "implementation_plan"
+    executor.playbook["steps"]["plan"].update(
+        input_artifacts=[artifact_name], output_artifact=artifact_name,
+        todo_identity_input_artifact=artifact_name)
 
     executor.iteration = 1
     original = executor.phase_dir / "iteration_001" / "output.md"
@@ -7734,6 +7743,9 @@ def test_plan_publication_rejects_corrupt_existing_artifact_record(
     tmp_path: Path,
 ) -> None:
     executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.playbook["steps"]["plan"].update(
+        input_artifacts=["implementation_plan"], output_artifact="implementation_plan",
+        todo_identity_input_artifact="implementation_plan")
     executor.phase_dir = tmp_path / "issue" / "plan"
     executor.iteration = 2
     state = BlackboardStore(tmp_path / "issue").load_or_create("plan")
@@ -9545,6 +9557,219 @@ def test_build_context_forwards_the_workflow_language_to_the_agent(
     assert "en-US" in content_line
     if stored_locale is None:
         assert state.conversation_locale is None
-        assert "conversation_locale" not in json.loads(
-            store.file_path.read_text(encoding="utf-8")
+        assert "conversation_locale" not in json.loads(store.file_path.read_text(encoding="utf-8"))
+
+
+def test_custom_steps_keep_all_local_skills_and_current_prompts(tmp_path, monkeypatch):
+    """U7/U9/I2/I3: public step launch forwards all selection/root/context data."""
+    monkeypatch.chdir(tmp_path)
+    phase = _build_loader(tmp_path)
+    for name in ("alpha-local", "beta-local", "unselected-local"):
+        directory = tmp_path / ".cafe/skills" / name
+        directory.mkdir(parents=True)
+        (directory / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: project\n---\n{name}: {{issue_dir}} {{iteration_dir}}\n"
         )
+    agent_file = tmp_path / ".cafe/agents/researcher/David.md"
+    agent_file.parent.mkdir(parents=True)
+    agent_file.write_text("---\nname: David\ndescription: Researcher\n---\nRead current sources.\n")
+    issue_dir = tmp_path / ".cafe/issues/custom-project"
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("alpha-step")
+    playbook = {
+        "playbook": {"id": "custom-local"},
+        "steps": {
+            "alpha-step": {
+                "skill": "alpha-local",
+                "role": "researcher",
+                "on": {"await_agent": "beta-step"},
+            },
+            "beta-step": {
+                "skill": "beta-local",
+                "role": "researcher",
+                "on": {"await_agent": "_done"},
+            },
+        },
+        "skills": {"workflow": {"shared": ["unselected-local"]}},
+    }
+    manager = FakeAgentManager(["ready", "ready"])
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="custom-project",
+        playbook=playbook,
+        generic_phase=phase,
+        agent_manager=manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"researcher": "David"},
+    )
+    for step in ("alpha-step", "beta-step"):
+        executor.execute_step(step, playbook["steps"][step], state)
+        prompt = manager.prompts[-1]
+        assert f"{playbook['steps'][step]['skill']}: ./.cafe/issues/custom-project" in prompt
+        assert "unselected-local: ./.cafe/issues/custom-project" in prompt
+        for cli in (AgentCLI.CODEX, AgentCLI.CLAUDE, AgentCLI.COPILOT):
+            for name in ("alpha-local", "beta-local", "unselected-local"):
+                link = phase.skill_bridge.get_native_skills_dir(cli) / name
+                assert link.is_symlink() and link.resolve() == tmp_path / ".cafe/skills" / name
+    assert "alpha-step/iteration_001" not in manager.prompts[-1]
+    from cafe.ui import chat
+
+    monkeypatch.setattr(chat, "SkillLoader", lambda **kwargs: phase.skill_loader)
+    chat._prepare_chat_environment(
+        agent_cli=AgentCLI.CODEX,
+        project_root=tmp_path,
+        playbook={"skills": {"chat": {"shared": ["unselected-local"]}}},
+        role="researcher",
+        step_name="custom-chat",
+        context={"issue_dir": "current-chat"},
+    )
+    added = tmp_path / ".cafe/skills/added-after-chat"
+    added.mkdir()
+    (added / "SKILL.md").write_text("---\nname: added-after-chat\ndescription: added\n---\n")
+    chat._prepare_chat_environment(
+        agent_cli=AgentCLI.CODEX,
+        project_root=tmp_path,
+        playbook={"skills": {"chat": {"shared": []}}},
+        role="researcher",
+        step_name="custom-chat",
+    )
+    for cli in (AgentCLI.CODEX, AgentCLI.CLAUDE, AgentCLI.COPILOT):
+        root = phase.skill_bridge.get_native_skills_dir(cli)
+        assert (root / "added-after-chat").is_symlink()
+        assert all(
+            (root / name).is_symlink() for name in ("alpha-local", "beta-local", "unselected-local")
+        )
+
+
+def _execution_report_publication_fixture(tmp_path, *, plan_name="plan", code_name="code"):
+    from cafe.core.checklist import ChecklistMaterialization, ProjectedTodo
+
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.playbook["steps"]["author"] = {
+        "input_artifacts": [plan_name], "output_artifact": plan_name,
+        "todo_identity_input_artifact": plan_name,
+    }
+    executor.playbook["steps"]["implement"] = {
+        "input_artifacts": [plan_name], "output_artifact": code_name,
+    }
+    executor.phase_dir = tmp_path / "issue" / "implement"
+    executor.iteration = 2
+    output = executor.phase_dir / "iteration_002" / "output.md"
+    output.parent.mkdir(parents=True)
+    row = (
+        "- [ ] `PLAN-001` — Source: `plan` — Work: build parser — "
+        "Closure: verified — Evidence: targeted test\n"
+    )
+    plan_file = tmp_path / "issue" / "author" / "iteration_001" / "output.md"
+    plan_file.parent.mkdir(parents=True)
+    plan_file.write_text("## Todo List\n" + row)
+    plan = ArtifactEntry(name=plan_name, kind=ArtifactKind.DOCUMENT, version=3,
+        updated_by="author", path=str(plan_file),
+        content_sha256=hashlib.sha256(plan_file.read_bytes()).hexdigest())
+    (plan_file.parent / "artifact.json").write_text(json.dumps(plan.to_dict()))
+    item = parse_todo_list(plan_file.read_text())[0]
+    binding = {
+        "declaration_artifact": plan_name, "source": "plan", "causal": False,
+        "contributor": "implementation", "section": 0, "artifact": plan_name,
+        "path": str(plan_file), "version": 3, "content_sha256": plan.content_sha256,
+        "handles": [item.item_id], "producer_ids": [item.item_id],
+        "rows": [ProjectedTodo(item.item_id, item).checklist_row()],
+    }
+    materialized = ChecklistMaterialization("", (), (binding,), False)
+    (output.parent / "iteration.json").write_text(
+        json.dumps({"effective_checklist": materialized.to_dict()}))
+    legacy = executor.phase_dir / "iteration_001" / "output.md"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("## Todo Progress\nHistorical execution report, edited after registration.\n")
+    code = ArtifactEntry(name=code_name, kind=ArtifactKind.DOCUMENT, version=1,
+        updated_by="implement", path=str(legacy), content_sha256="0" * 64)
+    (legacy.parent / "artifact.json").write_text(json.dumps(code.to_dict()))
+    output.write_text("## Todo List\n" + row)
+    state = BlackboardStore(tmp_path / "issue").load_or_create("implement")
+    state.artifacts.update({plan_name: plan, code_name: code})
+    return executor, state, output, binding
+
+
+@pytest.mark.parametrize(("plan_name", "code_name"), [("plan", "code"), ("roadmap", "report")])
+def test_execution_report_uses_pinned_plan_instead_of_stale_legacy_report(
+    tmp_path, plan_name, code_name,
+):
+    executor, state, output, _binding = _execution_report_publication_fixture(
+        tmp_path, plan_name=plan_name, code_name=code_name)
+    prior = state.artifacts[code_name]
+    plan = state.artifacts[plan_name]
+    before = {path: path.read_bytes() for path in (
+        Path(prior.path), Path(prior.path).parent / "artifact.json",
+        Path(plan.path).parent / "artifact.json")}
+    selected = {name: entry.to_dict() for name, entry in state.artifacts.items()}
+    output.write_text(output.read_text() +
+        "- [ ] `QA-001` — Source: `qa` — Work: inspect output — Closure: verified — Evidence: test\n")
+    result = executor._write_artifact_record(blackboard_state=state,
+        output_key=code_name, output_path=str(output), updated_by="implement", persist=False)
+    assert result.version == 2
+    assert result.todo_identities is None
+    assert result.todo_work_identities is None
+    assert not (output.parent / "artifact.json").exists()
+    assert {name: entry.to_dict() for name, entry in state.artifacts.items()} == selected
+    assert all(path.read_bytes() == content for path, content in before.items())
+
+
+@pytest.mark.parametrize("damage", ["missing_binding", "changed_version", "changed_digest", "changed_work", "new_id", "undeclared_source"])
+def test_execution_report_publication_rejects_untrusted_plan_binding(tmp_path, damage):
+    executor, state, output, _binding = _execution_report_publication_fixture(tmp_path)
+    if damage == "missing_binding":
+        (output.parent / "iteration.json").unlink()
+    elif damage == "changed_version":
+        state.artifacts["plan"].version += 1
+    elif damage == "changed_digest":
+        state.artifacts["plan"].content_sha256 = "f" * 64
+    elif damage == "changed_work":
+        output.write_text(output.read_text().replace("build parser", "deploy service") +
+            _plan_continuity("PLAN-001", "build parser"))
+    elif damage == "new_id":
+        output.write_text(output.read_text().replace("PLAN-001", "PLAN-002"))
+    else:
+        executor.playbook["steps"]["implement"]["input_artifacts"] = []
+    before = {name: entry.to_dict() for name, entry in state.artifacts.items()}
+    with pytest.raises(ValueError, match="plan"):
+        executor._write_artifact_record(blackboard_state=state, output_key="code",
+            output_path=str(output), updated_by="implement", persist=False)
+    assert not (output.parent / "artifact.json").exists()
+    assert {name: entry.to_dict() for name, entry in state.artifacts.items()} == before
+
+
+def test_plan_publication_preflight_does_not_materialize_legacy_authority(tmp_path):
+    executor, state, output, _binding = _execution_report_publication_fixture(tmp_path)
+    executor.phase_dir = output.parent.parent
+    executor.playbook["steps"]["implement"].update(
+        output_artifact="plan", todo_identity_input_artifact="plan")
+    plan = state.artifacts["plan"]
+    plan.content_sha256 = None
+    record_path = Path(plan.path).parent / "artifact.json"
+    old = plan.to_dict()
+    record_path.write_text(json.dumps(old))
+    before = record_path.read_bytes()
+    result = executor._write_artifact_record(blackboard_state=state, output_key="plan",
+        output_path=str(output), updated_by="implement", persist=False)
+    assert result.todo_work_identities
+    assert plan.to_dict() == old
+    assert record_path.read_bytes() == before
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("version", True), ("version", "1"),
+    ("todo_work_identities", []), ("todo_identities", []),
+])
+def test_pure_plan_resolver_preserves_invalid_selected_metadata_types(tmp_path, field, value):
+    executor, state, _output, _binding = _execution_report_publication_fixture(tmp_path)
+    selected = state.artifacts["plan"]
+    selected.version = 1
+    record_path = Path(selected.path).parent / "artifact.json"
+    record_path.write_text(json.dumps(selected.to_dict()))
+    setattr(selected, field, value)
+    before = record_path.read_bytes()
+    with pytest.raises(ValueError, match="invalid mandatory|malformed .*identity metadata"):
+        executor._resolve_plan_todo_authority("plan", selected)
+    assert getattr(selected, field) == value
+    assert type(getattr(selected, field)) is type(value)
+    assert record_path.read_bytes() == before

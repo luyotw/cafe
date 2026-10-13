@@ -175,6 +175,11 @@ def write_phase_config(
         project_root=project_root,
     )
     document = _candidate_document(_load_confirmed_chains(chains_file), playbook=effective_playbook)
+    if target.exists():
+        prior = yaml.safe_load(target.read_text(encoding="utf-8"))
+        if not isinstance(prior, dict):
+            raise ValueError("existing phase configuration is invalid; recover before an atomic update")
+        document = {**prior, **document}
     resolver = None
     phase_paths = None
     if effective_playbook is not None:

@@ -2,13 +2,14 @@
 
 The twelve adopting development playbooks separate PR preparation from delivery. Their `delivery` declarations bind the action-review step/task, action and outcome artifacts, original Review proposal artifact and implementation correction route. Names are not runtime discriminators. Compact delivery remains a separate contract.
 
-`subagent-flow` makes final delivery-result confirmation assignable at kickoff.
-The user may retain that confirmation or delegate it to Manager, which must
+All twelve adopting development playbooks make final delivery-result
+confirmation assignable at kickoff. New Manager proposals default to delegating
+that confirmation to Manager; the user may retain it instead. Manager must
 verify the current complete result and receipts before answering. The separate
 `need_permission` action review remains user-owned: delegating result confirmation
 does not authorize integration, follow-up issue creation, or an unconfirmed
-cleanup action. Other development playbooks retain their mandatory final user
-confirmation, and existing confirmed contracts retain their recorded ownership.
+cleanup action. Existing confirmed contracts retain their recorded ownership
+and require explicit reconfirmation before adopting a changed gate contract.
 
 PR publication presents exact repository, PR or local destination, source and target commit identities, strategy, original FUP drafts, and the host capability manifests and material permission boundaries. The host freezes this bundle and the reviewed artifact digest. One correlated user decision authorizes integration and an explicit subset or empty issue selection, including only those displayed host boundaries. Delivery projects that existing decision into separate durable capability approvals with the originating task/result and snapshot identity. Registered `cafe.github.pr.merge`, `cafe.branch.integrate` and `cafe.github.issue.create` still use the existing policy revalidation and one-attempt fence; changed manifests or permissions require fresh review. Legacy proposals without a displayed host review retain their separate capability approval.
 

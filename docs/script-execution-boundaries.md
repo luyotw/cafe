@@ -55,6 +55,7 @@ This inventory is executable documentation: the unit contract discovers every `s
 | `src/cafe/data/skills/use-cafe-workflow/scripts/kickoff_delivery.py::_inventory` | Internal fixed Git tracked-file inventory query |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/sync_helper_with_preflight.py::_run_command` | Explicit CLI-native helper publication with fixed CAFE pre/post checks |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/preflight_cache.py::_cli_fingerprint` | Internal version probe |
+| `src/cafe/agents/cli/effort.py::_client_version` | Internal fixed read-only provider version probe |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/preflight_cache.py::candidate_probe` | User-requested model availability probe |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/run_workflow.py::run` | Internal fixed CAFE workflow bootstrap |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/run_workflow.py::_bootstrap_isolated_runtime` | Internal fixed Python re-exec |
@@ -64,7 +65,7 @@ This inventory is executable documentation: the unit contract discovers every `s
 | `src/cafe/authoring/transaction.py::confined` | Internal fixed Git source marker query |
 | `src/cafe/install/bootstrap.py::_run` | Internal installer command family |
 | `src/cafe/skills/global_installer.py::_discover_git_roots` | Internal fixed Git root discovery query |
-| `src/cafe/skills/native_bridge.py::_ensure_managed_skills_git_excluded` | Internal fixed Git command |
+| `src/cafe/skills/native_bridge.py::_ensure_managed_skills_git_excluded` ×2 | Internal fixed Git command |
 | `src/cafe/agents/transport.py::open_interactive_session` | Internal agent CLI transport |
 | `src/cafe/updates/service.py::_run_pip` | Explicit approved package installation |
 | `src/cafe/ui/cli.py::_reexec_repo_entrypoint` | Internal fixed Python re-exec |
@@ -132,7 +133,8 @@ Existing compact launchers are inventoried separately from the development deliv
 | --- | --- |
 | `src/cafe/core/execution_checkpoints.py::guard_execution_delivery` | Internal fixed delivery checkpoint query |
 | `src/cafe/core/pr_delivery.py::publish_resolved_pr.action.dispatch_check` | Registered compact PR pre-dispatch query |
-| `src/cafe/core/pr_delivery.py::publish_resolved_pr.action` | Registered compact PR capability adapter |
+| `src/cafe/core/pr_delivery.py::observe_pr_identity.read` | Internal fixed GitHub PR identity observation query |
+| `src/cafe/skills/native_bridge.py::_worktree_git_exclude_context.git` | Internal fixed Git worktree identity query |
 | `src/cafe/core/file_scope.py::_git` | Internal fixed Git scope query |
 | `src/cafe/core/file_scope.py::working_git_entry` | Internal fixed Git scope query |
 | `src/cafe/core/git_delivery.py::git_text` | Internal fixed Git delivery query |

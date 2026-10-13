@@ -1454,13 +1454,17 @@ class BlackboardStore:
         data: Optional[Dict[str, Any]] = None,
         *,
         baton_contract: HandoffContract | None = None,
+        before_commit: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         entry = EventEntry(_now_iso(), step, event_type, message, data or {})
-        self._commit_event(state, entry, baton_contract=baton_contract)
+        options = {"baton_contract": baton_contract}
+        if before_commit is not None: options["before_commit"] = before_commit
+        self._commit_event(state, entry, **options)
 
     def _commit_event(self, state: BlackboardState, entry: EventEntry,
                       *, event_id: str | None = None,
-                      baton_contract: HandoffContract | None = None) -> EventEntry:
+                      baton_contract: HandoffContract | None = None,
+                      before_commit: Callable[[dict[str, Any]], None] | None = None) -> EventEntry:
         with self._thread_lock_for(self.file_path):
             with self.state_lock_path.open("a+", encoding="utf-8") as lock_file:
                 with _optional_process_file_lock(lock_file):
@@ -1495,6 +1499,13 @@ class BlackboardStore:
                     }
                     if baton_contract is not None:
                         record["baton"] = baton_contract.to_next_step_dict()
+                    if before_commit is not None:
+                        # Bind companion evidence to this exact reserved audit
+                        # identity before publishing its terminal record.
+                        before_commit(record)
+                        entry.data = record["data"]
+                        entry.message = json.dumps(entry.data, ensure_ascii=False)
+                        record["message"] = entry.message
                     self.audit.commit(state.workflow_id, record)
                     if baton_contract is not None:
                         atomic_write_bytes(
@@ -1515,11 +1526,14 @@ class BlackboardStore:
     def record_event(
         self, state: BlackboardState, event_type: str, payload: Dict[str, Any],
         *, baton_contract: HandoffContract | None = None,
+        before_commit: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         step = str(payload.get("step", state.current_step))
+        options = {"baton_contract": baton_contract}
+        if before_commit is not None: options["before_commit"] = before_commit
         self.log_event(
             state, step, event_type, json.dumps(payload, ensure_ascii=False), payload,
-            baton_contract=baton_contract,
+            **options,
         )
 
     def prepare_workflow_callback_event(

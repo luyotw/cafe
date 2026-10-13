@@ -433,3 +433,59 @@ class TestIterationIndexIncludesEndTime:
         assert data["end_time"] == "2026-01-27T10:05:00+08:00"
         assert data["status"] == "confirmed"
         assert data["has_error"] is False
+
+
+@pytest.mark.parametrize('response', ['await_agent', '', None])
+def test_u1_u2_control_history_omits_available_large_stream(tmp_path, response):
+    """issue646 U1/U2: success, empty and error retain only control evidence."""
+    phase = ConcretePhase(phase_dir=tmp_path)
+    phase.iteration = 1
+    directory = phase._get_iteration_dir(1)
+    directory.mkdir()
+    controls = {'session_id': 'original', 'model': 'original-model',
+                'artifact_correction': {'consumed': 2}, 'receipt': {'id': 'genuine'}}
+    (directory / 'iteration.json').write_text(json.dumps(controls))
+    records = [{'index': i, 'value': '台灣' * 400} for i in range(600)]
+    raw = ''.join(json.dumps(r, ensure_ascii=False) + '\n' for r in records).encode()
+    (directory / 'streaming.jsonl').write_bytes(raw)
+    phase._update_iteration_history({'response': response, 'streaming_log': records})
+    saved = json.loads((directory / 'iteration.json').read_text())
+    assert 'streaming_log' not in saved
+    assert all(saved[k] == v for k, v in controls.items())
+    assert (directory / 'iteration.json').stat().st_size < 1_048_576
+    assert (directory / 'streaming.jsonl').read_bytes() == raw
+
+
+@pytest.mark.parametrize('size', [983_041, 1_048_576, 1_048_577])
+def test_u1_ordinary_history_exact_admission_preserves_original_on_refusal(tmp_path, size):
+    from datetime import datetime
+    phase = ConcretePhase(phase_dir=tmp_path)
+    phase.iteration = 1
+    directory = phase._get_iteration_dir(1)
+    directory.mkdir()
+    path = directory / 'iteration.json'
+    candidate = {'padding': '', 'end_time': datetime.now().astimezone().isoformat()}
+    phase._update_iteration_history(candidate)
+    baseline = json.loads(path.read_text())
+    baseline['padding'] = 'x' * (size - path.stat().st_size)
+    before = path.read_bytes()
+    if size > 1_048_576:
+        with pytest.raises(RuntimeError):
+            phase._update_iteration_history(baseline)
+        assert path.read_bytes() == before
+    else:
+        phase._update_iteration_history(baseline)
+        assert path.stat().st_size == size
+
+
+def test_u1_legacy_overload_requires_explicit_verified_repair(tmp_path):
+    phase = ConcretePhase(phase_dir=tmp_path)
+    phase.iteration = 1
+    directory = phase._get_iteration_dir(1)
+    directory.mkdir()
+    path = directory / 'iteration.json'
+    original = json.dumps({'streaming_log': [{'text': 'x' * 1_100_000}], 'session_id': 'original'}).encode()
+    path.write_bytes(original)
+    with pytest.raises(RuntimeError):
+        phase._update_iteration_history({'response': 'new attempt'})
+    assert path.read_bytes() == original

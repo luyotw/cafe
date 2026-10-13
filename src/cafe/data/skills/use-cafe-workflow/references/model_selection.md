@@ -1,12 +1,12 @@
 # Issue Assessment And Model Selection
 
 Read this reference before kickoff, before writing phase execution config, and
-whenever execution returns control with agent phases still unexecuted. Also read
+whenever execution returns control, including when no future phase remains. Also read
 `kickoff.md` before asking for confirmation and `running_workflow.md` before
 execution.
 
 At kickoff, inspect the model evidence returned by `prepare_kickoff.py discover`
-before repeating research. Reuse only an exact provider/model/version record
+before repeating research. Reuse only an exact provider/model/version/effort record
 whose supporting-source fingerprints and freshness are still valid. Gather
 current primary-source evidence for a miss, expiry, changed source, or
 contradiction, then pass the verified assessment through the documented
@@ -223,11 +223,11 @@ For each distinct selected candidate, run:
 
 ```bash
 python3 <skill-dir>/scripts/preflight_cache.py candidate-probe \
-  --cli <cli> --model <exact-model>
+  --cli <cli> --model <exact-model> --reasoning-effort <verified-effort>
 ```
 
 - Exit `0` with `status=hit` reuses a successful actual execution from the last
-  24 hours for the same exact model and unchanged CLI executable/version.
+  24 hours for the same exact CLI/model/effort (including omission), unchanged executable/version, adapter projection, and effort-control context.
 - Exit `0` with `status=fresh` means the helper ran one actual minimal
   non-mutating prompt through the selected CAFE CLI/model and cached the success.
   If the provider reports a canonical resolved model, use that exact identifier
@@ -242,8 +242,8 @@ and CAFE runtime source fingerprint are unchanged:
 
 ```bash
 python3 <skill-dir>/scripts/preflight_cache.py fallback-smoke \
-  --entry <primary-cli>:<exact-model> \
-  --entry <fallback-cli>:<exact-model>
+  --entry '{"cli":"<primary-cli>","model":"<exact-model>","reasoning_effort":"<verified-effort>"}' \
+  --entry '{"cli":"<fallback-cli>","model":"<exact-model>","reasoning_effort":"<verified-effort>"}' 
 ```
 
 Run this command only when a fallback exists. Pass every configured fallback
@@ -258,7 +258,7 @@ matching candidate before reconsidering it:
 
 ```bash
 python3 <skill-dir>/scripts/preflight_cache.py candidate-invalidate \
-  --cli <cli> --model <exact-model>
+  --cli <cli> --model <exact-model> --reasoning-effort <verified-effort>
 ```
 
 For a suspected fallback-runtime defect, rerun `fallback-smoke` with `--force`.
@@ -279,18 +279,67 @@ quality_gate:
   clis:
     - cli: <primary-cli>
       model: <exact-primary-model>
+      reasoning_effort: <verified-effort>
 ```
 
 Append further `clis` entries only for confirmed fallbacks. A single entry is
 a valid primary-only chain.
 
-Issue scale and risk inform selection; do not persist an assessment report as
-part of the confirmed contract or create a replacement assessment sidecar.
+Issue scale and risk inform selection. For each phase, choose capability band,
+exact primary/fallback models, explicit verified effort for every entry, and
+phase-specific rationale for both model and effort. Keep the provider-neutral
+profile minimum distinct from the provider token. Current tuple evidence must
+justify the workload, risk and fallback strength; identical level names do not
+establish equivalence. Existing effort-omitting YAML remains compatible, but
+Manager-created or reselected chains cannot silently omit effort. If available
+independently controlled candidates cannot satisfy the phase, present the exact
+limitation and proposed default-only exception through the existing human route.
+The Manager cannot authorize that exception itself.
 
-Kickoff phase chains are initial values. The Manager never changes them from its
-own judgment. When the user explicitly requests a different phase model, edit
-only the corresponding future chain in the active worktree's
-`.cafe/phases.yaml`. The next phase start or iteration uses it; an iteration
-already running finishes unchanged. Do not update the Manager contract or touch
-callback session and dispatch state. Automatic use of an already configured
-fallback does not change the contract.
+Use lossless JSON entries with `--phase-chain 'STEP=[{"cli":"...","model":"...","reasoning_effort":"..."}]'`
+and `--phase-rationale 'STEP={"band":"balanced","model":"...","effort":"..."}'`.
+Compact inputs carry the same per-phase `rationale` object. Keep evidence in the
+existing review/output surfaces; add no assessment sidecar or role-scoped default.
+
+## Reassess at existing return-of-control boundaries
+
+Consume durable evidence for every newly completed phase since the previous
+observation, in execution order, even when no eligible future phase remains.
+Use `kickoff_models.reassess_completed_phases` with prior records from existing
+Manager output and append every returned record there. Supply phase-specific
+model/effort reasoning grounded in the remaining work, workload minimum and risk.
+Record `no_adjustment` when no future phase remains. Continuous execution may
+therefore defer these per-phase assessments to the next existing boundary;
+reassessment adds no callback, pause, advancement gate or worker ownership.
+
+Recommendations grant no edits. Only not-yet-started phases may change under
+existing confirmed authority. An effort-only change is material. The compact
+contract replacement still requires `user_reconfirmation` and predecessor CAS;
+use the existing human route when prior adjustment authority cannot satisfy that
+gate. Preserve unrelated policy and already-started/completed chains, preflight
+the changed exact tuples, update phase YAML and confirmed contract consistently,
+and regenerate launch/resume context and checkpoint identity. Partial updates
+must fail freshness/tuple checks and use existing recovery before execution.
+Never rewrite current worker context, completed iteration receipts, callback
+session or dispatch state. Configured fallback execution does not change policy.
+
+For example, lower a future bounded publication phase's effort only when current
+evidence supports its minimum, the user has confirmed the exact replacement,
+and its distinct tuple has passing preflight. A still-running develop invocation
+retains its initial tuple and historical evidence.
+
+See [Phase reasoning effort](../../../../../../docs/reasoning-effort.md) for adapter
+admission and the configured/applied/reported evidence limits.
+
+An interrupted workspace correction remains pinned to its actual producer.
+After an explicit phase-model change, submit the existing typed recovery choice
+before resuming: `retry` retains the original session, while
+`retry_fresh_session` explicitly requests a new session. Configuration alone
+cannot rotate a pinned correction. The runtime retains the original producer
+and recovery-result references, reserves the next existing correction
+opportunity, and rebinds active producer evidence only after the real invocation
+returns the selected CLI/model and permitted session. Failed, mismatched or
+unpersisted transitions stay interrupted; old results never become evidence for
+the replacement model. Correction budgets, capacity limits, approval/receipt
+history and publication replay restrictions remain unchanged. An exhausted
+workspace budget is not reset by selecting a new model or session.

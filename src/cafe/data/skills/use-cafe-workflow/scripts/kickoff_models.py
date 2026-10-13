@@ -20,13 +20,20 @@ def _date(value: Any) -> datetime | None:
         return None
     return parsed.astimezone(timezone.utc)
 
+
 def assess_model_evidence(
-    record: dict[str, Any], *, now: datetime, current_sources: dict[str, str] | None = None,
-    contradictions: list[str] | None = None, expected_identity: dict[str, str] | None = None,
+    record: dict[str, Any],
+    *,
+    now: datetime,
+    current_sources: dict[str, str] | None = None,
+    contradictions: list[str] | None = None,
+    expected_identity: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     diagnostics: list[str] = []
     invalidated = record.get("invalidated_sources", [])
-    if not isinstance(invalidated, list) or any(not isinstance(url, str) or not url.strip() for url in invalidated):
+    if not isinstance(invalidated, list) or any(
+        not isinstance(url, str) or not url.strip() for url in invalidated
+    ):
         diagnostics.append("source_invalidation_metadata_invalid")
     elif invalidated:
         diagnostics.append("source_fingerprint_changed")
@@ -40,7 +47,19 @@ def assess_model_evidence(
     ):
         diagnostics.append("floating_model_version")
     identity = {"provider": provider, "model": model, "version": version}
-    if expected_identity is not None and any(identity.get(key) != value for key, value in expected_identity.items()):
+    if "reasoning_effort" in record:
+        effort = record["reasoning_effort"]
+        if (
+            not isinstance(effort, str)
+            or not effort.isascii()
+            or not effort.isalpha()
+            or effort.lower() != effort
+        ):
+            diagnostics.append("effort_identity_invalid")
+        identity["reasoning_effort"] = effort
+    if expected_identity is not None and any(
+        identity.get(key) != value for key, value in expected_identity.items()
+    ):
         diagnostics.append("model_identity_changed")
     assessed_at = _date(record.get("assessed_at"))
     sources = record.get("sources")
@@ -78,8 +97,15 @@ def assess_model_evidence(
                 diagnostics.append("source_fingerprint_changed")
     workloads = record.get("workloads")
     allowed_workloads = {
-        "general", "requirements", "planning", "implementation", "review",
-        "publication", "operations", "research", "content",
+        "general",
+        "requirements",
+        "planning",
+        "implementation",
+        "review",
+        "publication",
+        "operations",
+        "research",
+        "content",
     }
     if (
         not isinstance(workloads, list)
@@ -94,7 +120,11 @@ def assess_model_evidence(
     if not isinstance(bands, dict) or not bands:
         diagnostics.append("capability_assessment_missing")
     limitations = record.get("limitations")
-    if not isinstance(limitations, list) or not limitations or any(not isinstance(item, str) or not item.strip() for item in limitations):
+    if (
+        not isinstance(limitations, list)
+        or not limitations
+        or any(not isinstance(item, str) or not item.strip() for item in limitations)
+    ):
         diagnostics.append("assessment_uncertainties_missing")
     if assessed_at is None or not source_dates:
         diagnostics.append("assessment_dates_incomplete")
@@ -120,8 +150,64 @@ def assess_model_evidence(
         "identity": identity,
         "expires_at": None if expires_at is None else expires_at.isoformat(),
         "diagnostics": diagnostics,
-        "assessment": {
-            key: record[key]
-            for key in ("workloads", "reasoning", "capability_bands", "limitations", "sources", "assessed_at")
-        } if status == "hit" else None,
+        "assessment": (
+            {
+                key: record[key]
+                for key in (
+                    "workloads",
+                    "reasoning",
+                    "capability_bands",
+                    "limitations",
+                    "sources",
+                    "assessed_at",
+                )
+            }
+            if status == "hit"
+            else None
+        ),
     }
+
+
+def reassess_completed_phases(completed, *, prior_assessments, started_phases, recommendations):
+    """Plan ordered recommendations at an existing Manager observation boundary.
+
+    Callers append these records to their existing Manager output. This pure
+    operation neither writes configuration nor grants adjustment authority.
+    Completion identity comes from durable phase/iteration evidence.
+    """
+
+    def identity(row):
+        return row["phase"], row["iteration"], row["completed_at"]
+
+    observed = {identity(row) for row in prior_assessments}
+    rows = []
+    eligible = {
+        name: value for name, value in recommendations.items() if name not in started_phases
+    }
+    for recommendation in eligible.values():
+        if recommendation.get("band") not in {"efficiency", "balanced", "frontier"}:
+            raise ValueError("reassessment requires a capability band")
+        if not recommendation.get("model_rationale") or not recommendation.get("effort_rationale"):
+            raise ValueError("reassessment requires model and effort rationale")
+        chain = recommendation.get("chain")
+        if not chain or any(not entry.get("reasoning_effort") for entry in chain):
+            raise ValueError("reassessment requires complete explicit tuples")
+    for completion in sorted(
+        completed, key=lambda row: (row["completed_at"], row["phase"], row["iteration"])
+    ):
+        key = identity(completion)
+        if key in observed:
+            continue
+        observed.add(key)
+        rows.append(
+            {
+                **{field: completion[field] for field in ("phase", "iteration", "completed_at")},
+                "outcome": "recommendation_only" if eligible else "no_adjustment",
+                "eligible_future_phases": list(eligible),
+                "recommendations": eligible,
+                "authorized_mutation": False,
+                "model_rationale": "Assess remaining workload, phase minimum and durable uncertainty evidence.",
+                "effort_rationale": "Reassess each exact provider tuple; no eligible future phase requires an explicit no-adjustment record.",
+            }
+        )
+    return rows

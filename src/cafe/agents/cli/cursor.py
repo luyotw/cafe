@@ -93,7 +93,7 @@ class CursorCLI(AbstractCLI):
         # Add output format parameter
         cmd.extend(self.get_output_format())
 
-        return cmd
+        return self.project_reasoning_effort(cmd)
 
     def parse_response(
         self,

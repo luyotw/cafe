@@ -32,6 +32,123 @@ from cafe.ui.human_tasks import resolve_step_human_task
 pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
 
+@pytest.mark.parametrize('deferred_compaction', [False, True])
+def test_validated_cached_completion_starts_new_iteration_after_review_return(tmp_path, monkeypatch, deferred_compaction):
+    from cafe.core.phase_state_mixin import next_runnable_iteration_number
+
+    issue = tmp_path / ".cafe" / "issues" / "cached-completion"
+    iteration = issue / "producer" / "iteration_001"
+    iteration.mkdir(parents=True)
+    metadata = iteration / "iteration.json"
+    retained = {
+        "iteration": 1,
+        "end_time": "2026-10-13T08:24:00+08:00",
+        "cli": "codex",
+        "model": "original-model",
+        "session_id": "original-session",
+        "effective_inputs": {"spec_file": {"mode": "full", "path": "spec.md"}},
+        "workspace_completion": {"consumed": 3, "rejections": ["original"]},
+        "workspace_publication": {"hooks": {"original": {"state": "completed"}}},
+    }
+    metadata.write_text(json.dumps({**retained, "workflow_completion_trusted": False}))
+    calls = []
+    playbook = {
+        "playbook": {"id": "cached-completion"},
+        "steps": {
+            "producer": {"skill": "producer", "role": "developer", "output_artifact": "code",
+                         "on": {"await_agent": "reviewer"}},
+            "reviewer": {"skill": "reviewer", "role": "reviewer", "output_artifact": "review_feedback",
+                         "on": {"manual_handoff": "producer"}},
+        },
+    }
+
+    def executor(step, declaration, state):
+        number = next_runnable_iteration_number(issue / step)
+        calls.append((step, number))
+        directory = issue / step / f"iteration_{number:03d}"
+        directory.mkdir(parents=True, exist_ok=True)
+        if step != "producer" or number != 1:
+            (directory / "iteration.json").write_text(json.dumps({
+                "iteration": number, "end_time": "2026-10-13T09:26:00+08:00",
+            }))
+        output = directory / "output.md"
+        output.write_text("Saved committed result" if step == "producer" else "Fix the blocking defect")
+        _write_baton(
+            issue, from_step=step, to_owner="agent",
+            to_step="reviewer" if step == "producer" else "producer",
+            intent="await_agent" if step == "producer" else "manual_handoff",
+        )
+        return StepExecutionResult(response="", artifacts={declaration["output_artifact"]: str(output)})
+
+    runtime = BlackboardWorkflowRuntime(issue_dir=issue, playbook=playbook, executor=executor)
+    if deferred_compaction:
+        import cafe.core.workflow_runtime as module
+        write = module.atomic_write_bytes
+        def fail_compaction(path, payload):
+            if path == metadata and 'workflow_completion_trusted' not in json.loads(payload):
+                raise OSError('optional marker compaction remains unavailable')
+            return write(path, payload)
+        monkeypatch.setattr(module, 'atomic_write_bytes', fail_compaction)
+    with pytest.raises(RuntimeError, match="max transition limit"):
+        runtime.run(start_step="producer", max_transitions=2)
+
+    assert calls == [("producer", 1), ("reviewer", 1)]
+    assert runtime.blackboard.current_step == "producer"
+    actual = json.loads(metadata.read_text())
+    assert {key: value for key, value in actual.items() if key != 'workflow_completion_trusted'} == retained
+    assert ('workflow_completion_trusted' in actual) is deferred_compaction
+    assert next_runnable_iteration_number(issue / "producer") == 2
+    assert runtime.blackboard.artifacts["review_feedback"].updated_by == "reviewer"
+    resumed = BlackboardWorkflowRuntime(issue_dir=issue, playbook=playbook, executor=executor)
+    with pytest.raises(RuntimeError, match="max transition limit"):
+        resumed.run(max_transitions=1)
+    assert calls[-1] == ("producer", 2)
+    assert {key: value for key, value in json.loads(metadata.read_text()).items() if key != 'workflow_completion_trusted'} == retained
+
+
+@pytest.mark.parametrize("case", ["missing_end", "malformed", "oversize", "serialized_oversize", "write_failure"])
+def test_completion_marker_failure_preserves_original_context(tmp_path, monkeypatch, case):
+    issue = tmp_path / ".cafe" / "issues" / "completion-marker"
+    directory = issue / "producer" / "iteration_001"
+    directory.mkdir(parents=True)
+    path = directory / "iteration.json"
+    context = {"end_time": "saved", "workflow_completion_trusted": False, "workspace_completion": {"consumed": 3}}
+    payload = json.dumps(context).encode()
+    if case == "missing_end":
+        del context["end_time"]
+        payload = json.dumps(context).encode()
+    elif case == "malformed":
+        payload = b"[invalid"
+    elif case == "oversize":
+        payload += b" " * (1_048_577 - len(payload))
+    elif case == "serialized_oversize":
+        context["history"] = [{"key": "value"}] * 16
+        context["padding"] = ""
+        size = len(json.dumps(context, separators=(",", ":")).encode())
+        context["padding"] = "p" * (1_048_576 - size)
+        payload = json.dumps(context, separators=(",", ":")).encode()
+        assert len(payload) <= 1_048_576
+        cleared = dict(context)
+        del cleared["workflow_completion_trusted"]
+        assert len((json.dumps(cleared, indent=2) + "\n").encode()) > 1_048_576
+    path.write_bytes(payload)
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue,
+        playbook={"playbook": {"id": "marker"}, "steps": {"producer": {"on": {"await_agent": "_done"}}}},
+        executor=lambda *args: None,
+    )
+    if case == "write_failure":
+        def fail(*args):
+            raise OSError("atomic write failed before replacement")
+        monkeypatch.setattr("cafe.core.workflow_runtime.atomic_write_bytes", fail)
+    if case == "missing_end":
+        runtime._mark_latest_iteration_completion_trusted("producer")
+    else:
+        with pytest.raises((RuntimeError, OSError)):
+            runtime._mark_latest_iteration_completion_trusted("producer")
+    assert path.read_bytes() == payload
+
+
 def _canonicalize_board_fixture(issue_dir: Path) -> None:
     """Give hand-written workflow fixtures the new prepared authorities."""
     board_path = issue_dir / "blackboard.json"
@@ -5573,6 +5690,292 @@ def _recovery_fault_curation_runtime(
         playbook=_feedback_curation_playbook(),
         executor=executor,
     )
+
+
+def _interrupted_curator_supervisor_redirect(issue_dir, monkeypatch, *, report=True):
+    from cafe.core.blackboard import ArtifactEntry, ArtifactKind
+    from cafe.ui.human_tasks import apply_human_task_payload
+
+    calls = []
+    runtime = _recovery_fault_curation_runtime(issue_dir=issue_dir, calls=calls)
+    old_output = issue_dir / "curator/iteration_001/output.md"
+    old_output.write_text("Previously published output.\n")
+    runtime.blackboard_store.put_artifact(runtime.blackboard, ArtifactEntry(
+        name="curated_result", kind=ArtifactKind.DOCUMENT, version=1,
+        updated_by="curator", path=str(old_output),
+    ))
+    iteration = issue_dir / "curator/iteration_002"
+    iteration.mkdir()
+    (iteration / "iteration.json").write_text(json.dumps({"iteration": 2, "step_name": "curator", "cli": "codex", "session_id": "interrupted-session"}))
+    (iteration / "checklist.md").write_text("[ ] Remaining integration\n")
+    (iteration / "output.md").write_text("Unaccepted staged proposal.\n")
+    original = runtime.executor
+
+    def interrupted(step_name, step, state):
+        if step_name == "curator":
+            raise RuntimeError("Producer interrupted before publication")
+        return original(step_name, step, state)
+
+    runtime.executor = interrupted
+    monkeypatch.setattr(runtime, "_notify_new_human_task", lambda task: None)
+    assert runtime.run(start_step="curator").final_status_code == "INTERRUPTED:agent_error"
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    payload = {"human_task_id": task.id, "task": task.policy_id, "decision": "retry"}
+    if report:
+        payload["work_report"] = {"summary": "User selected plan revision.", "outcome": "Read the proposal."}
+    applied = apply_human_task_payload(
+        issue_dir=issue_dir, playbook_data=runtime.playbook, blackboard=runtime.blackboard,
+        from_step="curator", trigger=task.trigger, raw_payload=payload,
+        source="command", supervisor_handoff_to="consumer",
+    )
+    assert applied.target == "consumer", applied.rejection
+    return BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=runtime.playbook, executor=interrupted,
+    ), calls, task
+
+
+@pytest.mark.parametrize("report", [False, True])
+def test_interrupted_supervisor_redirect_is_not_producer_feedback_delivery(tmp_path, monkeypatch, report):
+    runtime, calls, _ = _interrupted_curator_supervisor_redirect(tmp_path / "redirect", monkeypatch, report=report)
+    result = runtime.run(max_transitions=2)
+    assert result.completed, result.final_status_code
+    assert calls == ["consumer"]
+    assert (runtime.issue_dir / "curator/iteration_002/checklist.md").read_text() == "[ ] Remaining integration\n"
+    assert runtime.blackboard.artifacts["curated_result"].version == 1
+    assert not any(e.event_type == "workflow_feedback_delivered" for e in runtime.blackboard.events)
+
+
+@pytest.mark.parametrize("tamper", [
+    "missing_result", "iteration", "superseded", "cancelled", "source",
+    "continuation", "declared_continuation", "supervisor_target", "task_id",
+    "result_id", "event_target", "event_policy", "event_source", "baton_source",
+])
+def test_interrupted_supervisor_redirect_requires_correlated_completion(tmp_path, monkeypatch, tamper):
+    runtime, calls, task = _interrupted_curator_supervisor_redirect(tmp_path / "tampered", monkeypatch)
+    records = HumanTaskRecordStore(runtime.issue_dir)
+    raw = json.loads(records.file_path.read_text())
+    if tamper == "missing_result":
+        raw["results"] = []
+    elif tamper == "iteration":
+        raw["tasks"][0]["iteration"] = 1
+    elif tamper == "superseded":
+        raw["tasks"][0]["superseded_by_task_id"] = "other-task"
+    elif tamper == "cancelled":
+        raw["tasks"][0]["status"] = "cancelled"
+    elif tamper == "source":
+        raw["results"][0]["source"] = "other-source"
+    elif tamper in {"continuation", "declared_continuation", "supervisor_target"}:
+        key = "supervisor_handoff_to" if tamper == "supervisor_target" else tamper
+        raw["results"][0]["payload"][key] = "other-step"
+    elif tamper.startswith("event_") or tamper in {"task_id", "result_id"}:
+        event = next(e for e in reversed(runtime.blackboard.events) if e.event_type == "human_task_completed")
+        key = {"event_target": "to_step", "event_policy": "task_id", "event_source": "source", "task_id": "human_task_id"}.get(tamper, tamper)
+        event.data[key] = "other-value"
+    else:
+        runtime.blackboard.handoff_contract.source = "producer"
+    records.file_path.write_text(json.dumps(raw))
+    assert runtime._feedback_delivery_handoff_candidate() == ("curator", None)
+    assert calls == []
+
+
+def test_interrupted_supervisor_redirect_does_not_skip_prepared_delivery(tmp_path, monkeypatch):
+    runtime, calls, _ = _interrupted_curator_supervisor_redirect(tmp_path / "pending", monkeypatch)
+    runtime.blackboard_store.record_event(runtime.blackboard, "workflow_feedback_delivery_prepared", {
+        "step": "curator", "delivery_id": "unsettled-operation",
+        "source_identities": ["external:pending"],
+    })
+    result = runtime.run(max_transitions=2)
+    assert result.final_status_code == "INVALID_FEEDBACK_DELIVERY"
+    assert calls == []
+    assert not any(e.event_type == "workflow_feedback_delivered" for e in runtime.blackboard.events)
+
+
+@pytest.mark.parametrize("tamper", ["none", "later_work", "other_reason", "extra_gate", "real_delivery", "changed_result", "changed_source"])
+def test_resume_restores_only_an_unconsumed_supervisor_redirect_rejected_by_legacy_recovery(tmp_path, monkeypatch, tamper):
+    runtime, calls, _ = _interrupted_curator_supervisor_redirect(tmp_path / "legacy-rejection", monkeypatch)
+    runtime.blackboard_store.record_event(runtime.blackboard, "step_reconciliation_failed", {
+        "step": "curator", "runtime": "feedback_delivery_recovery",
+        "missing_evidence": ["checklist_complete", "feedback_delivery_prepared"],
+    })
+    runtime.blackboard_store.record_event(runtime.blackboard, "workflow_feedback_delivery_rejected", {
+        "step": "curator", "status_code": "INVALID_FEEDBACK_DELIVERY",
+        "reason": "feedback_delivery_recovery_failed", "runtime": "feedback_delivery_recovery",
+    })
+    runtime._restore_interrupted_step_handoff(current_step="curator", reason="feedback_delivery_recovery_failed")
+    if tamper == "later_work":
+        runtime.blackboard_store.record_event(runtime.blackboard, "step_started", {"step": "curator"})
+    elif tamper in {"other_reason", "extra_gate", "real_delivery"}:
+        events = runtime.blackboard.events
+        if tamper == "other_reason":
+            events[-1].data["reason"] = "other_reason"
+        elif tamper == "extra_gate":
+            events[-3].data["missing_evidence"].append("artifact_invalid")
+        else:
+            events[-2].data["delivery_id"] = "real-operation"
+        # Persist altered event evidence through a fresh test-only audit fixture.
+        paths = sorted((runtime.issue_dir / "audit_events/events").glob("*.json"))[-3:]
+        for event, path in zip(events[-3:], paths):
+            raw = json.loads(path.read_text())
+            raw["data"] = event.data
+            path.write_text(json.dumps(raw))
+    elif tamper == "changed_result":
+        records = HumanTaskRecordStore(runtime.issue_dir)
+        raw = json.loads(records.file_path.read_text())
+        raw["results"][0]["payload"]["supervisor_handoff_to"] = "other-step"
+        records.file_path.write_text(json.dumps(raw))
+    elif tamper == "changed_source":
+        runtime.blackboard_store.update_handoff_contract(
+            runtime.blackboard, from_step="curator", to_owner=HandoffOwner.AGENT,
+            to_step="curator", intent=HandoffIntent.AWAIT_AGENT, source="producer",
+        )
+    restored = BlackboardWorkflowRuntime(issue_dir=runtime.issue_dir, playbook=runtime.playbook, executor=runtime.executor)
+    if tamper != "none":
+        assert not restored._try_restore_rejected_interruption_redirect()
+        assert restored.blackboard.current_step == "curator"
+    else:
+        assert restored.run(max_transitions=2).completed
+        assert calls == ["consumer"]
+        assert any(e.event_type == "interrupted_supervisor_handoff_restored" for e in restored.blackboard.events)
+        assert (runtime.issue_dir / "curator/iteration_002/checklist.md").read_text() == "[ ] Remaining integration\n"
+
+
+@pytest.mark.parametrize("legacy_rejected", [False, True])
+@pytest.mark.parametrize("checkpoint_state", ["absent", "passed", "blocked"])
+def test_cli_preprocessing_preserves_supervisor_runtime_recovery(tmp_path, monkeypatch, legacy_rejected, checkpoint_state):
+    from cafe.ui.cli import _consume_pending_chat_handoff
+
+    root = tmp_path / "repository"
+    root.mkdir()
+    monkeypatch.chdir(root)
+    (root / ".gitignore").write_text(".cafe/\n")
+    (root / "allowed").write_text("baseline\n")
+    for args in (["init", "-q"], ["add", "."], ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "baseline"]):
+        subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+    baseline = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True).stdout.strip()
+    runtime, calls, _ = _interrupted_curator_supervisor_redirect(root / ".cafe/issues/redirect", monkeypatch)
+    if legacy_rejected:
+        runtime.blackboard_store.record_event(runtime.blackboard, "step_reconciliation_failed", {
+            "step": "curator", "runtime": "feedback_delivery_recovery",
+            "missing_evidence": ["checklist_complete", "feedback_delivery_prepared"],
+        })
+        runtime.blackboard_store.record_event(runtime.blackboard, "workflow_feedback_delivery_rejected", {
+            "step": "curator", "status_code": "INVALID_FEEDBACK_DELIVERY",
+            "reason": "feedback_delivery_recovery_failed", "runtime": "feedback_delivery_recovery",
+        })
+        runtime._restore_interrupted_step_handoff(current_step="curator", reason="feedback_delivery_recovery_failed")
+    expected_source = runtime.blackboard.handoff_contract.source
+    requested_start = _consume_pending_chat_handoff(
+        issue_dir=runtime.issue_dir, playbook_data=runtime.playbook, requested_start_step=None,
+    )
+    persisted = BlackboardStore(runtime.issue_dir).load_or_create("curator")
+    assert requested_start is None
+    assert persisted.handoff_contract.source == expected_source
+    context = None if checkpoint_state == "absent" else {
+        "version": 1, "root": str(root), "baseline_commit": baseline,
+        "paths": ["allowed"], "preexisting": [], "authority_digest": "a" * 64,
+        "revision": 1, "identity": {"issue_name": "redirect", "workflow_id": runtime.blackboard.workflow_id},
+    }
+    if checkpoint_state == "blocked":
+        (root / "outside").write_text("out of scope\n")
+    resumed = BlackboardWorkflowRuntime(
+        issue_dir=runtime.issue_dir, playbook=runtime.playbook,
+        executor=runtime.executor, execution_context=context,
+    )
+    result = resumed.run(start_step=requested_start, max_transitions=2)
+    if checkpoint_state == "blocked":
+        assert result.final_status_code == "EXECUTION_CHECKPOINT_BLOCKED"
+        assert calls == []
+        assert not any(e.event_type == "interrupted_supervisor_handoff_restored" for e in resumed.blackboard.events)
+    else:
+        assert result.completed, result.final_status_code
+        assert calls == ["consumer"]
+        assert (runtime.issue_dir / "curator/iteration_002/checklist.md").read_text() == "[ ] Remaining integration\n"
+
+
+@pytest.mark.parametrize("crash_at_checkpoint", [False, True])
+def test_runtime_entry_checkpoint_preserves_legacy_supervisor_redirect(tmp_path, monkeypatch, crash_at_checkpoint):
+    # Isolate checkpoint ordering from CLI preprocessing as a separate regression.
+    runtime, calls, _ = _interrupted_curator_supervisor_redirect(tmp_path / "checkpoint", monkeypatch)
+    runtime.blackboard_store.record_event(runtime.blackboard, "step_reconciliation_failed", {
+        "step": "curator", "runtime": "feedback_delivery_recovery",
+        "missing_evidence": ["checklist_complete", "feedback_delivery_prepared"],
+    })
+    runtime.blackboard_store.record_event(runtime.blackboard, "workflow_feedback_delivery_rejected", {
+        "step": "curator", "status_code": "INVALID_FEEDBACK_DELIVERY",
+        "reason": "feedback_delivery_recovery_failed", "runtime": "feedback_delivery_recovery",
+    })
+    runtime._restore_interrupted_step_handoff(current_step="curator", reason="feedback_delivery_recovery_failed")
+    monkeypatch.setattr("cafe.core.execution_checkpoints.checkpoint", lambda *a, **k: {"passed": True, "findings": []})
+    resumed = BlackboardWorkflowRuntime(
+        issue_dir=runtime.issue_dir, playbook=runtime.playbook, executor=runtime.executor,
+        execution_context={"test": "passed scope gate"},
+    )
+    if crash_at_checkpoint:
+        original_record_event = resumed.blackboard_store.record_event
+
+        def crash_after_restoration(state, event_type, data):
+            if event_type == "execution_checkpoint":
+                raise RuntimeError("Crash before checkpoint publication")
+            return original_record_event(state, event_type, data)
+
+        monkeypatch.setattr(resumed.blackboard_store, "record_event", crash_after_restoration)
+        with pytest.raises(RuntimeError, match="Crash before checkpoint publication"):
+            resumed.run(max_transitions=2)
+        assert calls == []
+        resumed = BlackboardWorkflowRuntime(
+            issue_dir=runtime.issue_dir, playbook=runtime.playbook, executor=runtime.executor,
+            execution_context={"test": "passed scope gate"},
+        )
+    assert resumed.run(max_transitions=2).completed
+    assert calls == ["consumer"]
+    assert sum(e.event_type == "interrupted_supervisor_handoff_restored" for e in resumed.blackboard.events) == 1
+
+
+@pytest.mark.parametrize("fault", ["before_baton", "after_baton_before_board", "before_terminal_receipt"])
+def test_supervisor_restoration_resumes_partial_route_publication(tmp_path, monkeypatch, fault):
+    from cafe.ui.cli import _consume_pending_chat_handoff
+
+    runtime, calls, _ = _interrupted_curator_supervisor_redirect(tmp_path / "partial-route", monkeypatch)
+    runtime.blackboard_store.record_event(runtime.blackboard, "step_reconciliation_failed", {
+        "step": "curator", "runtime": "feedback_delivery_recovery",
+        "missing_evidence": ["checklist_complete", "feedback_delivery_prepared"],
+    })
+    runtime.blackboard_store.record_event(runtime.blackboard, "workflow_feedback_delivery_rejected", {
+        "step": "curator", "status_code": "INVALID_FEEDBACK_DELIVERY",
+        "reason": "feedback_delivery_recovery_failed", "runtime": "feedback_delivery_recovery",
+    })
+    runtime._restore_interrupted_step_handoff(current_step="curator", reason="feedback_delivery_recovery_failed")
+    store = runtime.blackboard_store
+    if fault == "before_baton":
+        def crash(*args, **kwargs):
+            raise RuntimeError("publication interrupted")
+        monkeypatch.setattr(store, "update_handoff_contract", crash)
+    elif fault == "after_baton_before_board":
+        original_save = store.save
+        def crash(state, **kwargs):
+            if state.handoff_contract.source == "human_task.command":
+                raise RuntimeError("publication interrupted")
+            return original_save(state, **kwargs)
+        monkeypatch.setattr(store, "save", crash)
+    else:
+        original_record = store.record_event
+        def crash(state, event_type, data):
+            if event_type == "interrupted_supervisor_handoff_restored":
+                raise RuntimeError("publication interrupted")
+            return original_record(state, event_type, data)
+        monkeypatch.setattr(store, "record_event", crash)
+    with pytest.raises(RuntimeError, match="publication interrupted"):
+        runtime._try_restore_rejected_interruption_redirect()
+    assert calls == []
+    # Rebuild through the production preprocessing boundary, not the old object.
+    requested_start = _consume_pending_chat_handoff(
+        issue_dir=runtime.issue_dir, playbook_data=runtime.playbook, requested_start_step=None,
+    )
+    resumed = BlackboardWorkflowRuntime(issue_dir=runtime.issue_dir, playbook=runtime.playbook, executor=runtime.executor)
+    assert resumed.run(start_step=requested_start, max_transitions=2).completed
+    assert calls == ["consumer"]
+    assert sum(e.event_type == "interrupted_supervisor_handoff_restored" for e in resumed.blackboard.events) == 1
+    assert (runtime.issue_dir / "curator/iteration_002/checklist.md").read_text() == "[ ] Remaining integration\n"
 
 
 def _empty_batch_curation_runtime(issue_dir: Path, calls: list[str]):
