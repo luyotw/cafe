@@ -1518,3 +1518,60 @@ def test_issue646_i1_large_available_stream_remains_single_and_control_state_usa
     records = [json.loads(line) for line in (j.iteration / 'streaming.jsonl').read_text().splitlines()]
     assert records == raw_records * len([call for call in j.manager.calls if call[3].get('streaming_output_file')])
     j.reconstruct()
+
+
+@pytest.mark.parametrize("mode", ["baton", "legacy"])
+def test_legacy_skill_preparation_interruption_can_start_first_session(journey, monkeypatch, mode):
+    """Old saved skill conflicts have no provider identity, even with an interruption marker."""
+    from cafe.core.blackboard import BlackboardStore
+    from cafe.core.session_continuation import SessionContinuationPolicy
+    from cafe.skills.exceptions import SkillDiscoveryError
+    from cafe.ui.human_tasks import apply_human_task_payload
+
+    j = journey([CORRECTED], mode=mode)
+    prepare = j.executor.generic_phase.prepare_skill
+
+    def conflict(**kwargs):
+        raise SkillDiscoveryError("Unmanaged or changed native skill conflict: /native/old-copy")
+
+    monkeypatch.setattr(j.executor.generic_phase, "prepare_skill", conflict)
+    result = j.runtime.run(start_step="inspect_custom")
+    assert not result.completed and not j.manager.calls
+    records = HumanTaskRecordStore(j.issue)
+    task = records.tasks()[0]
+    path = j.iteration / "iteration.json"
+    saved = json.loads(path.read_text())
+    legacy = {k: v for k, v in saved.items()
+              if k in {"effective_inputs", "workflow_completion_trusted", "agent_interruption"}}
+    assert "agent_interruption" in legacy
+    path.write_text(json.dumps(legacy))
+    state = BlackboardStore(j.issue).load_or_create("inspect_custom")
+    for invalid in ({"workflow_id": "different"}, {"step": "different"}, {"id": "different"}):
+        changed = dict(legacy, agent_interruption={**legacy["agent_interruption"], **invalid})
+        path.write_text(json.dumps(changed))
+        rejected = apply_human_task_payload(
+            issue_dir=j.issue, playbook_data=j.playbook, blackboard=state,
+            from_step="inspect_custom", trigger=task.trigger,
+            raw_payload={"task": task.policy_id, "decision": "retry_fresh_session",
+                         "human_task_id": task.id}, source="test",
+        )
+        assert rejected.rejection is not None
+        assert records.get_result(task.id) is None
+    path.write_text(json.dumps(legacy))
+    application = apply_human_task_payload(
+        issue_dir=j.issue, playbook_data=j.playbook, blackboard=state,
+        from_step="inspect_custom", trigger=task.trigger,
+        raw_payload={"task": task.policy_id, "decision": "retry_fresh_session",
+                     "human_task_id": task.id}, source="test",
+    )
+    assert application.rejection is None
+    recovery = records.get_result(task.id).payload["session_continuation"]
+    assert recovery["preparation"]["kind"] == "skill_preparation_failed"
+    assert "previous" not in recovery
+    monkeypatch.setattr(j.executor.generic_phase, "prepare_skill", prepare)
+    assert j.reconstruct().run().completed
+    assert len(j.manager.calls) == 1
+    assert j.manager.calls[0][2].policy is SessionContinuationPolicy.NEW
+    assert j.manager.deliveries == 1
+    assert j.reconstruct().run().completed
+    assert len(j.manager.calls) == 1 and j.manager.deliveries == 1
