@@ -50,7 +50,6 @@ def physical_id(session, start):
     return sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-SUPPORTED_VERSION = "0.159.3"
 MAX_NODES = 256
 MAX_DEPTH = 16
 MAX_FILES = 8192
@@ -146,7 +145,7 @@ class NativeInterval:
 
     def attest_caller_usage(self, usage):
         """Normalize root totals here; generic reports never infer provider semantics."""
-        if getattr(self, "root_version", None) != SUPPORTED_VERSION:
+        if not getattr(self, "root_observed", False):
             return usage
         result = usage.model_copy(deep=True)
         for record in result.cost_records:
@@ -158,7 +157,7 @@ class NativeInterval:
                     counters["input_tokens"] + counters["output_tokens"]
                 )
                 record["token_total_evidence"] = dict(
-                    kind="input_plus_output", source="native_adapter", version=SUPPORTED_VERSION
+                    kind="input_plus_output", source="native_adapter"
                 )
         return result
 
@@ -457,8 +456,6 @@ class NativeInterval:
         owned = self.started <= born <= cutoff or identity in causal
         if not owned:
             return None
-        if meta.get("cli_version") != SUPPORTED_VERSION:
-            gaps.append("unsupported_native_version")
         if baseline and baseline.get("active_turn"):
             gaps.append("entry_child_already_active")
         native_records = [
@@ -474,12 +471,10 @@ class NativeInterval:
         if baseline is None:
             # Generic fork/resume history can seed cumulative counters. Do not infer zero.
             baseline = dict(offset=0, anchor="birth", counters={})
-            verified_birth = (
-                self.started <= born <= cutoff and meta.get("cli_version") == SUPPORTED_VERSION
-            )
+            verified_birth = self.started <= born <= cutoff
             if source_kind == "token_usage_record" and verified_birth:
-                # 0.159.3 spawn filtering removes inherited per-thread records;
-                # a new child starts its own response accounting from zero.
+                # Only records with this child's exact thread_id are selected.
+                # Inherited records from other threads cannot seed its counters.
                 baseline["counters"] = dict.fromkeys(COUNTERS, 0)
             elif not meta.get("forked_from_id") and not meta.get("history_base") and verified_birth:
                 baseline["counters"] = dict.fromkeys(COUNTERS, 0)
@@ -588,7 +583,6 @@ class NativeInterval:
         if any(
             g in gaps
             for g in (
-                "unsupported_native_version",
                 "entry_child_already_active",
                 "counter_reset",
                 "concurrent_child_turns",
@@ -608,14 +602,10 @@ class NativeInterval:
             gaps.append("actual_model_unavailable")
         parent = self._parent(meta)
         segment = physical_id(identity, start)
-        inclusion = (
-            "exclusive"
-            if (
-                meta.get("cli_version") == SUPPORTED_VERSION
-                and getattr(self, "root_version", None) == SUPPORTED_VERSION
-            )
-            else "unknown"
-        )
+        # Both recognized counter streams describe one journal/thread. The
+        # validated root identity and ancestry establish separate physical work;
+        # the CLI release string does not establish accounting semantics.
+        inclusion = "exclusive" if getattr(self, "root_observed", False) else "unknown"
         native = dict(
             version=1,
             segment_id=segment,
@@ -649,7 +639,11 @@ class NativeInterval:
                 counter_source=source_kind,
                 locator=str(boundary["path"]),
                 digest=boundary["digest"],
-                semantics="codex-rust-v0.159.3",
+                semantics=(
+                    "codex_thread_token_usage"
+                    if source_kind == "token_usage_record"
+                    else "codex_session_token_count"
+                ),
             ),
         )
         from cafe.core.cost import account_cost
@@ -710,7 +704,8 @@ class NativeInterval:
             except (OSError, ValueError, TypeError, KeyError):
                 gaps.append("native_observation_unavailable")
         self.root_version = data[self.root][0].get("cli_version") if self.root in data else None
-        if self.root_version != SUPPORTED_VERSION:
+        self.root_observed = self.root in data
+        if not self.root_observed:
             gaps.append("root_inclusion_unavailable")
         # Host admission belongs to the exact entry turn, not its persistent session.
         ownership_cutoff = cutoff

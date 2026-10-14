@@ -12,7 +12,6 @@ from cafe.core.cost import account_cost, summarize_cost
 from cafe.core.types import TokenUsage
 from tests.unit.test_cost_accounting import state
 
-
 SESSION = "01a10a7d-c447-7032-a913-d78a3919d35e"
 
 
@@ -26,11 +25,14 @@ def write(path, row):
         handle.write(json.dumps(row) + "\n")
 
 
-def metadata(path):
-    write(path, dict(type="session_meta", payload=dict(
-        id=SESSION, cli_version="0.159.3", source="exec",
+def metadata(path, version="0.159.3"):
+    payload = dict(
+        id=SESSION, source="exec",
         timestamp=datetime.now(timezone.utc).isoformat(),
-    )))
+    )
+    if version is not None:
+        payload["cli_version"] = version
+    write(path, dict(type="session_meta", payload=payload))
 
 
 def request(path, total, last, *, duplicate=False):
@@ -42,12 +44,12 @@ def request(path, total, last, *, duplicate=False):
         write(path, row)
 
 
-def project(tmp_path, *, resumed=False, duplicate=False, message_size=0):
+def project(tmp_path, *, resumed=False, duplicate=False, message_size=0, version="0.159.3"):
     journal = tmp_path / "sessions" / f"rollout-test-{SESSION}.jsonl"
     journal.parent.mkdir()
     prior = counters(1_000_000, 900_000) if resumed else None
     if resumed:
-        metadata(journal)
+        metadata(journal, version)
         if message_size:
             write(journal, dict(type="event_msg", payload=dict(
                 type="agent_message", message="x" * message_size)))
@@ -56,7 +58,7 @@ def project(tmp_path, *, resumed=False, duplicate=False, message_size=0):
     observe = prepare_request_usage(command, {"CODEX_HOME": str(tmp_path)},
                                     selected_session=SESSION if resumed else None)
     if not resumed:
-        metadata(journal)
+        metadata(journal, version)
     write(journal, dict(type="turn_context", payload=dict(model="gpt-test")))
     if message_size:
         write(journal, dict(type="event_msg", payload=dict(
@@ -91,6 +93,16 @@ def test_short_requests_above_aggregate_threshold_are_priced_once(tmp_path, resu
 
 
 @pytest.mark.parametrize("resumed", [False, True])
+@pytest.mark.parametrize("version", ["0.159.3", "0.162.0-alpha.17.2", "99.0.0", "unknown", None])
+def test_request_accounting_uses_evidence_instead_of_cli_version(tmp_path, resumed, version):
+    observe, usage, lines, _ = project(tmp_path, resumed=resumed, version=version)
+    record, = account_cost(observe(usage, lines), cli="codex", model="gpt-test",
+                           state=state()).cost_records
+    assert len(record["request_estimates"]) == 2
+    assert Decimal(record["amount_usd"]) == Decimal("0.3602")
+
+
+@pytest.mark.parametrize("resumed", [False, True])
 def test_large_native_messages_do_not_hide_request_usage(tmp_path, resumed):
     observe, usage, lines, _ = project(tmp_path, resumed=resumed, message_size=300_000)
     record, = account_cost(observe(usage, lines), cli="codex", model="gpt-test",
@@ -109,7 +121,7 @@ def test_native_message_line_limit_remains_bounded(tmp_path, resumed):
 
 
 @pytest.mark.parametrize("damage", ["missing_request", "wrong_last", "model_missing",
-                                       "unsupported", "truncated", "oversized", "alias"])
+                                       "identity", "schema", "truncated", "oversized", "alias"])
 def test_incomplete_native_request_evidence_does_not_invent_a_context_band(
     tmp_path, monkeypatch, damage
 ):
@@ -121,8 +133,10 @@ def test_incomplete_native_request_evidence_does_not_invent_a_context_band(
         rows[-1]["payload"]["info"]["last_token_usage"]["input_tokens"] -= 1
     elif damage == "model_missing":
         rows.pop(1)
-    elif damage == "unsupported":
-        rows[0]["payload"]["cli_version"] = "unknown"
+    elif damage == "identity":
+        rows[0]["payload"]["id"] = "another-session"
+    elif damage == "schema":
+        rows[-1]["payload"]["info"]["last_token_usage"] = {"tokens": 180_000}
     elif damage == "alias":
         rows[-1]["payload"]["info"]["last_token_usage"]["cache_read_input_tokens"] = 1
     journal.write_text("".join(json.dumps(row) + "\n" for row in rows))

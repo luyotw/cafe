@@ -148,6 +148,10 @@ Built-in **plan** templates require three architecture sections in every plan ar
 
 ## Coding Style
 
+Follow the repository-wide [engineering guidelines](docs/engineering-guidelines.md).
+Features must not be gated by release versions without a documented,
+evidence-backed exception; use capability and data validation instead.
+
 *   This project follows the [PEP 8](https://www.python.org/dev/peps/pep-0008/) style guide.
 *   We use pre-commit hooks to automatically check and format code. Please ensure you have them set up before committing.
 

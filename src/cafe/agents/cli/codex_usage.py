@@ -269,9 +269,10 @@ def prepare_request_usage(command, environment, *, selected_session=None):
                     raise ValueError("invalid native request metadata")
                 metadata = json.loads(first)
                 meta = metadata.get("payload", {})
-                if (metadata.get("type") != "session_meta" or meta.get("id") != session
-                        or meta.get("cli_version") != "0.159.3"):
-                    raise ValueError("unsupported native request identity/semantics")
+                if metadata.get("type") != "session_meta" or meta.get("id") != session:
+                    raise ValueError("invalid native request identity")
+                # CLI versions are diagnostic metadata. Compatibility is established
+                # below by reconciling every request against the invocation counters.
                 if baseline:
                     offset, previous = baseline[2], baseline[4]
                 else:
