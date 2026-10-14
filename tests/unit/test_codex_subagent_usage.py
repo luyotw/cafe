@@ -38,9 +38,10 @@ def journal(home, session, parent=None, second=1, fork=None, version="0.159.3"):
     metadata = dict(
         id=session,
         timestamp=(START + timedelta(seconds=second)).isoformat(),
-        cli_version=version,
         source="exec",
     )
+    if version is not None:
+        metadata["cli_version"] = version
     if parent:
         metadata["source"] = dict(
             subagent=dict(thread_spawn=dict(parent_thread_id=parent, agent_path="/root/child"))
@@ -122,7 +123,31 @@ def test_existing_child_requires_causal_resubmission_and_uses_entry_delta(tmp_pa
     assert children[0]["usage"]["input_tokens"] == 50
 
 
-@pytest.mark.parametrize("mode", ["missing", "reset", "fork", "unsupported", "partial", "mixed"])
+@pytest.mark.parametrize("version", ["0.159.3", "0.162.0-alpha.17.2", "99.0.0", "unknown", None])
+def test_native_accounting_uses_evidence_instead_of_cli_version(tmp_path, version):
+    from cafe.core.cost import account_cost
+    from cafe.core.types import TokenUsage
+    from tests.unit.test_cost_accounting import state
+
+    journal(tmp_path, ROOT, second=-30, version=version)
+    scope = interval(tmp_path)
+    scope.rate = state()
+    turn(journal(tmp_path, CHILD, ROOT, version=version), model="gpt-test")
+    records = collect(scope)
+    assert not records[0]["native_usage"]["gaps"]
+    child = next(r for r in records if r["native_usage"]["kind"] == "child")
+    assert child["complete"] and child["provenance"] == "estimated"
+    assert child["usage"]["input_tokens"] == 100
+    assert child["native_usage"]["inclusion"] == "exclusive"
+    assert child["native_usage"]["cli_version"] == version
+    caller = account_cost(TokenUsage(input_tokens=10, output_tokens=2), cli="codex",
+                          model="gpt-test", state=state())
+    attested = scope.attest_caller_usage(caller)
+    assert attested.cost_records[0]["usage"]["total_tokens"] == 12
+    assert "token_total_evidence" in attested.cost_records[0]
+
+
+@pytest.mark.parametrize("mode", ["missing", "reset", "fork", "schema", "partial", "mixed"])
 def test_degraded_native_evidence_is_unknown_or_partial(tmp_path, mode):
     journal(tmp_path, ROOT, second=-30)
     scope = interval(tmp_path)
@@ -131,7 +156,7 @@ def test_degraded_native_evidence_is_unknown_or_partial(tmp_path, mode):
         CHILD,
         ROOT,
         fork=ROOT if mode == "fork" else None,
-        version="9.0" if mode == "unsupported" else "0.159.3",
+        version="0.162.0-alpha.17.2",
     )
     if mode != "missing":
         turn(child, complete=mode != "partial")
@@ -139,9 +164,13 @@ def test_degraded_native_evidence_is_unknown_or_partial(tmp_path, mode):
         append(child, event("token_count", 7, info=dict(total_token_usage=counters(10))))
     if mode == "mixed":
         turn(child, 150, second=6, turn_id="t2", model="another-model")
+    if mode == "schema":
+        rows = [json.loads(line) for line in child.read_text().splitlines()]
+        rows[-2]["payload"]["info"]["total_token_usage"]["input_tokens"] = -1
+        child.write_text("".join(json.dumps(row) + "\n" for row in rows))
     record = next(r for r in collect(scope) if r["native_usage"]["kind"] == "child")
     assert not record["complete"] or record["provenance"] == "unavailable"
-    if mode in {"missing", "reset", "fork", "unsupported"}:
+    if mode in {"missing", "reset", "fork", "schema"}:
         assert "input_tokens" not in record["usage"]
     if mode == "mixed":
         assert record["model"] is None
@@ -187,7 +216,8 @@ def test_large_journal_home_keeps_archived_nested_coverage_within_bounds(tmp_pat
     assert sum(r["usage"]["input_tokens"] for r in children) == 150
     assert set(records[0]["native_usage"]["gaps"]) <= {"native_discovery_bound"}
     print(
-        f"5003-journal discovery: {elapsed:.3f}s; header bytes={scope.header_bytes}; journal bytes={scope.read_bytes}"
+        f"5003-journal discovery: {elapsed:.3f}s; header bytes={scope.header_bytes}; "
+        f"journal bytes={scope.read_bytes}"
     )
 
 
@@ -201,23 +231,31 @@ def test_unsafe_and_over_bound_sources_stay_contained(tmp_path):
     assert any(r["native_usage"]["gaps"] for r in collect(scope))
 
 
-def test_fork_inherited_counters_are_baseline_not_child_spend(tmp_path):
-    journal(tmp_path, ROOT, second=-30)
+@pytest.mark.parametrize("version", ["0.159.3", "0.162.0-alpha.17.2", "99.0.0"])
+def test_fork_inherited_counters_are_baseline_not_child_spend(tmp_path, version):
+    journal(tmp_path, ROOT, second=-30, version=version)
     scope = interval(tmp_path)
-    child = journal(tmp_path, CHILD, ROOT, fork=ROOT)
+    child = journal(tmp_path, CHILD, ROOT, fork=ROOT, version=version)
     append(child, event("token_count", -20, info=dict(total_token_usage=counters(1000))))
     turn(child, 1050)
     row = next(r for r in collect(scope) if r["native_usage"]["kind"] == "child")
     assert row["usage"]["input_tokens"] == 50
 
 
-def test_fresh_fork_per_thread_usage_records_do_not_inherit_parent_history(tmp_path):
-    journal(tmp_path, ROOT, second=-30)
+@pytest.mark.parametrize("version", ["0.159.3", "0.162.0-alpha.17.2", "99.0.0"])
+def test_fresh_fork_per_thread_usage_records_do_not_inherit_parent_history(tmp_path, version):
+    journal(tmp_path, ROOT, second=-30, version=version)
     scope = interval(tmp_path)
-    child = journal(tmp_path, CHILD, ROOT, fork=ROOT)
+    child = journal(tmp_path, CHILD, ROOT, fork=ROOT, version=version)
     turn(child, 1050, complete=False)
     append(
         child,
+        dict(
+            type="token_usage_record",
+            timestamp=(START - timedelta(seconds=10)).isoformat(),
+            payload=dict(thread_id=ROOT, turn_id="parent-turn",
+                         thread_token_usage=counters(1000)),
+        ),
         dict(
             type="token_usage_record",
             timestamp=(START + timedelta(seconds=3)).isoformat(),

@@ -288,7 +288,9 @@ not guarantee child totals unavailable before the final collection. Native-host
 explicit begin/finalize brackets use the same evidence and preserve their entry
 checkpoint after interruption.
 
-Local discovery supports the inspected `codex-cli 0.159.3` journal format.
+Local discovery recognizes native journal structures and validates identity,
+ownership, and counter semantics independently of the CLI release version.
+The recorded `cli_version` is diagnostic metadata, not an admission condition.
 Each collection inventories filenames before reading metadata, so it can verify
 unique IDs without letting unrelated large headers consume known-source reads.
 The root, retained entry baselines and targets named by verified parent
@@ -313,7 +315,7 @@ not establish that a real home fits the metadata allowance. Symlinks, special
 files, duplicate identities and skipped owned ranges remain incomplete. The
 collector never waits for, terminates or creates an agent.
 
-The implementation interpretation is grounded in the version-matched
+The historical implementation analysis inspected the
 [protocol](https://github.com/openai/codex/blob/rust-v0.159.3/codex-rs/protocol/src/protocol.rs),
 [session usage update](https://github.com/openai/codex/blob/rust-v0.159.3/codex-rs/core/src/session/mod.rs),
 [session state](https://github.com/openai/codex/blob/rust-v0.159.3/codex-rs/core/src/state/session.rs),
@@ -322,11 +324,15 @@ and [spawn history filtering](https://github.com/openai/codex/blob/rust-v0.159.3
 `TokenUsageInfo::append_last_usage` advances one session's cumulative counters;
 response accounting updates that session's state, while child execution uses a
 separate thread/session state. Shared rollout-budget consumption is a separate
-operation, not parent `token_count` accumulation. Supported parent/child native
-counters are therefore exclusive. Other versions remain unknown and child detail
-is non-additive when parent inclusion cannot be verified. Inclusive or overlapping
-observations without exact reconciliation retain detail but withhold a complete
-combined total; comparing equal numbers is never proof of overlap.
+operation, not parent `token_count` accumulation. These pinned source references
+describe the inspected format; they do not restrict support to that release.
+Recognized per-session/per-thread counters, validated root identity and ancestry
+establish exclusive parent/child accounting. Missing or incompatible identity,
+ownership, baseline or counter evidence leaves gaps regardless of the release
+string. Child detail is non-additive when parent inclusion cannot be verified.
+Inclusive or overlapping observations without exact reconciliation retain detail
+but withhold a complete combined total; comparing equal numbers is never proof
+of overlap.
 
 Resume and fork reconstruction can seed prior `token_count` information. Spawn
 filtering removes `TokenUsageRecord` inheritance but can retain older `EventMsg`
@@ -334,7 +340,9 @@ usage depending on history mode. A fresh timestamp alone therefore cannot prove
 a generic fork's zero baseline. An existing child requires an entry snapshot and
 an owned causal resubmission; historical ancestry alone never admits continuation.
 An inherited fork can use its evidenced pre-birth cumulative baseline; a new
-per-thread `token_usage_record` counter uses the verified fresh thread state.
+per-thread `token_usage_record` counter uses the verified fresh thread state,
+selecting only records with that child's exact `thread_id` and ignoring records
+inherited from other threads.
 A new non-fork/non-referenced child born during exclusively admitted work can use
 the verified initial-zero semantics. Missing or reset baseline categories stay
 unknown. Sanitized replay tests use these protocol shapes and never issue paid

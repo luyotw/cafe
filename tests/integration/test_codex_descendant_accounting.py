@@ -78,7 +78,8 @@ def native_journal(
 
 
 def supply_native(
-    provider_process, monkeypatch, home, *, failure=False, unsupported=False, publication=None
+    provider_process, monkeypatch, home, *, failure=False, malformed=False,
+    version="0.159.3", publication=None
 ):
     rows = [
         dict(type="thread.started", thread_id=ROOT),
@@ -92,11 +93,13 @@ def supply_native(
     def launch_native(*args, **kwargs):
         if publication is not None:
             assert publication(), "entry checkpoint must exist before provider submission"
-        native_journal(home, ROOT, n=10)
-        native_journal(
-            home, CHILD, ROOT, complete=not failure, version="9" if unsupported else "0.159.3"
-        )
-        native_journal(home, NESTED, CHILD, n=50)
+        native_journal(home, ROOT, n=10, version=version)
+        child = native_journal(home, CHILD, ROOT, complete=not failure, version=version)
+        if malformed:
+            records = [json.loads(line) for line in child.read_text().splitlines()]
+            records[3]["payload"]["info"]["total_token_usage"]["input_tokens"] = -1
+            child.write_text("".join(json.dumps(row) + "\n" for row in records))
+        native_journal(home, NESTED, CHILD, n=50, version=version)
         return launch.return_value
 
     launch.side_effect = launch_native
@@ -157,8 +160,9 @@ def test_manager_binding_preserves_process_control_and_prelaunch_open(
 
 
 @pytest.mark.parametrize("operation", ["run_one_shot", "acquire_session"])
+@pytest.mark.parametrize("version", ["0.159.3", "0.162.0-alpha.17.2", "99.0.0"])
 def test_custom_worker_public_caller_keeps_child_identity_and_owns_cutoff(
-    tmp_path, monkeypatch, provider_process, operation
+    tmp_path, monkeypatch, provider_process, operation, version
 ):
     home = tmp_path / "codex"
     issue = tmp_path / ".cafe/issues/topic"
@@ -171,6 +175,7 @@ def test_custom_worker_public_caller_keeps_child_identity_and_owns_cutoff(
         provider_process,
         monkeypatch,
         home,
+        version=version,
         publication=lambda: bool(json.loads(metadata.read_text()).get("stats")),
     )
     result = getattr(transport(AgentCLI.CODEX), operation)(
@@ -210,12 +215,12 @@ def test_custom_worker_public_caller_keeps_child_identity_and_owns_cutoff(
 
 
 @pytest.mark.parametrize("failure", [True, False])
-def test_partial_or_unsupported_native_accounting_preserves_provider_result(
+def test_partial_or_malformed_native_accounting_preserves_provider_result(
     tmp_path, monkeypatch, provider_process, failure
 ):
     published = []
     supply_native(
-        provider_process, monkeypatch, tmp_path / "native", failure=failure, unsupported=not failure
+        provider_process, monkeypatch, tmp_path / "native", failure=failure, malformed=not failure
     )
     caller = transport(AgentCLI.CODEX)
     if failure:
