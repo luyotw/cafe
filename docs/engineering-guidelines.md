@@ -4,6 +4,40 @@ This document contains confirmed repository-wide engineering and architecture
 constraints for CAFE. Workflow specification, planning, implementation, and
 review must treat these constraints as authoritative technical guidance.
 
+## Capabilities must not be gated by release versions
+
+No CAFE feature may require, allowlist, denylist, or otherwise bind to particular
+CAFE, provider, CLI, SDK, or dependency release versions without a documented,
+evidence-backed reason. This applies to exact matches, minimum/maximum versions,
+major-version ranges, and requirements that a cache's producer version match the
+installed client. An upgrade, an unfamiliar version, or missing version metadata
+must not by itself disable a feature or discard otherwise valid data.
+
+Determine compatibility from the required capabilities, command options,
+protocol/data structure, identity, and accounting semantics. Validate the
+evidence actually needed by the feature. Release versions may be recorded for
+diagnostics and reproducibility; a tested version is evidence about that test,
+not a list of the only supported versions. Missing or invalid capability evidence
+may still prevent execution, but the diagnostic must identify that actual gap.
+
+A version gate is an exception only when there is a concrete reason, such as a
+reproduced upstream bug or a demonstrated incompatible API/protocol change that
+cannot be handled adequately through capability or data validation. Every
+exception must document:
+
+- The failure, with a reproducible case or a specific upstream issue/change as
+  evidence. "Only this version was tested" is not sufficient.
+- The affected feature and narrowest affected version range, why direct
+  capability/data checks are insufficient, and the available recovery path.
+- The condition for removing the gate and regression tests covering both the
+  affected case and compatible versions outside that range.
+
+Specification, planning, implementation, and review must enforce this rule.
+Review must reject unexplained version gates, including attempts to restore
+them through cache validation or provider adapters. Explicit protocol/schema
+validation, release numbering, and dependency locks for reproducible builds are
+separate concerns; they do not justify a feature gate based on release identity.
+
 ## Generic workflow architecture
 
 Default workflow behavior is owned by playbook YAML, skills, and the
