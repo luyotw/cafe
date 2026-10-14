@@ -128,8 +128,9 @@ def test_provider_effort_mismatch_cannot_return_success_or_change_effort(phase_p
     assert len((root / "launches.jsonl").read_text().splitlines()) == 1
 
 
+@pytest.mark.parametrize("codex_version", ["0.159.3", "0.162.0-alpha.17.2"])
 def test_retry_and_fallback_keep_distinct_effort_and_each_attempt_evidence(
-    phase_process, monkeypatch
+    phase_process, monkeypatch, codex_version
 ):
     root, cafe = phase_process
     primary = root / "claude"
@@ -150,6 +151,9 @@ print(json.dumps({'type':'thread.started','thread_id':'fallback-session'}))
 print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':'EFFORT_OK'}}))
 print(json.dumps({'type':'turn.completed','usage':{'input_tokens':1,'output_tokens':1}}))
 """)
+    fallback.write_text(
+        fallback.read_text().replace("print('0.159.3')", f"print({codex_version!r})")
+    )
     fallback.chmod(0o755)
     cache = root / "codex-home" / "models_cache.json"
     cache.parent.mkdir()

@@ -128,15 +128,16 @@ def supported_efforts(
     if cli == "codex" and version >= Version("0.159.3"):
         root = Path(environment.get("CODEX_HOME") or Path.home() / ".codex")
         cache = _read_json(root / "models_cache.json")
-        if cache.get("client_version") == identity["version"]:
-            for entry in cache.get("models", []):
-                if entry.get("slug") == model:
-                    return tuple(
-                        level["effort"]
-                        for level in entry.get("supported_reasoning_levels", [])
-                        if isinstance(level, dict)
-                        and re.fullmatch(r"[a-z]+", str(level.get("effort", "")))
-                    )
+        # Capability entries remain usable across CLI upgrades; a different
+        # cache client_version does not invalidate the model's supported levels.
+        for entry in cache.get("models", []):
+            if entry.get("slug") == model:
+                return tuple(
+                    level["effort"]
+                    for level in entry.get("supported_reasoning_levels", [])
+                    if isinstance(level, dict)
+                    and re.fullmatch(r"[a-z]+", str(level.get("effort", "")))
+                )
     elif cli == "claude" and version >= Version("2.1.289"):
         return CLAUDE_MODELS.get(model, ())
     elif cli == "copilot" and version >= Version("1.0.83"):

@@ -71,6 +71,51 @@ def test_fresh_and_resume_command_apply_exact_effort(provider_clients, session, 
         assert strategy.build_environment()["CLAUDE_CODE_EFFORT_LEVEL"] == effort
 
 
+@pytest.mark.parametrize("session", [None, "existing-session"])
+@pytest.mark.parametrize("cache_version", ["0.159.3", "0.162.0-alpha.17.2", "99.0.0", None])
+def test_codex_upgrade_keeps_model_capabilities_without_matching_cache_version(
+    provider_clients, session, cache_version
+):
+    binary = provider_clients / "bin/codex"
+    binary.write_text('#!/bin/sh\necho "codex-cli 0.162.0-alpha.17.2"\n')
+    cache = provider_clients / "codex/models_cache.json"
+    metadata = json.loads(cache.read_text())
+    if cache_version is None:
+        del metadata["client_version"]
+    else:
+        metadata["client_version"] = cache_version
+    cache.write_text(json.dumps(metadata))
+    original = cache.read_bytes()
+    strategy = CodexCLI(AgentConfig(
+        name="David", cli=AgentCLI.CODEX, model="gpt-5.5",
+        session_id=session, reasoning_effort="xhigh",
+    ))
+
+    command = strategy.build_command("bounded prompt")
+
+    assert 'model_reasoning_effort="xhigh"' in command
+    assert ("resume" in command) == bool(session)
+    assert cache.read_bytes() == original
+
+
+@pytest.mark.parametrize("model,effort", [("unknown", "high"), ("gpt-5.5", "max")])
+def test_mismatched_cache_version_does_not_admit_unknown_model_or_effort(
+    provider_clients, model, effort
+):
+    from cafe.agents.executor import AgentExecutor
+
+    cache = provider_clients / "codex/models_cache.json"
+    metadata = json.loads(cache.read_text())
+    metadata["client_version"] = "99.0.0"
+    cache.write_text(json.dumps(metadata))
+    executor = AgentExecutor(AgentConfig(
+        name="David", cli=AgentCLI.CODEX, model=model, reasoning_effort=effort,
+    ))
+
+    with pytest.raises(ValueError, match="unsupported codex/"):
+        executor.preview_cli_command_args("prompt")
+
+
 @pytest.mark.parametrize(
     "cli,model,effort",
     [

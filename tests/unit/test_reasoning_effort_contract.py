@@ -53,7 +53,10 @@ def test_unverified_effort_control_preserves_legacy_omission(tmp_path, cli, mode
     assert result.clis[0].reasoning_effort is None
 
 
-def test_local_chain_omission_does_not_inherit_repository_effort(tmp_path):
+def test_local_chain_omission_does_not_inherit_repository_effort(tmp_path, monkeypatch):
+    from tests.unit.test_reasoning_effort_adapters import install_provider_clients
+
+    install_provider_clients(tmp_path, monkeypatch)
     local, repo = tmp_path / "local.yaml", tmp_path / "repo.yaml"
     write_phase(repo, [{"cli": "claude", "model": "claude-opus-4-6", "reasoning_effort": "high"}])
     write_phase(local, [{"cli": "claude", "model": "claude-opus-4-6"}])

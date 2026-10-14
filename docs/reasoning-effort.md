@@ -24,7 +24,10 @@ before launch. These are adapter capabilities, not phase-skill model defaults.
   response `reasoningEffort` confirms thread settings, not per-turn internal
   thinking telemetry. Independently modeled forks must admit the inherited token
   too; unknown child combinations reject before launch. The selected model's levels come from the
-  installed client's version-matching `models_cache.json`; no family-name or
+  configured Codex home's `models_cache.json`, matching the exact model and
+  declared supported levels. The cache's `client_version` need not match the
+  installed CLI; upgrades do not invalidate otherwise usable capability entries.
+  Missing model/level evidence still rejects explicit effort. No family-name or
   token-count inference is used. CLI configuration overrides inherited defaults.
   [Codex configuration reference](https://developers.openai.com/codex/config-reference/).
 - Claude Code 2.1.289 and later uses `--effort` plus the same value in the child
