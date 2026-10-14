@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.11.2] - 2026-10-14
+
+### Fixed
+
+- Validate Codex request and descendant usage through native identity, ownership,
+  counter structure and reconciliation rather than an exact CLI release string.
+- Keep exact-model reasoning capability entries usable when the Codex model
+  cache's producer version differs from the installed CLI version.
+- Document evidence requirements for feature version gates and their exceptions.
+
+See [the v0.11.2 release notes](docs/releases/v0.11.2.md) for accounting and
+model-cache compatibility guidance.
+
 ## [0.11.1] - 2026-10-14
 
 ### Fixed
