@@ -199,6 +199,7 @@ def compose_declared_checklist(
     role_dirs = {
         "pm": "pm",
         "reviewer": "reviewer",
+        "qa": "qa",
         "writer": "writer",
         "editor": "editor",
         "researcher": "researcher",
@@ -776,6 +777,7 @@ def compose_effective_checklist(
         if primary_contract.checklist is not None and role not in {
             "pm",
             "reviewer",
+            "qa",
             "writer",
             "editor",
             "researcher",
