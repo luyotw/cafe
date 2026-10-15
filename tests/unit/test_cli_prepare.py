@@ -79,10 +79,16 @@ def standard_playbook_for_prepare_tests(tmp_path_factory):
 
     project_root = Path(__file__).resolve().parents[2]
     global_root = tmp_path_factory.mktemp("prepare-global") / "global"
-    return PlaybookLoader(
+    loaded = PlaybookLoader(
         project_root=project_root,
         global_root=global_root,
     ).load_model("standard")
+    # Existing project catalogs keep agent delivery and optional endpoint settings.
+    # These update/setup/checkout tests exercise that compatibility; automatic
+    # endpoint requirements are covered through public prepare integration tests.
+    loaded.model.steps["deliver"].assignee_type = "agent"
+    loaded.model.steps["deliver"].automatic = None
+    return loaded
 
 
 @pytest.fixture

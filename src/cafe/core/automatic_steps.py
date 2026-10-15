@@ -14,6 +14,7 @@ class AutomaticExecutionResult:
     intent: str
     artifacts: dict[str, str] = field(default_factory=dict)
     events: list[dict[str, Any]] = field(default_factory=list)
+    task_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -24,6 +25,9 @@ class AutomaticExecutionContext:
     attempt: int
     artifacts: Mapping[str, Any]
     execution_id: str
+    playbook: Mapping[str, Any] = field(default_factory=dict)
+    blackboard_state: Any = None
+    execution_guard: Callable[[], None] | None = None
 
     @property
     def project_root(self) -> Path:
@@ -98,12 +102,12 @@ def _validate_declared_transition_inputs(inputs: Mapping[str, Any]) -> None:
         raise ValueError("automatic transition executor requires a non-empty inputs.intent")
 
 
-def default_automatic_executor_registry() -> AutomaticExecutorRegistry:
+def default_automatic_executor_registry(*, contextual_executors=None, input_validators=None) -> AutomaticExecutorRegistry:
     """Return the closed set of native executors shipped by this runtime."""
     from cafe.core.automatic_commands import execute_command, validate_command_inputs
     return AutomaticExecutorRegistry(
         {"declared_transition": _declared_transition},
         input_validators={"declared_transition": _validate_declared_transition_inputs,
-                          "command": validate_command_inputs},
-        contextual_executors={"command": execute_command},
+                          "command": validate_command_inputs, **(input_validators or {})},
+        contextual_executors={"command": execute_command, **(contextual_executors or {})},
     )

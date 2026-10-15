@@ -713,8 +713,8 @@ class StepConfig(BaseModel):
                 )
         if self.assignee_type == "hybrid" and self.hybrid is None:
             raise ValueError("assignee_type=hybrid requires hybrid portion declaration")
-        if self.assignee_type == "auto" and self.human_tasks:
-            raise ValueError("assignee_type=auto cannot declare human_tasks")
+        if self.assignee_type == "auto" and self.human_tasks and self.skill is None:
+            raise ValueError("automatic human-task bindings require their skill policy metadata")
         if self.workspace_artifact is not None:
             if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", self.workspace_artifact.strip()):
                 raise ValueError("workspace_artifact must be a safe identifier")

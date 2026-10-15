@@ -7334,6 +7334,7 @@ def test_missing_workspace_companion_recovers_from_declared_verified_producer(
 
     verify = Mock(wraps=verify_workspace_artifact)
     monkeypatch.setattr("cafe.phases.generic_workflow_step.verify_workspace_artifact", verify)
+    monkeypatch.setattr("cafe.core.workspace_inputs.verify_workspace_artifact", verify)
     with workspace_execution_lock(repo):
         for _ in range(2):
             executor._refresh_and_validate_workspace_inputs(
@@ -7358,6 +7359,7 @@ def test_missing_workspace_companion_recovers_from_declared_verified_producer(
 
     with monkeypatch.context() as context:
         context.setattr("cafe.phases.generic_workflow_step.verify_workspace_artifact", dirty_after_refresh)
+        context.setattr("cafe.core.workspace_inputs.verify_workspace_artifact", dirty_after_refresh)
         with pytest.raises(ValueError, match="worktree is dirty"):
             executor._refresh_and_validate_workspace_inputs(
                 step_def=playbook["steps"]["consume"], blackboard_state=state,

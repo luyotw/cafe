@@ -2264,8 +2264,10 @@ def _execute_single_step_alias(
     )
     step_executor.agent_manager.show_prompt = show_prompt
 
+    from cafe.workflow_execution.automatic import automatic_executor_registry
     runner = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
+        automatic_registry=automatic_executor_registry(),
         playbook=playbook_data,
         executor=step_executor.execute_step,
     )

@@ -662,7 +662,7 @@ def test_delivery_recovery_accepts_declared_mapping_feedback_route(local_action,
         ),
         source="test",
     )
-    assert result.target == delivery, result.rejection
+    assert result.target == data["steps"][delivery]["delivery"]["correction_step"], result.rejection
     assert HumanTaskRecordStore(issue).get_result(recovery.id) is not None
     assert git(dest, "rev-parse", "HEAD") == local_action[3].proposal.target_oid
 

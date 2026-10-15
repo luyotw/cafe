@@ -111,3 +111,15 @@ cleanup policy. A user may replace an old contract through the ordinary exact
 predecessor CAS, while the public close CLI continues to reject old integration
 options before touching source resources. Reading history never executes it or
 silently rewrites its authority.
+
+Bundled development delivery now declares `assignee_type: auto` with native
+`automatic.executor: delivery`. Its skill supplies HumanTask policy metadata;
+no agent executes its prose. `cafe prepare` requires explicit delivery settings
+through the `--set <step>.<field>=...` parameters above. Action review and host
+capability approvals still precede effects. The host validates receipts, writes
+localized result facts and requests the existing final acceptance. Pending
+verification retains the same automatic visit through `StepWaiting`.
+Implementation corrections and recovery feedback route directly to the declared
+correction step; `review_only` presents a new review without integrating.
+Cleanup remains separate. Project catalogs retaining agent delivery hooks continue
+to use their declared behavior.

@@ -17,8 +17,6 @@ from cafe.utils.issue_config import read_issue_config_strict
 def run_delivery(*, root: Path, issue_dir: Path, step: str, iteration: int):
     config = read_issue_config_strict(issue_dir / "issue.yaml")
     playbook = PlaybookLoader(project_root=root).load(config["playbook_id"])
-    definition = playbook["steps"][step]
-    binding = DeliveryBinding.model_validate(definition["delivery"])
     store = BlackboardStore(issue_dir)
     if not store.file_path.is_file():
         raise ValueError("delivery requires an existing workflow")
@@ -28,6 +26,21 @@ def run_delivery(*, root: Path, issue_dir: Path, step: str, iteration: int):
         state.current_step == "user" and handoff is not None and handoff.from_step == step
     ):
         raise ValueError("delivery step is not the current workflow owner")
+    _snapshot, report, path = execute_delivery(
+        root=root,
+        issue_dir=issue_dir,
+        step=step,
+        iteration=iteration,
+        playbook=playbook,
+        state=state,
+    )
+    return report, path
+
+
+def execute_delivery(*, root, issue_dir, step, iteration, playbook, state):
+    """Shared validated domain entry for CLI and automatic delivery."""
+    definition = playbook["steps"][step]
+    binding = DeliveryBinding.model_validate(definition["delivery"])
     snapshot = approved_snapshot(issue_dir, workflow_id=state.workflow_id, binding=binding)
     if binding.publication_artifact:
         from cafe.delivery.selection import validate_publication_reference
@@ -45,7 +58,7 @@ def run_delivery(*, root: Path, issue_dir: Path, step: str, iteration: int):
             raise ValueError("approved verification differs from preparation-time choices")
     output = issue_dir / step / f"iteration_{iteration:03d}" / "output.md"
     output.parent.mkdir(parents=True, exist_ok=True)
-    return execute_snapshot(
+    report, path = execute_snapshot(
         root=root,
         issue_dir=issue_dir,
         snapshot=snapshot,
@@ -55,3 +68,5 @@ def run_delivery(*, root: Path, issue_dir: Path, step: str, iteration: int):
         output_file=output,
         timeout=120,
     )
+
+    return snapshot, report, path

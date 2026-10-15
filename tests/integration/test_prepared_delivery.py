@@ -191,3 +191,18 @@ def test_prepared_policy_preserves_selected_issue_destination(local_action, tmp_
     )
     assert proposal["issue_repository"] == "owner/repo"
     assert "FUP-001" in proposal["capability_review"]
+
+
+def test_automatic_delivery_requires_choices_before_creating_branch(local_action, monkeypatch):
+    root, dest, _, snapshot = local_action
+    from tests.conftest import create_minimal_config
+    from tests.integration.test_development_delivery_operations import git
+    create_minimal_config(root)
+    monkeypatch.chdir(root)
+    monkeypatch.setattr("cafe.ui.commands.lifecycle._offer_cli_update", lambda **kw: None)
+    result = CliRunner().invoke(app, ["prepare", "missing-endpoint", "--playbook", "direct",
+        "--no-interactive", "--no-check", "--input-method", "manual", "--no-auto-create-pr"])
+    assert result.exit_code != 0
+    assert "automatic delivery requires prepare choices" in result.output
+    assert git(root, "branch", "--show-current") == "feature"
+    assert not (root / ".cafe/issues/missing-endpoint/issue.yaml").exists()

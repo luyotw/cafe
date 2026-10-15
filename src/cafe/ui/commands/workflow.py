@@ -1273,8 +1273,10 @@ def workflow(
                 f"[dim]Workflow context[/dim] playbook={playbook_data['playbook']['id']} step={effective_start_step}"
             )
 
+            from cafe.workflow_execution.automatic import automatic_executor_registry
             runner = BlackboardWorkflowRuntime(
                 issue_dir=issue_dir,
+                automatic_registry=automatic_executor_registry(),
                 playbook=playbook_data,
                 executor=wrapped_executor,
                 execution_context=execution_context,

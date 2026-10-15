@@ -102,27 +102,10 @@ def test_successful_delivery_can_return_for_correction_without_replaying_actions
         },
         source="test",
     )
-    assert revised.target == delivery, revised.rejection
-    phase.iteration = 2
-    kwargs["output_file"] = issue / delivery / "iteration_002" / "output.md"
-    kwargs["output_file"].parent.mkdir()
-    kwargs["output_file"].write_text("# Return the build correction to its owner\n")
-    recovered = hook(engine, "prepare_input", "DevelopmentDeliveryExecutor", kwargs)
-    assert recovered.context_updates["delivery_complete"] == "true"
     correction = data["steps"][delivery]["delivery"]["correction_step"]
-
-    def agent_boundary(step_name, step_def, blackboard, **_kwargs):
-        assert step_name == delivery
-        (issue / "next_step.txt").write_text(json.dumps({
-            "version": 1, "to_owner": "agent", "to_step": correction,
-            "intent": "manual_handoff",
-        }))
-        return StepExecutionResult(response="Return for the requested build correction.", artifacts={})
-
-    runtime = BlackboardWorkflowRuntime(
-        issue_dir=issue, playbook=data, executor=agent_boundary,
-    )
-    runtime.run(start_step=delivery, single_step=True)
+    assert revised.target == correction, revised.rejection
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+    assert WorkflowFeedbackLedger(issue).pending(target_step=correction)
     current = BlackboardStore(issue).load_or_create(delivery)
     handoff = BlackboardStore(issue).load_handoff_contract(current, allowed_steps=list(data["steps"]))
     assert handoff.to_step == correction

@@ -63,7 +63,11 @@ def request_from_config(config: dict, step: str) -> dict | None:
 def validate_prepared_delivery(config: dict, playbook: dict) -> None:
     for step, definition in playbook["steps"].items():
         if definition.get("delivery") is not None:
-            request_from_config(config, step)
+            request = request_from_config(config, step)
+            if definition.get("assignee_type") == "auto" and request is None:
+                raise ValueError(f"automatic delivery requires prepare choices: --set {step}.mode=github|local "
+                                 f"--set {step}.target_branch=BRANCH --set {step}.strategy=STRATEGY "
+                                 f"--set '{step}.verification=JSON' (local also requires {step}.destination)")
 
 
 def extend_prepare_fields(parsed, playbook: dict, values: list[str]):

@@ -2302,6 +2302,15 @@ class BlackboardWorkflowRuntime:
             final_step=current_step, final_status_code=status_code, completed=False
         )
 
+    def _check_execution_resume(self, current_step, attempt_count):
+        if self.execution_context is not None:
+            from cafe.core.execution_checkpoints import checkpoint
+            receipt = checkpoint(self.execution_context, "resume",
+                round_id=f"{current_step}:{attempt_count}", parent_id="runtime")
+            self.blackboard_store.record_event(self.blackboard, "execution_checkpoint", receipt)
+            if not receipt["passed"]:
+                raise ValueError("execution_checkpoint_blocked: " + json.dumps(receipt["findings"]))
+
     def _prepare_auto_owned_step(
         self, *, current_step: str, step_def: Dict
     ) -> AutomaticExecutionResult | PlaybookRunResult:
@@ -2319,10 +2328,13 @@ class BlackboardWorkflowRuntime:
             cursor = self.blackboard.ownership_cursor
             if not isinstance(cursor, dict) or cursor.get("step") != current_step:
                 raise ValueError("automatic execution has no reserved workflow visit")
+            self._check_execution_resume(current_step, cursor["attempt_count"])
             result = self.automatic_registry.execute(executor_id, inputs, context=AutomaticExecutionContext(
                 issue_dir=self.issue_dir, workflow_id=self.blackboard.workflow_id,
                 step=current_step, attempt=cursor["attempt_count"],
                 artifacts=self.blackboard.artifacts, execution_id=cursor["execution_id"],
+                playbook=self.playbook, blackboard_state=self.blackboard,
+                execution_guard=lambda: self._check_execution_resume(current_step, cursor["attempt_count"]),
             ))
         except StepWaiting:
             raise
@@ -2344,6 +2356,15 @@ class BlackboardWorkflowRuntime:
             response="",
             status_code=result.intent,
         )
+        if result.task_id:
+            try:
+                self._validate_automatic_task(current_step, result)
+            except ValueError as exc:
+                self.blackboard_store.record_event(self.blackboard, "automatic_step_rejected",
+                    {"step": current_step, "executor": executor_id, "reason": str(exc)})
+                return PlaybookRunResult(final_step=current_step, final_status_code="AUTOMATIC_EXECUTOR_REJECTED",
+                                         completed=False, detail=str(exc))
+            return result
         if next_step is None or (
             next_step not in {"done", "_done"} and next_step not in self.steps
         ):
@@ -2365,6 +2386,30 @@ class BlackboardWorkflowRuntime:
             )
         return result
 
+    def _validate_automatic_task(self, current_step, result):
+        task = HumanTaskRecordStore(self.issue_dir).get_task(result.task_id)
+        if (task is None or task.workflow_id != self.blackboard.workflow_id
+                or task.step != current_step or task.status is not HumanTaskStatus.PENDING
+                or result.intent not in {"confirm_output", "need_permission", "need_clarification"}
+                or task.iteration != self._human_task_iteration(current_step)):
+            raise ValueError("automatic pause does not reference its current pending task")
+        if task.capability_approval is not None:
+            from cafe.core.capability_approvals import CAPABILITY_APPROVAL_TRIGGER, CAPABILITY_APPROVAL_POLICY_ID
+            approval = task.capability_approval
+            if (result.intent != "need_permission" or task.trigger != CAPABILITY_APPROVAL_TRIGGER
+                    or task.policy_id != CAPABILITY_APPROVAL_POLICY_ID
+                    or approval.get("workflow_id") != task.workflow_id or approval.get("task_id") != task.id
+                    or not approval.get("fingerprint") or approval.get("state") != "pending"):
+                raise ValueError("automatic pause has an invalid host approval task")
+        else:
+            from cafe.skills.loader import SkillLoader
+            policy, binding = resolve_step_human_task(playbook_data=self.playbook, step_name=current_step,
+                trigger=result.intent, iteration=task.iteration, skill_loader=SkillLoader(project_root=self.issue_dir.parents[2]))
+            policy = policy.for_locale(self.blackboard.conversation_locale)
+            if (task.trigger != result.intent or task.policy_id != policy.id
+                    or task.expected_result != policy.model_dump(mode="json") or task.continuations != binding.outcomes):
+                raise ValueError("automatic pause does not match its declared task policy")
+
     def _run_auto_owned_step(
         self,
         *,
@@ -2377,10 +2422,23 @@ class BlackboardWorkflowRuntime:
         """Persist a previously validated automatic completion."""
         declaration = step_def["automatic"]
         executor_id = declaration["executor"]
+        if self.blackboard.host_wait and self.blackboard.host_wait["step"] == current_step:
+            self.blackboard.host_wait = None
         self._store_artifacts(result.artifacts)
         for event in result.events:
             self.blackboard_store.record_event(
                 self.blackboard, event["type"], {k: v for k, v in event.items() if k != "type"},
+            )
+        if result.task_id:
+            task = HumanTaskRecordStore(self.issue_dir).get_task(result.task_id)
+            self._notify_new_human_task(task)
+            self.blackboard_store.record_event(self.blackboard, "human_task_materialized", {
+                "step": current_step, "trigger": task.trigger, "task_id": task.id,
+            })
+            return self._emit_pause(
+                current_step=current_step, status_code="BATON_" + result.intent.upper(),
+                runtime=runtime, reason="automatic_task", pause_intent=HandoffIntent(result.intent),
+                materialized_task_id=task.id, materialize_user_task=False,
             )
         self.blackboard_store.record_event(
             self.blackboard,
@@ -2796,13 +2854,7 @@ class BlackboardWorkflowRuntime:
                 self.blackboard_store.save(self.blackboard)
 
         try:
-            if self.execution_context is not None:
-                from cafe.core.execution_checkpoints import checkpoint
-                receipt = checkpoint(self.execution_context, "resume",
-                    round_id=f"{current_step}:{attempt_count}", parent_id="runtime")
-                self.blackboard_store.record_event(self.blackboard, "execution_checkpoint", receipt)
-                if not receipt["passed"]:
-                    raise ValueError("execution_checkpoint_blocked: " + json.dumps(receipt["findings"]))
+            self._check_execution_resume(current_step, attempt_count)
             execute_kwargs = {
                 "extra_prompt": extra_prompt,
                 "same_invocation_retry": same_invocation_retry,
@@ -6549,6 +6601,10 @@ class BlackboardWorkflowRuntime:
                     max_transitions=max_transitions, start_step=start_step, single_step=single_step,
                 )
             except StepWaiting as waiting:
+                marker = {"step": waiting.step, "identity": waiting.identity}
+                if self.blackboard.host_wait != marker:
+                    self.blackboard.host_wait = marker
+                    self.blackboard_store.record_event(self.blackboard, "step_waiting", marker)
                 self._flush_phase_terminal()
                 return PlaybookRunResult(
                     final_step=waiting.step, final_status_code="HOST_WAITING",
