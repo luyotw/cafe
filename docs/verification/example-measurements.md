@@ -6,9 +6,9 @@ Durations are observations, not a performance threshold or promised speedup.
 
 | Run | Executed | Reused | Profile wall seconds | Caller wall seconds |
 | --- | ---: | ---: | ---: | ---: |
-| first | 4 | 0 | 0.255724 | 0.831356 |
-| repeat | 4 | 0 | 0.283127 | 0.806261 |
-| cached | 0 | 4 | 0.007169 | 0.574595 |
+| first | 4 | 0 | 0.293063 | 0.877683 |
+| repeat | 4 | 0 | 0.258681 | 0.768090 |
+| cached | 0 | 4 | 0.007887 | 0.512198 |
 
 The third call avoids four duplicate suite executions. Context probes, Git checks,
 digest verification and CLI startup still have a cost. Observed failures: none in
@@ -24,7 +24,7 @@ Reproduce with `examples/verification_profiles/README.md`. Raw bounded evidence:
 
 ```json
 {
-  "fixture_head": "7e2bc76073cacbcae70fcd34344dee22f23031a9",
+  "fixture_head": "4e8aaba1282450a75b597fc02a4bdb8830a7575c",
   "files": {
     "checks.py": "48bb5d3dc55807bf83cf01e3c94dad4aa69a05351f68308139ca7583f189cf0c",
     "profiles.json": "cf0d564080a88869b526310760cb6bea37da5bd1aabd0eb735bdacd7ae976ce9"
@@ -48,8 +48,8 @@ Reproduce with `examples/verification_profiles/README.md`. Raw bounded evidence:
         "notification"
       ],
       "status": "passed",
-      "suite_wall_seconds": 0.25572441704571247,
-      "caller_wall_seconds": 0.8313561789691448,
+      "suite_wall_seconds": 0.2930626440793276,
+      "caller_wall_seconds": 0.8776832576841116,
       "exit_code": 0,
       "pending": []
     },
@@ -64,8 +64,8 @@ Reproduce with `examples/verification_profiles/README.md`. Raw bounded evidence:
         "notification"
       ],
       "status": "passed",
-      "suite_wall_seconds": 0.2831266652792692,
-      "caller_wall_seconds": 0.8062605950981379,
+      "suite_wall_seconds": 0.25868051685392857,
+      "caller_wall_seconds": 0.76809037104249,
       "exit_code": 0,
       "pending": []
     },
@@ -80,8 +80,8 @@ Reproduce with `examples/verification_profiles/README.md`. Raw bounded evidence:
         "notification"
       ],
       "status": "passed",
-      "suite_wall_seconds": 0.007168708369135857,
-      "caller_wall_seconds": 0.5745947044342756,
+      "suite_wall_seconds": 0.00788709707558155,
+      "caller_wall_seconds": 0.5121977757662535,
       "exit_code": 0,
       "pending": []
     }

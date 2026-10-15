@@ -43,7 +43,11 @@ suites always run in manifest order. Raw replacement commands and narrowing
 arguments are rejected in profile mode. `check` and `reuse` accept the same
 binding and extras. `reuse` checks evidence without running test suites; incomplete
 applicability does not create a passing aggregate. `run --reuse-from` executes
-only pending rows. Capability probes may execute during applicability checks.
+only pending rows. Recheck a suite's context immediately before reuse and all
+completed contexts before aggregate success. If later execution invalidates an
+earlier result, the aggregate is incomplete and names the affected pending rows;
+there is no dependency scheduler or automatic rerun loop. Reuse-only never falls
+back to executing suites. Capability probes may execute during applicability checks.
 
 Profile results distinguish passed, failed and incomplete, with actual per-suite
 completion, exit, executed/reused/pending counts and measured durations. A failed

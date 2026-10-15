@@ -308,3 +308,53 @@ def test_nonadopter_public_legacy_check_reuse_focus_preserve_historical_claims(p
         ).exit_code
         == 6
     )
+
+
+@pytest.mark.parametrize("mutator_first", [True, False])
+def test_mixed_execution_cannot_reuse_context_invalidated_during_the_run(
+    project, monkeypatch, mutator_first
+):
+    runtime = project / ".cafe/runtime"
+    runtime.write_text("good")
+    path = project / "profiles.json"
+    data = json.loads(path.read_text())
+    mutator = "bootstrap" if mutator_first else "logout"
+    dependent = "logout" if mutator_first else "bootstrap"
+    data["suites"][mutator] = {
+        "argv": [
+            sys.executable,
+            "-c",
+            "import os; from pathlib import Path; "
+            "Path('.cafe/runtime').write_text('bad') if os.environ['MODE']=='mutate' else None",
+        ],
+        "reuse": True,
+        "context": {"env": ["MODE"]},
+    }
+    data["suites"][dependent] = {
+        "argv": [
+            sys.executable,
+            "-c",
+            "from pathlib import Path; assert Path('.cafe/runtime').read_text()=='good'",
+        ],
+        "reuse": True,
+        "context": {"files": [".cafe/runtime"]},
+    }
+    path.write_text(json.dumps(data))
+    git(project, "add", ".")
+    git(project, "commit", "-m", "context mutation fixture")
+    monkeypatch.setenv("MODE", "stable")
+    assert process(project, "run", "--output-file", out("stable")).returncode == 0
+    before = (project / ".cafe/stable/verification.json").read_bytes()
+    monkeypatch.setenv("MODE", "mutate")
+    mixed = process(project, "run", "--reuse-from", out("stable"), "--output-file", out("mutated"))
+    assert mixed.returncode != 0, mixed.stdout + mixed.stderr
+    result = receipt(project, "mutated")
+    assert not result["valid"]
+    if mutator_first:
+        assert result["status"] == "failed"
+        assert [row["action"] for row in result["suites"]] == ["executed", "executed"]
+        assert result["suites"][1]["exit_code"] == 1
+    else:
+        assert result["status"] == "incomplete"
+        assert dependent in result["pending"]
+    assert (project / ".cafe/stable/verification.json").read_bytes() == before

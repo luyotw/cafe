@@ -303,6 +303,16 @@ def run_profile(
                 offset = log.tell()
                 row_start = time.monotonic()
                 if source_check and not applicability[suite_id]:
+                    # Earlier executed suites may have changed ignored runtime inputs.
+                    current_context, current_errors = _context(request, suite, dict(os.environ))
+                    if current_errors or current_context != source_rows[suite_id].get("context"):
+                        applicability[suite_id].append("required context changed before reuse")
+                        row["applicability_reasons"] = list(applicability[suite_id])
+                if reuse_only and applicability[suite_id]:
+                    raise VerificationReceiptError(
+                        "required context changed before reuse; no suite executed"
+                    )
+                if source_check and not applicability[suite_id]:
                     source_row = source_rows[suite_id]
                     row.update(copy.deepcopy(source_row))
                     row["action"] = "reused"
@@ -370,8 +380,21 @@ def run_profile(
     if source_check and any(row["action"] == "reused" for row in rows):
         if _sha256_file(source_check.receipt_path) != source_digest:
             raise VerificationReceiptError("source receipt changed during reuse")
+    context_stable = True
+    for row in rows:
+        if row["completion"] != "completed":
+            continue
+        current_context, current_errors = _context(
+            request, request.suites[row["id"]], dict(os.environ)
+        )
+        row["context_valid_after"] = current_context == row["context"] and not (
+            row["action"] == "reused" and current_errors
+        )
+        if not row["context_valid_after"]:
+            context_stable = False
+            row["context_errors"].append("required context changed before aggregate completion")
     root_after, head_after, status_after = _git_state(root)
-    stable = root_after == root and head_after == head and not status_after
+    stable = root_after == root and head_after == head and not status_after and context_stable
     try:
         stable = stable and _fresh(request) == request
     except VerificationReceiptError:
@@ -394,7 +417,11 @@ def run_profile(
         "suites": rows,
         "executed": sum(row["action"] == "executed" for row in rows),
         "reused": sum(row["action"] == "reused" for row in rows),
-        "pending": [row["id"] for row in rows if row["completion"] == "pending"],
+        "pending": [
+            row["id"]
+            for row in rows
+            if row["completion"] == "pending" or row.get("context_valid_after") is False
+        ],
         "git": {
             "root": str(root),
             "cwd": str(root),
@@ -419,5 +446,7 @@ def reuse_profile(
     request: ProfileRequest, source_output_file: Path, output_file: Path
 ) -> tuple[Path, dict]:
     """Materialize an aggregate only when every required suite is reusable."""
-    _, path, payload = run_profile(request, output_file, source_output_file, reuse_only=True)
+    code, path, payload = run_profile(request, output_file, source_output_file, reuse_only=True)
+    if code:
+        raise VerificationReceiptError("context changed while materializing reused evidence")
     return path, payload

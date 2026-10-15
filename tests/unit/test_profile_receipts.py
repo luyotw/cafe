@@ -237,3 +237,37 @@ def test_interrupted_attempt_cannot_leave_a_prior_passing_target(project, monkey
         run_profile(request(project), output(project))
     monkeypatch.setattr(subprocess, "run", original)
     assert not check_profile(request(project), output(project)).valid
+
+
+def test_reuse_only_never_executes_when_a_probe_invalidates_context_at_boundary(
+    project, monkeypatch
+):
+    path = project / "profiles.json"
+    data = json.loads(path.read_text())
+    data["suites"]["bootstrap"]["argv"] = [
+        sys.executable,
+        "-c",
+        "from pathlib import Path; "
+        "p=Path('.cafe/suite-runs'); "
+        "p.write_text(p.read_text()+'ran\\n' if p.exists() else 'ran\\n')",
+    ]
+    data["suites"]["bootstrap"]["context"]["probes"] = [
+        [
+            sys.executable,
+            "-c",
+            "import os; from pathlib import Path; "
+            "Path('.cafe/input').write_text('changed') if "
+            "os.getenv('MUTATE_INPUT')=='1' else None; "
+            "print('supported')",
+        ]
+    ]
+    path.write_text(json.dumps(data))
+    git(project, "add", ".")
+    git(project, "commit", "-m", "capability boundary fixture")
+    monkeypatch.setenv("MUTATE_INPUT", "0")
+    run_profile(request(project), output(project))
+    before = (project / ".cafe/suite-runs").read_bytes()
+    monkeypatch.setenv("MUTATE_INPUT", "1")
+    with pytest.raises(VerificationReceiptError):
+        reuse_profile(request(project), output(project), output(project, "reuse-only"))
+    assert (project / ".cafe/suite-runs").read_bytes() == before
