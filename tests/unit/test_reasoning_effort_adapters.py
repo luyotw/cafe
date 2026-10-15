@@ -53,6 +53,33 @@ def provider_clients(tmp_path, monkeypatch):
     return install_provider_clients(tmp_path, monkeypatch)
 
 
+def test_codex_capability_context_ignores_model_cache_refresh_metadata(provider_clients):
+    from cafe.agents.cli.effort import capability_context
+
+    cache = provider_clients / "codex/models_cache.json"
+    before = capability_context("codex", "gpt-5.5", "high")
+    metadata = json.loads(cache.read_text())
+    metadata.update(fetched_at="2026-10-16T00:00:00Z", etag="refreshed", client_version="99.0.0")
+    cache.write_text(json.dumps(metadata, indent=2))
+
+    assert capability_context("codex", "gpt-5.5", "high") == before
+
+
+def test_codex_capability_context_retains_model_levels_and_controls(provider_clients):
+    from cafe.agents.cli.effort import capability_context
+
+    cache = provider_clients / "codex/models_cache.json"
+    before = capability_context("codex", "gpt-5.5", "high")
+    metadata = json.loads(cache.read_text())
+    metadata["models"][0]["supported_reasoning_levels"].pop()
+    cache.write_text(json.dumps(metadata))
+    changed_levels = capability_context("codex", "gpt-5.5", "high")
+    assert changed_levels != before
+
+    (provider_clients / "codex/config.toml").write_text('model_reasoning_effort="low"\n')
+    assert capability_context("codex", "gpt-5.5", "high") != changed_levels
+
+
 @pytest.mark.parametrize("session", [None, "existing-session"])
 @pytest.mark.parametrize(
     "cli,model,effort",
