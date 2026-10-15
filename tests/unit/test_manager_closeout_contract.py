@@ -38,6 +38,121 @@ def build(value, confirmed_by="user"):
     )
 
 
+@pytest.fixture(params=[
+    ["--squash"], ["--squash", "-m", "Recorded message"],
+    ["--message", "Recorded message", "--squash"],
+])
+def historical_close_contract(tmp_path, request):
+    """A canonically digested fixture of the previously valid recorded syntax."""
+    from cafe.core.packet_io import canonical_json, sha256_bytes
+    from cafe.manager._schema import proposal_digest
+
+    document = build(_manager_proposal())
+    argv = ["cafe", "close", *request.param]
+    document["delivery_contract"]["closeout_plan"]["cleanup"] = [{"argv": argv}]
+    document["provenance"]["proposal_digest"] = proposal_digest(document)
+    content = canonical_json(document)
+    path = tmp_path / "manager/contract.json"
+    path.parent.mkdir()
+    path.write_bytes(content)
+    return tmp_path, path, content, sha256_bytes(content), argv
+
+
+def test_historical_close_contract_load_preserves_bytes_and_formal_cas_can_replace_it(
+    historical_close_contract,
+):
+    from cafe.manager.api import ReplaceConfirmedContract, confirmed_contract_snapshot, replace_confirmed_contract
+    from cafe.manager._store import load_contract
+
+    issue, path, content, digest, argv = historical_close_contract
+    recorded, loaded_digest = load_contract(issue, issue_name="topic", workflow_id="wf")
+    assert loaded_digest == digest
+    assert recorded["delivery_contract"]["closeout_plan"]["cleanup"] == [{"argv": argv}]
+    snapshot = confirmed_contract_snapshot(issue)
+    assert list(snapshot["delivery_contract"]["closeout_plan"]["cleanup"][0]["argv"]) == argv
+    assert path.read_bytes() == content
+    # Reconfirm a current cleanup policy through the real public predecessor CAS.
+    replacement = replace_confirmed_contract(ReplaceConfirmedContract(
+        issue, "topic", "wf", "user", datetime.now(timezone.utc), proposal(), digest,
+        "user_reconfirmation",
+    ))
+    current, current_digest = load_contract(issue)
+    assert replacement.revision == 2
+    assert current_digest == replacement.contract_sha256 != digest
+    assert current["revision"]["previous_contract_sha256"] == digest
+    assert current["closeout_contract"] == proposal()["closeout_contract"]
+    assert current["phases"] == recorded["phases"]
+    assert current["manager"] == recorded["manager"]
+    assert current["delivery_contract"]["schema_version"] == 6
+    with pytest.raises(ValueError):
+        replace_confirmed_contract(ReplaceConfirmedContract(
+            issue, "topic", "wf", "user", datetime.now(timezone.utc), proposal(), digest,
+            "user_reconfirmation",
+        ))
+
+
+def test_historical_close_options_cannot_be_reconfirmed_as_new_authority(historical_close_contract):
+    from cafe.manager import ReplaceConfirmedContract, replace_confirmed_contract
+
+    issue, path, content, digest, argv = historical_close_contract
+    changed = _manager_proposal()
+    changed["delivery_contract"]["closeout_plan"]["cleanup"] = [{"argv": argv}]
+    with pytest.raises(ValueError):
+        replace_confirmed_contract(ReplaceConfirmedContract(
+            issue, "topic", "wf", "user", datetime.now(timezone.utc), changed, digest,
+            "user_reconfirmation",
+        ))
+    assert path.read_bytes() == content
+
+
+@pytest.mark.parametrize("options", [["--squash"], ["--squash", "-m", "New message"]])
+def test_new_activation_rejects_removed_close_options_without_creating_authority(tmp_path, options):
+    from cafe.manager import ActivateConfirmedContract, activate_confirmed_contract
+
+    value = _manager_proposal()
+    value["delivery_contract"]["closeout_plan"]["cleanup"] = [
+        {"argv": ["cafe", "close", *options]},
+    ]
+    with pytest.raises(ValueError):
+        activate_confirmed_contract(ActivateConfirmedContract(
+            tmp_path, "topic", "wf", "user", datetime.now(timezone.utc), value,
+        ))
+    assert not (tmp_path / "manager/contract.json").exists()
+
+
+@pytest.mark.parametrize("options", [
+    ["--squash", "--squash"], ["-m", "message only"],
+    ["--squash", "-m", ""], ["--squash", "--unknown"],
+    ["--squash", "--message", "one", "-m", "two"],
+])
+def test_historical_read_does_not_accept_previously_invalid_close_syntax(tmp_path, options):
+    from cafe.core.packet_io import canonical_json
+    from cafe.manager._schema import proposal_digest
+    from cafe.manager._store import load_contract
+
+    document = build(_manager_proposal())
+    document["delivery_contract"]["closeout_plan"]["cleanup"] = [
+        {"argv": ["cafe", "close", *options]},
+    ]
+    document["provenance"]["proposal_digest"] = proposal_digest(document)
+    content = canonical_json(document)
+    path = tmp_path / "manager/contract.json"
+    path.parent.mkdir()
+    path.write_bytes(content)
+    with pytest.raises(ValueError):
+        load_contract(tmp_path)
+    assert path.read_bytes() == content
+
+
+@pytest.mark.parametrize("publication_mode", [None, False, True])
+def test_current_close_policy_needs_explicit_historical_context_for_old_syntax(publication_mode):
+    from cafe.manager.delivery import validate_closeout_plan_policy
+
+    plan = {"deliver": [], "cleanup": [{"argv": ["cafe", "close", "--squash"]}]}
+    with pytest.raises(ValueError):
+        validate_closeout_plan_policy(plan, allow_squash=publication_mode)
+
+
 def test_separate_closeout_is_required_hashed_and_retained_in_freshness():
     value = proposal()
     contract = build(value)

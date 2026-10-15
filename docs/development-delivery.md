@@ -54,3 +54,12 @@ source checkout and its files by detaching the proven source commit before
 compare-and-delete of its branch. Authenticated worker startup diagnostics also
 cover missing, corrupt and rejected execution-context files before phase setup;
 the record is failed before its durable interruption callback is dispatched.
+
+Historical schema-3 delivery contracts containing the former close squash/message
+argv remain readable with their exact bytes, digests and command arrays. The
+historical read boundary is explicit; publication-mode defaults cannot enable
+removed options. New activation and user-reconfirmed CAS candidates apply current
+cleanup policy. A user may replace an old contract through the ordinary exact
+predecessor CAS, while the public close CLI continues to reject old integration
+options before touching source resources. Reading history never executes it or
+silently rewrites its authority.

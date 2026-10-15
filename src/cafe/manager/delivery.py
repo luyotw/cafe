@@ -380,9 +380,13 @@ def validate_compact_delivery(value):
 
 
 def validate_closeout_plan_policy(
-    closeout_plan: dict[str, Any], *, allow_squash: bool | None
+    closeout_plan: dict[str, Any], *, allow_squash: bool | None, historical: bool = False
 ) -> None:
-    """Validate lifecycle-command placement and mode before closeout execution."""
+    """Validate current commands, recognizing old syntax only for historical reads.
+
+    The legacy publication-mode argument cannot enable removed options. A
+    recorded read must explicitly request historical validation as well.
+    """
     plan = (
         DeliveryCloseoutPlan if "deliver" in closeout_plan else CleanupCloseoutPlan
     ).model_validate(closeout_plan)
@@ -397,8 +401,28 @@ def validate_closeout_plan_policy(
             if stage != "cleanup" or index != len(commands) - 1:
                 raise ValueError("cafe close is allowed only as the final cleanup command")
 
-            if argv not in (["cafe", "close"], ["cafe", "close", "--archive-only"]):
+            if argv in (["cafe", "close"], ["cafe", "close", "--archive-only"]):
+                continue
+            if not historical or allow_squash is not None or "deliver" not in closeout_plan:
                 raise ValueError("cafe close has unsupported integration or duplicate options")
+            # Validate the original recorded syntax without rewriting it or
+            # granting executable authority to removed integration options.
+            squash = message = False
+            position = 2
+            while position < len(argv):
+                option = argv[position]
+                if option == "--squash" and not squash:
+                    squash = True
+                    position += 1
+                elif option in {"-m", "--message"} and not message:
+                    if position + 1 >= len(argv) or not argv[position + 1]:
+                        raise ValueError("historical close message requires a value")
+                    message = True
+                    position += 2
+                else:
+                    raise ValueError("historical close has unsupported or duplicate options")
+            if not squash:
+                raise ValueError("historical close message requires --squash")
 
 
 def prepare_compact_delivery(root: Path, value: dict, *, issue_name: str) -> dict:
