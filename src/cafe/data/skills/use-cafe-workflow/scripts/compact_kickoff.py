@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -61,6 +62,25 @@ def discover(
         config_dir or Path.home() / ".config/cafe/kickoff",
         repository_root=catalog_args["project_root"],
     )
+    if not confirmed and "manager" not in inputs:
+        explicit = {**request.get("formatter_inputs", {}),
+                    **request.get("current_explicit_inputs", {})}
+        mode = preferences.effective("manager.mode", explicit=explicit.get("manager_mode")).value
+        mode = mode if mode is not None else "event-driven"
+        manager_inputs = {"manager_mode": mode}
+        dependent = {"attached": "poll_interval_seconds", "event-driven": "event_manager"}.get(mode)
+        if dependent:
+            selected_value = preferences.effective("manager." + dependent,
+                                                   explicit=explicit.get(dependent)).value
+            if selected_value is None and dependent == "event_manager":
+                cli = request.get("manager_cli") or ("codex" if os.environ.get("CODEX_THREAD_ID") else None)
+                selected_value = [cli] if cli else None
+            manager_inputs[dependent] = selected_value
+        # Preserve incompatible explicit fields so the common formatter rejects them.
+        for field in ("event_manager", "poll_interval_seconds"):
+            if field in explicit:
+                manager_inputs[field] = explicit[field]
+        inputs["manager_inputs"] = manager_inputs
     saved = preferences.effective("phase.chains").value or {} if not confirmed else {}
     if "phases" not in inputs and not confirmed:
         from cafe.utils.phase_config import load_phase_step_model
@@ -103,6 +123,7 @@ def discover(
             "review_configuration": (dict(confirmed["review_configuration"])
                                      if confirmed["review_configuration"] is not None else None),
             "delivery_contract": dict(confirmed["delivery_contract"]),
+            "manager": dict(confirmed["manager"]),
         }
     cached_models = VersionedJsonStore(
         (cache_dir or Path.home() / ".cache/cafe/kickoff/v1") / "models-v1.json",
@@ -231,6 +252,23 @@ def assemble(request, *, discovery):
             from cafe.manager.file_scope import prepare_file_scope
             from cafe.manager.delivery import prepare_compact_delivery
 
+            manager = inputs.get("manager")
+            if manager is None:
+                from argparse import Namespace
+                from format_kickoff_contract import _manager_policy_rows, _parse_event_manager_entries
+
+                args = Namespace(**{"poll_interval_seconds": None, "event_manager": None,
+                                    **inputs["manager_inputs"]})
+                _manager_policy_rows(args)
+                manager = {"mode": args.manager_mode}
+                if args.manager_mode == "attached":
+                    manager["poll_interval_seconds"] = args.poll_interval_seconds
+                elif args.manager_mode == "event-driven":
+                    manager["clis"] = [
+                        {"cli": cli} if model is None else {"cli": cli, "model": model}
+                        for cli, model in _parse_event_manager_entries(args.event_manager)
+                    ]
+
             proposal = {
                 "contract_mode": "compact",
                 "file_scope": (
@@ -269,7 +307,7 @@ def assemble(request, *, discovery):
                         {"phase": p["name"], "decision": "not_required"} for p in inputs["phases"]
                     ]
                 },
-                "manager": {"mode": "unattended"},
+                "manager": manager,
                 "checkout": {"kind": "current_checkout"},
             }
             expected_phases = {
@@ -305,7 +343,8 @@ def render(values):
     proposal = values["proposal"]
     groups = {
         "files": proposal["file_scope"]["paths"],
-        "execution": {"phases": proposal["phases"], "review": proposal["review_configuration"]},
+        "execution": {"phases": proposal["phases"], "review": proposal["review_configuration"],
+                      "manager": proposal["manager"]},
         "delivery": {k: v for k, v in proposal["delivery_contract"].items()
                      if k != "remote_identity"},
     }

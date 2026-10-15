@@ -388,6 +388,103 @@ class GitOperations:
         """
         self.run_git("pull")
 
+    def cleanup_snapshot(self, source: str, target: str) -> dict:
+        """Observe exact local and remote tips without integrating any changes.
+
+        This neutral lifecycle interface does not consume Manager contracts.
+        Remote deletion must consume the returned push URL and source lease.
+        """
+        from cafe.core.git_delivery import remote_configuration, pinned_remote_command
+
+        for branch in (source, target):
+            self.run_git("check-ref-format", "--branch", branch)
+        if source == target or self.get_current_branch() != source:
+            raise GitError("cleanup source/target identity mismatch")
+        if self.has_in_progress_operation():
+            raise GitError("cleanup source has a pending Git operation")
+        if self.run_git("status", "--porcelain", "--untracked-files=all"):
+            raise GitError("cleanup source has uncommitted or untracked changes")
+        source_oid = self.run_git("rev-parse", "--verify", f"refs/heads/{source}")
+        target_oid = self.run_git("rev-parse", "--verify", f"refs/heads/{target}")
+        snapshot = {"source": source, "source_oid": source_oid, "target": target,
+                    "local_target_oid": target_oid, "target_oid": target_oid,
+                    "remote": None, "remote_source_oid": None}
+        if "origin" in self.run_git("remote").splitlines():
+            configuration = remote_configuration(self.repo_path, "origin", "pr")
+            if configuration["fetch"] != configuration["push"]:
+                raise GitError("cleanup requires matching fetch and push endpoints")
+            refs = self.run_git("ls-remote", "--heads", configuration["push"],
+                                f"refs/heads/{source}", f"refs/heads/{target}")
+            observed = dict(line.split()[::-1] for line in refs.splitlines())
+            remote_source = observed.get(f"refs/heads/{source}")
+            if remote_source is not None and remote_source != source_oid:
+                raise GitError("remote feature branch differs from the local source tip")
+            remote_target = observed.get(f"refs/heads/{target}")
+            if not remote_target:
+                raise GitError("remote target branch is missing")
+            command = pinned_remote_command("fetch", configuration["fetch"], "--no-tags", remote_target)
+            self.run_git(*command[1:])
+            self.run_git("merge-base", "--is-ancestor", target_oid, remote_target)
+            snapshot.update(remote=configuration, remote_source_oid=remote_source,
+                            target_oid=remote_target)
+        return snapshot
+
+    def require_integrated(self, snapshot: dict, merged_pr: dict | None = None) -> None:
+        """Prove ancestry or an exact same-repository merged PR in the target tip."""
+        try:
+            self.run_git("merge-base", "--is-ancestor", snapshot["source_oid"], snapshot["target_oid"])
+            return
+        except GitError:
+            pass
+        pr = merged_pr or {}
+        if (not snapshot["remote"] or pr.get("state") != "MERGED"
+                or pr.get("isCrossRepository") is not False
+                or pr.get("headRefName") != snapshot["source"]
+                or pr.get("headRefOid") != snapshot["source_oid"]
+                or pr.get("baseRefName") != snapshot["target"]):
+            raise GitError("source tip is not integrated into the specified target")
+        commit = (pr.get("mergeCommit") or {}).get("oid")
+        if not isinstance(commit, str) or not commit:
+            raise GitError("merged PR has no integration commit")
+        self.run_git("merge-base", "--is-ancestor", commit, snapshot["target_oid"])
+
+    def delete_cleanup_remote(self, snapshot: dict) -> None:
+        """Delete only the preflight source tip at the pinned remote endpoint."""
+        if not snapshot["remote"]:
+            return
+        from cafe.core.git_delivery import remote_configuration, pinned_remote_command
+
+        if remote_configuration(self.repo_path, "origin", "pr") != snapshot["remote"]:
+            raise GitError("cleanup remote identity changed")
+        refs = self.run_git("ls-remote", "--heads", snapshot["remote"]["push"],
+                            f"refs/heads/{snapshot['source']}",
+                            f"refs/heads/{snapshot['target']}")
+        observed = dict(line.split()[::-1] for line in refs.splitlines())
+        if (observed.get(f"refs/heads/{snapshot['source']}") != snapshot["remote_source_oid"]
+                or observed.get(f"refs/heads/{snapshot['target']}") != snapshot["target_oid"]):
+            raise GitError("remote tips changed after cleanup preflight")
+        if snapshot["remote_source_oid"]:
+            source = snapshot["source"]
+            command = pinned_remote_command(
+                "push", snapshot["remote"]["push"],
+                f"--force-with-lease=refs/heads/{source}:{snapshot['source_oid']}",
+                f":refs/heads/{source}",
+            )
+            self.run_git(*command[1:])
+        elif self.run_git("ls-remote", "--heads", snapshot["remote"]["push"],
+                          f"refs/heads/{snapshot['source']}"):
+            raise GitError("remote source appeared after cleanup preflight")
+
+    def delete_cleanup_branch(self, snapshot: dict) -> None:
+        """Compare-and-delete the proven tip, including squash/rebase deliveries."""
+        if any(tree.get("branch") == snapshot["source"] for tree in self.list_worktrees()):
+            raise GitError("cleanup source branch is still checked out")
+        self.run_git("update-ref", "-d", f"refs/heads/{snapshot['source']}", snapshot["source_oid"])
+        try:
+            self.run_git("config", "--remove-section", f"branch.{snapshot['source']}")
+        except GitError:
+            pass  # An upstream section is optional; the branch ref is already absent.
+
     def merge(self, branch_name: str) -> None:
         """Merge a branch into current branch.
 

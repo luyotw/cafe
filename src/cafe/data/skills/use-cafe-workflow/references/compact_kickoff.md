@@ -12,6 +12,20 @@ phase CLI/model chains and provider-supported native review configuration, and
 PR source/target or commit/push to an exact branch. Resolve only missing values
 and selected evidence. Do not build a full proposal and remove its fields.
 
+The execution decision group includes the actual `manager` mode and all related
+settings. New compact proposals use the same mode resolution as full kickoff:
+explicit choice, saved preference, then `event-driven`. Resolve its primary CLI
+from the current Manager caller (`--manager-cli` or the Codex host identity),
+never from a phase model. Explicit `attached` requires a positive poll interval;
+explicit `unattended` has no mode-specific settings. Display an event-driven
+primary CLI and any explicitly selected fallback models. Confirmed contracts
+retain the complete recorded Manager object on resume even when defaults,
+preferences, or current inputs change. Launch `run_workflow.py` with that exact
+mode and callback configuration; creating a process establishes only a launch.
+Startup failures retain a bounded sanitized diagnostic in the worker launch
+record and dispatch the configured durable interruption callback before an
+agent is ready. Worker stdout/stderr remain DEVNULL to avoid unbounded raw logs.
+
 Present the complete proposal with this wording:
 
 > 沒有我的同意禁止修改上面列出來的檔案

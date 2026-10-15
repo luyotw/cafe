@@ -93,6 +93,7 @@ def compact_request(tmp_path, monkeypatch):
         "schema_version": 1,
         "project_root": str(root),
         "issue_name": "sample",
+        "manager_cli": "codex",
         "model_assessments": [
             {
                 "provider": "codex",
@@ -151,6 +152,37 @@ def test_compact_public_discovery_assembly_render_only_three_groups(compact_requ
     assert set(rendered["decision_groups"]) == {"files", "execution", "delivery"}
     assert "沒有我的同意禁止修改上面列出來的檔案" in rendered["output"]
     assert "outcome" not in rendered["proposal"]["delivery_contract"]
+    assert rendered["proposal"]["manager"] == {"mode": "event-driven", "clis": [{"cli": "codex"}]}
+    assert rendered["decision_groups"]["execution"]["manager"] == rendered["proposal"]["manager"]
+
+
+@pytest.mark.parametrize("mode,settings", [
+    ("unattended", {}), ("attached", {"poll_interval_seconds": 17}),
+    ("event-driven", {"event_manager": ["claude", "codex:test"]}),
+])
+@pytest.mark.parametrize("saved", [False, True], ids=["explicit", "persisted"])
+def test_compact_public_modes_use_the_selected_settings(compact_request, tmp_path, mode, settings, saved):
+    owner = load_kickoff_module("kickoff_inputs")
+    config = tmp_path / "config"
+    if saved:
+        prefs = load_kickoff_module("kickoff_preferences").PreferenceStore(
+            config, repository_root=Path(compact_request["project_root"]))
+        prefs.set("manager.mode", mode, scope="user", origin="explicit")
+        for key, value in settings.items():
+            prefs.set("manager." + key, value, scope="user", origin="explicit")
+    else:
+        compact_request["formatter_inputs"] = {"manager_mode": mode, **settings}
+    discovered = owner.discover_kickoff(compact_request, config_dir=config, cache_dir=tmp_path / "cache")
+    assembled = owner.assemble_kickoff(compact_request, discovery=discovered)
+    assert assembled["status"] == "ready", assembled
+    rendered = owner.render_kickoff(assembled["formatter_inputs"])
+    manager = rendered["proposal"]["manager"]
+    assert manager["mode"] == mode
+    if mode == "attached":
+        assert manager["poll_interval_seconds"] == 17
+    elif mode == "event-driven":
+        assert manager["clis"] == [{"cli": "claude"}, {"cli": "codex", "model": "test"}]
+    assert rendered["decision_groups"]["execution"]["manager"] == manager
 
 
 def test_compact_missing_values_produce_focused_gaps(compact_request, tmp_path):

@@ -105,10 +105,7 @@ def test_default_prefills_full_cleanup_but_explicit_archive_preference_wins(tmp_
                "playbook_id": "subagent-flow"}
     report = module.assemble_kickoff(request)
     command = report["formatter_draft"]["cleanup"][-1]
-    assert Path(command[1]).name == "cleanup_worktree.py"
-    assert command[command.index("--worktree") + 1] == str(tmp_path / ".cafe/worktrees/new")
-    assert command[-2:] == ["--remote", "origin"]
-    assert "origin branch" in report["formatter_draft"]["cleanup_description"][-1]
+    assert command == ["cafe", "close"]
     request["current_explicit_inputs"] = {"cleanup": [["cafe", "close", "--archive-only"]],
                                          "cleanup_description": ["Keep feature resources."]}
     explicit = module.assemble_kickoff(request)

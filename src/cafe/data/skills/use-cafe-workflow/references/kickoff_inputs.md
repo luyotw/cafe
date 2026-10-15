@@ -69,9 +69,9 @@ to copy them from the discovery report:
 - `.cafe/worktrees/issue<id>` in the main repository, or the explicitly named
   issue's equivalent path; non-Git first tasks use the current checkout;
 - cleanup: for phase-owned development delivery, close the verified bound GitHub
-  issue and use `cleanup_worktree.py` to archive and remove the exact feature
-  worktree and bound branches; without a separate feature worktree, archive only.
-  Non-adopting graphs retain their existing `cafe close` default;
+  issue and run `cafe close` to verify existing integration, archive, and remove
+  the exact feature branch and any managed worktree. Explicit preservation uses
+  `cafe close --archive-only`. Confirmed old helper commands remain unchanged;
 - repository content language through the existing strategic-context resolver;
 - conversation language through the existing workflow/playbook locale owner
   when no current preference was supplied;

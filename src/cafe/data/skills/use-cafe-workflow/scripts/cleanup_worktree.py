@@ -53,6 +53,17 @@ def cleanup(project_root, worktree, issue_name, remote=None):
     if _git(target, "status", "--porcelain", "--untracked-files=all").stdout.strip():
         raise ValueError("cleanup worktree has uncommitted or untracked changes")
     source = _git(target, "rev-parse", "HEAD").stdout.strip()
+    from cafe.core.git import GitError, GitOperations
+
+    git = GitOperations(str(root))
+
+    def require_integrated(commit):
+        # Retain this legacy command's accepted-action binding and resource
+        # scope while sharing lifecycle's neutral ancestry proof.
+        try:
+            git.require_integrated({"source_oid": source, "target_oid": commit, "remote": None})
+        except GitError as exc:
+            raise ValueError("feature changes are not integrated into the retained checkout") from exc
     repository = None
     tasks = json.loads((issue / "human_tasks.json").read_text()).get("tasks", [])
     if isinstance(tasks, dict):
@@ -77,10 +88,10 @@ def cleanup(project_root, worktree, issue_name, remote=None):
                     or pr["baseRefName"] != proposal["target_branch"]
                     or pr["mergeCommit"]["oid"] != integration["commit"]):
                 raise ValueError("GitHub delivery identity changed")
-        elif _git(root, "merge-base", "--is-ancestor", source, integration["commit"], check=False).returncode:
-            raise ValueError("local integration does not contain the feature tip")
-    elif _git(root, "merge-base", "--is-ancestor", source, "HEAD", check=False).returncode:
-        raise ValueError("feature changes are not integrated into the retained checkout")
+        else:
+            require_integrated(integration["commit"])
+    else:
+        require_integrated(_git(root, "rev-parse", "HEAD").stdout.strip())
     remote_tip = None
     push_url = None
     if remote:

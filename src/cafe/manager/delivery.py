@@ -280,8 +280,10 @@ class CleanupCloseoutPlan(BaseModel):
         if len(commands) != len(set(commands)):
             raise ValueError("duplicate cleanup command")
         for argv in commands:
-            if argv[:2] == ("cafe", "close") and argv != ("cafe", "close", "--archive-only"):
-                raise ValueError("phase-owned cleanup must archive without another integration")
+            if argv[:2] == ("cafe", "close") and argv not in {
+                ("cafe", "close"), ("cafe", "close", "--archive-only"),
+            }:
+                raise ValueError("phase-owned cleanup accepts only cleanup-only cafe close options")
             program = Path(argv[0]).name
             if (program == "git" and any(op in argv[1:] for op in ("merge", "rebase"))) or (
                 program == "gh" and any(argv[i:i + 2] in (("pr", "merge"), ("issue", "create")) for i in range(1, len(argv) - 1))
@@ -395,33 +397,8 @@ def validate_closeout_plan_policy(
             if stage != "cleanup" or index != len(commands) - 1:
                 raise ValueError("cafe close is allowed only as the final cleanup command")
 
-            squash = False
-            message = False
-            argument_index = 2
-            while argument_index < len(argv):
-                argument = argv[argument_index]
-                if (
-                    argument == "--archive-only"
-                    and "deliver" not in closeout_plan
-                    and len(argv) == 3
-                ):
-                    argument_index += 1
-                    continue
-                if argument == "--squash" and not squash:
-                    squash = True
-                    argument_index += 1
-                    continue
-                if argument in {"-m", "--message"} and not message:
-                    if argument_index + 1 >= len(argv) or not argv[argument_index + 1]:
-                        raise ValueError("cafe close message option requires a non-empty value")
-                    message = True
-                    argument_index += 2
-                    continue
-                raise ValueError("cafe close has unsupported or duplicate options")
-            if message and not squash:
-                raise ValueError("cafe close message option requires --squash")
-            if squash and allow_squash is False:
-                raise ValueError("cafe close --squash is unavailable in create-PR mode")
+            if argv not in (["cafe", "close"], ["cafe", "close", "--archive-only"]):
+                raise ValueError("cafe close has unsupported integration or duplicate options")
 
 
 def prepare_compact_delivery(root: Path, value: dict, *, issue_name: str) -> dict:

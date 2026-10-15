@@ -30,3 +30,20 @@ Delivery procedures and response/outcome evidence validation belong to `cafe.del
 New full Manager contracts use nested delivery schema version 6 with phase-owned delivery facts and a separate Manager closeout contract. Schema versions 3 and 5 retain their recorded legacy contracts. Kickoff schemas, templates, saved preference offers, formatter and progress do not expose Manager deliver actions. Descriptive discovery remains useful. Old delivery conventions/templates are inspectable diagnostics and cannot restore executable fields. Recorded legacy contracts retain original bytes, digests, command outcomes and narrow exact bindings; they are never silently rewritten. Cleanup, archive, branch/worktree deletion, issue closure, deployment and releases remain separate authority.
 
 Validation uses real temporary Git repositories and an isolated fake GitHub executable at the process boundary, plus public HumanTask and capability approval callers. No test merges the development repository or creates remote issues.
+
+Lifecycle cleanup uses neutral Git/GitHub integration evidence, independently of
+Manager contracts. Delivery performs integration; `cafe close` only verifies it,
+archives evidence before destructive cleanup, and removes the exact source
+resources. Local target synchronization is ff-only. Fresh Manager plans use
+`cafe close` as their final cleanup command; archive-only and legacy helper plans
+retain their explicitly confirmed scope. Cost closeout checks the archive and
+actual branch/worktree/remote absence rather than treating archival as cleanup.
+
+Compact kickoff displays Manager mode and related settings in its execution
+group. Fresh defaults are event-driven with the current Manager CLI; explicit
+attached/unattended choices and saved preferences remain available. Resume
+preserves confirmed mode/settings. Background startup failures before runtime
+or agent construction retain one sanitized bounded diagnostic in the worker
+launch record and dispatch the configured interruption callback. Process creation
+is launch evidence only. DEVNULL output remains intentional; no raw unbounded
+startup log is introduced.

@@ -115,6 +115,21 @@ class WorkerLaunchStore:
             record["updated_at"] = _now()
             return dict(record)
 
+    def record_failure(self, worker_id: str, error: Exception) -> None:
+        """Retain one bounded sanitized diagnostic, never a raw output log."""
+        from cafe.agents.diagnostics import sanitize_error_excerpt
+
+        with self._locked_records() as records:
+            record = records.get(worker_id)
+            if isinstance(record, dict):
+                record["status"] = "failed"
+                record["updated_at"] = _now()
+                record["error_code"] = type(error).__name__[:160]
+                record["diagnostic"] = {
+                    "error_type": type(error).__name__[:160],
+                    "detail": sanitize_error_excerpt(error),
+                }
+
     def validate_child(
         self,
         *,
@@ -247,7 +262,8 @@ class FixedWorkerLauncher:
                 close_fds=True,
                 env=detached_child_environment(),
             )
-        except OSError:
+        except OSError as exc:
+            self.store.record_failure(worker_id, exc)
             self.store.mark(worker_id, "startup_failed", error_code="spawn_failed")
             raise
         self.store.set_pid(worker_id, int(process.pid))

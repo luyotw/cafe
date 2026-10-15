@@ -11,6 +11,31 @@ from tests.fixtures.manager_chat import adapter
 from tests.unit._kickoff_test_support import SCRIPT_ROOT
 from tests.unit.test_closeout_execution import _journey, _run
 from tests.unit.test_manager_costs import cost_journey
+from tests.integration.test_close_cleanup_only import feature, integrate, git
+
+
+@pytest.mark.parametrize("remaining", [None, "local", "remote", "worktree"])
+def test_public_close_cost_verification_requires_actual_resource_removal(feature, remaining):
+    from typer.testing import CliRunner
+    from cafe.ui.cli import app
+    from cafe.manager.costs import _archive
+
+    root, worktree, issue, source, linked = feature
+    integrate(feature)
+    result = CliRunner().invoke(app, ["close"])
+    assert result.exit_code == 0, result.output
+    archive = _archive(root, "feature")
+    if remaining == "local":
+        git(root, "branch", "feature", source)
+    elif remaining == "remote":
+        git(root, "push", "origin", source + ":refs/heads/feature")
+    elif remaining == "worktree":
+        if not linked:
+            pytest.skip("normal checkout is retained by design")
+        git(root, "worktree", "add", "--detach", str(worktree), source)
+    completed = adapter("report_closeout_cost")._effect_complete(
+        ["cafe", "close"], root, worktree, issue, archive)
+    assert completed is (remaining is None)
 
 
 def removed_journey(tmp_path):

@@ -114,7 +114,9 @@ def pre_invocation_recovery_evidence(
 
     # Older runtimes wrote the invocation marker after workspace/checklist preparation.
     # Accept only the specific, workflow/task-bound audit evidence for that gap.
-    if set(context) <= {"effective_inputs", "workflow_completion_trusted", "agent_invoked"}:
+    if set(context) <= {
+        "effective_inputs", "workflow_completion_trusted", "agent_invoked", "agent_interruption",
+    }:
         audit = AuditEventStore(issue_dir)
         try:
             task = audit.latest_record(
@@ -133,7 +135,36 @@ def pre_invocation_recovery_evidence(
             and failure["data"].get("reason") == "agent_error"
             and failure["data"].get("attempt") == 1
         ):
+            marker = context.get("agent_interruption")
+            if marker is not None:
+                prepared = audit.latest_record(
+                    workflow_id, {"agent_interruption_prepared"}, step=step_name,
+                )
+                if (
+                    not isinstance(marker, dict)
+                    or marker.get("workflow_id") != workflow_id
+                    or marker.get("step") != step_name
+                    or marker.get("reason") != "agent_error"
+                    or prepared is None
+                    or not failure["sequence"] < prepared["sequence"] < task["sequence"]
+                    or prepared["data"].get("marker") != marker
+                ):
+                    return None
             detail = str(failure["data"].get("detail", ""))
+            if (
+                marker is not None
+                and detail == "Fresh-session recovery has no matching preparation evidence"
+            ):
+                # Session selection precedes invocation. A rejected preparation
+                # must remain recoverable without inventing a provider session.
+                return {"kind": "session_preparation_failed", "event_id": failure["event_id"]}
+            if marker is not None and re.fullmatch(
+                r"Skill not found: Unmanaged or changed native skill conflict: [^\n]+\. "
+                r"Back up and relocate the entry, then rerun prepare or launch; "
+                r"legacy names or matching contents alone do not prove ownership\.",
+                detail,
+            ):
+                return {"kind": "native_skill_preparation_failed", "event_id": failure["event_id"]}
             if re.fullmatch(
                 rf"Step {re.escape(repr(step_name))}, skill '[^']+', "
                 r"workflow\.checklist\.[^\n]+: unresolved placeholders \[[^\n]+\]",
