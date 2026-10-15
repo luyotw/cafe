@@ -676,9 +676,6 @@ def workflow(
     user_input = _normalize_cli_user_input(user_input)
     execution_context_file = execution_context_file if isinstance(execution_context_file, Path) else None
     execution_context = None
-    if execution_context_file is not None:
-        from cafe.core.execution_checkpoints import load_execution_context
-        execution_context = load_execution_context(execution_context_file)
     # Validation happens before any state is touched so a rejected locale input
     # leaves no partial workflow behind.
     start_locale_value = _normalize_cli_user_input(conversation_locale)
@@ -767,6 +764,13 @@ def workflow(
         else:
             has_internal_worker_context = False
             callback_binding = None
+
+        if execution_context_file is not None:
+            from cafe.core.execution_checkpoints import load_execution_context
+            try:
+                execution_context = load_execution_context(execution_context_file)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                raise ValueError(f"Cannot load execution context {execution_context_file}: {exc}") from exc
 
         # An explicit flag starts a requested playbook; otherwise an existing
         # issue must resume the playbook persisted in its own workflow state.

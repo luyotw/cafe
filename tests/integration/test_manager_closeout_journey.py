@@ -192,8 +192,6 @@ def test_manager_acceptance_executes_confirmed_cafe_close_without_reintegration(
     accept(context, monkeypatch, manager=True)
     source = journey.git(root, "rev-parse", "journey")
     assert journey.git(root, "rev-parse", "develop") == source
-    # The delivery fixture's destination is no longer needed after its real integration.
-    journey.git(root, "worktree", "remove", str(destination))
     binaries = tmp_path / "bin"
     binaries.mkdir()
     cafe = binaries / "cafe"
@@ -212,6 +210,9 @@ def test_manager_acceptance_executes_confirmed_cafe_close_without_reintegration(
     assert journey.git(root, "rev-parse", "develop") == source
     assert not journey.git(root, "branch", "--list", "journey")
     assert not issue.exists()
+    assert destination.is_dir() and root.is_dir()
+    assert journey.git(destination, "branch", "--show-current") == "develop"
+    assert journey.git(root, "rev-parse", "HEAD") == source
     replay = subprocess.run([*argv, "--execute", "--stage", "cleanup", "--index", "0"],
                             capture_output=True, text=True)
     assert replay.returncode != 0

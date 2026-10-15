@@ -168,3 +168,11 @@ or an archive backup; preserve a prior backup before retrying.
 `cafe close --archive-only` performs only archival and retains branches/worktrees,
 including unintegrated or dirty source checkouts. Fresh Manager cleanup proposals
 use `cafe close`; confirmed older argv are never rewritten on resume.
+
+When local delivery retains another checkout on the target branch, close reuses
+that destination. A normal source checkout is retained, detached at the proven
+source commit, and its branch ref is removed only after integration proof. Close
+does not remove the delivery destination. A source worktree selected for cleanup
+is still removed. Both source and destination must be clean. Ancestry-proven local
+cleanup works without gh; squash/rebase PR proof still requires a successful
+GitHub observation.

@@ -243,7 +243,9 @@ def test_background_forwards_trusted_event_callback_to_the_fixed_worker(
     ]
 
 
-@pytest.mark.parametrize("failure_site", ["playbook", "skills"])
+@pytest.mark.parametrize("failure_site", [
+    "playbook", "skills", "context_missing", "context_corrupt", "context_invalid",
+])
 def test_worker_pre_agent_failure_persists_diagnostic_and_dispatches_callback(
     tmp_path, monkeypatch, failure_site,
 ):
@@ -257,6 +259,14 @@ def test_worker_pre_agent_failure_persists_diagnostic_and_dispatches_callback(
     observed = []
     callback = SimpleNamespace(callback_id="builtin:use-cafe-workflow:workflow_event_callback",
                                script=tmp_path / "callback.py")
+    context_args = []
+    if failure_site.startswith("context_"):
+        context = tmp_path / "execution_context.json"
+        if failure_site == "context_corrupt":
+            context.write_text("{broken")
+        elif failure_site == "context_invalid":
+            context.write_text('{}')
+        context_args = ["--execution-context-file", str(context)]
     target = ("cafe.ui.commands.workflow.PlaybookLoader.load" if failure_site == "playbook"
               else "cafe.ui.commands.workflow.GenericPhase")
     def observe(_binding, event, **_kw):
@@ -264,7 +274,8 @@ def test_worker_pre_agent_failure_persists_diagnostic_and_dispatches_callback(
         observed.append(event)
     with (
         patch("cafe.ui.cli.GitOperations") as git_cls,
-        patch(target, side_effect=ValueError("Skill not found: startup-fixture")),
+        patch(target, side_effect=AssertionError("context failure must precede phase creation")
+              if context_args else ValueError("Skill not found: startup-fixture")),
         patch("cafe.ui.commands.workflow.resolve_builtin_workflow_event_callback", return_value=callback),
         patch("cafe.ui.commands.workflow.dispatch_workflow_event_callback",
               side_effect=observe),
@@ -272,12 +283,17 @@ def test_worker_pre_agent_failure_persists_diagnostic_and_dispatches_callback(
         git_cls.return_value.get_current_branch.return_value = "startup-failure"
         result = runner.invoke(app, ["workflow", "--execute", "--issue", "startup-failure",
             "--playbook", "standard", "--internal-worker-id", launch["worker_id"],
-            "--internal-worker-token", launch["worker_token"], "--on-workflow-event", callback.callback_id])
+            "--internal-worker-token", launch["worker_token"], "--on-workflow-event", callback.callback_id,
+            *context_args])
     assert result.exit_code != 0
     record = store.get(launch["worker_id"])
     assert record["status"] == "failed"
-    assert record["diagnostic"]["error_type"] == "ValueError"
-    assert "startup-fixture" in record["diagnostic"]["detail"]
+    if context_args:
+        assert record["diagnostic"]["error_type"] in {"FileNotFoundError", "JSONDecodeError", "ValueError"}
+        assert record["diagnostic"]["detail"]
+    else:
+        assert record["diagnostic"]["error_type"] == "ValueError"
+        assert "startup-fixture" in record["diagnostic"]["detail"]
     assert len(observed) == 1 and observed[0]["event_type"] == "workflow_interruption"
     assert observed[0]["workflow_id"] == state.workflow_id
     assert observed[0]["reason"] == "startup_failed"

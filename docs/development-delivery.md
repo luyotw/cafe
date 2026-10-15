@@ -47,3 +47,10 @@ or agent construction retain one sanitized bounded diagnostic in the worker
 launch record and dispatch the configured interruption callback. Process creation
 is launch evidence only. DEVNULL output remains intentional; no raw unbounded
 startup log is introduced.
+
+Local delivery's existing target checkout remains in place during cleanup,
+including when the source is a normal current checkout. Close preserves that
+source checkout and its files by detaching the proven source commit before
+compare-and-delete of its branch. Authenticated worker startup diagnostics also
+cover missing, corrupt and rejected execution-context files before phase setup;
+the record is failed before its durable interruption callback is dispatched.

@@ -1334,20 +1334,18 @@ def close(
             pr = GitHubOps().get_pr_for_branch(source)
             if pr and (pr.get("state") == "OPEN" or pr.get("isDraft")):
                 raise ValueError("cannot close a source with an open or draft PR")
-        except GitHubError:
+        except (GitHubError, FileNotFoundError):
             pass
 
-        destination = original
-        if worktree:
-            trees = git_ops.list_worktrees()
-            registered = next((tree for tree in trees
-                if Path(tree["path"]).resolve() == original and tree.get("branch") == source), None)
-            if registered is None:
-                raise ValueError("source worktree identity is not registered")
-            destination = next((Path(tree["path"]).resolve() for tree in trees
-                                if tree.get("branch") == target), project_root)
-            if destination == original or not (destination / ".git").exists():
-                raise ValueError("cannot locate the retained target checkout")
+        trees = git_ops.list_worktrees()
+        registered = next((tree for tree in trees
+            if Path(tree["path"]).resolve() == original and tree.get("branch") == source), None)
+        if registered is None:
+            raise ValueError("source worktree identity is not registered")
+        destination = next((Path(tree["path"]).resolve() for tree in trees
+                            if tree.get("branch") == target), project_root if worktree else original)
+        if (worktree and destination == original) or not (destination / ".git").exists():
+            raise ValueError("cannot locate the retained target checkout")
         retained = GitOperations(str(destination))
         if retained.has_in_progress_operation():
             raise ValueError("retained checkout has a pending Git operation")
@@ -1367,6 +1365,13 @@ def close(
         # Revalidate source, target and remote identity before the first deletion.
         if worktree and git_ops.run_git("status", "--porcelain", "--untracked-files=all"):
             raise ValueError("source checkout changed after preflight")
+        if not worktree and destination != original:
+            if (git_ops.get_current_branch() != source or git_ops.has_in_progress_operation()
+                    or git_ops.run_git("status", "--porcelain", "--untracked-files=all")):
+                raise ValueError("source checkout changed after preflight")
+            # Preserve a normal source checkout and its files when delivery's
+            # destination already owns the target branch. Release only its ref.
+            git_ops.run_git("checkout", "--detach", snapshot["source_oid"])
         retained.delete_cleanup_remote(snapshot)
         os.chdir(destination)
         if worktree:
@@ -1375,13 +1380,14 @@ def close(
         retained.delete_cleanup_branch(snapshot)
         if not worktree and issue.exists():
             shutil.rmtree(issue)
+            clear_marker_if_matches(original / ".cafe", source)
         if worktree:
             _remove_worktree_inventory_pointer(project_root=project_root,
                 issue_name=source, worktree_path=str(original))
         clear_marker_if_matches(destination / ".cafe", source)
         console.print(f"[green]✓ Successfully closed issue: {source}[/green]")
         console.print(f"  Issue data archived to: {archive}")
-        if worktree:
+        if destination != original:
             console.print(f"  Retained checkout: {destination}")
     except typer.Exit:
         raise

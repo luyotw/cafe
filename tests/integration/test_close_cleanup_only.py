@@ -9,7 +9,6 @@ import yaml
 from typer.testing import CliRunner
 
 from cafe.ui.cli import app
-from cafe.utils.github import GitHubError
 
 
 def git(root, *args):
@@ -51,9 +50,13 @@ def feature(tmp_path, monkeypatch, request):
     (issue / "issue.yaml").write_text(yaml.safe_dump(config))
     (issue / "evidence").write_text("retain delivery evidence")
     monkeypatch.chdir(worktree)
-    with patch("cafe.ui.cli.GitHubOps") as gh:
-        gh.return_value.get_pr_for_branch.side_effect = GitHubError("offline")
-        yield root, worktree, issue, source, request.param
+    real_run = subprocess.run
+    def without_gh(argv, **kwargs):
+        if argv[0] == "gh":
+            raise FileNotFoundError("gh executable is not installed")
+        return real_run(argv, **kwargs)
+    monkeypatch.setattr(subprocess, "run", without_gh)
+    yield root, worktree, issue, source, request.param
 
 
 def integrate(feature):
@@ -158,16 +161,19 @@ def test_squash_cleanup_requires_exact_pr_identity_and_reachable_merge(feature, 
     elif mismatch == "fork":
         pr["isCrossRepository"] = True
     real_run = subprocess.run
+    queried_endpoints = []
 
     def observe(argv, **kwargs):
         if argv[:3] == ["gh", "pr", "list"]:
             import json
-            assert argv[argv.index("--repo") + 1] == str(root.parent / "remote.git")
+            if "--repo" in argv:
+                queried_endpoints.append(argv[argv.index("--repo") + 1])
             return subprocess.CompletedProcess(argv, 0, json.dumps([pr]), "")
         return real_run(argv, **kwargs)
 
     monkeypatch.setattr(lifecycle.subprocess, "run", observe)
     result = CliRunner().invoke(app, ["close"])
+    assert queried_endpoints == [str(root.parent / "remote.git")]
     if mismatch:
         assert result.exit_code != 0
         assert_retained(feature)
@@ -265,3 +271,33 @@ def test_existing_archive_is_never_overwritten_by_full_cleanup(feature):
     assert result.exit_code != 0
     assert_retained(feature)
     assert (archive / "previous-evidence").read_text() == "preserve older work"
+
+
+@pytest.mark.parametrize("dirty_destination", [False, True])
+def test_cleanup_retains_the_checkout_already_owning_the_target(feature, tmp_path, dirty_destination):
+    root, source_checkout, issue, source, linked = feature
+    integrate(feature)
+    destination = root if linked else tmp_path / "delivery-destination"
+    if not linked:
+        git(root, "worktree", "add", str(destination), "develop")
+    marker = source_checkout / ".cafe/active_issue"
+    marker.write_text("feature\n")
+    if dirty_destination:
+        (destination / "unsaved").write_text("retain destination work")
+    result = CliRunner().invoke(app, ["close"])
+    if dirty_destination:
+        assert result.exit_code != 0
+        assert_retained(feature)
+        assert marker.read_text() == "feature\n"
+        assert (destination / "unsaved").read_text() == "retain destination work"
+    else:
+        assert result.exit_code == 0, result.output
+        assert destination.is_dir()
+        assert git(destination, "branch", "--show-current") == "develop"
+        assert git(destination, "rev-parse", "HEAD") == source
+        assert not issue.exists() and not marker.exists()
+        if not linked:
+            assert source_checkout.is_dir()
+            assert git(source_checkout, "branch", "--show-current") == ""
+            assert git(source_checkout, "rev-parse", "HEAD") == source
+            assert (source_checkout / "change").read_text() == "delivered\n"
