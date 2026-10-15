@@ -1278,6 +1278,9 @@ def close(
         False, "--archive-only",
         help="Archive CAFE issue state while retaining source branches and worktrees",
     ),
+    issue: Optional[str] = typer.Option(
+        None, "--issue", help="Exact issue to archive in this checkout (requires --archive-only)",
+    ),
 ) -> None:
     """Archive and clean an already integrated feature. Delivery performs integration.
 
@@ -1289,23 +1292,42 @@ def close(
 
     original = Path.cwd().resolve()
     try:
+        explicit_issue = issue is not None
+        if explicit_issue:
+            if not archive_only:
+                raise ValueError("--issue requires --archive-only")
+            import re
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", issue):
+                raise ValueError("invalid archive issue name")
         git_ops = GitOperations()
         source = git_ops.get_current_branch()
         if not source:
             raise ValueError("cleanup requires a named source branch")
-        issue = original / ".cafe" / "issues" / source
+        issue_name = issue if explicit_issue else source
+        issue = original / ".cafe" / "issues" / issue_name
         config_file = issue / "issue.yaml"
+        if explicit_issue:
+            resolved = resolve_issue_config_path(config_file, require_registered_worktree=True)
+            if resolved != config_file or resolved.parents[3] != original:
+                raise ValueError("explicit archive issue must belong to this checkout")
         config = safe_load(config_file.read_text(encoding="utf-8"))
+        if explicit_issue:
+            if config.get("issue_name", issue_name) != issue_name:
+                raise ValueError("archive issue configuration identity differs from the selected issue")
+            if config.get("worktree_path") and Path(config["worktree_path"]).resolve() != original:
+                raise ValueError("archive issue checkout differs from the current checkout")
         target = config.get("base_branch", "main")
         worktree = config.get("worktree_path")
         project_root = _get_project_root()
         if archive_only:
-            archive = _archive_issue_directory(issue, source, copy_current_config=True)
+            archive = _archive_issue_directory(issue, issue_name, copy_current_config=True)
+            if archive is None:
+                raise ValueError(f"no issue data found for: {issue_name}")
             if worktree:
                 _remove_worktree_inventory_pointer(project_root=project_root,
-                    issue_name=source, worktree_path=worktree)
-            clear_marker_if_matches(original / ".cafe", source)
-            console.print(f"[green]✓ Archived issue without delivery: {source}[/green]")
+                    issue_name=issue_name, worktree_path=worktree)
+            clear_marker_if_matches(original / ".cafe", issue_name)
+            console.print(f"[green]✓ Archived issue without delivery: {issue_name}[/green]")
             console.print(f"  Issue data archived to: {archive}")
             return
 

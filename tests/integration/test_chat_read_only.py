@@ -1,6 +1,9 @@
 """Read-only wiring/storage journeys; native fixtures do not prove process confinement."""
 
 import json
+import os
+import re
+import stat
 import subprocess
 import sys
 
@@ -680,6 +683,16 @@ for record in records:
         timeout=20,
     )
     assert inventory(repo.parent) == before
+    diagnostic_paths = [
+        Path(path) for path in re.findall(r"Private stderr diagnostic: ([^\r\n]+)", result.stdout)
+    ]
+    assert len(diagnostic_paths) == 1
+    log = diagnostic_paths[0]
+    assert not log.is_relative_to(repo.parent)
+    if os.name != "nt":
+        assert stat.S_IMODE(log.stat().st_mode) == 0o600
+    raw_stderr = log.read_text()
+    log.unlink()
     attempts = [json.loads(line) for line in receipt.read_text().splitlines()]
     for attempt in attempts:
         assert_native_options([provider, *attempt["argv"]], provider)
@@ -691,11 +704,16 @@ for record in records:
             assert args[args.index("--disallowed-tools") + 1] == "Bash,Edit,Write,NotebookEdit"
     assert "stored-session" in attempts[0]["argv"]
     if scenario == "recover":
+        assert raw_stderr == "No conversation found\n"
         assert result.returncode == 0, result.stdout + result.stderr
         assert len(attempts) == 2
         assert "stored-session" not in attempts[1]["argv"]
         assert "fixture diagnosis: diagnostic context" in result.stdout
     else:
+        assert raw_stderr == (
+            "native option rejected\n"
+            "native rejection detail private-provider-configuration-fixture\n"
+        )
         assert result.returncode != 0
         assert len(attempts) == 1
         assert "native option rejected" in result.stdout + result.stderr

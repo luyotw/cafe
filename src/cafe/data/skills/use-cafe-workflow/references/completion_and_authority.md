@@ -6,6 +6,12 @@ For local development delivery, require host receipts proving the reviewed sourc
 
 Fresh nested contract version 5 has cleanup only. Default full cleanup to `cafe close`, which verifies the existing integration before archiving and removing its exact local and remote feature resources. Retain archive-only as the explicit preservation choice. Existing contracts and compact routes keep their original authority and receipts; a new default never broadens their approved commands.
 
+The full-cleanup helper passes its exact issue identity to `cafe close
+--archive-only --issue <issue-name>` internally. This archive-only selector
+resolves the current registered checkout's issue authority; a correction branch
+does not become a different issue. It cannot select integration or branch
+removal through ordinary `close`.
+
 # Completion And Action Authority
 
 ## Compact route
@@ -199,7 +205,7 @@ registered worktrees plus dirty/untracked content. The confirmed argv must use
 explicit targets. When a command needs another Git context, make that context
 an exact argument (for example `git -C <retained-checkout> worktree remove
 <target>`), rather than changing the Manager's working directory. Never add force
-flags. A remote branch deletion lease is a compare-and-delete guard, never permission to overwrite a changed tip. For new full cleanup plans, use the confirmed `cafe close` as the final cleanup command through `execute_closeout.py`, after any separately authorized `gh issue close`. It checks the exact source/target identity, existing integration, clean checkouts, and remote tips before cleanup. A local target update is ff-only. Inspect the archive and absence of named local/remote resources before offering inclusive cost calculation. Retain a previously confirmed `cleanup_worktree.py` command as a compatibility entry with its original scope; do not replace it during resume. Both paths use neutral Git integration proof. `cafe close --squash`, `--message`, and `-m` have been removed. PR merge strategies belong to delivery. `--archive-only` continues to retain feature resources.
+flags. A remote branch deletion lease is a compare-and-delete guard, never permission to overwrite a changed tip. For new full cleanup plans, use the confirmed `cafe close` as the final cleanup command through `execute_closeout.py`, after any separately authorized `gh issue close`. It checks the exact source/target identity, existing integration, clean checkouts, and remote tips before cleanup. A local target update is ff-only. Inspect the archive and absence of named local/remote resources before offering inclusive cost calculation. Retain a previously confirmed `cleanup_worktree.py` command as a compatibility entry with its original scope; do not replace it during resume. Its accepted snapshot identifies the source branch independently of the issue name. A different original issue-name branch is eligible only with an exact successful integration receipt retained in the accepted result, matching workflow, repository, destination, target and unchanged tips. Validate both branches and their worktree ownership before archival; unrelated branches are never selected. Legacy cleanup without an accepted snapshot retains its same-name restriction. Both paths use neutral Git integration proof. `cafe close --squash`, `--message`, and `-m` have been removed. PR merge strategies belong to delivery. `--archive-only` continues to retain feature resources.
 
 ### Assist when no argv closeout plan exists
 

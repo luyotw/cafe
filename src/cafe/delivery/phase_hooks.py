@@ -110,6 +110,63 @@ def _request_clarification(kwargs):
     )
 
 
+def _proposal_table_cells(line):
+    """Split Markdown separators while retaining escaped pipes in cell text."""
+    cells, escaped = [""], False
+    for char in line.strip():
+        if char == "|" and not escaped:
+            cells.append("")
+        else:
+            cells[-1] += char
+        escaped = not escaped if char == "\\" else False
+    if len(cells) == 1:
+        return None
+    if not cells[0]:
+        cells.pop(0)
+    if cells and not cells[-1]:
+        cells.pop()
+    return [cell.strip().strip("`* ") for cell in cells]
+
+
+def _open_proposal_evidence_ids(section):
+    """Use explicit table status, not incidental narrative finding references."""
+    lines = re.sub(r"```.*?```", "", section, flags=re.S).splitlines()
+    statuses, has_status_table, index = {}, False, 0
+    while index < len(lines):
+        cells = _proposal_table_cells(lines[index])
+        index += 1
+        header = [cell.casefold() for cell in cells] if cells else []
+        if "id" not in header or "status" not in header:
+            continue
+        if header.count("id") != 1 or header.count("status") != 1:
+            raise ValueError("Review proposal table has ambiguous columns")
+        separator = _proposal_table_cells(lines[index]) if index < len(lines) else None
+        if (not separator or len(separator) != len(header)
+                or any(not re.fullmatch(r":?-+:?", cell) for cell in separator)):
+            raise ValueError("Review proposal table separator is invalid")
+        index += 1
+        has_status_table = True
+        while index < len(lines):
+            row = _proposal_table_cells(lines[index])
+            if row is None:
+                break
+            index += 1
+            if len(row) != len(header):
+                raise ValueError("Review proposal table has ambiguous columns")
+            identities = set(re.findall(r"FUP-[0-9]{3}", row[header.index("id")]))
+            if len(identities) != 1:
+                raise ValueError("Review proposal identity is ambiguous")
+            identity = identities.pop()
+            status = row[header.index("status")].casefold()
+            if status not in {"open", "fixed", "closed"} or identity in statuses:
+                raise ValueError("Review proposal status is ambiguous")
+            statuses[identity] = status
+    if has_status_table:
+        return {identity for identity, status in statuses.items() if status == "open"}
+    # Preserve the existing JSON-only/legacy evidence contract.
+    return set(re.findall(r"FUP-[0-9]{3}", section))
+
+
 def _proposals(state, binding, issue_dir):
     entry = state.artifacts.get(binding.proposals_artifact) if binding.proposals_artifact else None
     if entry is None:
@@ -129,14 +186,17 @@ def _proposals(state, binding, issue_dir):
     )
     text = content.decode()
     section = re.search(r"(?ms)^## Follow-up Proposals\s*\n(.*?)(?=^## |\Z)", text)
-    if not section or not re.search(r"FUP-[0-9]{3}", section[1]):
+    if not section:
         return (), source
+    evidence_ids = _open_proposal_evidence_ids(section[1])
     block = re.search(r"```json\s*(.*?)\s*```", section[1], re.S)
     if not block:
+        if not evidence_ids and not re.search(r"FUP-[0-9]{3}", section[1]):
+            return (), source
         raise ValueError("open proposals require the Review's original structured draft bundle")
     rows = json.loads(block[1])["proposals"]
     selected = tuple(FollowUp.model_validate(row) for row in rows)
-    if set(re.findall(r"FUP-[0-9]{3}", section[1])) != {p.id for p in selected}:
+    if evidence_ids != {p.id for p in selected}:
         raise ValueError("Review draft IDs do not match open proposal evidence")
     return selected, source
 

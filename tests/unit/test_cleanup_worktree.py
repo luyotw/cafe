@@ -18,7 +18,7 @@ def git(root, *args):
 
 
 @pytest.fixture
-def journey(tmp_path, monkeypatch):
+def journey(tmp_path, monkeypatch, request):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     root, worktree, remote = tmp_path / "repo", tmp_path / "feature", tmp_path / "remote.git"
     root.mkdir()
@@ -52,8 +52,21 @@ def journey(tmp_path, monkeypatch):
     archive = module._archive(root, "issue474")
 
     def run(argv, **kwargs):
-        if argv == ["cafe", "close", "--archive-only"]:
+        if argv == ["cafe", "close", "--archive-only", "--issue", "issue474"]:
             assert Path(kwargs["cwd"]) == worktree
+            if getattr(request, "param", None) == "real_archive":
+                from typer.testing import CliRunner
+                from cafe.ui.cli import app
+                from cafe.core.git import GitOperations
+                from unittest.mock import patch
+
+                with monkeypatch.context() as context:
+                    context.chdir(worktree)
+                    with patch("cafe.ui.cli.GitOperations", GitOperations):
+                        result = CliRunner().invoke(app, argv[1:])
+                if result.exit_code:
+                    raise subprocess.CalledProcessError(result.exit_code, argv, output=result.output)
+                return subprocess.CompletedProcess(argv, 0, stdout=result.output)
             archive.parent.mkdir(parents=True)
             shutil.move(str(issue), str(archive))
             return subprocess.CompletedProcess(argv, 0)
@@ -95,6 +108,238 @@ def test_advanced_remote_is_refused_before_any_cleanup(journey):
         module.cleanup(root, worktree, "issue474", "origin")
     assert issue.is_dir() and worktree.is_dir() and not archive.exists()
     assert git(root, "branch", "--list", "issue474")
+
+
+@pytest.mark.parametrize("history", ["replacement", "graft", "environment_graft"])
+def test_legacy_cleanup_requires_original_ancestry(journey, monkeypatch, history):
+    module, root, worktree, remote, issue, archive = journey
+    (worktree / "feature-change").write_text("not integrated\n")
+    git(worktree, "add", "feature-change")
+    git(worktree, "commit", "-m", "feature")
+    git(worktree, "push", "origin", "issue474")
+    source, target = git(worktree, "rev-parse", "HEAD"), git(root, "rev-parse", "HEAD")
+    if history == "replacement":
+        git(root, "replace", "--graft", target, source)
+    else:
+        path = Path(git(root, "rev-parse", "--path-format=absolute", "--git-path", "info/grafts"))
+        path.parent.mkdir(exist_ok=True)
+        if history == "environment_graft":
+            path = path.with_name("alternative-grafts")
+            monkeypatch.setenv("GIT_GRAFT_FILE", str(path))
+        path.write_text(f"{target} {source}\n")
+    git(root, "merge-base", "--is-ancestor", source, target)
+    with pytest.raises(ValueError):
+        module.cleanup(root, worktree, "issue474", "origin")
+    assert issue.is_dir() and worktree.is_dir() and not archive.exists()
+    assert git(root, "rev-parse", "issue474") == source
+    assert git(remote, "rev-parse", "issue474") == source
+
+
+def test_legacy_cleanup_observes_the_same_pinned_remote_it_deletes(journey, tmp_path):
+    module, root, worktree, remote, issue, archive = journey
+    rewritten = tmp_path / "rewritten.git"
+    git(root, "clone", "--bare", str(remote), str(rewritten))
+    other = git(rewritten, "-c", "user.name=Test", "-c", "user.email=test@example.com",
+                "commit-tree", "develop^{tree}", "-p", "develop", "-m", "other remote tip")
+    git(rewritten, "update-ref", "refs/heads/issue474", other)
+    git(root, "remote", "set-url", "origin", "cafe-original:")
+    git(root, "config", f"url.{remote}.insteadOf", "cafe-original:")
+    git(root, "config", f"url.{rewritten}.insteadOf", str(remote))
+    result = module.cleanup(root, worktree, "issue474", "origin")
+    assert result["status"] == "completed"
+    assert archive.is_dir() and not worktree.exists()
+    assert not git(remote, "branch", "--list", "issue474")
+    assert git(rewritten, "rev-parse", "issue474") == other
+
+
+@pytest.fixture
+def correction(journey, monkeypatch, request):
+    """Real Git resources with separately retained successful delivery receipts.
+
+    The owning acceptance validator is tested separately below; this fixture
+    supplies its accepted selection to exercise cleanup's resource checks.
+    """
+    from cafe.delivery.contracts import ActionProposal, ActionSnapshot
+    from cafe.delivery.records import ActionStore
+    import inspect_delivery_closeout
+
+    module, root, worktree, remote, issue, archive = journey
+    mode = getattr(request, "param", "local")
+    github = {}
+
+    def integrated_snapshot(branch):
+        p = ActionProposal(workflow_id="workflow-474", approval_step="pr", approval_iteration=1,
+            repository="example/repo" if mode == "github" else git(root, "rev-parse", "--path-format=absolute", "--git-common-dir"),
+            source_oid=git(worktree, "rev-parse", "HEAD"), source_branch=branch,
+            target_branch="develop", target_oid=git(root, "rev-parse", "HEAD"),
+            mode=mode, strategy="merge" if mode == "github" else "merge-commit",
+            destination="" if mode == "github" else str(root),
+            pr_number=(1 if branch == "issue474" else 2) if mode == "github" else None)
+        snapshot = ActionSnapshot(proposal=p, proposal_digest=p.digest,
+            task_id=f"approve-{branch}", result_id=f"result-{branch}", selected=())
+        git(root, "merge", "--no-ff", "-m", "integrate", branch)
+        store = ActionStore(issue, snapshot)
+        with store.locked():
+            store.finish("integration", {"state": "succeeded", "commit": git(root, "rev-parse", "HEAD")})
+        github[str(p.pr_number)] = {"state": "MERGED", "headRefOid": p.source_oid,
+            "headRefName": branch, "baseRefName": "develop",
+            "mergeCommit": {"oid": git(root, "rev-parse", "HEAD")}}
+        return snapshot, store.read("integration")
+
+    old, old_receipt = integrated_snapshot("issue474")
+    git(worktree, "checkout", "-b", "issue474-date-fix")
+    (worktree / "correction").write_text("fixed\n")
+    git(worktree, "add", "correction")
+    git(worktree, "commit", "-m", "correct")
+    git(worktree, "push", "-u", "origin", "issue474-date-fix")
+    current, receipt = integrated_snapshot("issue474-date-fix")
+    report = {"actions": {"integration": receipt},
+              "previous_results": {f"{old.digest}:integration": old_receipt}}
+    (issue / "delivery" / current.digest / "result.json").write_text(json.dumps(report))
+    monkeypatch.setattr(inspect_delivery_closeout, "inspect", lambda *a, **k: {
+        "status": "accepted", "selection": {"choice": "cleanup", "snapshot": current.digest}})
+    if mode == "github":
+        previous_run = module.subprocess.run
+
+        def run(argv, **kwargs):
+            if argv[:3] == ["gh", "pr", "view"]:
+                return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(github[argv[3]]))
+            return previous_run(argv, **kwargs)
+
+        monkeypatch.setattr(module.subprocess, "run", run)
+    return journey, current, old
+
+
+def test_accepted_correction_cleans_both_exact_branches_and_preserves_unrelated(correction):
+    (module, root, worktree, remote, issue, archive), current, old = correction
+    git(root, "branch", "issue474-unrelated")
+    result = module.cleanup(root, worktree, "issue474", "origin")
+    assert result["branches"] == ["issue474", "issue474-date-fix"]
+    assert result["branch"] == "issue474-date-fix"
+    assert archive.is_dir() and not worktree.exists()
+    assert (archive / "delivery" / old.digest / "integration.json").is_file()
+    for branch in result["branches"]:
+        assert git(root, "branch", "--list", branch) == ""
+        assert git(root, "ls-remote", "--heads", "origin", f"refs/heads/{branch}") == ""
+    assert git(root, "branch", "--list", "issue474-unrelated")
+
+
+def test_correction_cleanup_requires_original_target_ancestry(correction):
+    (module, root, worktree, remote, issue, archive), current, old = correction
+    target = old.proposal.target_oid
+    receipt = json.loads((issue / "delivery" / current.digest / "result.json").read_text())["actions"]["integration"]
+    git(root, "update-ref", "refs/heads/develop", target)
+    git(root, "replace", "--graft", target, receipt["commit"])
+    git(root, "merge-base", "--is-ancestor", receipt["commit"], "develop")
+    with pytest.raises(ValueError):
+        module.cleanup(root, worktree, "issue474", "origin")
+    assert issue.is_dir() and worktree.is_dir() and not archive.exists()
+    assert git(root, "rev-parse", "issue474-date-fix") == current.proposal.source_oid
+
+
+@pytest.mark.parametrize("change", ["current_tip", "original_tip", "remote_tip", "receipt", "retained",
+                                    "other_worktree", "target", "foreign_branch"])
+def test_correction_rejects_changed_or_unproven_resources_before_archive(correction, change, tmp_path):
+    (module, root, worktree, remote, issue, archive), current, old = correction
+    if change == "current_tip":
+        (worktree / "correction").write_text("new work\n")
+        git(worktree, "commit", "-am", "advanced")
+    elif change == "original_tip":
+        git(root, "branch", "-f", "issue474", current.proposal.source_oid)
+    elif change == "remote_tip":
+        git(root, "push", "origin", f"{current.proposal.source_oid}:refs/heads/issue474")
+    elif change == "receipt":
+        path = issue / "delivery" / old.digest / "integration.json"
+        value = json.loads(path.read_text()); value["state"] = "unknown"
+        path.write_text(json.dumps(value))
+    elif change == "retained":
+        path = issue / "delivery" / current.digest / "result.json"
+        value = json.loads(path.read_text()); value["previous_results"] = {}
+        path.write_text(json.dumps(value))
+    elif change == "other_worktree":
+        git(root, "worktree", "add", str(tmp_path / "other"), "issue474")
+    elif change == "target":
+        git(root, "reset", "--hard", old.proposal.source_oid)
+    else:
+        git(worktree, "checkout", "-b", "unrelated")
+    with pytest.raises(ValueError):
+        module.cleanup(root, worktree, "issue474", "origin")
+    assert worktree.is_dir() and issue.is_dir() and not archive.exists()
+    for branch in ("issue474", "issue474-date-fix"):
+        assert git(root, "branch", "--list", branch)
+        assert git(root, "ls-remote", "--heads", "origin", f"refs/heads/{branch}")
+
+
+def test_legacy_different_branch_does_not_gain_cleanup_authority(journey):
+    module, root, worktree, remote, issue, archive = journey
+    git(worktree, "checkout", "-b", "issue474-date-fix")
+    with pytest.raises(ValueError, match="another branch"):
+        module.cleanup(root, worktree, "issue474", "origin")
+    assert issue.exists() and not archive.exists()
+
+
+@pytest.mark.parametrize("correction", ["github"], indirect=True)
+def test_github_correction_checks_each_exact_merged_pr(correction, monkeypatch):
+    (module, root, worktree, remote, issue, archive), current, old = correction
+    result = module.cleanup(root, worktree, "issue474")
+    assert result["branches"] == ["issue474", "issue474-date-fix"]
+    assert archive.is_dir() and not worktree.exists()
+    # No remote was authorized, so both remote refs remain.
+    assert git(root, "ls-remote", "--heads", "origin", "refs/heads/issue474")
+
+
+@pytest.mark.parametrize("correction", ["github"], indirect=True)
+def test_github_changed_merge_is_refused_before_archive(correction, monkeypatch):
+    (module, root, worktree, remote, issue, archive), current, old = correction
+    previous_run = module.subprocess.run
+
+    def run(argv, **kwargs):
+        result = previous_run(argv, **kwargs)
+        if argv[:3] == ["gh", "pr", "view"]:
+            data = json.loads(result.stdout)
+            data["mergeCommit"]["oid"] = "a" * 40
+            return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(data))
+        return result
+
+    monkeypatch.setattr(module.subprocess, "run", run)
+    with pytest.raises(ValueError, match="GitHub delivery identity"):
+        module.cleanup(root, worktree, "issue474")
+    assert issue.exists() and worktree.exists() and not archive.exists()
+
+
+def test_archival_tip_change_stops_removal_and_preserves_archive(correction, monkeypatch):
+    (module, root, worktree, remote, issue, archive), current, old = correction
+    previous_run = module.subprocess.run
+
+    def run(argv, **kwargs):
+        result = previous_run(argv, **kwargs)
+        if argv == ["cafe", "close", "--archive-only", "--issue", "issue474"]:
+            git(root, "branch", "-f", "issue474", current.proposal.source_oid)
+        return result
+
+    monkeypatch.setattr(module.subprocess, "run", run)
+    with pytest.raises(ValueError, match="changed during cleanup"):
+        module.cleanup(root, worktree, "issue474", "origin")
+    assert archive.exists() and worktree.exists()
+    assert git(root, "branch", "--list", "issue474-date-fix")
+
+
+@pytest.mark.parametrize("journey", ["real_archive"], indirect=True)
+def test_correction_cleanup_uses_real_cli_archive_with_explicit_issue(correction):
+    import yaml
+
+    (module, root, worktree, remote, issue, archive), current, old = correction
+    (issue / "issue.yaml").write_text(yaml.safe_dump({
+        "issue_name": "issue474", "worktree_path": str(worktree),
+        "base_branch": "develop", "pr": {"auto_create": True},
+    }))
+    (issue / "cost-proof.txt").write_text("retained accounting evidence")
+    result = module.cleanup(root, worktree, "issue474", "origin")
+    assert result["status"] == "completed" and archive.exists() and not worktree.exists()
+    assert (archive / "cost-proof.txt").read_text() == "retained accounting evidence"
+    for branch in ("issue474", "issue474-date-fix"):
+        assert git(root, "branch", "--list", branch) == ""
+        assert git(root, "ls-remote", "--heads", "origin", f"refs/heads/{branch}") == ""
 
 
 def test_default_prefills_full_cleanup_but_explicit_archive_preference_wins(tmp_path):

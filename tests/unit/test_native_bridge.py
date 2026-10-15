@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 from cafe.core.types import AgentCLI
-from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 
@@ -81,32 +80,46 @@ def test_selection_cleanup_preserves_project_links_and_sources(bridge):
     assert source.is_dir()
 
 
-@pytest.mark.parametrize("manifest", [None, "{broken", "[]", '["local"]'])
+@pytest.mark.parametrize(
+    "manifest",
+    [None, "{broken", "[]", '["local"]', '{"version":2,"entries":{"local":{"kind":"legacy"}}}'],
+)
 @pytest.mark.parametrize("entry", ["identical-copy", "directory", "file", "wrong-link"])
-def test_ambiguous_entries_are_preserved_even_with_legacy_names(bridge, manifest, entry):
-    source = local(bridge)
+@pytest.mark.parametrize("active_local", [False, True])
+def test_existing_entries_refresh_without_ownership_proof(bridge, manifest, entry, active_local):
+    source = (
+        local(bridge)
+        if active_local
+        else skill(bridge.skill_loader.builtin_root / "skills", "local")
+    )
     root = bridge.get_native_skills_dir(AgentCLI.CODEX)
     root.mkdir(parents=True)
     target = root / "local"
+    external = bridge.project_root.parent / "external"
+    external.mkdir()
+    (external / "sentinel").write_text("preserved")
     if entry == "identical-copy":
         shutil.copytree(source, target)
     elif entry == "directory":
         target.mkdir()
-        (target / "user").write_text("user")
+        (target / "user").write_text("old copy")
     elif entry == "file":
-        target.write_text("user")
+        target.write_text("old copy")
     else:
-        target.symlink_to(bridge.project_root / "missing")
-    before = target.lstat()
+        target.symlink_to(external)
+    unrelated = root / "unrelated"
+    unrelated.mkdir()
+    (unrelated / "note").write_text("preserved")
     if manifest is not None:
         (root / bridge.MANAGED_SKILLS_MANIFEST).write_text(manifest)
-    errors = bridge.reconcile_project_skills()
-    assert errors and "local" in " ".join(errors)
-    assert target.lstat() == before
-    with pytest.raises(SkillDiscoveryError):
-        bridge.install_skill("local", AgentCLI.CODEX)
-    assert source.is_dir()
-    assert (bridge.get_native_skills_dir(AgentCLI.CLAUDE) / "local").resolve() == source
+    assert bridge.reconcile_project_skills() == []
+    bridge.install_skill("local", AgentCLI.CODEX)
+    assert target.is_symlink() == active_local
+    for relative in ("SKILL.md", "references/note.md", "scripts/tool.sh"):
+        assert (target / relative).read_bytes() == (source / relative).read_bytes()
+    assert (external / "sentinel").read_text() == "preserved"
+    assert (unrelated / "note").read_text() == "preserved"
+    assert not list(root.glob(".cafe-backup-*"))
 
 
 def test_correct_manual_link_is_adopted_and_repeated_install_is_safe(bridge):
@@ -123,7 +136,7 @@ def test_correct_manual_link_is_adopted_and_repeated_install_is_safe(bridge):
     assert not target.is_symlink() and source.is_dir()
 
 
-def test_user_replacement_is_not_removed_or_overwritten(bridge):
+def test_cleanup_preserves_user_replacement_until_authority_refresh(bridge):
     local(bridge)
     bridge.reconcile_project_skills()
     target = bridge.get_native_skills_dir(AgentCLI.CODEX) / "local"
@@ -132,8 +145,8 @@ def test_user_replacement_is_not_removed_or_overwritten(bridge):
     (target / "SKILL.md").write_text("replacement")
     bridge._remove_managed_skill(AgentCLI.CODEX, "local")
     assert (target / "SKILL.md").read_text() == "replacement"
-    assert bridge.reconcile_project_skills()
-    assert (target / "SKILL.md").read_text() == "replacement"
+    assert bridge.reconcile_project_skills() == []
+    assert target.is_symlink() and target.resolve() == bridge.project_root / ".cafe/skills/local"
 
 
 def test_proven_transient_copy_migrates_to_active_local_link(bridge):
@@ -289,8 +302,8 @@ def test_cleanup_restores_git_visibility_for_a_user_replacement(bridge):
     assert ".claude/skills/local" not in status
 
 
-def test_replacement_during_staging_is_preserved(bridge, monkeypatch):
-    """U3: revalidate current-entry ownership at the mutation boundary."""
+def test_replacement_during_staging_does_not_block_refresh(bridge, monkeypatch):
+    """A changed destination still receives the resolved skill at publication."""
     skill(bridge.skill_loader.builtin_root / "skills", "local")
     target = bridge.install_skill("local", AgentCLI.CODEX)
     local(bridge)
@@ -304,9 +317,9 @@ def test_replacement_during_staging_is_preserved(bridge, monkeypatch):
         return original(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "symlink_to", replace_user_entry)
-    assert bridge.reconcile_project_skills()
-    assert not target.is_symlink()
-    assert (target / "SKILL.md").read_text() == "new user content"
+    assert bridge.reconcile_project_skills() == []
+    assert target.is_symlink()
+    assert "original" in (target / "SKILL.md").read_text()
 
 
 @pytest.mark.parametrize("header", [b"---\nname: [unterminated\n---\n", b"---\nname: \xff\n---\n"])
@@ -322,3 +335,36 @@ def test_invalid_unselected_frontmatter_is_reported_without_exposure(bridge, hea
         assert (root / "local").is_symlink()
         assert not (root / "invalid").exists()
     assert (invalid / "SKILL.md").read_bytes() == header
+
+
+@pytest.mark.parametrize("entry", ["directory", "file", "link"])
+def test_failed_publication_restores_unmanaged_destination(bridge, monkeypatch, entry):
+    local(bridge)
+    root = bridge.get_native_skills_dir(AgentCLI.CODEX)
+    root.mkdir(parents=True)
+    target = root / "local"
+    if entry == "directory":
+        target.mkdir()
+        (target / "note").write_text("old content")
+    elif entry == "file":
+        target.write_text("old content")
+    else:
+        target.symlink_to("missing-original")
+    original_write = bridge._write_managed_skills
+    failed = False
+
+    def fail_once(cli, records):
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise OSError("injected publication failure")
+        return original_write(cli, records)
+
+    monkeypatch.setattr(bridge, "_write_managed_skills", fail_once)
+    with pytest.raises(OSError):
+        bridge.install_skill("local", AgentCLI.CODEX)
+    if entry == "link":
+        assert os.readlink(target) == "missing-original"
+    else:
+        assert (target / "note" if entry == "directory" else target).read_text() == "old content"
+    assert not list(root.glob(".cafe-backup-*"))

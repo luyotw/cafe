@@ -14,6 +14,56 @@ from cafe.ui.cli import app
 runner = CliRunner()
 
 
+@pytest.mark.parametrize("invalid", [None, "traversal", "symlink", "wrong_checkout", "wrong_identity", "missing", "normal_close"])
+def test_explicit_archive_on_different_branch_uses_only_current_registered_issue(tmp_path, monkeypatch, invalid):
+    from cafe.core.git import GitOperations
+
+    def git(root, *args):
+        return subprocess.check_output(["git", "-C", str(root), *args], text=True).strip()
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    root, worktree = tmp_path / "repo", tmp_path / "feature"
+    root.mkdir()
+    git(root, "init", "-b", "develop")
+    git(root, "config", "user.name", "Test")
+    git(root, "config", "user.email", "test@example.com")
+    (root / ".gitignore").write_text(".cafe/\n")
+    git(root, "add", ".gitignore")
+    git(root, "commit", "-m", "base")
+    git(root, "worktree", "add", "-b", "issue474-date-fix", str(worktree))
+    issue = worktree / ".cafe/issues/issue474"
+    issue.mkdir(parents=True)
+    config = {"issue_name": "issue474", "worktree_path": str(worktree), "base_branch": "develop"}
+    if invalid == "wrong_checkout":
+        config["worktree_path"] = str(root)
+    if invalid == "wrong_identity":
+        config["issue_name"] = "another"
+    (issue / "issue.yaml").write_text(yaml.safe_dump(config))
+    (issue / "evidence.txt").write_text("retain")
+    selected = "../issue474" if invalid == "traversal" else "absent" if invalid == "missing" else "issue474"
+    if invalid == "symlink":
+        selected = "alias"
+        (issue.parent / selected).symlink_to(issue, target_is_directory=True)
+    monkeypatch.chdir(worktree)
+    argv = ["close", "--issue", selected]
+    if invalid != "normal_close":
+        argv.append("--archive-only")
+    with patch("cafe.ui.cli.GitOperations", GitOperations), patch("cafe.ui.cli.GitHubOps") as gh:
+        result = runner.invoke(app, argv)
+    gh.assert_not_called()
+    assert worktree.is_dir() and git(worktree, "branch", "--show-current") == "issue474-date-fix"
+    archived = list(home.glob(".cafe/projects/*/archived/issue474/evidence.txt"))
+    if invalid:
+        assert result.exit_code != 0, result.output
+        assert issue.exists() and not archived
+    else:
+        assert result.exit_code == 0, result.output
+        assert not issue.exists() and len(archived) == 1
+        assert archived[0].read_text() == "retain"
+
+
 @pytest.mark.parametrize("linked_base", [False, True])
 def test_close_external_worktree_uses_the_checkout_owning_base(tmp_path, monkeypatch, linked_base):
     """真 Git 重現外部／巢狀 worktree，保留其他 checkout 並完成歸檔。"""

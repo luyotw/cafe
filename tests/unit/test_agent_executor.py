@@ -194,9 +194,11 @@ class TestAgentExecutorErrorHandling:
         from queue import Empty
 
         pipe_reader = MagicMock()
-        pipe_reader.first_stderr_line = ""
         pipe_reader.stderr_read_failed = False
         pipe_reader.stderr_text.return_value = ""
+        pipe_reader.diagnostics.return_value = {
+            "stderr_bytes": 0, "stderr_complete": True, "stderr_read_failed": False,
+        }
         pipe_reader.readline.side_effect = [
             mock_process.stdout.readline.return_value,
             Empty(),
@@ -502,9 +504,13 @@ class TestAgentExecutorErrorHandling:
         process.wait.return_value = -15
         from queue import Empty
         reader = MagicMock()
-        reader.first_stderr_line = ""
         reader.stderr_read_failed = False
         reader.stderr_text.return_value = "debug: rate limit configuration loaded"
+        reader.diagnostics.return_value = {
+            "stderr_bytes": len(reader.stderr_text.return_value.encode()),
+            "stderr_complete": True,
+            "stderr_read_failed": False,
+        }
         reader.readline.side_effect = [Empty()]
         with (
             patch("subprocess.Popen", return_value=process),
@@ -1633,13 +1639,16 @@ class TestStreamingExecution:
                     parse_stream_json=True,
                 )
 
-    def test_execute_with_streaming_handles_early_stderr_failure(self, capsys) -> None:
-        """Early fatal stderr should still raise an execution error."""
+    def test_execute_with_streaming_handles_failed_exit_with_stderr(self, capsys) -> None:
+        """A failed exit with early stderr still raises an execution error."""
         config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
         executor = AgentExecutor(config)
+        executor.stream_output = False
 
         mock_process = MagicMock()
         mock_process.stderr.read.return_value = "Error: session not found\n"
+        mock_process.wait.return_value = 1
+        mock_process.poll.return_value = 1
         mock_process.kill.return_value = None
 
         with patch("subprocess.Popen", return_value=mock_process), \

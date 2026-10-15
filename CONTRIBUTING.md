@@ -189,19 +189,17 @@ invocation outside CAFE sees the raw template; workflow placeholders require the
 CAFE invocation context. Chat supplies its available issue/step context and does
 not invent an iteration or reuse an earlier phase's artifact values.
 
-CAFE's existing `.cafe-managed-skills.json` records successful installations and
-binds ownership to the present entry's identity and contents/link target. Proven
-copies can migrate to links; correct links to the active authority can be adopted.
-A legacy name-only manifest, matching catalog name or identical directory bytes
-alone cannot authorize replacement. Missing/corrupt ownership metadata,
-externally changed entries and unmanaged same-name files/directories/links are
-preserved with conflict diagnostics. Unrelated safe entries can still reconcile;
-a selected conflict stops the agent launch before an unintended skill is used.
+CAFE refreshes same-name native skill entries from the resolved authority during
+prepare and writable launches. Old copies, missing/corrupt manifests and locally
+changed entries do not block installation or agent startup. The destination is
+replaced atomically; a failed installation restores the previous entry. A
+same-name link is replaced without traversing or modifying its target.
 
-For an ambiguous old rendered copy or a same-name user collision, inspect and
-back up the entry, relocate it outside the destination name, then rerun prepare
-or a writable launch. Do not fabricate ownership records. A dangling skills-root
-link can be removed without traversing its target and replaced with a directory.
+The `.cafe-managed-skills.json` manifest records installations for cleanup and
+Git exclusions, not permission to refresh a selected destination. Cleanup still
+removes only entries whose recorded identity and contents/link target match;
+unrelated or changed entries are preserved when no authority replaces them.
+A dangling skills-root link can be removed without traversing its target and replaced with a directory.
 A valid root/ancestor link or occupied non-directory root requires explicit local
 remediation: preserve its contents and replace that layout with an ordinary
 provider directory. Never move/delete another provider's tree to repair it.
