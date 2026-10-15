@@ -107,6 +107,8 @@ This inventory is executable documentation: the unit contract discovers every `s
 | `src/cafe/utils/github.py::get_pr_timeline_comments` | Registered GitHub read boundary |
 | `src/cafe/utils/github.py::update_issue` | Registered GitHub effect boundary |
 | `src/cafe/utils/github.py::update_pr` | Registered GitHub effect boundary |
+| `src/cafe/verification/profile_runner.py::_context` | Explicit verification probe runner |
+| `src/cafe/verification/profile_runner.py::run_profile` | Explicit verification runner |
 | `src/cafe/verification/receipt.py::_run_git` | Internal fixed Git query |
 | `src/cafe/verification/receipt.py::run_focused_verification` | Explicit verification runner |
 | `src/cafe/verification/receipt.py::_run_with_output_log` | Explicit verification runner |

@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "profiles": {
+    "acceptance": {
+      "mandatory": [
+        "bootstrap",
+        "logout",
+        "midnight",
+        "notification"
+      ],
+      "optional": []
+    }
+  },
+  "suites": {
+    "bootstrap": {
+      "argv": [
+        "python3",
+        "checks.py",
+        "bootstrap"
+      ],
+      "reuse": true,
+      "context": {
+        "files": [
+          "checks.py"
+        ],
+        "env": [],
+        "probes": []
+      }
+    },
+    "logout": {
+      "argv": [
+        "python3",
+        "checks.py",
+        "logout"
+      ],
+      "reuse": true,
+      "context": {
+        "files": [
+          "checks.py"
+        ],
+        "env": [],
+        "probes": []
+      }
+    },
+    "midnight": {
+      "argv": [
+        "python3",
+        "checks.py",
+        "midnight"
+      ],
+      "reuse": true,
+      "context": {
+        "files": [
+          "checks.py"
+        ],
+        "env": [
+          "TZ",
+          "FROZEN_CLOCK",
+          "FAULT"
+        ],
+        "probes": []
+      }
+    },
+    "notification": {
+      "argv": [
+        "python3",
+        "checks.py",
+        "notification"
+      ],
+      "reuse": true,
+      "context": {
+        "files": [
+          "checks.py"
+        ],
+        "env": [
+          "SEED",
+          "BARRIER",
+          "FAULT"
+        ],
+        "probes": []
+      }
+    }
+  }
+}
