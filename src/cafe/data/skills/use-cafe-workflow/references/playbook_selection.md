@@ -89,6 +89,22 @@ Separate spec ownership needs evidence of an independent owner or artifact
 boundary. Unresolved requirements or architecture alone do not require separate
 spec and plan phases when a joint phase with a planning partner covers them.
 
+## Default development outcome
+
+For new development work, default to merging the reviewed PR into the confirmed
+base branch, then deleting its exact local and remote feature branches after
+verified integration. Without a remote PR, use the existing local integration
+and cleanup path. Include these effects and targets in the kickoff proposal;
+confirmation and host capability gates still apply. An explicit PR-only,
+preservation or other narrower user choice takes precedence.
+
+Apply this outcome before comparing candidate graphs. Select an existing graph
+with declared integration delivery and the applicable cleanup path; creating a
+PR alone is insufficient for the default outcome. PR-only compact graphs remain
+available for an explicit narrower choice. If an explicitly selected graph
+cannot provide the requested outcome, explain that mismatch before kickoff
+instead of silently reducing delivery or adding new runtime capabilities.
+
 ## Focused defect selection
 
 | Playbook | Appropriate boundary |
