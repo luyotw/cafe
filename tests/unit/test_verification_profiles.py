@@ -1,20 +1,27 @@
 """U1/U5: repository profiles and explicit adoption preserve mandatory coverage."""
+
 import json
-from pathlib import Path
 
 import pytest
 
+from cafe.verification import VerificationReceiptError
 from cafe.verification.profiles import load_profile
 from cafe.verification.project import resolve_profile_request
-from cafe.verification import VerificationReceiptError
 
 
 def manifest():
-    return {"schema_version": 1, "profiles": {"custom": {
-        "mandatory": ["bootstrap", "logout"], "optional": ["extra"]}},
-        "suites": {name: {"argv": ["python3", "-c", "print('ok')"],
-                          "reuse": True, "context": {"files": [], "env": [], "probes": []}}
-                   for name in ["bootstrap", "logout", "extra"]}}
+    return {
+        "schema_version": 1,
+        "profiles": {"custom": {"mandatory": ["bootstrap", "logout"], "optional": ["extra"]}},
+        "suites": {
+            name: {
+                "argv": ["python3", "-c", "print('ok')"],
+                "reuse": True,
+                "context": {"files": [], "env": [], "probes": []},
+            }
+            for name in ["bootstrap", "logout", "extra"]
+        },
+    }
 
 
 def write_manifest(tmp_path, data=None):
@@ -34,14 +41,17 @@ def test_selection_keeps_mandatory_and_adds_only_declared_extras(tmp_path):
         load_profile(tmp_path, path, "custom", ["extra", "extra"])
 
 
-@pytest.mark.parametrize("mutate", [
-    lambda d: d["profiles"]["custom"]["mandatory"].append("bootstrap"),
-    lambda d: d["profiles"]["custom"]["mandatory"].append("missing"),
-    lambda d: d["suites"]["bootstrap"].update(argv="python3"),
-    lambda d: d["suites"]["bootstrap"].update(context={"files": ["../escape"]}),
-    lambda d: d["suites"]["bootstrap"].update(reuse="yes"),
-    lambda d: d["suites"]["bootstrap"].update(context={"env": ["BAD=NAME"]}),
-])
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda d: d["profiles"]["custom"]["mandatory"].append("bootstrap"),
+        lambda d: d["profiles"]["custom"]["mandatory"].append("missing"),
+        lambda d: d["suites"]["bootstrap"].update(argv="python3"),
+        lambda d: d["suites"]["bootstrap"].update(context={"files": ["../escape"]}),
+        lambda d: d["suites"]["bootstrap"].update(reuse="yes"),
+        lambda d: d["suites"]["bootstrap"].update(context={"env": ["BAD=NAME"]}),
+    ],
+)
 def test_ambiguous_or_unsafe_definitions_fail(tmp_path, mutate):
     data = manifest()
     mutate(data)

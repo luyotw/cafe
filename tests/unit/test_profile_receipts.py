@@ -1,4 +1,5 @@
 """U2/U3/U4: real suite evidence, context locality and historical boundaries."""
+
 import json
 import subprocess
 import sys
@@ -7,8 +8,8 @@ from pathlib import Path
 import pytest
 
 from cafe.verification import VerificationReceiptError, run_verification
+from cafe.verification.profile_runner import check_profile, reuse_profile, run_profile
 from cafe.verification.profiles import load_profile
-from cafe.verification.profile_runner import run_profile, check_profile, reuse_profile
 
 
 def git(repo, *args):
@@ -27,10 +28,18 @@ def project(tmp_path, monkeypatch):
     (repo / ".gitignore").write_text(".cafe/\n")
     (repo / ".cafe").mkdir()
     (repo / ".cafe/input").write_text("original")
-    data = {"schema_version": 1, "profiles": {"custom": {"mandatory": ["bootstrap", "logout"]}}, "suites": {
-        "bootstrap": {"argv": [sys.executable, "-c", "print('bootstrap')"], "reuse": True,
-                      "context": {"files": [".cafe/input"], "env": ["TZ", "CLOCK", "SEED"]}},
-        "logout": {"argv": [sys.executable, "-c", "print('logout')"], "reuse": True}}}
+    data = {
+        "schema_version": 1,
+        "profiles": {"custom": {"mandatory": ["bootstrap", "logout"]}},
+        "suites": {
+            "bootstrap": {
+                "argv": [sys.executable, "-c", "print('bootstrap')"],
+                "reuse": True,
+                "context": {"files": [".cafe/input"], "env": ["TZ", "CLOCK", "SEED"]},
+            },
+            "logout": {"argv": [sys.executable, "-c", "print('logout')"], "reuse": True},
+        },
+    }
     (repo / "profiles.json").write_text(json.dumps(data))
     git(repo, "add", ".")
     git(repo, "commit", "-m", "initial")
@@ -71,7 +80,10 @@ def test_context_changes_rerun_only_dependent_suite(project, monkeypatch, depend
         reuse_profile(request(project), output(project), output(project, "reuse-only"))
     code, _, payload = run_profile(request(project), output(project, "mixed"), output(project))
     assert code == 0
-    assert [(row["id"], row["action"]) for row in payload["suites"]] == [("bootstrap", "executed"), ("logout", "reused")]
+    assert [(row["id"], row["action"]) for row in payload["suites"]] == [
+        ("bootstrap", "executed"),
+        ("logout", "reused"),
+    ]
 
 
 def test_irrelevant_environment_and_release_diagnostics_do_not_invalidate(project, monkeypatch):
@@ -84,7 +96,20 @@ def test_irrelevant_environment_and_release_diagnostics_do_not_invalidate(projec
     assert check_profile(request(project), output(project)).valid
 
 
-@pytest.mark.parametrize("mutation", ["missing", "duplicate", "failed", "interrupted", "command", "log", "membership"])
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing",
+        "duplicate",
+        "failed",
+        "interrupted",
+        "command",
+        "log",
+        "membership",
+        "skipped",
+        "segment",
+    ],
+)
 def test_full_valid_labels_cannot_hide_incomplete_evidence(project, mutation):
     _, path, data = run_profile(request(project), output(project))
     if mutation == "missing":
@@ -97,6 +122,10 @@ def test_full_valid_labels_cannot_hide_incomplete_evidence(project, mutation):
         data["suites"][0]["completion"] = "started"
     elif mutation == "command":
         data["suites"][0]["argv"] = ["true"]
+    elif mutation == "skipped":
+        data["suites"][0]["action"] = "skipped"
+    elif mutation == "segment":
+        data["suites"][0]["log"]["sha256"] = "0" * 64
     elif mutation == "membership":
         data["mandatory"] = ["bootstrap"]
     else:
@@ -106,7 +135,12 @@ def test_full_valid_labels_cannot_hide_incomplete_evidence(project, mutation):
 
 
 def test_legacy_receipts_cannot_claim_profiles_and_dirty_or_changed_head_reject(project):
-    run_verification(output_file=output(project), command=[sys.executable, "-c", "pass"], scope="full", cwd=project)
+    run_verification(
+        output_file=output(project),
+        command=[sys.executable, "-c", "pass"],
+        scope="full",
+        cwd=project,
+    )
     assert not check_profile(request(project), output(project)).valid
     run_profile(request(project), output(project))
     (project / "untracked").write_text("dirty")
@@ -130,8 +164,17 @@ def test_missing_required_input_cannot_be_reused(project):
 def test_capability_probe_observes_real_output_and_exit(project):
     path = project / "profiles.json"
     data = json.loads(path.read_text())
-    data["suites"]["bootstrap"]["context"]["probes"] = [[sys.executable, "-c",
-        "from pathlib import Path; import sys; value=Path('.cafe/capability').read_text(); print(value); sys.exit(0 if value.startswith('supported') else 8)"]]
+    data["suites"]["bootstrap"]["context"]["probes"] = [
+        [
+            sys.executable,
+            "-c",
+            (
+                "from pathlib import Path; import sys; "
+                "value=Path('.cafe/capability').read_text(); print(value); "
+                "sys.exit(0 if value.startswith('supported') else 8)"
+            ),
+        ]
+    ]
     path.write_text(json.dumps(data))
     git(project, "add", ".")
     git(project, "commit", "-m", "declare capability")
@@ -161,7 +204,16 @@ def test_failed_child_preserves_exit_and_later_suites_pending(project):
     assert not check_profile(request(project), output(project)).valid
 
 
-@pytest.mark.parametrize("field,value", [("schema_version", []), ("selected", [{}]), ("suites", ["bad"]), ("suites", None)])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("schema_version", []),
+        ("selected", [{}]),
+        ("suites", ["bad"]),
+        ("suites", None),
+        ("profile", {"name": "custom", "source": "profiles.json"}),
+    ],
+)
 def test_malformed_receipt_fails_closed_without_crashing_mixed_run(project, field, value):
     _, path, data = run_profile(request(project), output(project))
     data[field] = value
@@ -169,3 +221,19 @@ def test_malformed_receipt_fails_closed_without_crashing_mixed_run(project, fiel
     assert not check_profile(request(project), output(project)).valid
     code, _, rerun = run_profile(request(project), output(project, "repaired"), output(project))
     assert code == 0 and rerun["executed"] == 2
+
+
+def test_interrupted_attempt_cannot_leave_a_prior_passing_target(project, monkeypatch):
+    run_profile(request(project), output(project))
+    original = subprocess.run
+
+    def interrupted(argv, **kwargs):
+        if argv[0] == sys.executable:
+            raise KeyboardInterrupt("interrupted child boundary")
+        return original(argv, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        run_profile(request(project), output(project))
+    monkeypatch.setattr(subprocess, "run", original)
+    assert not check_profile(request(project), output(project)).valid

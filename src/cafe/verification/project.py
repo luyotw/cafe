@@ -1,4 +1,5 @@
 """Repository-bound configuration adapter; issue overrides cannot weaken adoption."""
+
 from pathlib import Path
 from typing import Sequence
 
@@ -10,7 +11,9 @@ from cafe.verification.receipt import VerificationReceiptError
 
 
 def resolve_profile_request(
-    root: Path, profile_file: Path | None = None, profile: str | None = None,
+    root: Path,
+    profile_file: Path | None = None,
+    profile: str | None = None,
     extras: Sequence[str] = (),
 ) -> ProfileRequest | None:
     """Resolve explicit CLI binding first, then only the project configuration."""
@@ -34,7 +37,10 @@ def resolve_profile_request(
             raise VerificationReceiptError("--add-suite requires a profile binding")
         return None
     binding = config["verification"]
-    if (not isinstance(binding, dict) or set(binding) != {"profile_file", "profile"}
-            or not all(isinstance(x, str) and x for x in binding.values())):
+    if (
+        not isinstance(binding, dict)
+        or set(binding) != {"profile_file", "profile"}
+        or not all(isinstance(x, str) and x for x in binding.values())
+    ):
         raise VerificationReceiptError("verification requires profile_file and profile strings")
     return load_profile(root, Path(binding["profile_file"]), binding["profile"], extras)

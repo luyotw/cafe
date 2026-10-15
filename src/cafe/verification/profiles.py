@@ -1,4 +1,5 @@
 """Flat repository-owned verification contracts, independent of their consumers."""
+
 from __future__ import annotations
 
 import hashlib
@@ -12,7 +13,9 @@ from cafe.verification.receipt import VerificationReceiptError
 
 
 def fingerprint(value: Any) -> str:
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 def repository_path(root: Path, value: str | Path) -> Path:
@@ -33,15 +36,20 @@ def _unique_object(pairs):
 
 
 def string_list(value: Any, label: str, *, nonempty: bool = False) -> list[str]:
-    if (not isinstance(value, list) or (nonempty and not value)
-            or not all(isinstance(x, str) and x and "\0" not in x for x in value)):
+    if (
+        not isinstance(value, list)
+        or (nonempty and not value)
+        or not all(isinstance(x, str) and x and "\0" not in x for x in value)
+    ):
         raise VerificationReceiptError(f"{label} must be a list of nonempty strings")
     return value
 
 
 def _ids(value: Any, label: str, *, nonempty: bool = False) -> list[str]:
     values = string_list(value, label, nonempty=nonempty)
-    if len(set(values)) != len(values) or any(not re.fullmatch(r"[A-Za-z0-9_.-]+", x) for x in values):
+    if len(set(values)) != len(values) or any(
+        not re.fullmatch(r"[A-Za-z0-9_.-]+", x) for x in values
+    ):
         raise VerificationReceiptError(f"{label} contains duplicate or invalid IDs")
     return values
 
@@ -64,7 +72,12 @@ def load_profile(root: Path, path: Path, name: str, extras: Sequence[str] = ()) 
         data = json.loads(source.read_text(), object_pairs_hook=_unique_object)
     except (OSError, ValueError) as exc:
         raise VerificationReceiptError(f"cannot read profile manifest: {exc}") from exc
-    if not isinstance(data, dict) or set(data) != {"schema_version", "profiles", "suites"} or type(data["schema_version"]) is not int or data["schema_version"] != 1:
+    if (
+        not isinstance(data, dict)
+        or set(data) != {"schema_version", "profiles", "suites"}
+        or type(data["schema_version"]) is not int
+        or data["schema_version"] != 1
+    ):
         raise VerificationReceiptError("manifest requires schema_version=1, profiles and suites")
     profiles, suites = data["profiles"], data["suites"]
     if not isinstance(profiles, dict) or not isinstance(suites, dict):
@@ -86,15 +99,20 @@ def load_profile(root: Path, path: Path, name: str, extras: Sequence[str] = ()) 
         for file in files:
             repository_path(root, file)
         env = string_list(context.get("env", []), "env")
-        if len(set(env)) != len(env) or any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", x) for x in env):
+        if len(set(env)) != len(env) or any(
+            not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", x) for x in env
+        ):
             raise VerificationReceiptError("invalid or duplicate environment names")
         probes = context.get("probes", [])
         if not isinstance(probes, list):
             raise VerificationReceiptError("probes must be a list of argv lists")
         for probe in probes:
             string_list(probe, "probe argv", nonempty=True)
-        normalized[suite_id] = {"argv": argv, "reuse": reuse,
-                                "context": {"files": files, "env": env, "probes": probes}}
+        normalized[suite_id] = {
+            "argv": argv,
+            "reuse": reuse,
+            "context": {"files": files, "env": env, "probes": probes},
+        }
     for profile in profiles.values():
         if not isinstance(profile, dict) or set(profile) - {"mandatory", "optional"}:
             raise VerificationReceiptError("invalid profile definition")
@@ -108,7 +126,15 @@ def load_profile(root: Path, path: Path, name: str, extras: Sequence[str] = ()) 
     extra_ids = _ids(list(extras), "extra suites")
     if any(x not in profile.get("optional", []) for x in extra_ids):
         raise VerificationReceiptError("extra suite is not optional in this profile")
-    selected = tuple(profile["mandatory"] + [x for x in profile.get("optional", []) if x in extra_ids])
-    return ProfileRequest(root, source.relative_to(root).as_posix(), name, fingerprint(data),
-                          tuple(profile["mandatory"]), selected,
-                          {x: normalized[x] for x in selected})
+    selected = tuple(
+        profile["mandatory"] + [x for x in profile.get("optional", []) if x in extra_ids]
+    )
+    return ProfileRequest(
+        root,
+        source.relative_to(root).as_posix(),
+        name,
+        fingerprint(data),
+        tuple(profile["mandatory"]),
+        selected,
+        {x: normalized[x] for x in selected},
+    )

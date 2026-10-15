@@ -16,9 +16,8 @@ from cafe.verification import (
     run_verification,
     verification_log_excerpt,
 )
-
-from cafe.verification.project import resolve_profile_request
 from cafe.verification.profile_runner import check_profile, reuse_profile, run_profile
+from cafe.verification.project import resolve_profile_request
 
 
 def _emit_profile(payload: dict, path: Path) -> None:
@@ -51,7 +50,9 @@ def verification_run(
         request = resolve_profile_request(Path.cwd(), profile_file, profile, add_suite)
         if request is not None:
             if command or scope != "full":
-                raise VerificationReceiptError("profile mode rejects replacement commands and narrowed scope")
+                raise VerificationReceiptError(
+                    "profile mode rejects replacement commands and narrowed scope"
+                )
             exit_code, receipt_path, payload = run_profile(request, output_file, reuse_from)
             _emit_profile(payload, receipt_path)
             if exit_code:
@@ -107,8 +108,11 @@ def verification_check(
                 raise VerificationReceiptError("profile mode requires full profile scope")
             result = check_profile(request, output_file)
             payload = dict(result.receipt or {})
-            payload.update(valid=result.valid, reasons=list(result.reasons),
-                           status="passed" if result.valid else "incomplete")
+            payload.update(
+                valid=result.valid,
+                reasons=list(result.reasons),
+                status="passed" if result.valid else "incomplete",
+            )
             _emit_profile(payload, result.receipt_path)
             if not result.valid:
                 raise typer.Exit(code=1)
