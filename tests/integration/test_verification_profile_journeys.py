@@ -258,8 +258,15 @@ def test_public_reuse_rechecks_real_runtime_dependencies_locally(project, monkey
 
 
 @pytest.mark.parametrize("schema", [1, 2])
-def test_nonadopter_public_legacy_check_reuse_focus_preserve_historical_claims(project, schema):
-    (project / ".cafe/config.yaml").unlink()
+@pytest.mark.parametrize("config", [None, "", "# no profile adoption\n"])
+def test_nonadopter_public_legacy_check_reuse_focus_preserve_historical_claims(
+    project, schema, config
+):
+    config_path = project / ".cafe/config.yaml"
+    if config is None:
+        config_path.unlink()
+    else:
+        config_path.write_text(config)
     (project / "test_legacy.py").write_text("def test_existing():\n    assert 2 + 2 == 4\n")
     git(project, "add", ".")
     git(project, "commit", "-m", "legacy check")
@@ -358,3 +365,94 @@ def test_mixed_execution_cannot_reuse_context_invalidated_during_the_run(
         assert result["status"] == "incomplete"
         assert dependent in result["pending"]
     assert (project / ".cafe/stable/verification.json").read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "config", ["verification:\n", "verification: {}\n", "verification: broken\n"]
+)
+def test_malformed_explicit_adoption_never_executes_a_legacy_fallback(project, config):
+    (project / ".cafe/config.yaml").write_text(config)
+    for args in [
+        ["run", "--output-file", out("invalid"), "--", sys.executable, "suite.py", "bootstrap"],
+        ["check", "--output-file", out("invalid")],
+        ["reuse", "--source-output-file", out("invalid"), "--output-file", out("reused")],
+    ]:
+        result = process(project, *args)
+        assert result.returncode == 2
+    assert not (project / ".cafe/trace").exists()
+
+
+@pytest.mark.parametrize("reuse", [False, True])
+@pytest.mark.parametrize("dependency", ["env", "file", "probe"])
+def test_fresh_missing_context_passes_check_but_reuse_rejects_missing_and_changed_context(
+    project, monkeypatch, reuse, dependency
+):
+    monkeypatch.delenv("OPTIONAL_REUSE_CONTEXT", raising=False)
+    manifest_path = project / "profiles.json"
+    data = json.loads(manifest_path.read_text())
+    data["profiles"]["custom-consumer"] = {"mandatory": ["bootstrap"], "optional": []}
+    suite = data["suites"]["bootstrap"]
+    suite["reuse"] = reuse
+    if dependency == "env":
+        suite["context"] = {"env": ["OPTIONAL_REUSE_CONTEXT"]}
+    elif dependency == "file":
+        suite["context"] = {"files": [".cafe/reuse-input"]}
+    else:
+        suite["context"] = {
+            "probes": [
+                [
+                    sys.executable,
+                    "-c",
+                    "from pathlib import Path; "
+                    "exit(0 if Path('.cafe/reuse-input').exists() else 4)",
+                ]
+            ]
+        }
+    manifest_path.write_text(json.dumps(data))
+    git(project, "add", ".")
+    git(project, "commit", "-m", "context evidence fixture")
+    fresh = process(project, "run", "--output-file", out("fresh"))
+    assert fresh.returncode == 0, fresh.stdout + fresh.stderr
+    checked = process(project, "check", "--output-file", out("fresh"))
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+    for public_result in [json.loads(fresh.stdout), json.loads(checked.stdout)]:
+        assert public_result["valid"] and public_result["status"] == "passed"
+        assert public_result["pending"] == []
+        row = public_result["suites"][0]
+        assert row["completion"] == "completed" and row["exit_code"] == 0
+        assert row["context_errors"] and not row["reusable"] and row["reuse_reasons"]
+    receipt_path = project / ".cafe/fresh/verification.json"
+    log_path = receipt_path.with_name("verification.log")
+    before = receipt_path.read_bytes(), log_path.read_bytes()
+    trace = project / ".cafe/trace"
+    executed = trace.read_bytes()
+    refused = process(
+        project, "reuse", "--source-output-file", out("fresh"), "--output-file", out("refused")
+    )
+    assert refused.returncode == 1
+    assert not json.loads(refused.stdout)["valid"]
+    assert not (project / ".cafe/refused/verification.json").exists()
+    assert trace.read_bytes() == executed
+    # An explicit mixed run may execute a non-reusable row; reuse-only cannot.
+    mixed = process(project, "run", "--reuse-from", out("fresh"), "--output-file", out("mixed"))
+    assert mixed.returncode == 0, mixed.stdout + mixed.stderr
+    assert json.loads(mixed.stdout)["executed"] == 1 and json.loads(mixed.stdout)["reused"] == 0
+    assert process(project, "check", "--output-file", out("mixed")).returncode == 0
+    if dependency == "env":
+        monkeypatch.setenv("OPTIONAL_REUSE_CONTEXT", "now-available")
+    else:
+        (project / ".cafe/reuse-input").write_text("now-available")
+    executed = trace.read_bytes()
+    assert process(project, "check", "--output-file", out("fresh")).returncode == 1
+    assert (
+        process(
+            project, "reuse", "--source-output-file", out("fresh"), "--output-file", out("stale")
+        ).returncode
+        == 1
+    )
+    assert trace.read_bytes() == executed
+    assert (receipt_path.read_bytes(), log_path.read_bytes()) == before
+    assert process(project, "run", "--output-file", out("available")).returncode == 0
+    available = process(project, "check", "--output-file", out("available"))
+    assert available.returncode == 0
+    assert json.loads(available.stdout)["suites"][0]["reusable"] == reuse

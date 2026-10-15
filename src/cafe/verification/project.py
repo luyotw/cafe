@@ -30,6 +30,8 @@ def resolve_profile_request(
         config = safe_load(config_path.read_text())
     except (OSError, yaml.YAMLError, ValueError) as exc:
         raise VerificationReceiptError(f"cannot read project configuration: {exc}") from exc
+    if config is None:
+        config = {}
     if not isinstance(config, dict):
         raise VerificationReceiptError("project configuration must be an object")
     if "verification" not in config:

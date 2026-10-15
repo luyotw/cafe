@@ -103,6 +103,19 @@ def _segment_reason(row: dict, path: Path) -> str | None:
     return None
 
 
+def _reuse_reasons(suite: dict, row: dict, completion_reasons: list[str]) -> list[str]:
+    """Keep reuse eligibility separate from a freshly completed suite's result."""
+    reasons = list(completion_reasons)
+    errors = row.get("context_errors", [])
+    if not isinstance(errors, list) or not all(isinstance(error, str) for error in errors):
+        reasons.append("recorded context diagnostics are malformed")
+    else:
+        reasons.extend(errors)
+    if not suite["reuse"]:
+        reasons.append("suite has not opted into reuse")
+    return list(dict.fromkeys(reasons))
+
+
 def _inspect(
     request: ProfileRequest, output_file: Path, *, for_reuse: bool
 ) -> tuple[ReceiptCheck, dict[str, list[str]]]:
@@ -170,16 +183,28 @@ def _inspect(
                 if reason:
                     reasons.append(reason)
             context, context_reasons = _context(request, suite, dict(os.environ))
-            reasons.extend(context_reasons)
+            recorded_errors = row.get("context_errors", [])
+            diagnostics_match = (
+                isinstance(recorded_errors, list)
+                and all(isinstance(error, str) for error in recorded_errors)
+                and set(recorded_errors) == set(context_reasons)
+            )
+            # Unchanged unavailable inputs limit reuse, rather than negate execution.
+            # Changed values or unstable execution still invalidate completion evidence.
             if (
                 row.get("context") != context
-                or row.get("context_errors")
+                or not diagnostics_match
+                or row.get("context_valid_after") is False
                 or row.get("context_identity")
                 != fingerprint({"definition": suite, "context": context})
+                or (row.get("action") == "reused" and (recorded_errors or context_reasons))
             ):
-                reasons.append("required execution context changed or was unverifiable")
-            if for_reuse and not suite["reuse"]:
-                reasons.append("suite has not opted into reuse")
+                reasons.append("required execution context changed or was unstable")
+            reuse_reasons = _reuse_reasons(suite, row, reasons + context_reasons)
+            row["reusable"] = not reuse_reasons
+            row["reuse_reasons"] = reuse_reasons
+            if for_reuse:
+                reasons = reuse_reasons
         applicability[suite_id] = reasons
     all_reasons = common + [
         f"{key}: {reason}" for key, reasons in applicability.items() for reason in reasons
@@ -387,8 +412,10 @@ def run_profile(
         current_context, current_errors = _context(
             request, request.suites[row["id"]], dict(os.environ)
         )
-        row["context_valid_after"] = current_context == row["context"] and not (
-            row["action"] == "reused" and current_errors
+        row["context_valid_after"] = (
+            current_context == row["context"]
+            and set(row["context_errors"]) == set(current_errors)
+            and not (row["action"] == "reused" and current_errors)
         )
         if not row["context_valid_after"]:
             context_stable = False
@@ -438,6 +465,10 @@ def run_profile(
             "stdout_stderr_combined": True,
         },
     }
+    for row in rows:
+        completion_reasons = [] if passed else ["profile verification did not pass"]
+        row["reuse_reasons"] = _reuse_reasons(request.suites[row["id"]], row, completion_reasons)
+        row["reusable"] = not row["reuse_reasons"]
     _write_json_atomic(receipt_path, payload)
     return exit_code or (0 if passed else 3), receipt_path, payload
 

@@ -10,7 +10,8 @@ verification:
 
 Only the project configuration is read for this binding; issue overrides do not
 replace it. Explicit `--profile-file` and `--profile` take precedence together.
-Malformed explicit adoption is an error. Without adoption, existing raw-command
+Malformed explicit adoption is an error. Absent, empty and comments-only project
+configuration do not adopt a profile. Without adoption, existing raw-command
 `run/check/reuse/focus` behavior remains available with its existing limitations.
 
 The JSON manifest has `schema_version: 1`, a `profiles` object, and a `suites`
@@ -48,6 +49,19 @@ completed contexts before aggregate success. If later execution invalidates an
 earlier result, the aggregate is incomplete and names the affected pending rows;
 there is no dependency scheduler or automatic rerun loop. Reuse-only never falls
 back to executing suites. Capability probes may execute during applicability checks.
+
+`run` and `check` validate completed execution separately from reuse eligibility.
+A fresh successful suite with unchanged unavailable context can pass both while
+its row remains `reusable: false`. `reuse_reasons` and the original `context_errors`
+retain the limitation. Reuse is opt-in; a suite with `reuse: false` remains
+non-reusable even when its declared context is fully available. Neither missing
+context nor an explicit opt-out turns a completed success into pending work.
+A changed required value/content/probe result, unstable execution, or missing
+completion/log/HEAD evidence still invalidates the result. Unverifiable context
+never qualifies a reused row, and reuse-only never executes replacement suites.
+These fields are derived from checked evidence; stored eligibility flags are not
+trusted. Existing compatible schema 3 rows are evaluated from their recorded
+context/diagnostics without requiring a producer release identity.
 
 Profile results distinguish passed, failed and incomplete, with actual per-suite
 completion, exit, executed/reused/pending counts and measured durations. A failed
