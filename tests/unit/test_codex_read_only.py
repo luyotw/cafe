@@ -1,9 +1,12 @@
 """Plan U4/U6: native parameters, not a whole-process safety proof."""
 
+from unittest.mock import patch
+
 import pytest
 
 from cafe.agents.cli import CodexCLI
-from cafe.core.types import AgentCLI, AgentConfig
+from cafe.agents.executor import AgentExecutionControl, AgentExecutor
+from cafe.core.types import AgentCLI, AgentConfig, AgentResponse, TokenUsage
 
 
 @pytest.mark.parametrize("session", [None, "stored-writable-session"])
@@ -53,3 +56,42 @@ def test_u4_prompt_text_cannot_omit_interactive_approval_policy():
     )
     assert command[command.index("--ask-for-approval") + 1] == "never"
     assert command[-1] == "-a"
+
+
+@pytest.mark.parametrize("session", [None, "stored-session"])
+def test_read_only_empty_scope_launches_with_one_sandbox_option(tmp_path, session):
+    executor = AgentExecutor(
+        AgentConfig(name="Probe", cli=AgentCLI.CODEX, session_id=session),
+        stream_output=False,
+    )
+    response = AgentResponse(response="OK", token_usage=TokenUsage())
+    with patch.object(executor, "_execute_with_streaming", return_value=response) as run:
+        executor.execute(
+            "inspect",
+            allowed_tools=[],
+            allowed_directories=[],
+            read_only=True,
+            execution_control=AgentExecutionControl(working_directory=tmp_path),
+        )
+
+    command = run.call_args.kwargs["cmd"]
+    assert command.count("--sandbox") == 1
+    assert command[command.index("--sandbox") + 1] == "read-only"
+    assert command.index("--sandbox") < command.index("exec")
+    assert command[command.index("-a") + 1] == "never"
+    assert "--ignore-user-config" in command
+    assert "--ignore-rules" in command
+    assert "--strict-config" in command
+    for feature in ("shell_tool", "unified_exec", "apps", "plugins", "multi_agent"):
+        assert command[command.index(feature) - 1] == "--disable"
+
+
+def test_read_only_replaces_existing_global_sandbox_without_changing_prompt():
+    strategy = CodexCLI(AgentConfig(name="Probe", cli=AgentCLI.CODEX))
+    command = ["codex", "--sandbox", "workspace-write", "exec", "--sandbox"]
+    original = command.copy()
+
+    restricted = strategy.apply_read_only(command, "run_one_shot")
+
+    assert restricted == ["codex", "--sandbox", "read-only", "exec", "--sandbox"]
+    assert command == original
