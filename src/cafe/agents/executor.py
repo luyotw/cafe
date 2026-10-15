@@ -1468,6 +1468,13 @@ class AgentExecutor:
             from cafe.agents.cli.codex_usage import prepare_model_reader
 
             native_model_reader = prepare_model_reader(accounting_environment)
+        from cafe.core.workflow_control import current_control, check_control, SupervisorCorrection
+        control = current_control()
+        if control is not None and not control.supports_provider_interruption:
+            control = None
+        check_control()
+        if control is not None:
+            control.provider_starting()
         try:
             process = subprocess.Popen(
                 cmd,
@@ -1478,8 +1485,11 @@ class AgentExecutor:
                 bufsize=1,  # Line buffered
                 env=env,
                 cwd=str(process_cwd) if process_cwd is not None else None,
+                start_new_session=control is not None,
             )
         except FileNotFoundError as e:
+            if control is not None:
+                control.provider_stopped()  # Popen did not dispatch the executable.
             if provider_usage is not None:
                 provider_usage.close()
             # CLI command not found - provide user-friendly error
@@ -1489,16 +1499,42 @@ class AgentExecutor:
             )
             err.error_type = "cli_not_found"
             raise err from e
+        except OSError:
+            if control is not None:
+                control.provider_stopped()  # Popen did not hand off an executable.
+            if provider_usage is not None:
+                provider_usage.close()
+            raise
         except BaseException:
             if provider_usage is not None:
                 provider_usage.close()
             raise
 
-        if execution_control is not None and execution_control.on_process_started is not None:
+        def stop_controlled_provider(*, strict=True):
+            if control is None:
+                return
+            from cafe.agents.process_control import stop_provider
             try:
-                execution_control.on_process_started()
+                stop_provider(process)
+            except Exception as exc:
+                control.provider_unverified()
+                if strict:
+                    raise SupervisorCorrection("provider quiescence is unverified") from exc
+            else:
+                control.provider_stopped()
+
+        if control is not None or (execution_control is not None and execution_control.on_process_started is not None):
+            try:
+                if control is not None:
+                    control.provider_started(process.pid)
+                if execution_control is not None and execution_control.on_process_started is not None:
+                    execution_control.on_process_started()
+            except SupervisorCorrection:
+                stop_controlled_provider()
+                raise
             except BaseException:
                 # Submission has happened; a caller error must not leave its child running.
+                stop_controlled_provider(strict=False)
                 try:
                     process.terminate()
                 except OSError:
@@ -1773,6 +1809,7 @@ class AgentExecutor:
             try:
                 if process.stdout:
                     while True:
+                        check_control()
                         if execution_limit_reached.is_set():
                             break
                         record_stream_activity()
@@ -2123,7 +2160,13 @@ class AgentExecutor:
                 if execution_timer is not None:
                     execution_timer.cancel()
                 raise
+            except SupervisorCorrection:
+                if execution_timer is not None:
+                    execution_timer.cancel()
+                stop_controlled_provider()
+                raise
             except KeyboardInterrupt:
+                stop_controlled_provider(strict=False)
                 if execution_timer is not None:
                     execution_timer.cancel()
                 print(f"\n\n⚠️  Interrupted by user, terminating {cli_name} process...")
@@ -2139,6 +2182,7 @@ class AgentExecutor:
                     streaming_file_handle.close()
                 raise
             except BaseException as error:
+                stop_controlled_provider(strict=False)
                 if execution_timer is not None:
                     execution_timer.cancel()
                 if process.poll() is None:
@@ -2157,6 +2201,7 @@ class AgentExecutor:
                 execution_timer.cancel()
 
             if execution_limit_reached.is_set():
+                stop_controlled_provider(strict=False)
                 try:
                     process.wait(timeout=2)
                 except subprocess.TimeoutExpired:
@@ -2181,6 +2226,7 @@ class AgentExecutor:
 
             # If idle timeout triggered, terminate process immediately
             if idle_timeout_triggered:
+                stop_controlled_provider(strict=False)
                 print(f"⚠️  Terminating {cli_name} process due to idle timeout...")
                 process.terminate()
                 try:
@@ -2466,6 +2512,10 @@ class AgentExecutor:
                 if streaming_file_handle is not None and not streaming_file_handle.closed:
                     streaming_file_handle.close()
                 process_output.close()
+                if control is not None:
+                    from cafe.agents.process_control import group_stopped
+                    if process.returncode is not None and group_stopped(process.pid):
+                        control.provider_stopped()
                 if provider_usage is not None:
                     provider_usage.close()
 

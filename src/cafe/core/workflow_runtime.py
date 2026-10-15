@@ -6,6 +6,8 @@ primary source of truth for step transitions.
 
 from __future__ import annotations
 
+from cafe.core.workflow_control import current_control, check_control, controlled_boundary, SupervisorCorrection, apply_correction
+
 import inspect
 import json
 import re
@@ -2765,6 +2767,9 @@ class BlackboardWorkflowRuntime:
     def _run_non_agent_owner(
         self, *, current_step: str, step_def: Dict, runtime: str
     ) -> Optional[PlaybookRunResult]:
+        control = current_control()
+        if control is not None:
+            control.position(self.blackboard, self.steps)
         owner = self._owner_for_step(step_def)
         if owner == "agent":
             return None
@@ -2913,6 +2918,8 @@ class BlackboardWorkflowRuntime:
         except BatonRejected:
             # Recoverable handoff errors belong to the original-session baton loop.
             raise
+        except SupervisorCorrection:
+            raise
         except BaseException as exc:
             # Catch AgentExecutionError (rate_limit, cli_not_found),
             # CriticalPhaseError (the same critical error_types re-raised by
@@ -2950,6 +2957,7 @@ class BlackboardWorkflowRuntime:
                 },
             )
             raise StepInterrupted(step=current_step, hop=hop_count, reason=reason, detail=detail)
+        check_control()
         if self.blackboard.host_wait is not None:
             self.blackboard.host_wait = None
             self.blackboard_store.save(self.blackboard)
@@ -3680,6 +3688,7 @@ class BlackboardWorkflowRuntime:
             "hop",
             "reason",
             "task_id",
+            "request_id", "worker_id", "iteration", "correction_step", "next_action",
         ):
             value = payload.get(event_field)
             if isinstance(value, (str, int)):
@@ -3742,6 +3751,7 @@ class BlackboardWorkflowRuntime:
             )
         return result
 
+    @controlled_boundary
     def _emit_pause(
         self,
         *,
@@ -4149,6 +4159,7 @@ class BlackboardWorkflowRuntime:
             )
         self._replaced_user_handoff = None
 
+    @controlled_boundary
     def _emit_complete(
         self,
         *,
@@ -4196,6 +4207,7 @@ class BlackboardWorkflowRuntime:
             completed=True,
         )
 
+    @controlled_boundary
     def _emit_transition(
         self,
         *,
@@ -6566,6 +6578,10 @@ class BlackboardWorkflowRuntime:
             pause_record_event=False,
         )
 
+    def _supervisor_quiesced(self, event):
+        self.blackboard = self.blackboard_store.load_or_create(event["step"], playbook_id=self.playbook_id)
+        self._dispatch_workflow_event("workflow_interruption", event)
+
     def run(
         self, *, max_transitions: int = 30, start_step: Optional[str] = None,
         single_step: bool = False,
@@ -6600,6 +6616,14 @@ class BlackboardWorkflowRuntime:
                 return self._run_impl(
                     max_transitions=max_transitions, start_step=start_step, single_step=single_step,
                 )
+            except SupervisorCorrection:
+                control = current_control()
+                step = self.blackboard.current_step
+                control.prepare(lambda request: apply_correction(self.issue_dir, request),
+                    self._supervisor_quiesced)
+                self.blackboard = self.blackboard_store.load_or_create(step, playbook_id=self.playbook_id)
+                return PlaybookRunResult(final_step=step, final_status_code="INTERRUPTED:supervisor_correction",
+                    completed=False, detail="Provider stopped; same-step correction queued. Explicit resume required.")
             except StepWaiting as waiting:
                 marker = {"step": waiting.step, "identity": waiting.identity}
                 if self.blackboard.host_wait != marker:

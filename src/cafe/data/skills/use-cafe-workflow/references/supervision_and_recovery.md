@@ -58,6 +58,43 @@ implementation code or diffs, run phase work, restart/resume/select a step,
 mutate tasks/artifacts/blackboard/baton/model/authority, or add a review or
 confirmation gate.
 
+## Intervene on a confirmed anomaly
+
+A scheduled proactive review and an observed anomaly are different triggers.
+When bounded inspection establishes an incorrect scope, handoff or behavior,
+and its correction is already authorized, intervene now. Do not let known-invalid
+work run through development, QA and PR merely to reach a scheduled gate.
+Healthy execution remains passive; event-driven supervision adds no polling.
+
+1. Inspect `cafe workflow-interrupt --issue <issue> --inspect` and current status.
+   Require the exact worker/workflow/step/iteration, a verified live process and
+   `accepts_interruption: true`. This API supports the host-owned agent and
+   same-step correction. Auto operations, host verification waits, hybrid/human
+   steps and native-review-policy phases are outside this cancellation contract.
+   Provider ownership requires Linux `/proc`; unsupported platforms keep normal
+   workflow execution but cannot accept interruption.
+2. Preserve pending user/permission/capability decisions. If correction changes
+   confirmed scope, strategy, model, session or external authority, use its
+   existing user-owned boundary. Intervention supplies none of that authority.
+3. Submit one bounded explanation and corrective input:
+   `cafe workflow-interrupt --issue <issue> --worker-id <worker> --workflow-id <workflow> --step <step> --iteration <iteration> --reason '<observed anomaly>' --feedback '<authorized same-step correction>'`.
+   `requested` only records a cooperative stop request. Never report the agent
+   stopped until inspection shows `quiesced` and the interruption callback/status
+   agrees. The host retains partial edits, obligations, receipts and retry counts.
+4. If the host exited during correction commit, use the same exact identity with
+   `--recover`. Recovery requires released advancement/workspace leases and a
+   verified provider stop; uncertainty remains frozen. Never signal an external
+   PID, edit state files, discard work or replay an unknown effect to clear it.
+5. After `quiesced`, re-read the correction and current authority, then resume
+   through the normal confirmed `run_workflow.py` route. This is intentional
+   supervisor correction, not a failed-provider automatic retry. It does not
+   consume or reset that recovery exception or change the configured session.
+
+If the operation refuses an identity, refresh facts before acting. If it refuses
+quiescence or authority, retain the pause/freeze and diagnose that specific
+boundary. A refusal is not permission to wait for PR while claiming correction
+has already been applied.
+
 ## Classify leaving the envelope
 
 Leaving the envelope requires a fresh inspection. Preserve every visible

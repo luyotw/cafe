@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import uuid
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,15 +45,44 @@ class WorkflowHost:
     ) -> HostRunResult:
         if hosting not in {"foreground", "background"}:
             raise ValueError("hosting must be 'foreground' or 'background'")
+        from cafe.core.workflow_control import bind_control
+        from cafe.workflow_execution.intervention import InterventionControl
+        from cafe.workflow_execution.worker_launch import WorkerLaunchStore
+
+        store = WorkerLaunchStore(self.issue_dir)
         with advancement_execution_lock(self.issue_dir, reuse_existing=False):
-            identity = worker_id or str(uuid.uuid4())
-            while True:
-                result = runtime()
-                delay = getattr(result, "wait_seconds", None)
-                if hosting != "background" or delay is None:
-                    return HostRunResult(hosting=hosting, worker_id=identity, result=result)
-                if not 1 <= delay <= 300:
-                    raise ValueError("invalid host wait interval")
-                # Phase execution has unwound its workspace lease; only workflow
-                # advancement ownership remains. No agent or timer service is used.
-                time.sleep(delay)
+            control = InterventionControl(self.issue_dir, worker_id or "")
+            control.ensure_no_pending()
+            if worker_id and store.get(worker_id) is None:
+                store.start(worker_id=worker_id)
+            identity = worker_id or store.start()["worker_id"]
+            control.worker_id = identity
+            store.mark(identity, "running", pid=os.getpid())
+            from cafe.agents.process_control import process_birth
+
+            with store._locked_records() as records:
+                records[identity]["process_birth"] = process_birth(os.getpid())
+            try:
+                with bind_control(control):
+                    while True:
+                        result = runtime()
+                        delay = getattr(result, "wait_seconds", None)
+                        if delay is not None:
+                            control.waiting()
+                        if hosting != "background" or delay is None:
+                            break
+                        if not 1 <= delay <= 300:
+                            raise ValueError("invalid host wait interval")
+                        # Background observation keeps existing waits; intervention is for active agents.
+                        time.sleep(delay)
+            except BaseException:
+                try:
+                    store.mark(identity, "failed")
+                except (OSError, ValueError):
+                    pass  # Retain the original error; unreadable control stays frozen.
+                raise
+            if control.on_quiesced is None:
+                store.mark(identity, "stopped")
+        if control.on_quiesced is not None:
+            control.finish()
+        return HostRunResult(hosting=hosting, worker_id=identity, result=result)

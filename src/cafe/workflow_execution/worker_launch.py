@@ -61,9 +61,9 @@ class WorkerLaunchStore:
         self.path = self.issue_dir / LAUNCH_RECORD_FILENAME
         self.lock_path = self.issue_dir / f"{LAUNCH_RECORD_FILENAME}.lock"
 
-    def start(self) -> dict[str, Any]:
+    def start(self, *, worker_id: str | None = None) -> dict[str, Any]:
         """Reserve one child handoff without reading workflow policy."""
-        worker_id = str(uuid.uuid4())
+        worker_id = worker_id or str(uuid.uuid4())
         now = _now()
         record = {
             "worker_id": worker_id,
@@ -73,6 +73,8 @@ class WorkerLaunchStore:
             "updated_at": now,
         }
         with self._locked_records() as records:
+            if worker_id in records:
+                raise ValueError("worker invocation identity already exists")
             records[worker_id] = record
         return dict(record)
 
@@ -178,10 +180,57 @@ class WorkerLaunchStore:
             return {}
         try:
             loaded = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError):
-            return {}
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError("worker launch state is unreadable; advancement is frozen") from exc
         attempts = loaded.get("attempts") if isinstance(loaded, dict) else None
-        return dict(attempts) if isinstance(attempts, dict) else {}
+        if not isinstance(attempts, dict) or any(
+            not isinstance(r, dict) for r in attempts.values()
+        ):
+            raise ValueError("worker launch state is malformed; advancement is frozen")
+        for key, record in attempts.items():
+            intervention = record.get("intervention")
+            if intervention is not None:
+                required = {
+                    "worker_id",
+                    "workflow_id",
+                    "step",
+                    "iteration",
+                    "request_id",
+                    "status",
+                    "reason",
+                    "feedback",
+                }
+                if (
+                    not isinstance(intervention, dict)
+                    or not required <= intervention.keys()
+                    or intervention["worker_id"] != key
+                    or any(
+                        not isinstance(intervention[k], str) or not intervention[k].strip()
+                        for k in required - {"iteration"}
+                    )
+                    or type(intervention["iteration"]) is not int
+                    or intervention["iteration"] < 1
+                    or intervention["status"]
+                    not in {
+                        "requested",
+                        "prepared",
+                        "quiesced",
+                        "refused_pending_task",
+                        "refused_host_wait",
+                    }
+                    or len(intervention["request_id"]) != 64
+                    or any(c not in "0123456789abcdef" for c in intervention["request_id"])
+                ):
+                    raise ValueError(
+                        "worker intervention state is malformed; advancement is frozen"
+                    )
+            provider = record.get("provider")
+            if provider is not None and (
+                not isinstance(provider, dict)
+                or provider.get("state") not in {"starting", "running", "stopped", "unverified"}
+            ):
+                raise ValueError("provider ownership state is malformed; advancement is frozen")
+        return dict(attempts)
 
 
 def _thread_lock(path: Path) -> threading.RLock:

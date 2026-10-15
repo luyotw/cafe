@@ -682,6 +682,10 @@ class GenericWorkflowStepExecutor(Phase):
         )
 
         self.iteration = self._get_next_iteration_number(step_name, self.phase_dir)
+        from cafe.core.workflow_control import current_control
+        control = current_control()
+        if control is not None:
+            control.position(blackboard_state, self.playbook["steps"], iteration=self.iteration)
         self._resolved_iteration_user_input = None
         self._session_recovery = None
         self._restart_recovery = None

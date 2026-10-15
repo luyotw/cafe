@@ -2217,7 +2217,15 @@ def _handle_phase_exception(e: Exception, phase_name: str) -> None:
     raise typer.Exit(1)
 
 
-def _execute_single_step_alias(
+def _execute_single_step_alias(**kwargs) -> Dict[str, Any]:
+    from cafe.workflow_execution.workflow_hosting import WorkflowHost
+    issue_dir = Path(".cafe/issues") / kwargs["issue_name"]
+    return WorkflowHost(issue_dir).run(
+        lambda: _execute_single_step_alias_owned(**kwargs), hosting="foreground",
+    ).result
+
+
+def _execute_single_step_alias_owned(
     *,
     issue_name: str,
     step_name: str,

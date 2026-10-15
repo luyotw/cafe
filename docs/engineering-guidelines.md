@@ -84,3 +84,19 @@ declared by the producer route and is never inferred from a built-in source name
 Changes in this area require a regression test using custom phase and artifact
 names. The test must exercise the public production path and fail if a built-in
 name or fixed precedence is reintroduced.
+
+Active anomaly intervention uses `cafe workflow-interrupt`: inspect the current
+worker, then submit its exact worker/workflow/step/iteration with a bounded reason
+and same-step feedback. `requested` means live execution may still be running;
+`quiesced` means owned provider termination, released leases, durable correction
+and an interruption event have been verified. Resume remains explicit.
+Provider intervention requires Linux `/proc` ownership verification; platforms
+without it keep normal workflow execution but cannot accept interruption.
+
+The operation reuses the worker sidecar, advancement/workspace leases, normal
+iteration input and callback audit. It never accepts output, clears budgets,
+changes sessions or answers a pending HumanTask. Auto commands/merge, host waits,
+human/hybrid steps and phases declaring native-review policy are excluded.
+Escaped descendants or unknown spawn/stop results retain the freeze. After a
+crash, `--recover` with the same identity can finish only an already verified
+stop. No external PID signalling or rollback is performed.

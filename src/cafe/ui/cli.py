@@ -796,6 +796,8 @@ app.command()(workflow_commands.show)
 app.command()(workflow_commands.status)
 app.command()(workflow_commands.workflow)
 app.command()(workflow_commands.repair)
+from cafe.ui.commands.workflow_interrupt import workflow_interrupt
+app.command("workflow-interrupt")(workflow_interrupt)
 
 app.command(name="audit")(audit_commands.audit)
 

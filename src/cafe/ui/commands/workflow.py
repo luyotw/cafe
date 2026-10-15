@@ -1327,6 +1327,9 @@ def workflow(
                     if add_dir_values:
                         console.print("[dim]Resume with the same --add-dir grants; background handoff cannot preserve them.[/dim]")
                 return
+            if result.final_status_code == "INTERRUPTED:supervisor_correction":
+                console.print(f"[yellow]Workflow stopped for correction[/yellow] step={result.final_step}; run cafe make to resume")
+                return
             if result.final_status_code == "INVALID_FEEDBACK_DELIVERY":
                 console.print(
                     f"[yellow]Workflow paused[/yellow] step={result.final_step} "
@@ -1441,11 +1444,10 @@ def workflow(
         raise typer.Exit(1)
     finally:
         if validated_worker_id and launch_store is not None:
-            launch_store.mark(
-                validated_worker_id,
-                worker_exit_status,
-                error_code=worker_exit_error,
-            )
+            try:
+                launch_store.mark(validated_worker_id, worker_exit_status, error_code=worker_exit_error)
+            except (OSError, ValueError):
+                pass  # Preserve the already reported failure and frozen control state.
 
 
 def _record_execution_failure(
@@ -1455,7 +1457,10 @@ def _record_execution_failure(
 ) -> None:
     """Persist startup diagnostics before notifying the configured event consumer."""
     if worker_id and launch_store is not None:
-        launch_store.record_failure(worker_id, error)
+        try:
+            launch_store.record_failure(worker_id, error)
+        except (OSError, ValueError):
+            pass  # Corrupt worker control must not suppress the original failure callback.
     if runtime is not None:
         _dispatch_interruption_callback(runtime, error)
         return
