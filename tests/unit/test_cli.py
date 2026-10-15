@@ -151,364 +151,115 @@ class TestConfigCommand:
 
 
 class TestCloseCommand:
-    """Test close command."""
+    """Keep the existing seven close scenarios on the cleanup-only API."""
 
-    @patch("cafe.ui.cli.GitHubOps")
-    @patch("cafe.ui.cli.GitOperations")
-    def test_close_normal_mode_success(
-        self,
-        mock_git_ops: Mock,
-        mock_github_ops: Mock,
-        tmp_path: Path,
-    ) -> None:
-        """測試 close 指令在一般模式（非 worktree）下成功執行"""
-        # Setup: Create issue config
-        branch_name = "test-issue"
-        config_file = tmp_path / ".cafe" / "issues" / branch_name / "issue.yaml"
-        config_file.parent.mkdir(parents=True, exist_ok=True)
-        config_file.write_text("""
-base_branch: main
-feature_branch: test-issue
-pr:
-  auto_create: true
-""")
+    @pytest.fixture
+    def cleanup(self, tmp_path, monkeypatch):
+        import yaml
+        from cafe.ui.commands import lifecycle
 
-        # Mock Git operations
-        mock_git_instance = MagicMock()
-        mock_git_instance.get_current_branch.return_value = branch_name
-        mock_git_instance.checkout_branch.return_value = None
-        mock_git_instance.pull.return_value = None
-        mock_git_instance.delete_branch.return_value = None
-        mock_git_ops.return_value = mock_git_instance
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
 
-        # Mock GitHub operations (no open PR)
-        mock_github_instance = MagicMock()
-        mock_github_instance.get_pr_for_branch.return_value = None
-        mock_github_ops.return_value = mock_github_instance
+        def arrange(linked=False):
+            source = tmp_path / "source"
+            retained = tmp_path / "retained" if linked else source
+            for path in {source, retained}:
+                (path / ".git").mkdir(parents=True)
+            issue = source / ".cafe/issues/test-issue"
+            issue.mkdir(parents=True)
+            config = {"base_branch": "main", "feature_branch": "test-issue"}
+            if linked:
+                config["worktree_path"] = str(source)
+            (issue / "issue.yaml").write_text(yaml.safe_dump(config))
+            snapshot = {"source_oid": "a" * 40, "target_oid": "b" * 40}
+            git = MagicMock(spec=GitOperations)
+            git.get_current_branch.return_value = "test-issue"
+            git.cleanup_snapshot.return_value = snapshot
+            git.has_in_progress_operation.return_value = False
+            git.list_worktrees.return_value = [
+                {"path": str(source), "branch": "test-issue"},
+                *([{"path": str(retained), "branch": "main"}] if linked else []),
+            ]
 
-        # Execute
-        import os
-        old_cwd = os.getcwd()
-        try:
-            os.chdir(tmp_path)
-            result = runner.invoke(app, ["close"])
-        finally:
-            os.chdir(old_cwd)
+            def run_git(*args):
+                if args == ("rev-parse", "--show-toplevel"):
+                    return str(source)
+                if args == ("rev-parse", "refs/heads/test-issue"):
+                    return snapshot["source_oid"]
+                if args == ("status", "--porcelain", "--untracked-files=all"):
+                    return ""
+                if args == ("merge", "--ff-only", snapshot["target_oid"]):
+                    return ""
+                raise AssertionError(f"unexpected cleanup command: {args}")
 
-        # Verify
-        assert result.exit_code == 0
-        assert "Successfully closed issue" in result.stdout
+            git.run_git.side_effect = run_git
+            github = MagicMock()
+            github.get_pr_for_branch.return_value = None
+            monkeypatch.setattr("cafe.ui.cli.GitOperations", lambda *args: git)
+            monkeypatch.setattr("cafe.ui.cli.GitHubOps", lambda: github)
+            monkeypatch.setattr(lifecycle, "_get_project_root", lambda: retained)
+            monkeypatch.chdir(source)
+            return git, github, snapshot, source, issue
+        return arrange
 
-        # Verify all operations were called
-        mock_git_instance.checkout_branch.assert_called_once_with("main")
-        mock_git_instance.pull.assert_called_once()
-        mock_git_instance.delete_branch.assert_called_once_with("test-issue")
+    @pytest.mark.parametrize("linked", [False, True], ids=["checkout", "worktree"])
+    def test_close_success(self, cleanup, linked):
+        git, github, snapshot, source, issue = cleanup(linked)
+        result = runner.invoke(app, ["close"])
+        assert result.exit_code == 0, result.output
+        assert "Successfully closed issue" in result.output
+        git.require_integrated.assert_called_once_with(snapshot)
+        git.checkout_branch.assert_called_once_with("main")
+        git.run_git.assert_any_call("merge", "--ff-only", snapshot["target_oid"])
+        git.delete_cleanup_remote.assert_called_once_with(snapshot)
+        git.delete_cleanup_branch.assert_called_once_with(snapshot)
+        if linked:
+            git.remove_worktree.assert_called_once_with(str(source))
+        else:
+            git.remove_worktree.assert_not_called()
+            assert not issue.exists()
+        git.pull.assert_not_called()
+        git.delete_branch.assert_not_called()
 
-    @patch("cafe.ui.cli.GitHubOps")
-    @patch("cafe.ui.cli.GitOperations")
-    def test_close_worktree_mode_success(
-        self,
-        mock_git_ops: Mock,
-        mock_github_ops: Mock,
-        tmp_path: Path,
-    ) -> None:
-        """測試 close 指令在 worktree 模式下成功執行"""
-        # Setup: Create issue config with worktree_path
-        branch_name = "test-issue"
-        worktree_path = ".cafe/worktrees/test-issue"
-        config_file = tmp_path / ".cafe" / "issues" / branch_name / "issue.yaml"
-        config_file.parent.mkdir(parents=True, exist_ok=True)
-        config_file.write_text(f"""
-base_branch: main
-feature_branch: test-issue
-worktree_path: {worktree_path}
-pr:
-  auto_create: true
-""")
-
-        # Create .git directory to simulate main repo
-        git_dir = tmp_path / ".git"
-        git_dir.mkdir(parents=True, exist_ok=True)
-
-        # Mock Git operations
-        mock_git_instance = MagicMock()
-        mock_git_instance.get_current_branch.return_value = branch_name
-        mock_git_instance.checkout_branch.return_value = None
-        mock_git_instance.pull.return_value = None
-        mock_git_instance.remove_worktree.return_value = None
-        mock_git_instance.delete_branch.return_value = None
-        mock_git_ops.return_value = mock_git_instance
-
-        # Mock GitHub operations (no open PR)
-        mock_github_instance = MagicMock()
-        mock_github_instance.get_pr_for_branch.return_value = None
-        mock_github_ops.return_value = mock_github_instance
-
-        # Execute
-        import os
-        old_cwd = os.getcwd()
-        try:
-            os.chdir(tmp_path)
-            result = runner.invoke(app, ["close"])
-        finally:
-            os.chdir(old_cwd)
-
-        # Verify
-        assert result.exit_code == 0
-        assert "Successfully closed issue" in result.stdout
-
-        # Verify all operations were called in worktree mode
-        mock_git_instance.checkout_branch.assert_called_once_with("main")
-        mock_git_instance.pull.assert_called_once()
-        mock_git_instance.remove_worktree.assert_called_once_with(worktree_path)
-        mock_git_instance.delete_branch.assert_called_once_with("test-issue")
-
-    @patch("cafe.ui.cli.GitHubOps")
-    @patch("cafe.ui.cli.GitOperations")
-    def test_close_fails_on_checkout_error_normal_mode(
-        self,
-        mock_git_ops: Mock,
-        mock_github_ops: Mock,
-        tmp_path: Path,
-    ) -> None:
-        """測試 close 在 checkout 失敗時中斷（一般模式）"""
-        # Setup
-        branch_name = "test-issue"
-        config_file = tmp_path / ".cafe" / "issues" / branch_name / "issue.yaml"
-        config_file.parent.mkdir(parents=True, exist_ok=True)
-        config_file.write_text(
-            "base_branch: main\nfeature_branch: test-issue\npr:\n  auto_create: true\n"
-        )
-
-        # Mock Git operations - checkout fails
-        mock_git_instance = MagicMock()
-        mock_git_instance.get_current_branch.return_value = branch_name
-        mock_git_instance.checkout_branch.side_effect = Exception("Uncommitted changes")
-        mock_git_ops.return_value = mock_git_instance
-
-        # Mock GitHub
-        mock_github_instance = MagicMock()
-        mock_github_instance.get_pr_for_branch.return_value = None
-        mock_github_ops.return_value = mock_github_instance
-
-        # Execute
-        import os
-        old_cwd = os.getcwd()
-        try:
-            os.chdir(tmp_path)
-            result = runner.invoke(app, ["close"])
-        finally:
-            os.chdir(old_cwd)
-
-        # Verify
+    @pytest.mark.parametrize("failure", ["checkout", "ff_sync", "delete_branch", "remove_worktree"])
+    def test_close_stops_at_cleanup_failure(self, cleanup, failure):
+        git, github, snapshot, source, issue = cleanup(failure == "remove_worktree")
+        if failure == "ff_sync":
+            original = git.run_git.side_effect
+            def fail_sync(*args):
+                if args == ("merge", "--ff-only", snapshot["target_oid"]):
+                    raise RuntimeError("injected ff_sync failure")
+                return original(*args)
+            git.run_git.side_effect = fail_sync
+        else:
+            method = {"checkout": git.checkout_branch, "delete_branch": git.delete_cleanup_branch,
+                      "remove_worktree": git.remove_worktree}[failure]
+            method.side_effect = RuntimeError(f"injected {failure} failure")
+        result = runner.invoke(app, ["close"])
         assert result.exit_code == 1
-        assert "Failed to switch to base branch" in result.stdout
-        assert "Remaining steps" in result.stdout
-        assert "git checkout main" in result.stdout
-        assert "git pull" in result.stdout
-        assert "git branch -d test-issue" in result.stdout
+        assert f"injected {failure} failure" in result.output
+        git.require_integrated.assert_called_once_with(snapshot)
+        assert issue.exists(), "failed cleanup must retain live evidence"
+        if failure != "delete_branch":
+            git.delete_cleanup_branch.assert_not_called()
+        if failure in {"checkout", "ff_sync"}:
+            git.delete_cleanup_remote.assert_not_called()
+        git.pull.assert_not_called()
+        git.delete_branch.assert_not_called()
 
-        # Verify subsequent operations were not called
-        mock_git_instance.pull.assert_not_called()
-        mock_git_instance.delete_branch.assert_not_called()
-
-    @patch("cafe.ui.cli.GitHubOps")
-    @patch("cafe.ui.cli.GitOperations")
-    def test_close_fails_on_pull_error_normal_mode(
-        self,
-        mock_git_ops: Mock,
-        mock_github_ops: Mock,
-        tmp_path: Path,
-    ) -> None:
-        """測試 close 在 pull 失敗時中斷（一般模式）"""
-        # Setup
-        branch_name = "test-issue"
-        config_file = tmp_path / ".cafe" / "issues" / branch_name / "issue.yaml"
-        config_file.parent.mkdir(parents=True, exist_ok=True)
-        config_file.write_text(
-            "base_branch: main\nfeature_branch: test-issue\npr:\n  auto_create: true\n"
-        )
-
-        # Mock Git operations - pull fails
-        mock_git_instance = MagicMock()
-        mock_git_instance.get_current_branch.return_value = branch_name
-        mock_git_instance.checkout_branch.return_value = None
-        mock_git_instance.pull.side_effect = Exception("Network error")
-        mock_git_ops.return_value = mock_git_instance
-
-        # Mock GitHub
-        mock_github_instance = MagicMock()
-        mock_github_instance.get_pr_for_branch.return_value = None
-        mock_github_ops.return_value = mock_github_instance
-
-        # Execute
-        import os
-        old_cwd = os.getcwd()
-        try:
-            os.chdir(tmp_path)
-            result = runner.invoke(app, ["close"])
-        finally:
-            os.chdir(old_cwd)
-
-        # Verify
+    def test_close_blocks_on_open_pr(self, cleanup):
+        git, github, snapshot, source, issue = cleanup()
+        github.get_pr_for_branch.return_value = {"number": 123, "state": "OPEN", "isDraft": False}
+        result = runner.invoke(app, ["close"])
         assert result.exit_code == 1
-        assert "Failed to update base branch" in result.stdout
-        assert "Remaining steps" in result.stdout
-        assert "git pull" in result.stdout
-        assert "git branch -D test-issue" in result.stdout
-        assert "cafe rm test-issue" in result.stdout
-
-        # Verify delete was not called
-        mock_git_instance.delete_branch.assert_not_called()
-
-    @patch("cafe.ui.cli.GitHubOps")
-    @patch("cafe.ui.cli.GitOperations")
-    def test_close_fails_on_delete_branch_error(
-        self,
-        mock_git_ops: Mock,
-        mock_github_ops: Mock,
-        tmp_path: Path,
-    ) -> None:
-        """測試 close 在刪除分支失敗時顯示錯誤"""
-        # Setup
-        branch_name = "test-issue"
-        config_file = tmp_path / ".cafe" / "issues" / branch_name / "issue.yaml"
-        config_file.parent.mkdir(parents=True, exist_ok=True)
-        config_file.write_text("base_branch: main\nfeature_branch: test-issue\n")
-
-        # Mock Git operations - delete fails
-        mock_git_instance = MagicMock()
-        mock_git_instance.get_current_branch.return_value = branch_name
-        mock_git_instance.checkout_branch.return_value = None
-        mock_git_instance.pull.return_value = None
-        mock_git_instance.delete_branch.side_effect = Exception("Branch not fully merged")
-        mock_git_ops.return_value = mock_git_instance
-
-        # Mock GitHub
-        mock_github_instance = MagicMock()
-        mock_github_instance.get_pr_for_branch.return_value = None
-        mock_github_ops.return_value = mock_github_instance
-
-        # Execute
-        import os
-        old_cwd = os.getcwd()
-        try:
-            os.chdir(tmp_path)
-            result = runner.invoke(app, ["close"])
-        finally:
-            os.chdir(old_cwd)
-
-        # Verify
-        assert result.exit_code == 1
-        assert "Failed to delete branch" in result.stdout
-        assert "Remaining steps" in result.stdout
-        assert "git branch -D test-issue" in result.stdout
-
-    @patch("cafe.ui.cli.GitHubOps")
-    @patch("cafe.ui.cli.GitOperations")
-    def test_close_fails_on_remove_worktree_error(
-        self,
-        mock_git_ops: Mock,
-        mock_github_ops: Mock,
-        tmp_path: Path,
-    ) -> None:
-        """測試 close 在刪除 worktree 失敗時中斷（worktree 模式）"""
-        # Setup
-        branch_name = "test-issue"
-        worktree_path = ".cafe/worktrees/test-issue"
-        config_file = tmp_path / ".cafe" / "issues" / branch_name / "issue.yaml"
-        config_file.parent.mkdir(parents=True, exist_ok=True)
-        config_file.write_text(f"""
-base_branch: main
-feature_branch: test-issue
-worktree_path: {worktree_path}
-""")
-
-        # Create .git directory
-        git_dir = tmp_path / ".git"
-        git_dir.mkdir(parents=True, exist_ok=True)
-
-        # Mock Git operations - remove_worktree fails
-        mock_git_instance = MagicMock()
-        mock_git_instance.get_current_branch.return_value = branch_name
-        mock_git_instance.checkout_branch.return_value = None
-        mock_git_instance.pull.return_value = None
-        mock_git_instance.remove_worktree.side_effect = Exception("Worktree has changes")
-        mock_git_ops.return_value = mock_git_instance
-
-        # Mock GitHub
-        mock_github_instance = MagicMock()
-        mock_github_instance.get_pr_for_branch.return_value = None
-        mock_github_ops.return_value = mock_github_instance
-
-        # Execute
-        import os
-        old_cwd = os.getcwd()
-        try:
-            os.chdir(tmp_path)
-            result = runner.invoke(app, ["close"])
-        finally:
-            os.chdir(old_cwd)
-
-        # Verify
-        assert result.exit_code == 1
-        assert "Failed to remove worktree" in result.stdout
-        assert "Remaining steps" in result.stdout
-        assert f"git worktree remove {worktree_path}" in result.stdout
-        assert "git branch -D test-issue" in result.stdout
-        assert "cafe rm test-issue" in result.stdout
-
-        # Verify delete_branch was not called
-        mock_git_instance.delete_branch.assert_not_called()
-
-    @patch("cafe.ui.cli.GitHubOps")
-    @patch("cafe.ui.cli.GitOperations")
-    def test_close_blocks_on_open_pr(
-        self,
-        mock_git_ops: Mock,
-        mock_github_ops: Mock,
-        tmp_path: Path,
-    ) -> None:
-        """測試 close 在有 open PR 時被阻擋"""
-        # Setup
-        branch_name = "test-issue"
-        config_file = tmp_path / ".cafe" / "issues" / branch_name / "issue.yaml"
-        config_file.parent.mkdir(parents=True, exist_ok=True)
-        config_file.write_text("base_branch: main\n")
-
-        # Mock Git operations
-        mock_git_instance = MagicMock()
-        mock_git_instance.get_current_branch.return_value = branch_name
-        mock_git_ops.return_value = mock_git_instance
-
-        # Mock GitHub - has open PR
-        mock_github_instance = MagicMock()
-        mock_github_instance.get_pr_for_branch.return_value = {
-            "number": 123,
-            "title": "Test PR",
-            "state": "OPEN",
-            "isDraft": False,
-            "url": "https://github.com/user/repo/pull/123"
-        }
-        mock_github_ops.return_value = mock_github_instance
-
-        # Execute
-        import os
-        old_cwd = os.getcwd()
-        try:
-            os.chdir(tmp_path)
-            result = runner.invoke(app, ["close"])
-        finally:
-            os.chdir(old_cwd)
-
-        # Verify
-        assert result.exit_code == 1
-        assert "Cannot close: Open PR found" in result.stdout
-        assert "PR #123" in result.stdout
-
-        # Verify no git operations were performed
-        mock_git_instance.checkout_branch.assert_not_called()
-        mock_git_instance.delete_branch.assert_not_called()
+        assert "open or draft PR" in result.output
+        assert issue.exists()
+        git.require_integrated.assert_called_once_with(snapshot)
+        git.checkout_branch.assert_not_called()
+        git.delete_cleanup_remote.assert_not_called()
+        git.delete_cleanup_branch.assert_not_called()
+        git.pull.assert_not_called()
+        git.delete_branch.assert_not_called()
 
 
 class TestEditFileWithEditor:

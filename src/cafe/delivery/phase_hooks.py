@@ -27,13 +27,16 @@ def _prepare_action_context(kwargs, binding, reason=""):
     entry = kwargs["blackboard_state"].artifacts.get(binding.publication_artifact)
     if entry is None:
         raise ValueError("declared PR publication artifact is missing")
+    from cafe.delivery.prepared import prepared_request
+    request = prepared_request(kwargs["phase"].issue_dir, kwargs["step_name"])
+    fixed = ("Use these preparation-time delivery choices without changing them: "
+             + json.dumps(request, ensure_ascii=False) + ". ") if request else ""
     return HookResult(context_updates={
         "delivery_stage": "prepare_action", "delivery_complete": "false",
         "delivery_publication_file": entry.path,
         "continuation_prompt": (
             "Prepare integration into the confirmed base branch and its verification plan. "
-            "Local delivery uses mode local and a clean destination checkout; local artifacts "
-            "alone do not complete development delivery. "
+            + fixed + "Local mode requires its confirmed clean destination checkout. "
             "Read the declared PR input at " + entry.path + ". Use repository policy "
             "or recommend a concrete strategy in the complete action bundle. "
             "Write delivery_request.json beside the output and request need_permission. "
@@ -234,7 +237,10 @@ class DevelopmentActionContext(NoOpHook):
         root = Path(phase.git_ops.repo_path).resolve()
         output = kwargs["output_file"]
         try:
-            request = json.loads((output.parent / "delivery_request.json").read_text())
+            from cafe.delivery.prepared import prepared_request
+            request = prepared_request(phase.issue_dir, kwargs["step_name"])
+            if request is None:
+                request = json.loads((output.parent / "delivery_request.json").read_text())
             allowed = {"mode", "strategy", "target_branch", "destination", "issue_repository", "verification"}
             if set(request) - allowed:
                 raise ValueError("action request contains unbound fields")
@@ -445,14 +451,8 @@ class DevelopmentDeliveryExecutor(NoOpHook):
                 phase.issue_dir, workflow_id=state.workflow_id, binding=binding
             )
             if binding.publication_artifact:
-                entry = state.artifacts.get(binding.publication_artifact)
-                if entry is None:
-                    raise ValueError("declared PR publication artifact is missing")
-                published = Path(entry.path).resolve()
-                if (str(published.relative_to(phase.issue_dir.resolve())) != snapshot.proposal.reviewed_artifact
-                        or hashlib.sha256(published.read_bytes()).hexdigest()
-                        != snapshot.proposal.reviewed_artifact_sha256):
-                    raise ActionReviewRequired("current PR publication changed; fresh action review is required")
+                from cafe.delivery.selection import validate_publication_reference
+                validate_publication_reference(phase.issue_dir, state, binding, snapshot)
             actions_path = phase.issue_dir / "delivery" / snapshot.digest / "actions.json"
             atomic_write_bytes(actions_path, canonical_json(snapshot.model_dump(mode="json")))
             _register_artifact(
@@ -525,10 +525,10 @@ class DevelopmentDeliveryExecutor(NoOpHook):
                 "delivery_stage": "prepare_action",
                 "delivery_verification_error": str(exc)[:1024],
                 "continuation_prompt": (
-                    "Verification needs implementation or fresh action review: "
+                    "The prepared verification contract needs attention or fresh action review: "
                     + str(exc)[:1024]
-                    + ". Help draft the missing tool and tests in the delivery output, "
-                    "normalize work into Todo List and use the injected correction route. "
+                    + ". Identify the confirmed requirement and why it applies before proposing any tool work. "
+                    "A missing observer does not establish a deployment or release requirement. "
                     "Do not execute unapproved host code or request final acceptance."
                 ),
             })

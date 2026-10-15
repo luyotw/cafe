@@ -2,7 +2,7 @@
 name: cafe-deliver_development
 description: Verify development delivery with approved project tools, help close missing
   verification work, and request acceptance of complete results.
-version: 1.4.1
+version: 1.4.2
 workflow:
   execution_profile:
     workload: publication
@@ -106,7 +106,7 @@ Read your agent file: {agent_file}
 
 ## Instructions
 
-Local development delivery means integrating the reviewed source into the confirmed base branch in its clean destination checkout. A feature-branch commit, PR draft, clean workspace or acceptance of local artifacts alone does not complete delivery. Use `mode: local` and the existing host action review and receipts; do not choose `mode: local-only` to finish this phase. If the user explicitly excludes integration, resolve that scope through the declared clarification route instead of reporting development delivery complete. Local integration does not imply a push; include a push only through an explicitly authorized execution path.
+Use the delivery mode, target, strategy and verification choices saved during preparation when supplied. The host uses those fields directly; an agent draft cannot replace them. GitHub delivery integrates the exact published PR into its confirmed base. Local delivery integrates into the confirmed clean destination checkout. A feature-branch commit, PR draft or clean workspace alone does not complete either route. Do not substitute local mode for a GitHub PR or invent a destination from general repository documentation. An unresolved or conflicting endpoint uses the declared clarification route.
 
 For integration delivery, prepare the integration plan here, after PR content confirmation. Read the declared PR publication input, supplied user direction, and repository guidance such as root agent instructions, `CONTRIBUTING.md`, and referenced engineering or delivery policy. For GitHub integration, select the strategy in this order: an explicit current user choice, repository policy, then the workflow proposal default `merge` (merge commit). An authorized user exception does not override platform or branch restrictions. When no policy is found, recommend `merge` and label it as the workflow default; do not infer a repository preference from the merge methods GitHub permits. If that choice is unavailable, propose a supported alternative in the same action review rather than silently substituting it. Missing strategy configuration is not a separate questionnaire. Explain material conflicts and request clarification only for an unresolved target, unavailable local checkout or a decision that cannot be safely proposed.
 
@@ -120,7 +120,7 @@ The declared host hook owns integration and external operations. Read the curren
 
 Use the project's existing CI and verification tools first. CAFE does not implement every CI provider. For GitHub Actions the optional bundled observer is available; for other platforms select an existing, reviewable tool suited to the agreed delivery scope. Read `references/verification_tools.md` when selecting, explaining, or helping implement a tool. Never require every repository to add a script or silently replace a missing tool with the GitHub observer.
 
-When a necessary tool or check is missing, explain the gap and help implement it: include a concrete script draft and fixture-based test cases in the delivery output when useful. Run local tests only with the granted tools. Normalize the remaining implementation, tests and integration into the existing Todo List and use the injected correction route. Repo changes go through the existing development, review and PR process before the host executes the revised tool. Do not require a separate issue for a small correction; propose a follow-up only when independent work is appropriate. A proposal is not permission to create an external issue. Missing credentials or an unresolved acceptance requirement need the declared permission/clarification route.
+Before proposing tool work, cite the already-confirmed requirement or configured required check and establish why it applies to this endpoint. Preserving an existing deployment gate does not require every PR to wait for a release. A missing observer alone establishes no new requirement. For a genuinely required missing tool, explain the gap and route implementation and tests through the declared correction/review path. Unresolved scope uses clarification; changed verification choices require fresh action review. Preserve actual required checks and never execute an unapproved draft.
 
 The host executes only the exact approved tool bytes and options under the reviewed capability boundary. A normal check returns pending, succeeded, failed or unknown for the actual integration commit. Pending checks and retryable transport errors are normal machine waiting: the background worker saves the latest observation, releases the workspace lease, and resumes the same iteration without an agent call or repeated integration. Fifteen minutes is not an acceptance or recovery deadline. A stopped worker resumes from saved evidence on the next `cafe make`; operating-system startup does not automatically launch one.
 

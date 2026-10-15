@@ -31,6 +31,7 @@ This inventory is executable documentation: the unit contract discovers every `s
 | `src/cafe/core/phase_review_mixin.py::_open_file_with_editor` | Explicit interactive editor |
 | `src/cafe/core/sandbox_execution.py::preflight_sandbox` | Internal fixed sandbox preflight |
 | `src/cafe/core/sandbox_execution.py::run` | Sandbox script adapter |
+| `src/cafe/core/automatic_commands.py::execute_command` | Sandbox argv step adapter |
 | `src/cafe/core/workspace_artifact.py::_git` | Internal fixed Git query family |
 | `src/cafe/core/workspace_artifact.py::build_workspace_artifact` | Internal fixed Git ancestry query |
 | `src/cafe/core/workspace_artifact.py::verify_workspace_artifact` | Internal fixed Git ancestry query |

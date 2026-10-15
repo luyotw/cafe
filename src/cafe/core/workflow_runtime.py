@@ -17,6 +17,7 @@ from uuid import uuid4
 
 from cafe.core.active_issue import clear_marker_if_matches
 from cafe.core.automatic_steps import (
+    AutomaticExecutionContext,
     AutomaticExecutionResult,
     AutomaticExecutorRegistry,
     default_automatic_executor_registry,
@@ -513,6 +514,10 @@ class BlackboardWorkflowRuntime:
                     f"Step '{step_name}' has an invalid automatic executor declaration"
                 )
             self.automatic_registry.validate_inputs(executor_id, inputs)
+            if executor_id == "command":
+                intent = inputs.get("success", "await_agent")
+                if intent not in step_def.get("on", {}):
+                    raise ValueError(f"Step '{step_name}' command success needs a declared transition")
 
     def _notify_new_human_task(self, task: HumanTask) -> None:
         HumanTaskNotificationDispatcher(
@@ -2311,7 +2316,16 @@ class BlackboardWorkflowRuntime:
                 f"Step '{current_step}' has an invalid automatic executor declaration"
             )
         try:
-            result: AutomaticExecutionResult = self.automatic_registry.execute(executor_id, inputs)
+            cursor = self.blackboard.ownership_cursor
+            if not isinstance(cursor, dict) or cursor.get("step") != current_step:
+                raise ValueError("automatic execution has no reserved workflow visit")
+            result = self.automatic_registry.execute(executor_id, inputs, context=AutomaticExecutionContext(
+                issue_dir=self.issue_dir, workflow_id=self.blackboard.workflow_id,
+                step=current_step, attempt=cursor["attempt_count"],
+                artifacts=self.blackboard.artifacts, execution_id=cursor["execution_id"],
+            ))
+        except StepWaiting:
+            raise
         except Exception as exc:
             self.blackboard_store.record_event(
                 self.blackboard,
@@ -2364,6 +2378,10 @@ class BlackboardWorkflowRuntime:
         declaration = step_def["automatic"]
         executor_id = declaration["executor"]
         self._store_artifacts(result.artifacts)
+        for event in result.events:
+            self.blackboard_store.record_event(
+                self.blackboard, event["type"], {k: v for k, v in event.items() if k != "type"},
+            )
         self.blackboard_store.record_event(
             self.blackboard,
             "automatic_step_completed",
@@ -2692,23 +2710,27 @@ class BlackboardWorkflowRuntime:
         owner = self._owner_for_step(step_def)
         if owner == "agent":
             return None
-        automatic_result: AutomaticExecutionResult | None = None
         if owner == "auto":
-            try:
-                self._ensure_step_attempt_within_limit(
-                    current_step=current_step,
-                    step_def=step_def,
-                    runtime=runtime,
-                )
-            except IterationLimitReachedError as exc:
-                return exc.result
-            prepared = self._prepare_auto_owned_step(
-                current_step=current_step,
-                step_def=step_def,
-            )
+            cursor = self.blackboard.ownership_cursor
+            if not (isinstance(cursor, dict) and cursor.get("step") == current_step
+                    and cursor.get("owner") == "auto"):
+                try:
+                    attempt = self._record_step_attempt(
+                        current_step=current_step, step_def=step_def, runtime=runtime,
+                    )
+                except IterationLimitReachedError as exc:
+                    return exc.result
+                cursor = {"step": current_step, "owner": "auto", "attempt_count": attempt,
+                          "execution_id": uuid4().hex}
+                self.blackboard.ownership_cursor = cursor
+                self.blackboard_store.save(self.blackboard)
+            prepared = self._prepare_auto_owned_step(current_step=current_step, step_def=step_def)
             if isinstance(prepared, PlaybookRunResult):
                 return prepared
-            automatic_result = prepared
+            return self._run_auto_owned_step(
+                current_step=current_step, step_def=step_def,
+                attempt_count=cursor["attempt_count"], runtime=runtime, result=prepared,
+            )
         cursor = self.blackboard.ownership_cursor
         if (
             owner == "hybrid"
@@ -2730,15 +2752,6 @@ class BlackboardWorkflowRuntime:
                 step_def=step_def,
                 attempt_count=attempt_count,
                 runtime=runtime,
-            )
-        if owner == "auto":
-            assert automatic_result is not None
-            return self._run_auto_owned_step(
-                current_step=current_step,
-                step_def=step_def,
-                attempt_count=attempt_count,
-                runtime=runtime,
-                result=automatic_result,
             )
         return self._run_hybrid_owned_step(
             current_step=current_step,
@@ -4096,6 +4109,7 @@ class BlackboardWorkflowRuntime:
         contract_source: str = "workflow.transition",
     ) -> PlaybookRunResult:
         self.blackboard.current_step = "done"
+        self._retire_automatic_visit(current_step)
         baton_contract = None
         if update_contract:
             baton_contract = self.blackboard_store.build_handoff_contract(
@@ -4176,6 +4190,7 @@ class BlackboardWorkflowRuntime:
         if completed_attempts is not None:
             transition_data["completed_attempts"] = completed_attempts
         self.blackboard.current_step = next_step
+        self._retire_automatic_visit(current_step)
         baton_contract = None
         if update_contract:
             baton_contract = self.blackboard_store.build_handoff_contract(
@@ -4198,6 +4213,12 @@ class BlackboardWorkflowRuntime:
                 "transition_source": source,
             })
         self._flush_phase_terminal()
+
+    def _retire_automatic_visit(self, current_step: str) -> None:
+        """Commit cursor retirement with the transition, including self-loop visits."""
+        cursor = self.blackboard.ownership_cursor
+        if isinstance(cursor, dict) and cursor.get("owner") == "auto" and cursor.get("step") == current_step:
+            self.blackboard.ownership_cursor = None
 
     def _execution_completion_gate(self, *, current_step, post_contract, runtime):
         execution = self.steps[current_step].get("execution", {})
@@ -5596,6 +5617,9 @@ class BlackboardWorkflowRuntime:
                 current_step=current_step, step_def=step_def, runtime=runtime_label
             )
             if owned_result is not None:
+                if not single_step_mode and self._automatic_advanced(step_def, owned_result):
+                    current_step = self.blackboard.current_step
+                    continue
                 return owned_result
             _baton_retry_extra_prompt: Optional[str] = None
             try:
@@ -5982,6 +6006,9 @@ class BlackboardWorkflowRuntime:
                 current_step=current_step, step_def=step_def, runtime=runtime_label
             )
             if owned_result is not None:
+                if not single_step_mode and self._automatic_advanced(step_def, owned_result):
+                    current_step = self.blackboard.current_step
+                    continue
                 return owned_result
             if self._is_baton_driven_step(current_step):
                 return self._run_baton_driven_pr(
@@ -6698,13 +6725,19 @@ class BlackboardWorkflowRuntime:
     def _run_from_current_step(
         self, *, current_step: str, max_transitions: int
     ) -> PlaybookRunResult:
-        owned_result = self._run_non_agent_owner(
-            current_step=current_step,
-            step_def=self.steps[current_step],
-            runtime="owner_dispatch",
-        )
-        if owned_result is not None:
-            return owned_result
+        for hop in range(max_transitions):
+            definition = self.steps[current_step]
+            owned_result = self._run_non_agent_owner(
+                current_step=current_step, step_def=definition, runtime="owner_dispatch",
+            )
+            if owned_result is None:
+                max_transitions -= hop
+                break
+            if not self._automatic_advanced(definition, owned_result):
+                return owned_result
+            current_step = self.blackboard.current_step
+        else:
+            raise RuntimeError(f"Playbook run reached max transition limit ({max_transitions})")
 
         if not self._is_baton_driven_step(current_step):
             return self._run_legacy_until_boundary(
@@ -6712,3 +6745,8 @@ class BlackboardWorkflowRuntime:
             )
 
         return self._run_baton_driven_pr(current_step=current_step, max_transitions=max_transitions)
+
+    def _automatic_advanced(self, definition: Dict, result: PlaybookRunResult) -> bool:
+        return (definition.get("assignee_type") == "auto" and not result.completed
+                and self.blackboard.ownership_cursor is None
+                and self.blackboard.current_step in self.steps)

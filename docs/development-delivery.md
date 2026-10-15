@@ -1,5 +1,53 @@
 # Development delivery
 
+## Prepared system operations
+
+`cafe prepare --set FIELD_ID=VALUE` supplies a declared custom prepare field.
+Values remain individual argv elements; they are never shell-expanded. Automatic
+steps may omit agent skill/role configuration and use the `command` executor:
+
+```yaml
+commands:
+  prepare:
+    fields:
+      - {id: export_name, type: text, label: Export name, write: export_job.name, required: true}
+steps:
+  export_job:
+    assignee_type: auto
+    automatic:
+      executor: command
+      inputs:
+        argv: [python3, export.py, {config: export_job.name}]
+        timeout: 60
+    'on': {await_agent: _done}
+```
+
+Ordinary commands use the existing credential-free, network-disabled sandbox.
+Sandbox failure never falls back to host execution. Each visit retains its exact
+inputs and process result under the step's `systematic/` directory. A completed
+command can finish its interrupted transition without running again. An unknown
+or failed execution stops for recovery; it is never automatically replayed.
+
+For a step declaring `delivery`, prepare also accepts its typed endpoint choices,
+for example `--set deliver.mode=github --set deliver.target_branch=develop
+--set deliver.strategy=merge --set 'deliver.verification={"not_required_reason":"An explicitly selected integration-only scope"}'`.
+Local mode additionally requires `deliver.destination` and a local strategy.
+The prefix is the declared step name, not a reserved phase name. All supplied
+choices are validated before branch creation and take precedence over an agent's
+request draft. Missing observer code does not create a release requirement;
+actually required checks must remain in the reviewed verification scope.
+
+`cafe delivery run --issue NAME --step STEP` executes or reconciles the existing
+exact approved bundle through registered host capabilities, without a model.
+It includes the bundle's explicitly selected follow-ups and verification, not
+just its merge. Source/target SHA and PR identity are bound to current evidence
+at action review, rather than guessed at preparation. Action review and host
+approval remain required. This entry takes the existing advancement/workspace
+locks; it grants no cleanup authority. The agent-based delivery path remains
+compatible while the receipt formatter and automatic phase adoption are migrated.
+
+## Delivery authority and evidence
+
 The twelve adopting development playbooks separate PR preparation from delivery. Their `delivery` declarations bind the action-review step/task, action and outcome artifacts, original Review proposal artifact and implementation correction route. Names are not runtime discriminators. Compact delivery remains a separate contract.
 
 All twelve adopting development playbooks make final delivery-result

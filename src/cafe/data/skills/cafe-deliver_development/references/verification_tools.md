@@ -76,6 +76,12 @@ one; reruns must change stable evidence or become pending/failed.
 
 ## Missing tool or required check
 
+First establish the existing accepted requirement or configured mandatory check
+and its applicability to the selected endpoint. A release-only workflow does
+not make an ordinary branch merge wait for publication. Missing observer code
+is not itself a requirement. Preparation-time choices remain authoritative;
+resolve a genuine conflict through the existing review/clarification route.
+
 Identify the missing capability during planning and PR preparation whenever
 possible. For a clear requirement, write the script implementation and fixture
 tests as normal work in the current plan/correction, rather than asking the user

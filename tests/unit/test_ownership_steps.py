@@ -586,8 +586,8 @@ def test_automatic_inputs_are_validated_before_a_visit_is_persisted(tmp_path: Pa
     assert BlackboardStore(issue_dir).load_or_create("automatic").step_attempt_counts == {}
 
 
-def test_invalid_automatic_result_is_rejected_before_visits_or_artifacts(tmp_path: Path) -> None:
-    """UT-003/UT-006: an undeclared result cannot create workflow progress."""
+def test_invalid_automatic_result_retains_reserved_visit_without_publishing_artifacts(tmp_path: Path) -> None:
+    """An executor reserves its identity before effects, but invalid output cannot advance."""
     issue_dir = tmp_path / ".cafe" / "issues" / "invalid-automatic-result"
     playbook = {
         "playbook": {"id": "owner-test"},
@@ -618,7 +618,11 @@ def test_invalid_automatic_result_is_rejected_before_visits_or_artifacts(tmp_pat
 
     state = BlackboardStore(issue_dir).load_or_create("automatic")
     assert result.final_status_code == "AUTOMATIC_EXECUTOR_REJECTED"
-    assert state.step_attempt_counts == {}
+    assert state.step_attempt_counts == {"automatic": 1}
+    assert state.ownership_cursor["owner"] == "auto"
+    assert state.ownership_cursor["step"] == "automatic"
+    assert state.ownership_cursor["execution_id"]
+    assert state.current_step == "automatic"
     assert "escaped" not in state.artifacts
 
 

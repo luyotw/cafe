@@ -447,6 +447,9 @@ def prepare(
         "--conversation-locale-source",
         help="Tier that supplied the conversation language: explicit or inferred",
     ),
+    field_values: Optional[List[str]] = typer.Option(
+        None, "--set", help="Set a declared step prepare field: FIELD_ID=VALUE (repeatable).",
+    ),
 ) -> None:
     """Prepare issue environment (directory, config, git branch) before running spec phase.
 
@@ -863,6 +866,7 @@ def prepare(
                 NonInteractiveResolverDeps,
                 PrepareNonInteractiveError,
                 PrepareNonInteractiveTemplateError,
+                parse_explicit_fields,
                 resolve_non_interactive_issue_config,
             )
 
@@ -879,6 +883,9 @@ def prepare(
                     skill_loader,
                 ),
             )
+            if field_values:
+                from cafe.delivery.prepared import extend_prepare_fields
+                parsed_fields = extend_prepare_fields(parsed_fields, loaded_playbook.as_dict(), field_values)
             try:
                 resolved_config = resolve_non_interactive_issue_config(
                     profile,
@@ -892,6 +899,7 @@ def prepare(
                         sync_plan_github=sync_plan_github,
                         auto_create_pr=auto_create_pr,
                         post_pr_todo_list=post_pr_todo_list,
+                        field_values=parse_explicit_fields(field_values or [], parsed_fields, profile),
                     ),
                     parsed_fields=parsed_fields,
                     deps=resolver_deps,
@@ -953,6 +961,20 @@ def prepare(
             if auto_create_pr is not False:
                 pr_config["post_todo_list"] = post_pr_todo_list
 
+        if field_values and interactive:
+            from cafe.ui.prepare_field_renderer import parse_explicit_fields
+            from cafe.skills.loader import SkillLoader
+            fields = profile.resolved_prepare_fields(
+                playbook_path=loaded_playbook.path, skill_loader=SkillLoader(),
+            )
+            from cafe.delivery.prepared import extend_prepare_fields
+            fields = extend_prepare_fields(fields, loaded_playbook.as_dict(), field_values)
+            explicit = parse_explicit_fields(field_values, fields, profile)
+            for item in fields.fields:
+                if item.id in explicit:
+                    section, key = item.write.split(".", 1)
+                    step_configs.setdefault(section, {})[key] = explicit[item.id]
+
         # 11. Prepare config data (but don't write yet)
         feature_branch = issue_name
 
@@ -979,6 +1001,9 @@ def prepare(
         for step_name, step_config in step_configs.items():
             if step_config:
                 config_data[step_name] = step_config
+
+        from cafe.delivery.prepared import validate_prepared_delivery
+        validate_prepared_delivery(config_data, loaded_playbook.as_dict())
 
         # Add worktree_path if using worktree mode
         if use_worktree:
