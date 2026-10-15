@@ -232,13 +232,14 @@ def run_verification(
     return 0, receipt_path, payload
 
 
-def check_verification_receipt(
+def _check_verification_receipt(
     *,
     output_file: Path,
     required_scope: str = "full",
     cwd: Path | None = None,
+    supported_schemas: frozenset[int] = SUPPORTED_SCHEMA_VERSIONS,
 ) -> ReceiptCheck:
-    """Validate a receipt against the current clean checkout and HEAD."""
+    """Validate common evidence, including profile schema when explicitly requested."""
     if required_scope not in VALID_SCOPES:
         raise VerificationReceiptError(
             f"required_scope must be one of: {', '.join(sorted(VALID_SCOPES))}"
@@ -257,7 +258,7 @@ def check_verification_receipt(
 
     reasons: list[str] = []
     schema_version = loaded.get("schema_version")
-    if schema_version not in SUPPORTED_SCHEMA_VERSIONS:
+    if type(schema_version) is not int or schema_version not in supported_schemas:
         reasons.append(f"unsupported schema_version: {loaded.get('schema_version')!r}")
     if loaded.get("scope") != required_scope:
         reasons.append(
@@ -286,7 +287,7 @@ def check_verification_receipt(
     if required_scope == "full" and git_record.get("cwd_relative_to_root") != ".":
         reasons.append("full verification was not run from the worktree root")
 
-    if schema_version == SCHEMA_VERSION:
+    if type(schema_version) is int and schema_version in {2, 3}:
         output_log = loaded.get("output_log")
         if not isinstance(output_log, dict):
             reasons.append("output log record is missing")
@@ -339,6 +340,15 @@ def check_verification_receipt(
             reasons.append("current HEAD does not match the verified HEAD")
 
     return ReceiptCheck(not reasons, tuple(reasons), receipt_path, loaded)
+
+
+def check_verification_receipt(
+    *, output_file: Path, required_scope: str = "full", cwd: Path | None = None,
+) -> ReceiptCheck:
+    """Check legacy claims; profile evidence requires an explicit current binding."""
+    return _check_verification_receipt(
+        output_file=output_file, required_scope=required_scope, cwd=cwd,
+    )
 
 
 def reuse_verification_receipt(
