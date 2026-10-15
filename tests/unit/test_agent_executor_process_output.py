@@ -27,7 +27,7 @@ def run_fixture(tmp_path, script, **kwargs):
             executor._get_cli_strategy(), lines
         ),
         require_terminal_stream_event=True,
-        streaming_output_file=str(tmp_path / "stream.jsonl"),
+        streaming_output_file=kwargs.pop("streaming_output_file", str(tmp_path / "stream.jsonl")),
         execution_control=AgentExecutionControl(max_duration_seconds=3),
         **kwargs,
     )
@@ -175,12 +175,65 @@ def test_early_native_failure_also_saves_stderr(tmp_path):
             import sys, time
             sys.stderr.write('Error: failed to start provider\\n')
             sys.stderr.flush()
-            time.sleep(5)
+            raise SystemExit(7)
         """)
+    assert caught.value.stderr_diagnostics["returncode"] == 7
     log = Path(caught.value.stderr_diagnostics["stderr_log"])
     assert log.read_text() == "Error: failed to start provider\n"
     summary = json.loads((tmp_path / "stream.jsonl").read_text())
     assert summary["stderr_diagnostics"]["stderr_log"] == str(log)
+
+
+@pytest.mark.parametrize("message", [
+    "ERROR optional metadata unavailable; continuing",
+    "diagnostic cache already in use; continuing",
+    "diagnostic limit reached; continuing",
+    "diagnostic: previously hit your limit; continuing",
+])
+def test_startup_diagnostic_does_not_kill_successful_provider(tmp_path, message):
+    result = run_fixture(tmp_path, f"""
+        import json, sys, time
+        print({message!r}, file=sys.stderr, flush=True)
+        print(json.dumps({{'type':'thread.started','thread_id':'fixture'}}), flush=True)
+        time.sleep(1.2)
+        print(json.dumps({{'type':'item.completed','item':{{'type':'agent_message','text':'done'}}}}), flush=True)
+        print(json.dumps({{'type':'turn.completed','usage':{{'input_tokens':2,'output_tokens':1}}}}), flush=True)
+    """)
+    assert result.response == "done"
+    assert result.transport_result.completed is True
+    rows = [json.loads(line) for line in (tmp_path / "stream.jsonl").read_text().splitlines()]
+    metadata = next(row for row in rows if row["type"] == "stderr_diagnostics")
+    assert metadata["returncode"] == 0
+    assert Path(metadata["stderr_log"]).read_text() == message + "\n"
+
+
+def test_failure_without_workflow_log_retains_private_temp_diagnostic(tmp_path, monkeypatch):
+    project, host_temp = tmp_path / "project", tmp_path / "host-temp"
+    project.mkdir()
+    host_temp.mkdir()
+    monkeypatch.setattr("cafe.agents.diagnostics.tempfile.tempdir", str(host_temp))
+    raw = "Error: provider unavailable; token=private-fixture\n"
+    attempts = []
+    for _ in range(2):
+        with pytest.raises(AgentExecutionError) as caught:
+            run_fixture(project, f"""
+                import sys
+                sys.stderr.write({raw!r})
+                raise SystemExit(7)
+            """, streaming_output_file=None)
+        metadata = caught.value.stderr_diagnostics
+        log = Path(metadata["stderr_log"])
+        assert log.parent == host_temp
+        assert log.read_text() == raw
+        assert metadata["returncode"] == 7
+        assert metadata["stderr_complete"]
+        assert metadata["timeout_kind"] is None
+        if os.name != "nt":
+            assert stat.S_IMODE(log.stat().st_mode) == 0o600
+        attempts.append(log)
+    assert attempts[0] != attempts[1]
+    assert not (project / "stream.jsonl").exists()
+    assert sorted(p.name for p in project.iterdir()) == ["provider.py"]
 
 
 def test_retry_attempts_keep_distinct_stderr_files(tmp_path):
@@ -258,7 +311,10 @@ def test_returned_attempt_keeps_private_stderr_reference(tmp_path, conflicting_s
     assert Path(metadata["stderr_log"]).read_text() == raw
 
 
-def test_diagnostic_write_failure_preserves_provider_error(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("with_workflow_log", [True, False])
+def test_diagnostic_write_failure_preserves_provider_error(
+    tmp_path, monkeypatch, capsys, with_workflow_log
+):
     def reject_write(*args, **kwargs):
         raise OSError("token=private-fixture")
 
@@ -269,13 +325,16 @@ def test_diagnostic_write_failure_preserves_provider_error(tmp_path, monkeypatch
             time.sleep(.6)
             sys.stderr.write('provider connection closed unexpectedly\\n')
             raise SystemExit(7)
-        """)
+        """, streaming_output_file=str(tmp_path / "stream.jsonl") if with_workflow_log else None)
     assert caught.value.error_type is None
     assert "code 7" in str(caught.value)
     diagnostic_output = capsys.readouterr().out
     assert "Failed to save stderr diagnostics: OSError" in diagnostic_output
     assert "private-fixture" not in diagnostic_output
-    assert "private-fixture" not in (tmp_path / "stream.jsonl").read_text()
+    if with_workflow_log:
+        assert "private-fixture" not in (tmp_path / "stream.jsonl").read_text()
+    else:
+        assert not (tmp_path / "stream.jsonl").exists()
 
 
 def test_managed_process_consumes_registry_post_output_wait(tmp_path, monkeypatch):

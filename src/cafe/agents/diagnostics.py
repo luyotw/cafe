@@ -43,17 +43,19 @@ def sanitize_error_excerpt(error: BaseException) -> str:
 
 
 def save_stderr_diagnostics(
-    streaming_output_file: str,
+    streaming_output_file: str | None,
     stderr: str,
     *,
     diagnostics: Dict[str, Any],
     returncode: int | None,
     timeout_kind: str | None,
 ) -> Dict[str, Any]:
-    """Keep the bounded pipe snapshot in a private, unique attempt file."""
-    stream = Path(streaming_output_file)
+    """Keep bounded stderr privately, outside workflow state when no log is allowed."""
+    stream = Path(streaming_output_file) if streaming_output_file else None
     descriptor, filename = tempfile.mkstemp(
-        prefix=f"{stream.stem}.stderr-", suffix=".log", dir=stream.parent
+        prefix=f"{stream.stem if stream else 'cafe-agent'}.stderr-",
+        suffix=".log",
+        dir=stream.parent if stream else None,
     )
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
