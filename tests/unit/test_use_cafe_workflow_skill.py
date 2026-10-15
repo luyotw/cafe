@@ -4253,8 +4253,7 @@ def test_manager_confirms_cleanup_or_terminal_archive() -> None:
     assert "without merging, pushing, closing the GitHub issue" in normalized
     assert "Stop and report the first command failure." in normalized
     assert "final cleanup command" in normalized
-    assert "valid only in confirmed local-review mode" in normalized
-    assert "rejected in create-PR mode" in normalized
+    assert "`cafe close --squash`, `--message`, and `-m` have been removed" in normalized
     assert "inspect the completed issue's remaining lifecycle state read-only" in normalized
     assert '"merge and close" must not be silently reduced to an issue closure' in normalized
 

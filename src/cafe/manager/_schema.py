@@ -397,7 +397,9 @@ def _validate_checkout(value: Any) -> dict[str, Any]:
     raise ValueError("checkout must be current_checkout or a named worktree")
 
 
-def _validate_policy(proposal: Mapping[str, Any]) -> dict[str, Any]:
+def _validate_policy(
+    proposal: Mapping[str, Any], *, historical_closeout: bool = False
+) -> dict[str, Any]:
     if proposal.get("contract_mode") == "compact":
         return validate_compact_proposal(proposal)
     raw = _mapping(proposal, "confirmed proposal", keys=set(proposal))
@@ -438,7 +440,9 @@ def _validate_policy(proposal: Mapping[str, Any]) -> dict[str, Any]:
     elif "closeout_contract" in raw:
         raise ValueError("separate Manager closeout requires Delivery Contract v6")
     else:
-        validate_closeout_plan_policy(delivery["closeout_plan"], allow_squash=None)
+        validate_closeout_plan_policy(
+            delivery["closeout_plan"], allow_squash=None, historical=historical_closeout,
+        )
     result["delivery_contract"] = delivery
     for field in result["reactive_user_handoffs"]:
         result["reactive_user_handoffs"][field] = _string(
@@ -710,7 +714,9 @@ def validate_contract(
         )
         policy = _validate_legacy_policy(proposal, require_delivery=schema_version == 4)
     else:
-        policy = _validate_policy(proposal)
+        # Read the recorded policy without granting removed commands to new
+        # activation or CAS candidates, whose builder uses current validation.
+        policy = _validate_policy(proposal, historical_closeout=True)
         has_clarification = "need_clarification" in policy["reactive_user_handoffs"]
         if schema_version == 6 and has_clarification:
             raise ValueError("Manager v6 has no overall clarification policy; reconfirm as v7")

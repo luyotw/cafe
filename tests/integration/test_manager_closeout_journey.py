@@ -166,6 +166,58 @@ def test_confirmed_cleanup_survives_result_confirmation_and_executes_once(
     assert replay.returncode != 0 and marker.read_text() == "x"
 
 
+def test_manager_acceptance_executes_confirmed_cafe_close_without_reintegration(tmp_path, monkeypatch):
+    import os
+    import shlex
+    import yaml
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    local = journey.local_action.__wrapped__(tmp_path)
+    root, destination = local[:2]
+    journey.git(root, "branch", "-m", "journey")
+    context = journey.setup_action(local, tmp_path)
+    issue = context[2]
+    (issue / "issue.yaml").write_text(yaml.safe_dump({
+        "feature_branch": "journey", "base_branch": "develop", "pr": {"auto_create": False},
+    }))
+    kickoff = load_kickoff_module("kickoff_inputs").assemble_kickoff({
+        "schema_version": 1, "project_root": str(root), "issue_name": "journey",
+        "playbook_id": "direct", "current_explicit_inputs": {
+            "current_checkout": True, "manager_mode": "unattended",
+        },
+    })
+    command = kickoff["formatter_draft"]["cleanup"][-1]
+    assert command == ["cafe", "close"]
+    activate(context, command)
+    accept(context, monkeypatch, manager=True)
+    source = journey.git(root, "rev-parse", "journey")
+    assert journey.git(root, "rev-parse", "develop") == source
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    cafe = binaries / "cafe"
+    cafe.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " -m cafe.ui.cli \"$@\"\n")
+    cafe.chmod(0o755)
+    gh = binaries / "gh"
+    gh.write_text("#!/bin/sh\nexit 1\n")
+    gh.chmod(0o755)
+    monkeypatch.setenv("PATH", str(binaries) + os.pathsep + os.environ["PATH"])
+    argv = executor(context)
+    initialized = subprocess.run([*argv, "--initialize"], capture_output=True, text=True)
+    assert initialized.returncode == 0, initialized.stderr
+    run = subprocess.run([*argv, "--execute", "--stage", "cleanup", "--index", "0"],
+                         capture_output=True, text=True)
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert journey.git(root, "rev-parse", "develop") == source
+    assert not journey.git(root, "branch", "--list", "journey")
+    assert not issue.exists()
+    assert destination.is_dir() and root.is_dir()
+    assert journey.git(destination, "branch", "--show-current") == "develop"
+    assert journey.git(root, "rev-parse", "HEAD") == source
+    replay = subprocess.run([*argv, "--execute", "--stage", "cleanup", "--index", "0"],
+                            capture_output=True, text=True)
+    assert replay.returncode != 0
+
+
 @pytest.mark.parametrize("choice", ["archive", "leave", "pending"])
 def test_confirmation_preserves_other_closeout_choices(context, tmp_path, monkeypatch, choice):
     command = [sys.executable, "-c", "raise RuntimeError('unselected cleanup must not execute')"]

@@ -101,7 +101,35 @@ def _effect_complete(argv, project_root, worktree, issue_dir, archive):
             ).stdout
             return not target.exists() and f"worktree {target.absolute()}\n" not in listing
     if argv[:2] == ["cafe", "close"]:
-        return archive.is_dir() and not Path(issue_dir).exists()
+        if not archive.is_dir() or Path(issue_dir).exists():
+            return False
+        if argv == ["cafe", "close", "--archive-only"]:
+            return True
+        if argv != ["cafe", "close"]:
+            return False
+        from cafe.core.git import GitOperations
+        from cafe.utils.yaml_utils import safe_load
+
+        config = safe_load((archive / "issue.yaml").read_text(encoding="utf-8"))
+        source = Path(issue_dir).name
+        if config.get("feature_branch", source) != source:
+            return False
+        git = GitOperations(str(project_root))
+        if git.run_git("branch", "--list", source):
+            return False
+        declared = config.get("worktree_path")
+        if declared:
+            target = Path(declared)
+            if not target.is_absolute():
+                target = Path(project_root) / target
+            if target.resolve() != Path(worktree).resolve() or target.exists():
+                return False
+            if any(Path(tree["path"]).resolve() == target.resolve() for tree in git.list_worktrees()):
+                return False
+        if "origin" in git.run_git("remote").splitlines():
+            if git.run_git("ls-remote", "--heads", "origin", f"refs/heads/{source}"):
+                return False
+        return True
     # Unknown external effects require the existing human recovery route.
     return False
 

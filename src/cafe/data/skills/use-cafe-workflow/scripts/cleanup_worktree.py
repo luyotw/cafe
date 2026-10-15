@@ -66,10 +66,20 @@ def _delivery_branches(issue, selection, workflow_id, issue_name, branch, source
     return branches + list(originals.values())
 
 
+def _require_original_ancestry(root, source, target):
+    from cafe.core.git import GitError, GitOperations
+
+    try:
+        GitOperations(str(root)).require_integrated({
+            "source_oid": source, "target_oid": target, "remote": None,
+        })
+    except GitError as exc:
+        raise ValueError("feature changes are not integrated into the retained checkout") from exc
+
+
 def _verify_integration(root, source, proposal, receipt):
     if proposal is None:
-        if _git(root, "merge-base", "--is-ancestor", source, "HEAD", check=False).returncode:
-            raise ValueError("feature changes are not integrated into the retained checkout")
+        _require_original_ancestry(root, source, "HEAD")
     elif proposal.mode == "github":
         observed = subprocess.run(
             ["gh", "pr", "view", str(proposal.pr_number), "--repo", proposal.repository,
@@ -86,10 +96,8 @@ def _verify_integration(root, source, proposal, receipt):
         common = _git(root, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
         if Path(proposal.repository).resolve() != Path(common).resolve():
             raise ValueError("local integration belongs to another repository")
-        if (_git(root, "merge-base", "--is-ancestor", source, receipt["commit"], check=False).returncode
-                or _git(root, "merge-base", "--is-ancestor", receipt["commit"],
-                        f"refs/heads/{proposal.target_branch}", check=False).returncode):
-            raise ValueError("local integration does not contain the feature tip in its target branch")
+        _require_original_ancestry(root, source, receipt["commit"])
+        _require_original_ancestry(root, receipt["commit"], f"refs/heads/{proposal.target_branch}")
 
 
 def cleanup(project_root, worktree, issue_name, remote=None):
@@ -142,7 +150,13 @@ def cleanup(project_root, worktree, issue_name, remote=None):
         ref = f"refs/heads/{name}"
         local = _git(root, "rev-parse", "--verify", ref, check=False)
         local_tip = local.stdout.strip() if local.returncode == 0 else None
-        refs = _git(root, "ls-remote", "--heads", push_url, ref).stdout.splitlines() if remote else []
+        if remote:
+            from cafe.core.git_delivery import pinned_remote_command
+
+            command = pinned_remote_command("ls-remote", push_url, "--heads", ref)
+            refs = _git(root, *command[1:]).stdout.splitlines()
+        else:
+            refs = []
         remote_tip = refs[0].split()[0] if len(refs) == 1 else None
         if len(refs) > 1:
             raise ValueError("ambiguous remote feature branch")
@@ -161,8 +175,7 @@ def cleanup(project_root, worktree, issue_name, remote=None):
             # Ensure ordinary deletion can succeed; never fall back to -D.
             upstream = _git(root, "rev-parse", "--verify", f"{name}@{{upstream}}", check=False)
             merged_into = upstream.stdout.strip() if upstream.returncode == 0 else "HEAD"
-            if _git(root, "merge-base", "--is-ancestor", tip, merged_into, check=False).returncode:
-                raise ValueError("ordinary branch deletion would refuse this feature tip")
+            _require_original_ancestry(root, tip, merged_into)
         owned[name] = (tip, bool(local_tip), bool(remote_tip))
     for record in _git(root, "worktree", "list", "--porcelain", "-z").stdout.split("\0\0"):
         fields = record.split("\0")

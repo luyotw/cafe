@@ -110,6 +110,48 @@ def test_advanced_remote_is_refused_before_any_cleanup(journey):
     assert git(root, "branch", "--list", "issue474")
 
 
+@pytest.mark.parametrize("history", ["replacement", "graft", "environment_graft"])
+def test_legacy_cleanup_requires_original_ancestry(journey, monkeypatch, history):
+    module, root, worktree, remote, issue, archive = journey
+    (worktree / "feature-change").write_text("not integrated\n")
+    git(worktree, "add", "feature-change")
+    git(worktree, "commit", "-m", "feature")
+    git(worktree, "push", "origin", "issue474")
+    source, target = git(worktree, "rev-parse", "HEAD"), git(root, "rev-parse", "HEAD")
+    if history == "replacement":
+        git(root, "replace", "--graft", target, source)
+    else:
+        path = Path(git(root, "rev-parse", "--path-format=absolute", "--git-path", "info/grafts"))
+        path.parent.mkdir(exist_ok=True)
+        if history == "environment_graft":
+            path = path.with_name("alternative-grafts")
+            monkeypatch.setenv("GIT_GRAFT_FILE", str(path))
+        path.write_text(f"{target} {source}\n")
+    git(root, "merge-base", "--is-ancestor", source, target)
+    with pytest.raises(ValueError):
+        module.cleanup(root, worktree, "issue474", "origin")
+    assert issue.is_dir() and worktree.is_dir() and not archive.exists()
+    assert git(root, "rev-parse", "issue474") == source
+    assert git(remote, "rev-parse", "issue474") == source
+
+
+def test_legacy_cleanup_observes_the_same_pinned_remote_it_deletes(journey, tmp_path):
+    module, root, worktree, remote, issue, archive = journey
+    rewritten = tmp_path / "rewritten.git"
+    git(root, "clone", "--bare", str(remote), str(rewritten))
+    other = git(rewritten, "-c", "user.name=Test", "-c", "user.email=test@example.com",
+                "commit-tree", "develop^{tree}", "-p", "develop", "-m", "other remote tip")
+    git(rewritten, "update-ref", "refs/heads/issue474", other)
+    git(root, "remote", "set-url", "origin", "cafe-original:")
+    git(root, "config", f"url.{remote}.insteadOf", "cafe-original:")
+    git(root, "config", f"url.{rewritten}.insteadOf", str(remote))
+    result = module.cleanup(root, worktree, "issue474", "origin")
+    assert result["status"] == "completed"
+    assert archive.is_dir() and not worktree.exists()
+    assert not git(remote, "branch", "--list", "issue474")
+    assert git(rewritten, "rev-parse", "issue474") == other
+
+
 @pytest.fixture
 def correction(journey, monkeypatch, request):
     """Real Git resources with separately retained successful delivery receipts.
@@ -180,6 +222,19 @@ def test_accepted_correction_cleans_both_exact_branches_and_preserves_unrelated(
         assert git(root, "branch", "--list", branch) == ""
         assert git(root, "ls-remote", "--heads", "origin", f"refs/heads/{branch}") == ""
     assert git(root, "branch", "--list", "issue474-unrelated")
+
+
+def test_correction_cleanup_requires_original_target_ancestry(correction):
+    (module, root, worktree, remote, issue, archive), current, old = correction
+    target = old.proposal.target_oid
+    receipt = json.loads((issue / "delivery" / current.digest / "result.json").read_text())["actions"]["integration"]
+    git(root, "update-ref", "refs/heads/develop", target)
+    git(root, "replace", "--graft", target, receipt["commit"])
+    git(root, "merge-base", "--is-ancestor", receipt["commit"], "develop")
+    with pytest.raises(ValueError):
+        module.cleanup(root, worktree, "issue474", "origin")
+    assert issue.is_dir() and worktree.is_dir() and not archive.exists()
+    assert git(root, "rev-parse", "issue474-date-fix") == current.proposal.source_oid
 
 
 @pytest.mark.parametrize("change", ["current_tip", "original_tip", "remote_tip", "receipt", "retained",
@@ -295,10 +350,7 @@ def test_default_prefills_full_cleanup_but_explicit_archive_preference_wins(tmp_
                "playbook_id": "subagent-flow"}
     report = module.assemble_kickoff(request)
     command = report["formatter_draft"]["cleanup"][-1]
-    assert Path(command[1]).name == "cleanup_worktree.py"
-    assert command[command.index("--worktree") + 1] == str(tmp_path / ".cafe/worktrees/new")
-    assert command[-2:] == ["--remote", "origin"]
-    assert "origin branch" in report["formatter_draft"]["cleanup_description"][-1]
+    assert command == ["cafe", "close"]
     request["current_explicit_inputs"] = {"cleanup": [["cafe", "close", "--archive-only"]],
                                          "cleanup_description": ["Keep feature resources."]}
     explicit = module.assemble_kickoff(request)

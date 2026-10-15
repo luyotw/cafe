@@ -13,7 +13,12 @@ from tests.unit._kickoff_test_support import load_kickoff_module, SCRIPT_ROOT
 
 
 @pytest.mark.parametrize("legacy", [False, True])
-def test_confirmed_compact_inputs_override_changed_defaults_and_selected_mode(compact_request, compact_proposal, tmp_path, legacy):
+@pytest.mark.parametrize("manager", [
+    {"mode": "unattended"}, {"mode": "attached", "poll_interval_seconds": 13},
+    {"mode": "event-driven", "clis": [{"cli": "codex"}]},
+])
+def test_confirmed_compact_inputs_override_changed_defaults_and_selected_mode(compact_request, compact_proposal, tmp_path, legacy, manager):
+    compact_proposal["manager"] = manager
     if legacy:
         compact_proposal["execution"].pop("review_policy", None)
     root = Path(compact_request["project_root"])
@@ -23,6 +28,7 @@ def test_confirmed_compact_inputs_override_changed_defaults_and_selected_mode(co
     changed = deepcopy(compact_request)
     changed.pop("compact_inputs")
     changed.pop("playbook_id")
+    changed["current_explicit_inputs"] = {"manager_mode": "attached", "poll_interval_seconds": 99}
     (root / ".cafe/phases.yaml").write_text("invalid new defaults")
     owner = load_kickoff_module("kickoff_inputs")
     discovery = owner.discover_kickoff(changed, config_dir=tmp_path / "prefs", cache_dir=tmp_path / "cache")

@@ -676,9 +676,6 @@ def workflow(
     user_input = _normalize_cli_user_input(user_input)
     execution_context_file = execution_context_file if isinstance(execution_context_file, Path) else None
     execution_context = None
-    if execution_context_file is not None:
-        from cafe.core.execution_checkpoints import load_execution_context
-        execution_context = load_execution_context(execution_context_file)
     # Validation happens before any state is touched so a rejected locale input
     # leaves no partial workflow behind.
     start_locale_value = _normalize_cli_user_input(conversation_locale)
@@ -731,6 +728,50 @@ def workflow(
             raise typer.Exit(1)
         issue_name = resolved.issue_name
         issue_dir = cafe_dir / "issues" / issue_name
+        if not dry_run:
+            launch_store = WorkerLaunchStore(issue_dir)
+            has_internal_worker_context = bool(internal_worker_id or internal_worker_token)
+            if has_internal_worker_context:
+                try:
+                    valid_worker = launch_store.validate_child(
+                        worker_id=internal_worker_id,
+                        worker_token=internal_worker_token,
+                    )
+                except (OSError, ValueError):
+                    valid_worker = False
+                if not valid_worker:
+                    console.print("[red]Error: background worker context is invalid or stale[/red]")
+                    raise typer.Exit(1)
+                validated_worker_id = internal_worker_id
+                # A validated child is always the foreground execution half of the
+                # fixed worker handoff and must never launch another child.
+                background = False
+
+            callback_binding: ResolvedWorkflowEventCallback | None = None
+            if on_workflow_event is not None:
+                try:
+                    callback_binding = resolve_builtin_workflow_event_callback(
+                        on_workflow_event,
+                        project_root=Path.cwd(),
+                    )
+                except ValueError as exc:
+                    console.print(f"[red]Error: workflow event callback is invalid: {exc}[/red]")
+                    raise typer.Exit(1)
+                if not background and not has_internal_worker_context:
+                    console.print("[red]Error: --on-workflow-event requires --background[/red]")
+                    raise typer.Exit(1)
+
+        else:
+            has_internal_worker_context = False
+            callback_binding = None
+
+        if execution_context_file is not None:
+            from cafe.core.execution_checkpoints import load_execution_context
+            try:
+                execution_context = load_execution_context(execution_context_file)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                raise ValueError(f"Cannot load execution context {execution_context_file}: {exc}") from exc
+
         # An explicit flag starts a requested playbook; otherwise an existing
         # issue must resume the playbook persisted in its own workflow state.
         has_issue_workflow = (issue_dir / "blackboard.json").exists() or (
@@ -782,38 +823,6 @@ def workflow(
             )
             console.print(format_text_report(analyze_playbook(model)))
             return
-        launch_store = WorkerLaunchStore(issue_dir)
-        has_internal_worker_context = bool(internal_worker_id or internal_worker_token)
-        if has_internal_worker_context:
-            try:
-                valid_worker = launch_store.validate_child(
-                    worker_id=internal_worker_id,
-                    worker_token=internal_worker_token,
-                )
-            except (OSError, ValueError):
-                valid_worker = False
-            if not valid_worker:
-                console.print("[red]Error: background worker context is invalid or stale[/red]")
-                raise typer.Exit(1)
-            validated_worker_id = internal_worker_id
-            # A validated child is always the foreground execution half of the
-            # fixed worker handoff and must never launch another child.
-            background = False
-
-        callback_binding: ResolvedWorkflowEventCallback | None = None
-        if on_workflow_event is not None:
-            try:
-                callback_binding = resolve_builtin_workflow_event_callback(
-                    on_workflow_event,
-                    project_root=Path.cwd(),
-                )
-            except ValueError as exc:
-                console.print(f"[red]Error: workflow event callback is invalid: {exc}[/red]")
-                raise typer.Exit(1)
-            if not background and not has_internal_worker_context:
-                console.print("[red]Error: --on-workflow-event requires --background[/red]")
-                raise typer.Exit(1)
-
         def launch_background_worker() -> None:
             """Launch one generic worker with an optional trusted event callback ID."""
             try:
@@ -1407,12 +1416,20 @@ def workflow(
     except CriticalPhaseError as e:
         worker_exit_status = "failed"
         worker_exit_error = type(e).__name__
-        _dispatch_interruption_callback(locals().get("runner"), e)
+        _record_execution_failure(
+            locals().get("runner"), e, issue_dir=locals().get("issue_dir"),
+            launch_store=launch_store, worker_id=validated_worker_id,
+            callback=locals().get("callback_binding"),
+        )
         _handle_phase_exception(e, "workflow")
     except Exception as e:
         worker_exit_status = "failed"
         worker_exit_error = type(e).__name__
-        _dispatch_interruption_callback(locals().get("runner"), e)
+        _record_execution_failure(
+            locals().get("runner"), e, issue_dir=locals().get("issue_dir"),
+            launch_store=launch_store, worker_id=validated_worker_id,
+            callback=locals().get("callback_binding"),
+        )
         if _is_baton_contract_error(e):
             _print_baton_contract_recovery_guidance(
                 issue_dir=locals().get("issue_dir"),
@@ -1427,6 +1444,36 @@ def workflow(
                 worker_exit_status,
                 error_code=worker_exit_error,
             )
+
+
+def _record_execution_failure(
+    runtime: Any, error: Exception, *, issue_dir: Path | None,
+    launch_store: WorkerLaunchStore | None, worker_id: str | None,
+    callback: ResolvedWorkflowEventCallback | None,
+) -> None:
+    """Persist startup diagnostics before notifying the configured event consumer."""
+    if worker_id and launch_store is not None:
+        launch_store.record_failure(worker_id, error)
+    if runtime is not None:
+        _dispatch_interruption_callback(runtime, error)
+        return
+    if not worker_id or callback is None or issue_dir is None:
+        return
+    try:
+        store = BlackboardStore(issue_dir)
+        state = store.load_read_only()
+        store.record_event(state, "workflow_interrupted", {
+            "error": type(error).__name__, "reason": "startup_failed", "worker_id": worker_id,
+        })
+        event = store.prepare_workflow_callback_event(state, {
+            "workflow_id": state.workflow_id, "issue": issue_dir.name,
+            "event_type": "workflow_interruption", "step": state.current_step,
+            "reason": "startup_failed",
+        })
+        dispatch_workflow_event_callback(callback, event, cwd=Path.cwd())
+    except Exception:
+        # Preserve the original failure; callback dispatch remains fail-open.
+        pass
 
 
 def _dispatch_interruption_callback(runtime: Any, error: Exception) -> None:

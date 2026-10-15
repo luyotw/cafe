@@ -84,6 +84,23 @@ def test_invalid_worker_handshake_fails_closed(tmp_path: Path) -> None:
     assert store.get(record["worker_id"])["status"] == "startup_failed"
 
 
+def test_failed_spawn_retains_only_bounded_sanitized_diagnostic(tmp_path):
+    issue = tmp_path / ".cafe/issues/failed-spawn"
+    store = WorkerLaunchStore(issue)
+    record = store.start()
+    def fail(*_args, **_kwargs):
+        raise OSError("startup unavailable token=private-credential " + "x" * 10000)
+    with pytest.raises(OSError):
+        FixedWorkerLauncher(issue, popen_factory=fail).launch(record)
+    observed = store.get(record["worker_id"])
+    assert observed["status"] == "startup_failed"
+    assert "pid" not in observed
+    assert observed["diagnostic"]["error_type"] == "OSError"
+    assert "private-credential" not in observed["diagnostic"]["detail"]
+    assert len(observed["diagnostic"]["detail"]) <= 2048
+    assert not list(issue.glob("*.log"))
+
+
 def test_only_one_host_worker_advances_at_a_time(tmp_path: Path) -> None:
     host = WorkflowHost(tmp_path)
     release = Event()

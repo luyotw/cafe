@@ -519,9 +519,7 @@ def test_cached_delivery_and_issue_defaults_reach_the_complete_formatter(tmp_pat
     assert "deliver" not in fields and "deliver_description" not in fields
     assert fields["cleanup"][0] == ["gh", "issue", "close", "999573", "--repo", "example/project"]
     cleanup = fields["cleanup"][1]
-    assert Path(cleanup[1]).name == "cleanup_worktree.py"
-    assert cleanup[cleanup.index("--project-root") + 1] == str(Path(values["project_root"]).resolve())
-    assert cleanup[cleanup.index("--issue-name") + 1] == values["issue_name"]
+    assert cleanup == ["cafe", "close"]
     assert fields["manager_mode"] == "event-driven" and fields["event_manager"] == ["codex"]
     assert fields["worktree"].endswith("/.cafe/worktrees/" + values["issue_name"])
     # Only fill the actual gaps; do not hand-copy any prefilled field.
@@ -830,9 +828,7 @@ def test_selected_draft_supplies_owner_typed_contract_and_renders_without_repair
     assert set(template["delivery_contract"]) == set(values["delivery_contract"])
     assert "deliver" not in template
     cleanup = template["cleanup"][0]
-    assert Path(cleanup[1]).name == "cleanup_worktree.py"
-    assert cleanup[cleanup.index("--worktree") + 1] == str((PROJECT_ROOT / values["worktree"]).resolve())
-    assert cleanup[cleanup.index("--issue-name") + 1] == values["issue_name"]
+    assert cleanup == ["cafe", "close"]
     assert cli.main(["assemble", *common, "--summary", "--draft-output", str(draft)]) == 3
     capsys.readouterr()
     draft_request = json.loads(draft.read_text())

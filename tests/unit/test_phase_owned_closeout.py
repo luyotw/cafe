@@ -103,12 +103,14 @@ def test_legacy_unbound_merge_pauses_without_changing_contract():
     )
 
 
-def test_phase_owned_cleanup_cannot_repeat_local_integration():
+def test_phase_owned_cleanup_allows_only_cleanup_lifecycle_options():
     from cafe.manager.delivery import CleanupCloseoutPlan
 
-    with pytest.raises(ValueError):
-        CleanupCloseoutPlan.model_validate({"cleanup": [{"argv": ["cafe", "close"]}]})
+    CleanupCloseoutPlan.model_validate({"cleanup": [{"argv": ["cafe", "close"]}]})
     CleanupCloseoutPlan.model_validate({"cleanup": [{"argv": ["cafe", "close", "--archive-only"]}]})
+    for options in (["--squash"], ["--message", "merge"], ["-m", "merge"]):
+        with pytest.raises(ValueError):
+            CleanupCloseoutPlan.model_validate({"cleanup": [{"argv": ["cafe", "close", *options]}]})
 
 
 @pytest.mark.parametrize(
