@@ -250,6 +250,96 @@ def test_different_push_endpoint_cannot_be_cleaned(feature, tmp_path):
     assert_retained(feature)
 
 
+@pytest.mark.parametrize("integrated_endpoint", ["authorized", "rewritten"])
+def test_cleanup_observes_and_deletes_only_the_pinned_endpoint(feature, tmp_path, integrated_endpoint):
+    root, worktree, issue, source, linked = feature
+    authorized = tmp_path / "remote.git"
+    rewritten = tmp_path / "rewritten.git"
+    baseline = git(root, "rev-parse", "develop")
+    git(root, "clone", "--bare", str(authorized), str(rewritten))
+    integrated = authorized if integrated_endpoint == "authorized" else rewritten
+    git(integrated, "update-ref", "refs/heads/develop", source)
+    git(root, "remote", "set-url", "origin", "cafe-original:")
+    git(root, "config", f"url.{authorized}.insteadOf", "cafe-original:")
+    git(root, "config", f"url.{rewritten}.insteadOf", str(authorized))
+    assert git(root, "remote", "get-url", "origin") == str(authorized)
+
+    result = CliRunner().invoke(app, ["close"])
+
+    # Inspect repositories directly: resolving either URL again would hide drift.
+    assert git(rewritten, "rev-parse", "feature") == source
+    if integrated_endpoint == "authorized":
+        assert result.exit_code == 0, result.output
+        assert not git(authorized, "branch", "--list", "feature")
+        assert not git(root, "branch", "--list", "feature")
+        assert git(root, "rev-parse", "develop") == source
+        assert not issue.exists()
+        assert worktree.exists() is (not linked)
+    else:
+        assert result.exit_code != 0, result.output
+        assert git(authorized, "rev-parse", "feature") == source
+        assert git(authorized, "rev-parse", "develop") == baseline
+        assert git(root, "rev-parse", "develop") == baseline
+        assert worktree.is_dir() and issue.is_dir()
+        assert git(root, "rev-parse", "feature") == source
+
+
+def test_pinned_cleanup_accepts_an_already_absent_remote_source(feature, tmp_path):
+    integrate(feature)
+    root, _, issue, source, _ = feature
+    authorized = tmp_path / "remote.git"
+    rewritten = tmp_path / "rewritten.git"
+    git(root, "clone", "--bare", str(authorized), str(rewritten))
+    git(authorized, "update-ref", "-d", "refs/heads/feature")
+    git(root, "remote", "set-url", "origin", "cafe-original:")
+    git(root, "config", f"url.{authorized}.insteadOf", "cafe-original:")
+    git(root, "config", f"url.{rewritten}.insteadOf", str(authorized))
+    result = CliRunner().invoke(app, ["close"])
+    assert result.exit_code == 0, result.output
+    assert not issue.exists()
+    assert not git(root, "branch", "--list", "feature")
+    assert not git(authorized, "branch", "--list", "feature")
+    assert git(rewritten, "rev-parse", "feature") == source
+
+
+@pytest.mark.parametrize("proof", ["source", "pr_commit"])
+@pytest.mark.parametrize("history", ["replacement", "graft", "environment_graft"])
+def test_local_alternative_history_cannot_prove_unintegrated_cleanup(feature, monkeypatch, history, proof):
+    root, worktree, _, source, _ = feature
+    target = git(root, "rev-parse", "develop")
+    claimed_commit = source
+    if proof == "pr_commit":
+        # A distinct same-repository PR commit also needs original ancestry.
+        claimed_commit = git(root, "commit-tree", f"{source}^{{tree}}", "-p", target, "-m", "claimed integration")
+        pr = {"state": "MERGED", "isCrossRepository": False, "headRefName": "feature",
+              "headRefOid": source, "baseRefName": "develop", "mergeCommit": {"oid": claimed_commit}}
+        real_run = subprocess.run
+
+        def observe(argv, **kwargs):
+            if argv[:3] == ["gh", "pr", "list"]:
+                import json
+                return subprocess.CompletedProcess(argv, 0, json.dumps([pr]), "")
+            return real_run(argv, **kwargs)
+
+        monkeypatch.setattr(subprocess, "run", observe)
+    if history == "replacement":
+        git(root, "replace", "--graft", target, claimed_commit)
+    else:
+        path = Path(git(worktree, "rev-parse", "--path-format=absolute", "--git-path", "info/grafts"))
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(f"{target} {claimed_commit}\n")
+        if history == "environment_graft":
+            alternative = path.with_name("alternative-grafts")
+            path.rename(alternative)
+            monkeypatch.setenv("GIT_GRAFT_FILE", str(alternative))
+    # Demonstrate that the local view would falsely authorize this deletion.
+    git(worktree, "merge-base", "--is-ancestor", claimed_commit, target)
+    result = CliRunner().invoke(app, ["close"])
+    assert result.exit_code != 0, result.output
+    assert_retained(feature)
+    assert git(root, "rev-parse", "develop") == target
+
+
 def test_pending_git_operation_blocks_cleanup_even_with_clean_index(feature):
     integrate(feature)
     _, worktree, _, source, _ = feature
