@@ -88,3 +88,61 @@ optional proposal for independent work, not a mandatory step.
 Test success, pending, actual failure, unavailable tools, transient network
 errors, wrong commit/version and missing evidence. The completed tool joins
 the reviewed source and is frozen in a fresh delivery action decision.
+
+## Release-triggered deployment observer
+
+For a release workflow rather than a target-branch push workflow, select
+`scripts/verify_github_release_deployment.py` under `cafe-deliver_development`
+with the same existing `cafe.delivery.verify` capability. It is self-contained,
+uses only read-only GitHub API calls through `gh api --hostname github.com`,
+and has a shared 25-second query deadline. It neither creates a deployment nor
+runs a workflow. Its approved options pin the environment, workflow and all
+required jobs/steps, including the job associated with the deployment status:
+
+```json
+{
+  "environment": "pypi",
+  "workflow": ".github/workflows/publish-pypi.yml",
+  "deployment_job": "Publish distributions to PyPI",
+  "jobs": {
+    "Build distributions": ["Verify release identity", "Build and inspect distributions"],
+    "Publish distributions to PyPI": ["Publish distributions"]
+  }
+}
+```
+
+These names describe this repository's existing release workflow; other
+repositories must review their actual environment/workflow/job/step contract.
+Options cannot override host-supplied repository, target branch or integration
+commit. Hash the exact script bytes after implementation/review and submit the
+whole verification scope in a fresh delivery action review. A source/QA commit
+must never substitute for the successful host integration receipt's commit.
+
+The observer considers only the latest deployment returned for that environment,
+never falls back to an older success, and proves that its full SHA equals or
+descends from the integration commit using GitHub's commit comparison. An older
+or unrelated deployment remains pending. For a related successful deployment it
+requires a published release, resolves its tag to the deployed SHA, and binds the
+status log URL to the same repository's release run and deployment job. The run's
+SHA, tag, event and workflow path must match; every required job/step must finish
+successfully in the current run attempt. An old deployment job cannot certify a
+new attempt. Truncated job pages, identity contradictions or missing required
+results never pass.
+
+Missing/running deployments or release runs remain `pending`; completed deployment
+or required workflow/job/step failures are `failed`. `unknown` with
+`retryable: true` is reserved for transient timeouts, transport/rate-limit/server
+failures. Invalid configuration, credentials or identity evidence produce
+non-retryable unknown. Observations return the host integration commit plus stable
+deployment/status IDs, deployed SHA, ancestry, release tag/version/URL, workflow
+run/attempt/URL and required job/step results. No scheduling timestamps are included.
+The checked release tag is version evidence, not a producer-release allowlist.
+
+GitHub API contracts: [deployments](https://docs.github.com/en/rest/deployments/deployments),
+[deployment statuses](https://docs.github.com/en/rest/deployments/statuses),
+[workflow runs](https://docs.github.com/en/rest/actions/workflow-runs),
+[workflow jobs](https://docs.github.com/en/rest/actions/workflow-jobs), and
+[commit references/comparisons](https://docs.github.com/en/rest/commits/commits).
+These read-only observations do not prove that a pending merge/deployment happened;
+final delivery remains blocked until the approved action and matching deployed
+release actually complete.

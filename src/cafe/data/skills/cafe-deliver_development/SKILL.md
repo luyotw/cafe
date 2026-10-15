@@ -103,6 +103,7 @@ Read your agent file: {agent_file}
 ## Available scripts
 
 - `scripts/verify_github_actions.py` — Read existing target-branch Actions results for the approved commit; this optional GitHub tool does not trigger CI or deployment.
+- `scripts/verify_github_release_deployment.py` — Observe the latest approved environment deployment, release tag and matching release workflow for the actual integration commit or its descendant; see `references/verification_tools.md` for the reviewed options. This tool never merges, publishes or triggers a workflow.
 
 ## Instructions
 

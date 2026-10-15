@@ -48,6 +48,7 @@ This inventory is executable documentation: the unit contract discovers every `s
 | `src/cafe/data/skills/use-cafe-workflow/scripts/report_closeout_cost.py::verify_closeout` | Internal fixed Git common-directory query |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/kickoff_inputs.py::_default_cleanup` | Internal read-only origin remote discovery |
 | `src/cafe/data/skills/cafe-deliver_development/scripts/verify_github_actions.py::api` | Approved GitHub Actions observation query |
+| `src/cafe/data/skills/cafe-deliver_development/scripts/verify_github_release_deployment.py::api` | Approved GitHub release deployment observation query |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/execute_closeout.py::_common_dir` | Internal fixed Git common-directory query |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/execute_closeout.py::main` ×2 | Explicit confirmed closeout command adapter |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/_kickoff_store.py::repository_identity` | Internal fixed Git common-directory query |
