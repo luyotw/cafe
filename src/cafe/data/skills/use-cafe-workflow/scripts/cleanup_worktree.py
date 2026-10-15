@@ -173,7 +173,8 @@ def cleanup(project_root, worktree, issue_name, remote=None):
     if active.exists():
         if archive.exists():
             raise ValueError("an existing archive would be overwritten")
-        subprocess.run(["cafe", "close", "--archive-only"], cwd=target, check=True, timeout=120)
+        subprocess.run(["cafe", "close", "--archive-only", "--issue", issue_name],
+                       cwd=target, check=True, timeout=120)
     validate_issue_identity(archive, issue_name, workflow_id)
     # The archive and cost evidence now survive removal of the source checkout.
     if (_git(target, "branch", "--show-current").stdout.strip() != branch

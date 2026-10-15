@@ -18,7 +18,7 @@ def git(root, *args):
 
 
 @pytest.fixture
-def journey(tmp_path, monkeypatch):
+def journey(tmp_path, monkeypatch, request):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     root, worktree, remote = tmp_path / "repo", tmp_path / "feature", tmp_path / "remote.git"
     root.mkdir()
@@ -52,8 +52,21 @@ def journey(tmp_path, monkeypatch):
     archive = module._archive(root, "issue474")
 
     def run(argv, **kwargs):
-        if argv == ["cafe", "close", "--archive-only"]:
+        if argv == ["cafe", "close", "--archive-only", "--issue", "issue474"]:
             assert Path(kwargs["cwd"]) == worktree
+            if getattr(request, "param", None) == "real_archive":
+                from typer.testing import CliRunner
+                from cafe.ui.cli import app
+                from cafe.core.git import GitOperations
+                from unittest.mock import patch
+
+                with monkeypatch.context() as context:
+                    context.chdir(worktree)
+                    with patch("cafe.ui.cli.GitOperations", GitOperations):
+                        result = CliRunner().invoke(app, argv[1:])
+                if result.exit_code:
+                    raise subprocess.CalledProcessError(result.exit_code, argv, output=result.output)
+                return subprocess.CompletedProcess(argv, 0, stdout=result.output)
             archive.parent.mkdir(parents=True)
             shutil.move(str(issue), str(archive))
             return subprocess.CompletedProcess(argv, 0)
@@ -245,7 +258,7 @@ def test_archival_tip_change_stops_removal_and_preserves_archive(correction, mon
 
     def run(argv, **kwargs):
         result = previous_run(argv, **kwargs)
-        if argv == ["cafe", "close", "--archive-only"]:
+        if argv == ["cafe", "close", "--archive-only", "--issue", "issue474"]:
             git(root, "branch", "-f", "issue474", current.proposal.source_oid)
         return result
 
@@ -254,6 +267,24 @@ def test_archival_tip_change_stops_removal_and_preserves_archive(correction, mon
         module.cleanup(root, worktree, "issue474", "origin")
     assert archive.exists() and worktree.exists()
     assert git(root, "branch", "--list", "issue474-date-fix")
+
+
+@pytest.mark.parametrize("journey", ["real_archive"], indirect=True)
+def test_correction_cleanup_uses_real_cli_archive_with_explicit_issue(correction):
+    import yaml
+
+    (module, root, worktree, remote, issue, archive), current, old = correction
+    (issue / "issue.yaml").write_text(yaml.safe_dump({
+        "issue_name": "issue474", "worktree_path": str(worktree),
+        "base_branch": "develop", "pr": {"auto_create": True},
+    }))
+    (issue / "cost-proof.txt").write_text("retained accounting evidence")
+    result = module.cleanup(root, worktree, "issue474", "origin")
+    assert result["status"] == "completed" and archive.exists() and not worktree.exists()
+    assert (archive / "cost-proof.txt").read_text() == "retained accounting evidence"
+    for branch in ("issue474", "issue474-date-fix"):
+        assert git(root, "branch", "--list", branch) == ""
+        assert git(root, "ls-remote", "--heads", "origin", f"refs/heads/{branch}") == ""
 
 
 def test_default_prefills_full_cleanup_but_explicit_archive_preference_wins(tmp_path):

@@ -1405,6 +1405,9 @@ def close(
         "--archive-only",
         help="Archive CAFE issue state without merging, delivering, or removing source branches",
     ),
+    issue: Optional[str] = typer.Option(
+        None, "--issue", help="Exact issue to archive in this checkout (requires --archive-only)",
+    ),
 ) -> None:
     """Close current feature and return to base branch.
 
@@ -1417,6 +1420,14 @@ def close(
     """
     import os
     try:
+        if issue is not None and not archive_only:
+            console.print("[red]Error: --issue requires --archive-only.[/red]")
+            raise typer.Exit(1)
+        if issue is not None:
+            import re
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", issue):
+                console.print("[red]Error: Invalid archive issue name.[/red]")
+                raise typer.Exit(1)
         if archive_only and squash:
             console.print("[red]Error: --archive-only cannot be combined with --squash.[/red]")
             raise typer.Exit(1)
@@ -1435,7 +1446,13 @@ def close(
             raise typer.Exit(1)
 
         # 3. Load issue config
-        issue_config_file = Path(f".cafe/issues/{current_branch}/issue.yaml").resolve()
+        issue_name = issue if issue is not None else current_branch
+        issue_config_file = Path(f".cafe/issues/{issue_name}/issue.yaml").absolute()
+        if issue is not None:
+            resolved = resolve_issue_config_path(issue_config_file, require_registered_worktree=True)
+            if (resolved != issue_config_file or resolved.parents[3] != Path.cwd().resolve()):
+                raise ValueError("explicit archive issue must belong to this checkout")
+        issue_config_file = issue_config_file.resolve()
         if not issue_config_file.exists():
             console.print(f"[red]Error: Issue config not found: {issue_config_file}[/red]")
             console.print(
@@ -1445,6 +1462,11 @@ def close(
 
         with open(issue_config_file, "r", encoding="utf-8") as f:
             config_data = safe_load(f)
+        if issue is not None and config_data.get("issue_name", issue_name) != issue_name:
+            raise ValueError("archive issue configuration identity differs from the selected issue")
+        if issue is not None and config_data.get("worktree_path"):
+            if Path(config_data["worktree_path"]).resolve() != Path.cwd().resolve():
+                raise ValueError("archive issue checkout differs from the current checkout")
 
         pr_auto_create = config_data.get("pr", {}).get("auto_create", False)
         if message is not None and not squash:
@@ -1459,7 +1481,6 @@ def close(
 
         base_branch = config_data.get("base_branch", "main")
         feature_branch = current_branch
-        issue_name = current_branch  # Issue name is the same as current branch
         worktree_path = config_data.get("worktree_path")
 
         if archive_only:

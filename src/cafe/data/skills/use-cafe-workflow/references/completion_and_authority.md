@@ -6,6 +6,12 @@ For local development delivery, require host receipts proving the reviewed sourc
 
 Fresh nested contract version 5 has cleanup only. Default a separate feature worktree to full cleanup through `scripts/cleanup_worktree.py`, which archives before removing its exact local and remote resources without repeating integration. Retain archive-only as the explicit preservation choice. Existing contracts and compact routes keep their original authority and receipts; a new default never broadens their approved commands.
 
+The full-cleanup helper passes its exact issue identity to `cafe close
+--archive-only --issue <issue-name>` internally. This archive-only selector
+resolves the current registered checkout's issue authority; a correction branch
+does not become a different issue. It cannot select integration or branch
+removal through ordinary `close`.
+
 # Completion And Action Authority
 
 ## Compact route
