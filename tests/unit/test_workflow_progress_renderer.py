@@ -2432,3 +2432,193 @@ def test_reactive_task_requires_declared_correction_to_show_return(
     )
     assert "ship · iteration" not in rendered
     assert "▶︎ ship · In progress" in rendered
+@pytest.mark.parametrize(
+    "case",
+    [
+        "accepted",
+        "pending",
+        "invalid",
+        "later_iteration",
+        "later_block",
+        "different_workflow",
+        "different_handoff",
+    ],
+)
+def test_terminal_acceptance_completes_automatic_phase_without_agent_event(tmp_path, case):
+    """Automatic delivery ends through its result task, without step_completed."""
+    issue = tmp_path / "archived" / "sample"
+    issue.mkdir(parents=True)
+    handoff = {
+        "from_step": "ship",
+        "to_step": "done",
+        "to_owner": "done",
+        "intent": "workflow_complete",
+    }
+    events = [
+        {"event_type": "step_started", "step": "ship", "data": {"iteration": 3}},
+        {
+            "event_type": "workflow_paused",
+            "step": "ship",
+            "data": {"iteration": 3, "status_code": "BATON_NEED_PERMISSION"},
+        },
+        {"event_type": "human_task_completed", "step": "ship"},
+    ]
+    if case == "later_block":
+        events.append(
+            {
+                "event_type": "workflow_blocked",
+                "step": "ship",
+                "timestamp": "2026-09-20T01:04:00+00:00",
+                "data": {"iteration": 3},
+            }
+        )
+    if case == "different_handoff":
+        handoff["from_step"] = "build"
+    _write_runtime_state(
+        issue, {"current_step": "done", "handoff_contract": handoff, "events": events}
+    )
+    (issue / "human_tasks.json").write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "accepted",
+                        "workflow_id": "workflow-1",
+                        "step": "ship",
+                        "iteration": 3,
+                        "trigger": "confirm_output",
+                        "status": "pending" if case == "pending" else "completed",
+                        "completed_at": "2026-09-20T01:03:00+00:00",
+                        "continuations": {"accept": "_done"},
+                        "expected_result": {"decisions": [{"id": "accept"}]},
+                    }
+                ],
+                "results": [
+                    {
+                        "task_id": "accepted",
+                        "workflow_id": (
+                            "another-workflow" if case == "different_workflow" else "workflow-1"
+                        ),
+                        "payload": {
+                            "decision": "invalid" if case == "invalid" else "accept",
+                            "continuation": "_done",
+                        },
+                    }
+                ],
+            }
+        )
+    )
+    if case == "later_iteration":
+        directory = issue / "ship" / "iteration_004"
+        directory.mkdir(parents=True)
+        (directory / "iteration.json").write_text('{"timestamp":"2026-09-20T01:04:00+00:00"}')
+    before = {str(p.relative_to(issue)): p.read_bytes() for p in issue.rglob("*") if p.is_file()}
+    rendered = _module().render_progress(
+        playbook=_delivery_graph(),
+        issue_dir=issue,
+        contract={"confirmation_contract": {"mandatory_human_stops": ["ship"]}},
+        manager_state={"cleanup": "completed"},
+    )
+    line = next(line for line in rendered.splitlines() if "ship" in line)
+    assert ("Completed" in line) == (case == "accepted")
+    if case == "pending":
+        assert "Awaiting confirmation" in line
+    assert before == {
+        str(p.relative_to(issue)): p.read_bytes() for p in issue.rglob("*") if p.is_file()
+    }
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "redirected",
+        "same_step",
+        "invoked",
+        "missing_metadata",
+        "wrong_target",
+        "invalid_decision",
+        "later_iteration",
+        "later_block",
+    ],
+)
+def test_explicit_redirect_skips_only_the_uninvoked_interrupted_attempt(tmp_path, case):
+    issue = tmp_path / "issue"
+    issue.mkdir()
+    events = [
+        {"event_type": "step_completed", "step": "build", "data": {"iteration": 3}},
+        {"event_type": "step_started", "step": "build", "data": {"iteration": 4}},
+        {"event_type": "step_interrupted", "step": "build", "data": {"iteration": 4}},
+    ]
+    if case == "later_block":
+        events.append(
+            {
+                "event_type": "workflow_blocked",
+                "step": "build",
+                "timestamp": "2026-09-20T01:04:00+00:00",
+                "data": {"iteration": 4},
+            }
+        )
+    _write_runtime_state(issue, {"current_step": "ship", "events": events})
+    directory = issue / "build" / "iteration_004"
+    directory.mkdir(parents=True)
+    if case != "missing_metadata":
+        (directory / "iteration.json").write_text(
+            json.dumps(
+                {
+                    "agent_invoked": case == "invoked",
+                    "workflow_completion_trusted": False,
+                    "agent_interruption": {
+                        "id": "2026-09-20T01:00:00+00:00",
+                        "workflow_id": "workflow-1",
+                        "step": "build",
+                        "iteration": 4,
+                    },
+                }
+            )
+        )
+    if case == "later_iteration":
+        newer = issue / "build" / "iteration_005"
+        newer.mkdir()
+        (newer / "iteration.json").write_text('{"timestamp":"2026-09-20T01:04:00+00:00"}')
+    target = "build" if case == "same_step" else "ship"
+    (issue / "human_tasks.json").write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "recovery",
+                        "workflow_id": "workflow-1",
+                        "step": "build",
+                        "iteration": 4,
+                        "trigger": "agent_execution_interrupted",
+                        "status": "completed",
+                        "completed_at": "2026-09-20T01:03:00+00:00",
+                        "continuations": {"retry": "build"},
+                        "expected_result": {"decisions": [{"id": "retry"}]},
+                    }
+                ],
+                "results": [
+                    {
+                        "task_id": "recovery",
+                        "workflow_id": "workflow-1",
+                        "payload": {
+                            "decision": "invalid" if case == "invalid_decision" else "retry",
+                            "continuation": target,
+                            "declared_continuation": "build",
+                            "supervisor_handoff_to": "package"
+                            if case == "wrong_target"
+                            else target,
+                        },
+                    }
+                ],
+            }
+        )
+    )
+    rendered = _module().render_progress(
+        playbook=_delivery_graph(),
+        issue_dir=issue,
+        manager_state={"cleanup": "pending"},
+    )
+    line = next(line for line in rendered.splitlines() if "build" in line)
+    assert ("Skipped" in line) == (case == "redirected")
+    assert "Completed" not in line
