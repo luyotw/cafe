@@ -15,7 +15,7 @@ from cafe.manager.costs import (
     worker_cost,
 )
 from tests.fixtures.manager_chat import repository
-from tests.unit.test_workflow_cost_summary import record
+from tests.unit.test_workflow_cost_summary import record, uninvoked_iteration
 
 
 def cost_journey(tmp_path):
@@ -78,6 +78,40 @@ def test_wrong_workflow_cannot_read_or_replace_snapshot(tmp_path):
     for name in ("../bad", "", "bad/name"):
         with pytest.raises(ValueError):
             CostStore(root, "topic", name)
+
+
+@pytest.mark.parametrize("old_cost", [False, True])
+def test_proven_no_model_source_replaces_only_retained_empty_gap(tmp_path, old_cost):
+    root, issue = cost_journey(tmp_path)
+    directory = issue / "compose/iteration_004"
+    directory.mkdir(parents=True)
+    if old_cost:
+        (directory / "iteration.json").write_text(
+            json.dumps(
+                {
+                    "stats": {
+                        "cost_records": [record("old-call", "2")],
+                        "total_cost_usd": 2,
+                    }
+                }
+            )
+        )
+    preserve_worker_cost(root, issue, "topic", "wf")
+    uninvoked_iteration(issue)
+    summary = worker_cost(root, issue, "topic", "wf")
+    assert summary["known"] == Decimal("3.5" if old_cost else "1.5")
+    assert summary["incomplete"] == old_cost
+    preserve_worker_cost(root, issue, "topic", "wf")
+    store = CostStore(root, "topic", "wf").read()
+    source = next(
+        s for s in store["worker_snapshot"]["sources"] if s["source_id"] == "compose/iteration_004"
+    )
+    assert bool(source.get("no_model_execution")) != old_cost
+    # Retained evidence remains useful without active runtime files.
+    shutil.rmtree(issue)
+    result = inclusive_report(root, "topic", "wf")
+    assert result["worker"]["known"] == summary["known"]
+    assert result["worker"]["incomplete"] == old_cost
 
 
 @pytest.mark.parametrize("damage", ["symlink", "identity", "corrupt", "oversize"])
@@ -288,23 +322,39 @@ def test_unpriced_coverage_survives_footer_snapshot_and_report(tmp_path):
     assert result["worker"]["incomplete"]
 
 
-def test_native_discovery_gap_keeps_caller_money_through_retention(tmp_path):
+@pytest.mark.parametrize("caller_complete", [False, True])
+def test_native_discovery_gap_keeps_caller_money_through_retention(tmp_path, caller_complete):
     from datetime import datetime, timezone
+
     from cafe.agents.cli.codex_subagent_usage import NativeInterval
     from cafe.manager.costs import worker_footer
 
     root, issue = cost_journey(tmp_path)
-    scope = NativeInterval(root / 'native', workflow_id='wf', caller_id='custom',
-                           attempt_id='native-attempt')
-    gap = scope.open_record(datetime.now(timezone.utc), final=True,
-                            gaps=['native_discovery_bound'])
-    path = issue / 'custom/iteration_001/iteration.json'
-    path.write_text(json.dumps({'stats': {'cost_records': [record('worker', '1.5'), gap],
-                                         'total_cost_usd': 1.5}}))
-    assert worker_cost(root, issue, 'topic', 'wf')['known'] == Decimal('1.5')
-    assert 'incomplete coverage' in worker_footer(issue, locale='en-US', project_root=root)
-    preserve_worker_cost(root, issue, 'topic', 'wf')
+    scope = NativeInterval(
+        root / "native", workflow_id="wf", caller_id="custom", attempt_id="native-attempt"
+    )
+    identity = "00000000-0000-4000-8000-000000000001"
+    scope.bind(identity)
+    gap = scope.open_record(datetime.now(timezone.utc), final=True, gaps=["native_discovery_bound"])
+    path = issue / "custom/iteration_001/iteration.json"
+    caller = record("native-attempt", "1.5", session_id=identity)
+    if caller_complete:
+        caller["usage"] = dict(
+            input_tokens=10,
+            output_tokens=2,
+            total_tokens=12,
+            cache_read_input_tokens=0,
+            cache_write_input_tokens=0,
+            reasoning_output_tokens=0,
+        )
+    path.write_text(json.dumps({"stats": {"cost_records": [caller, gap], "total_cost_usd": 1.5}}))
+    assert worker_cost(root, issue, "topic", "wf")["known"] == Decimal("1.5")
+    footer = worker_footer(issue, locale="en-US", project_root=root)
+    assert "Known cost subtotal" in footer
+    assert "subagent coverage remains unverified" in footer
+    assert ("incomplete coverage" in footer) != caller_complete
+    preserve_worker_cost(root, issue, "topic", "wf")
     shutil.rmtree(issue)
-    summary = inclusive_report(root, 'topic', 'wf')['worker']
-    assert summary['known'] == Decimal('1.5')
-    assert summary['incomplete']
+    summary = inclusive_report(root, "topic", "wf")["worker"]
+    assert summary["known"] == Decimal("1.5")
+    assert summary["incomplete"]

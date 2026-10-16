@@ -18,6 +18,7 @@ from cafe.core.packet_io import atomic_write_bytes, canonical_json
 from cafe.services.cost_summary import (
     accounting_source_versions,
     collect_cost_sources,
+    confirmed_no_model_source,
     read_accounting_file,
     summarize_sources,
 )
@@ -131,7 +132,7 @@ class CostStore:
             for k, v in data["manager_gaps"].items()
         ):
             raise ValueError("invalid retained coverage gaps")
-        self._validate_sources(data["manager_sources"])
+        self._validate_sources(data["manager_sources"], workflow_id=self.identity["workflow_id"])
         snapshot = data["worker_snapshot"]
         if snapshot is not None:
             if (
@@ -147,11 +148,11 @@ class CostStore:
                 )
             ):
                 raise ValueError("invalid worker snapshot")
-            self._validate_sources(snapshot["sources"])
+            self._validate_sources(snapshot["sources"], workflow_id=self.identity["workflow_id"])
         return data
 
     @staticmethod
-    def _validate_sources(sources):
+    def _validate_sources(sources, *, workflow_id=None):
         if not isinstance(sources, list):
             raise ValueError("invalid accounting sources")
         seen = set()
@@ -187,13 +188,20 @@ class CostStore:
                 legacy_cost=source.get("legacy_cost"),
                 legacy_residual=source.get("legacy_residual"),
             )
+            confirmed_no_model_source(source)
+            if (workflow_id is not None and source.get("no_model_execution")
+                    and source["no_model_execution"]["workflow_id"] != workflow_id):
+                raise ValueError("no-model accounting workflow differs")
 
     def read(self):
         with self.locked():
             return self._read()
 
     def _write(self, data):
-        self._validate_sources(data["manager_sources"])
+        self._validate_sources(data["manager_sources"], workflow_id=self.identity["workflow_id"])
+        if data.get("worker_snapshot") is not None:
+            self._validate_sources(data["worker_snapshot"]["sources"],
+                                   workflow_id=self.identity["workflow_id"])
         content = canonical_json(data)
         if len(content) > MAX_ACCOUNTING_BYTES:
             raise ValueError("retained accounting exceeds lossless storage limit")
@@ -402,7 +410,10 @@ def _prefer_current(current, retained):
         if (
             replacement is None
             or replacement.get("read_error")
-            or (not replacement["records"] and replacement.get("legacy_cost") is None)
+            or (not replacement["records"] and replacement.get("legacy_cost") is None
+                and not confirmed_no_model_source(replacement))
+            or (confirmed_no_model_source(replacement)
+                and (source["records"] or source.get("legacy_cost") not in (None, 0)))
         ):
             fallback = copy.deepcopy(source)
             fallback["gap"] = True
@@ -543,9 +554,35 @@ def format_summary(summary, locale="en-US"):
             label = render_text(f"manager.progress.cost.{kind}", locale=locale)
             parts.append(f"${summary[kind]:.4f} {label}")
     if not parts:
-        parts.append(render_text("manager.progress.cost.unknown", locale=locale))
+        parts.append(
+            render_text(
+                "manager.progress.cost.unknown"
+                if summary["incomplete"]
+                else "manager.progress.cost.no_model",
+                locale=locale,
+            )
+        )
     if summary["incomplete"]:
-        parts.append(render_text("manager.progress.cost.partial", locale=locale))
+        scopes = [
+            record
+            for record in summary.get("_cost_records", [])
+            if record.get("native_usage", {}).get("kind") == "scope"
+            and (record["native_usage"].get("gaps") or not record.get("complete", True))
+        ]
+        if scopes:
+            parts.append(render_text("manager.progress.cost.native_partial", locale=locale))
+        scope_gaps = {gap for record in scopes for gap in record["native_usage"].get("gaps", [])}
+        if (
+            not scopes
+            or summary["unknown"] > len(scopes)
+            or any(
+                not r.get("complete", True)
+                for r in summary.get("_cost_records", [])
+                if "native_usage" not in r
+            )
+            or set(summary.get("native_usage", {}).get("gaps", [])) - scope_gaps
+        ):
+            parts.append(render_text("manager.progress.cost.partial", locale=locale))
     if summary["stale"]:
         parts.append(render_text("manager.progress.cost.stale", locale=locale))
     return " + ".join(parts)

@@ -135,6 +135,21 @@ When new invocations are added to an older iteration or chat group, its prior
 money and token subtotals remain visible alongside the new records. Missing
 historical chat-cost coverage stays partial in step and workflow summaries.
 
+The progress footer labels its amount as a known cost subtotal, excluding the
+Manager. It distinguishes unverified subagent coverage from other missing usage
+or pricing evidence. A complete caller estimate does not certify descendant
+coverage. Cache creation/write token names are aliases, not two required counters;
+conflicting values remain invalid. Historical alias-only chat flags are interpreted
+only when complete per-call records cover every recorded call.
+
+An empty iteration is not proof of zero model usage. A bound, uninvoked-provider
+interruption or the closed delivery owner's verified host-only receipts can
+establish that no model ran. Read-only interpretation preserves this evidence
+through archival and never discards prior calls, chat usage or legacy amounts.
+Unproven automatic commands, missing/corrupt records and unknown delivery tools
+retain their gaps. Existing amounts and immutable native coverage gaps are not
+rewritten or repriced.
+
 ## Copilot, Cursor and Gemini accounting
 
 The adapters were checked with Copilot 1.0.83, Cursor Agent
@@ -207,7 +222,7 @@ reader. Merely configuring a model does not establish complete cost coverage.
 ## Manager progress and retained closeout accounting
 
 Every established Manager progress diagram ends with a worker-only USD summary
-(`已使用成本（不含 Manager）` in zh-TW). Rendering rereads persisted calculations;
+(`已知成本小計（不含 Manager）` in zh-TW). Rendering rereads persisted calculations;
 it does not fetch prices, reprice historical usage, write accounting, or calculate
 Manager-inclusive totals. An unestablished workflow retains its short response.
 Initial workflows without execution evidence show unknown coverage. Compact

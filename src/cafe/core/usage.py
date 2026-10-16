@@ -13,7 +13,13 @@ from typing import Any, Dict
 
 import yaml
 
-from cafe.core.cost import _row_counters, accounting_admission, merge_cost_records, source_remainder
+from cafe.core.cost import (
+    _row_counters,
+    accounting_admission,
+    merge_cost_records,
+    normalized_counters,
+    source_remainder,
+)
 from cafe.core.types import TokenUsage
 from cafe.core.workspace_lock import workspace_execution_lock
 from cafe.utils.issue_config import issue_config_lock
@@ -91,8 +97,20 @@ def merge_token_usage_stats(existing: Any, incoming: TokenUsage) -> Dict[str, An
     for record in incoming.cost_records:
         if "native_usage" in record or record.get("invocation_id") not in duplicate_ids:
             continue
-        for key, value in record.get("usage", {}).items():
-            if isinstance(incoming_data.get(key), (int, float)) and isinstance(value, (int, float)):
+        counters = record.get("usage", {})
+        cache, _ = normalized_counters(
+            {k: v for k, v in counters.items() if k in _CACHE_WRITE_ALIASES}
+        )
+        if "cache_write_input_tokens" in cache:
+            for field in _CACHE_WRITE_ALIASES & incoming.model_fields_set:
+                incoming_data[field] -= cache["cache_write_input_tokens"]
+        for key, value in counters.items():
+            if (
+                key not in _CACHE_WRITE_ALIASES
+                and key in incoming.model_fields_set
+                and isinstance(incoming_data.get(key), (int, float))
+                and isinstance(value, (int, float))
+            ):
                 incoming_data[key] -= value
         if record.get("amount_usd") is not None:
             incoming_data["total_cost_usd"] -= float(record["amount_usd"])
@@ -324,6 +342,89 @@ CHAT_USAGE_FIELDS = (
     "total_cost_usd",
 )
 
+_CACHE_WRITE_ALIASES = {"cache_creation_input_tokens", "cache_write_input_tokens"}
+
+
+def missing_chat_usage_fields(values, *, aggregate=False):
+    """Require one explicit cache-write counter, preserving absence and conflicts."""
+    for field, value in values.items():
+        if field in CHAT_USAGE_FIELDS and (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value < 0
+            or (field != "total_cost_usd" and not isinstance(value, int))
+        ):
+            raise ValueError("invalid chat usage counter")
+    missing = set(CHAT_USAGE_FIELDS) - values.keys()
+    present = _CACHE_WRITE_ALIASES & values.keys()
+    if (
+        not aggregate
+        and len(present) == 2
+        and values["cache_creation_input_tokens"] != values["cache_write_input_tokens"]
+    ):
+        raise ValueError("conflicting chat cache-write aliases")
+    if present:
+        missing -= _CACHE_WRITE_ALIASES
+    return missing
+
+
+def _canonical_chat_usage(usage):
+    if usage is None:
+        return None
+    values = usage.model_dump(exclude_unset=True)
+    missing_chat_usage_fields({k: v for k, v in values.items() if k in CHAT_USAGE_FIELDS})
+    if "cache_creation_input_tokens" in values:
+        values["cache_write_input_tokens"] = values.pop("cache_creation_input_tokens")
+    return TokenUsage(**values)
+
+
+def _canonical_chat_aggregate(values):
+    """A legacy split aggregate remains ambiguous; never guess its combined value."""
+    values = dict(values)
+    if "cache_creation_input_tokens" in values and "cache_write_input_tokens" not in values:
+        values["cache_write_input_tokens"] = values.pop("cache_creation_input_tokens")
+    elif values.get("cache_creation_input_tokens") == values.get("cache_write_input_tokens") == 0:
+        values.pop("cache_creation_input_tokens", None)
+    return values
+
+
+def chat_usage_has_gap(group):
+    """Interpret old alias-only flags only with complete per-call evidence."""
+    unknown = set(group.get("unknown_fields", []))
+    if not group.get("incomplete_calls"):
+        return "total_cost_usd" in unknown
+    native_gap = any(
+        r.get("native_usage", {}).get("kind") == "scope"
+        and (r["native_usage"].get("gaps") or not r.get("complete", True))
+        for r in group.get("cost_records", [])
+    )
+    if (
+        unknown - _CACHE_WRITE_ALIASES
+        or group.get("mode") != "one_shot"
+        or (not unknown and not native_gap)
+    ):
+        return True
+    records = [r for r in group.get("cost_records", []) if "native_usage" not in r]
+    calls = group.get("calls")
+    identities = {r.get("parent_invocation_id") or r.get("invocation_id") for r in records}
+    if type(calls) is not int or calls <= 0 or len(identities) != calls or None in identities:
+        return True
+    for record in records:
+        try:
+            missing = missing_chat_usage_fields(record.get("usage", {})) - {"total_cost_usd"}
+        except (ValueError, TypeError, AttributeError):
+            return True
+        if (
+            record.get("complete") is not True
+            or not (group.get("reported_model") or record.get("model"))
+            or record.get("provenance") not in {"reported", "estimated"}
+            or record.get("amount_usd") is None
+            or missing
+        ):
+            return True
+    return False
+
 
 def _bounded_chat_identity(value):
     """Keep persisted identities within the existing scalar accounting limit."""
@@ -392,7 +493,7 @@ def _validate_chat_usage(metadata):
                 finite = False
             if not finite or (field != "total_cost_usd" and not isinstance(value, int)):
                 raise ValueError("invalid chat accounting statistics")
-        missing = set(CHAT_USAGE_FIELDS) - stats.keys()
+        missing = missing_chat_usage_fields(stats, aggregate=True)
         if not missing.issubset(unknown) or (
             calls
             and (unknown or group["reported_model"] is None or group["mode"] == "interactive")
@@ -465,6 +566,7 @@ def chat_usage_sink(
                 )
                 group.update(stats={}, calls=0, incomplete_calls=0, unknown_fields=[])
                 groups.append(group)
+            group["stats"] = _canonical_chat_aggregate(group["stats"])
             native_results = [
                 r
                 for r in records
@@ -476,7 +578,7 @@ def chat_usage_sink(
                 prior_attempts = set(group.get("native_attempts", []))
                 attempts = set(prior_attempts)
                 for result in native_results:
-                    usage = result.usage
+                    usage = _canonical_chat_usage(result.usage)
                     attempts.update(
                         c["native_usage"]["attempt_id"]
                         for c in usage.cost_records
@@ -495,11 +597,13 @@ def chat_usage_sink(
                         group["stats"]["accounting_residual"] = historical_proof
                     group["cost_records"] = merged["cost_records"]
                     if not issue_metadata:
-                        current["stats"] = merge_token_usage_stats(current.get("stats"), usage)
+                        current["stats"] = merge_token_usage_stats(
+                            _canonical_chat_aggregate(current.get("stats") or {}), usage
+                        )
                 group["calls"] += len(attempts - prior_attempts)
                 group["native_attempts"] = sorted(attempts)
                 missing = set(group["legacy_unknown_fields"]) | (
-                    set(CHAT_USAGE_FIELDS) - group["stats"].keys()
+                    missing_chat_usage_fields(group["stats"], aggregate=True)
                 )
                 physical = [
                     c
@@ -507,7 +611,9 @@ def chat_usage_sink(
                     if c.get("native_usage", {}).get("kind") != "scope"
                 ]
                 for field in CHAT_USAGE_FIELDS:
-                    if not physical or any(field not in c.get("usage", {}) for c in physical):
+                    if not physical or any(
+                        field in missing_chat_usage_fields(c.get("usage", {})) for c in physical
+                    ):
                         if (
                             field != "total_cost_usd"
                             or any(c.get("amount_usd") is None for c in physical)
@@ -539,7 +645,7 @@ def chat_usage_sink(
             missing = set(group["unknown_fields"])
             incomplete = model is None or mode == "interactive"
             for record in records:
-                usage = record.usage
+                usage = _canonical_chat_usage(record.usage)
                 known = {}
                 if usage is not None:
                     known = {
@@ -555,7 +661,7 @@ def chat_usage_sink(
                         for value in known.values()
                     ):
                         raise ValueError("invalid reported chat statistics")
-                absent = set(CHAT_USAGE_FIELDS) - known.keys()
+                absent = missing_chat_usage_fields(known)
                 missing.update(absent)
                 incomplete = incomplete or bool(absent) or bool(record.failure_code)
                 previous = dict(group["stats"], cost_records=group.get("cost_records", []))
@@ -575,7 +681,9 @@ def chat_usage_sink(
                 if "scalar_coverage" in merged:
                     group["stats"]["scalar_coverage"] = merged["scalar_coverage"]
                 if not issue_metadata and usage is not None:
-                    current["stats"] = merge_token_usage_stats(current.get("stats"), usage)
+                    current["stats"] = merge_token_usage_stats(
+                        _canonical_chat_aggregate(current.get("stats") or {}), usage
+                    )
                 if usage is not None and usage.cost_records:
                     group["cost_records"] = merge_cost_records(
                         group.get("cost_records"), usage.cost_records
