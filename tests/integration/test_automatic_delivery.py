@@ -136,6 +136,99 @@ def test_review_execute_outcome_and_restart_are_automatic(
     assert ctx[1].exists()  # Cleanup remains an explicit separate command.
 
 
+@pytest.mark.parametrize(
+    "case",
+    [
+        "host_only",
+        "custom_names",
+        "local",
+        "missing_receipt",
+        "unknown_bundle",
+        "missing_proposal",
+        "known_agent_execution",
+    ],
+)
+def test_automatic_delivery_cost_requires_closed_owner_receipts(
+    local_action, fake_github, tmp_path, case
+):
+    from cafe.services.cost_summary import collect_cost_sources, confirmed_no_model_source
+
+    ctx = setup(local_action, tmp_path, github=case != "local", renamed=case == "custom_names")
+    runtime, _ = run(ctx)
+    answer(ctx, runtime, "integrate_only")
+    runtime, _ = run(ctx)
+    answer(ctx, runtime, "confirm")
+    issue = ctx[2]
+    if case == "missing_receipt":
+        next((issue / "delivery").glob("*/integration.json")).unlink()
+    if case == "unknown_bundle":
+        path = issue / "delivery" / ("0" * 64) / "actions.json"
+        path.parent.mkdir()
+        path.write_text("{}")
+    if case == "missing_proposal":
+        from cafe.delivery.selection import proposal_path
+
+        task = next(
+            t for t in HumanTaskRecordStore(issue).tasks() if t.policy_id == "delivery-review"
+        )
+        proposal_path(issue, task.id).unlink()
+    if case == "known_agent_execution":
+        from cafe.core.audit_events import AuditEventStore
+
+        task = next(
+            t for t in HumanTaskRecordStore(issue).tasks() if t.policy_id == "delivery-review"
+        )
+        audit = AuditEventStore(issue)
+        sequence = audit.reserve(task.workflow_id)
+        audit.commit(
+            task.workflow_id,
+            dict(
+                workflow_id=task.workflow_id,
+                sequence=sequence,
+                event_id="known-invocation",
+                step=ctx[-1],
+                event_type="step_started",
+                timestamp=task.created_at,
+                message="",
+                data={"iteration": task.iteration},
+            ),
+        )
+    before = {str(p.relative_to(issue)): p.read_bytes() for p in issue.rglob("*") if p.is_file()}
+    sources = collect_cost_sources(issue)
+    visits = {t.iteration for t in HumanTaskRecordStore(issue).tasks() if t.step == ctx[-1]}
+    automatic = [
+        s
+        for s in sources
+        if s["source_id"] in {f"{ctx[-1]}/iteration_{number:03d}" for number in visits}
+    ]
+    assert automatic
+    assert all(confirmed_no_model_source(s) for s in automatic) == (
+        case in {"host_only", "custom_names"}
+    )
+    assert before == {
+        str(p.relative_to(issue)): p.read_bytes() for p in issue.rglob("*") if p.is_file()
+    }
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_approval_only_visit_requires_the_shown_typed_proposal(
+    local_action, fake_github, tmp_path, missing
+):
+    from cafe.delivery.selection import proposal_path
+    from cafe.services.cost_summary import collect_cost_sources, confirmed_no_model_source
+
+    ctx = setup(local_action, tmp_path, github=True)
+    runtime, _ = run(ctx)
+    task, _ = answer(ctx, runtime, "fix_now", "Keep the same source scope and correct the code.")
+    if missing:
+        proposal_path(ctx[2], task.id).unlink()
+    sources = collect_cost_sources(ctx[2])
+    source = next(
+        s for s in sources if s["source_id"] == f"{task.step}/iteration_{task.iteration:03d}"
+    )
+    assert confirmed_no_model_source(source) != missing
+
+
 def test_review_only_represents_once_and_correction_routes_feedback(local_action, tmp_path):
     ctx = setup(local_action, tmp_path)
     runtime, _ = run(ctx)

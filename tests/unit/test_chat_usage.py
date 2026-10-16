@@ -60,6 +60,151 @@ def test_all_known_zero_usage_can_have_complete_coverage(tmp_path):
     assert group["unknown_fields"] == [] and group["incomplete_calls"] == 0
 
 
+@pytest.mark.parametrize("alias", ["cache_creation_input_tokens", "cache_write_input_tokens"])
+def test_cache_write_alias_is_one_explicit_counter(tmp_path, alias):
+    target = tmp_path / "iteration.json"
+    target.write_text('{"iteration":1}')
+    values = dict.fromkeys(CHAT_USAGE_FIELDS, 0)
+    values.pop(
+        "cache_write_input_tokens"
+        if alias == "cache_creation_input_tokens"
+        else "cache_creation_input_tokens"
+    )
+    sink(tmp_path, target)([TransportResult(reported_model="actual", usage=TokenUsage(**values))])
+    (group,) = json.loads(target.read_text())["chat_usage"]
+    assert group["unknown_fields"] == []
+    assert group["incomplete_calls"] == 0
+    assert group["stats"]["cache_write_input_tokens"] == 0
+    assert "cache_creation_input_tokens" not in group["stats"]
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("second", [3, 5])
+@pytest.mark.parametrize("native", [False, True])
+def test_cache_alias_switch_accumulates_every_call(tmp_path, reverse, second, native):
+    from datetime import datetime, timezone
+
+    from cafe.agents.cli.codex_subagent_usage import NativeInterval
+    from tests.unit.test_workflow_cost_summary import record
+
+    target = tmp_path / "iteration.json"
+    target.write_text('{"iteration":1}')
+    writer = sink(tmp_path, target)
+    aliases = ["cache_creation_input_tokens", "cache_write_input_tokens"]
+    if reverse:
+        aliases.reverse()
+    for index, (alias, value) in enumerate(zip(aliases, [3, second])):
+        values = dict(
+            input_tokens=10,
+            output_tokens=2,
+            cache_read_input_tokens=0,
+            reasoning_output_tokens=0,
+            total_cost_usd=0,
+            **{alias: value},
+        )
+        records = []
+        if native:
+            scope = NativeInterval(
+                tmp_path / "native",
+                workflow_id="wf",
+                caller_id="custom",
+                attempt_id=f"call-{index}",
+            )
+            identity = f"00000000-0000-4000-8000-00000000000{index}"
+            scope.bind(identity)
+            records = [
+                scope.open_record(
+                    datetime.now(timezone.utc), final=True, gaps=["native_discovery_bound"]
+                ),
+                record(
+                    f"call-{index}",
+                    "0",
+                    model="actual",
+                    session_id=identity,
+                    usage={k: v for k, v in values.items() if k != "total_cost_usd"},
+                ),
+            ]
+        writer(
+            [
+                TransportResult(
+                    reported_model="actual", usage=TokenUsage(**values, cost_records=records)
+                )
+            ]
+        )
+    data = json.loads(target.read_text())
+    (group,) = data["chat_usage"]
+    assert group["calls"] == 2
+    assert group["stats"]["cache_write_input_tokens"] == 3 + second
+    assert data["stats"]["cache_write_input_tokens"] == 3 + second
+    assert "cache_creation_input_tokens" not in group["stats"]
+    assert not (set(group["unknown_fields"]) & set(aliases))
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("native", [False, True])
+def test_cache_alias_mixed_replay_counts_each_record_once(tmp_path, reverse, native):
+    from datetime import datetime, timezone
+
+    from cafe.agents.cli.codex_subagent_usage import NativeInterval
+    from tests.unit.test_workflow_cost_summary import record
+
+    target = tmp_path / "iteration.json"
+    target.write_text('{"iteration":1}')
+    writer = sink(tmp_path, target)
+    aliases = ["cache_creation_input_tokens", "cache_write_input_tokens"]
+    if reverse:
+        aliases.reverse()
+    callers, scopes = [], []
+    for index, alias in enumerate(aliases):
+        values = dict(
+            input_tokens=10,
+            output_tokens=2,
+            cache_read_input_tokens=0,
+            reasoning_output_tokens=0,
+            **{alias: 3 if index == 0 else 5},
+        )
+        identity = f"00000000-0000-4000-8000-00000000000{index}"
+        callers.append(
+            record(f"call-{index}", "1", model="actual", session_id=identity, usage=values)
+        )
+        if native:
+            scope = NativeInterval(
+                tmp_path / "native",
+                workflow_id="wf",
+                caller_id="custom",
+                attempt_id=f"call-{index}",
+            )
+            scope.bind(identity)
+            scopes.append(scope.open_record(datetime.now(timezone.utc), final=True, gaps=[]))
+        # The second observation repeats A and adds B, with a different scalar alias.
+        cumulative = dict(values, input_tokens=10 * (index + 1), output_tokens=2 * (index + 1))
+        cumulative[alias] = 3 if index == 0 else 8
+        usage = TokenUsage(**cumulative, total_cost_usd=index + 1, cost_records=[*scopes, *callers])
+        writer([TransportResult(reported_model="actual", usage=usage)])
+    data = json.loads(target.read_text())
+    (group,) = data["chat_usage"]
+    for stats in (group["stats"], data["stats"]):
+        assert stats["input_tokens"] == 20
+        assert stats["cache_write_input_tokens"] == 8
+        assert stats.get("cache_creation_input_tokens", 0) == 0
+        assert stats["total_cost_usd"] == 2
+    assert [r for r in group["cost_records"] if "native_usage" not in r] == callers
+    assert not (set(group["unknown_fields"]) & set(aliases))
+
+
+def test_conflicting_cache_write_aliases_do_not_publish_usage(tmp_path):
+    target = tmp_path / "iteration.json"
+    target.write_text('{"iteration":1}')
+    before = target.read_bytes()
+    values = dict.fromkeys(CHAT_USAGE_FIELDS, 0)
+    values.update(cache_write_input_tokens=2, cache_creation_input_tokens=1)
+    with pytest.raises(ValueError, match="conflicting chat cache-write aliases"):
+        sink(tmp_path, target)(
+            [TransportResult(reported_model="actual", usage=TokenUsage(**values))]
+        )
+    assert target.read_bytes() == before
+
+
 def test_issue_metadata_writers_preserve_aliases_readers_and_concurrent_counts(tmp_path):
     target = tmp_path / "issue.yaml"
     target.write_text(yaml.safe_dump({"feature_branch": "x", "other": "kept"}))
@@ -106,6 +251,7 @@ def test_descriptor_lock_serializes_with_existing_settings_writer(tmp_path, monk
     import fcntl
     import os
     from threading import Event, get_ident
+
     from cafe.utils.issue_config import issue_config_lock, write_issue_config_atomic
 
     target = tmp_path / "issue.yaml"

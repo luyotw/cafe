@@ -159,7 +159,7 @@ diagram.
 
 Every established diagram produced by the shared renderer ends with the current
 worker-only USD cost, localized to the conversation locale. In zh-TW its label
-is `已使用成本（不含 Manager）`. It includes recorded phase/issue chats,
+is `已知成本小計（不含 Manager）`. It includes recorded phase/issue chats,
 iterations, retry and fallback attempts once per invocation, while excluding
 attributable Manager callbacks/chats. Unknown or partial coverage and stale-rate
 provenance remain visible. Missing execution evidence at kickoff is unknown.

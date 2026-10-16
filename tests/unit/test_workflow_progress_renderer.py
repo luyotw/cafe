@@ -2164,8 +2164,8 @@ def test_iteration_timestamps_work_without_status_codes_or_execution_events(
     assert "○ publish-draft · Pending" in rendered
 
 
-@pytest.mark.parametrize("locale,label", [("zh-TW", "已使用成本（不含 Manager）"),
-                                          ("en-US", "Used cost (excluding Manager)")])
+@pytest.mark.parametrize("locale,label", [("zh-TW", "已知成本小計（不含 Manager）"),
+                                          ("en-US", "Known cost subtotal (excluding Manager)")])
 def test_progress_rereads_worker_accounting_without_writes(tmp_path, locale, label):
     from tests.unit.test_manager_costs import cost_journey
     from tests.unit.test_workflow_cost_summary import record
@@ -2212,10 +2212,10 @@ def test_established_kickoff_uses_identity_bound_cost_source(tmp_path):
     proposal["proactive_review"]["phase_decisions"][0]["phase"] = "outline"
     proposal["locales"]["conversation"]["value"] = "en-US"
     output = formatter.render(args, confirmed_proposal=proposal)
-    assert "Used cost (excluding Manager): USD $1.0000 reported" in output
+    assert "Known cost subtotal (excluding Manager): USD $1.0000 reported" in output
     args.workflow_id = "other"
     output = formatter.render(args, confirmed_proposal=proposal)
-    assert "Used cost (excluding Manager): USD unknown" in output
+    assert "Known cost subtotal (excluding Manager): USD unknown" in output
     assert "$1.0000" not in output
 
 
