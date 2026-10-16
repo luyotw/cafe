@@ -230,6 +230,93 @@ def _now() -> str:
     return datetime.now().astimezone().isoformat()
 
 
+def has_causal_feedback_projection(issue_dir: Path, output: Path) -> bool:
+    """Identify a declared consumer without requiring help requests to finish work."""
+    from cafe.core.checklist import load_materialization
+
+    materialized = load_materialization(output.parent / "iteration.json")
+    if materialized is None:
+        return False
+    ledger = WorkflowFeedbackLedger(issue_dir).path.resolve()
+    return any(
+        binding["causal"] and (issue_dir.parents[2] / binding["path"]).resolve() == ledger
+        for binding in materialized.projections
+    )
+
+
+def validate_completed_feedback_projection(
+    issue_dir: Path,
+    *,
+    step: str,
+    output: Path,
+    source_identities: tuple[str, ...],
+    mappings: Mapping[str, tuple[str, str]],
+) -> bool:
+    """Distinguish completed causal work from a curator's outbound Todo List.
+
+    Use the invocation's immutable batch and the existing materialization and
+    evidence validators. A later ledger entry must neither be consumed nor
+    invalidate already completed work from this batch.
+    """
+    from cafe.core.checklist import ProjectedTodo, load_materialization
+    from cafe.core.packet_io import sha256_bytes
+    from cafe.core.todo import projection_todo_items, workflow_feedback_todo_items
+    from cafe.utils.checklist_validator import validate_projected_todos
+
+    materialized = load_materialization(output.parent / "iteration.json")
+    if materialized is None:
+        return False
+    root = issue_dir.parents[2]
+    ledger = WorkflowFeedbackLedger(issue_dir)
+
+    def path(value):
+        value = Path(value)
+        return value if value.is_absolute() else root / value
+
+    causal = [
+        binding
+        for binding in materialized.projections
+        if binding["causal"] and path(binding["path"]).resolve() == ledger.path.resolve()
+    ]
+    if not causal:
+        return False
+    options = dict(
+        target_step=step,
+        source_identities=source_identities,
+        source_by_kind={key: value[0] for key, value in mappings.items()},
+        id_prefix_by_kind={key: value[1] for key, value in mappings.items()},
+    )
+    snapshot = output.parent / "workflow_feedback_batch.json"
+    items = workflow_feedback_todo_items(snapshot, **options)
+    if items != workflow_feedback_todo_items(ledger.path, **options):
+        raise WorkflowFeedbackError("completed feedback source changed after invocation")
+    if not source_identities or len(items) != len(source_identities):
+        raise WorkflowFeedbackError("completed feedback batch is incomplete")
+    expected = []
+    for binding in materialized.projections:
+        source = path(binding["path"])
+        if binding in causal:
+            selected = items
+        else:
+            if sha256_bytes(source.read_bytes()) != binding["content_sha256"]:
+                raise WorkflowFeedbackError("completed Todo projection source changed")
+            selected = projection_todo_items(source, expected_source=binding["source"])
+        if [item.item_id for item in selected] != binding["producer_ids"]:
+            raise WorkflowFeedbackError("completed feedback projection identities changed")
+        projected = tuple(
+            ProjectedTodo(handle, item)
+            for handle, item in zip(binding["handles"], selected, strict=True)
+        )
+        if [item.checklist_row() for item in projected] != binding["rows"]:
+            raise WorkflowFeedbackError("completed feedback projection fingerprint changed")
+        expected.extend(projected)
+    errors = validate_projected_todos(
+        output.parent / "checklist.md", output, tuple(expected), repo_root=root
+    )
+    if errors:
+        raise WorkflowFeedbackError("completed feedback evidence is invalid: " + "; ".join(errors))
+    return True
+
 def _required(value: str, *, field: str) -> str:
     cleaned = str(value).strip()
     if not cleaned:

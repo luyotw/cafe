@@ -623,6 +623,291 @@ def lifecycle_fixture(tmp_path, monkeypatch, *, real_develop=False):
     return executor, step, state, directory
 
 
+@pytest.mark.parametrize("completion", ["status_code", "baton"])
+@pytest.mark.parametrize(
+    "late_feedback,corruption",
+    [
+        (False, None),
+        (True, None),
+        (False, "batch"),
+        (False, "projection"),
+        (False, "output"),
+        (False, "checklist"),
+        (False, "missing_binding"),
+        (False, "historical"),
+        (False, "historical_changed_output"),
+        (False, "clarification"),
+        (False, "handoff"),
+        (False, "crash_before_settle"),
+        (False, "crash_after_settle"),
+        (False, "historical_changed_batch"),
+        (False, "historical_untrusted"),
+    ],
+)
+def test_completed_causal_feedback_is_not_requeued(
+    tmp_path, monkeypatch, completion, late_feedback, corruption
+):
+    """The real consumer settles only its completed, source-bound invocation batch."""
+    import subprocess
+
+    from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+    from cafe.core.workflow_models import StepExecutionResult
+    from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
+    from cafe.ui.cli_shared import _find_external_resume_step
+
+    executor, step, state, directory = lifecycle_fixture(tmp_path, monkeypatch, real_develop=True)
+    step["behavior"]["completion"] = completion
+    producer = {
+        "skill": "primary",
+        "role": "developer",
+        "human_tasks": [
+            {
+                "trigger": "need_permission",
+                "task_id": "repair",
+                "outcomes": {"fix_now": "assemble"},
+                "feedback_delivery": {
+                    "artifact": "workflow_feedback",
+                    "source_kind": "delivery",
+                    "todo_source": "workflow_feedback",
+                    "todo_id_prefix": "DLV",
+                },
+            }
+        ],
+        "hooks": {"prepare_input": ["GitHubPRFeedbackSource"]},
+        "on": {"manual_handoff": "assemble"},
+    }
+    executor.playbook["steps"]["producer"] = producer
+    store = BlackboardStore(executor.issue_dir)
+    store.update_handoff_contract(
+        state,
+        from_step="producer",
+        to_owner=HandoffOwner.AGENT,
+        to_step="assemble",
+        intent=HandoffIntent.AWAIT_AGENT,
+    )
+    ledger = WorkflowFeedbackLedger(executor.issue_dir)
+    identity = "delivery:producer:repair:1"
+    ledger.record(
+        source_identity=identity,
+        source_kind="delivery",
+        target_step="assemble",
+        content="Complete this requested correction",
+    )
+    store.set_artifact(state, "workflow_feedback", str(ledger.path))
+    state.playbook_id = executor.playbook["playbook"]["id"]
+    store.save(state)
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+
+    def finish(directory):
+        if corruption in {"clarification", "handoff"}:
+            (directory / "output.md").write_text("Need a missing requirement before proceeding")
+            (executor.issue_dir / "next_step.txt").write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "to_owner": "user" if corruption == "clarification" else "agent",
+                        "to_step": "user" if corruption == "clarification" else "inspect",
+                        "intent": "need_clarification"
+                        if corruption == "clarification"
+                        else "manual_handoff",
+                    }
+                )
+            )
+            return "need_clarification" if corruption == "clarification" else "needs_changes"
+        complete_ledger(directory, commit)
+        (executor.issue_dir / "next_step.txt").write_text('{"version":1,"intent":"await_agent"}')
+        return "confirmed"
+
+    executor.agent_manager = JourneyAgent(executor, [finish])
+
+    def execute(name, definition, current):
+        if name == "assemble":
+            frame = executor.execute_step(name, definition, current)
+            if late_feedback:
+                ledger.record(
+                    source_identity="delivery:producer:repair:2",
+                    source_kind="delivery",
+                    target_step="assemble",
+                    content="A genuinely new correction",
+                )
+            if corruption == "batch":
+                path = directory / "workflow_feedback_batch.json"
+                batch = json.loads(path.read_text())
+                batch["entries"][0]["content"] = "Unreviewed replacement work"
+                path.write_text(json.dumps(batch))
+            elif corruption in {"projection", "missing_binding"}:
+                path = directory / "iteration.json"
+                context = json.loads(path.read_text())
+                if corruption == "projection":
+                    context["effective_checklist"]["projections"][0]["rows"][0] += " changed"
+                else:
+                    context["effective_checklist"]["projections"] = []
+                path.write_text(json.dumps(context))
+            elif corruption == "output":
+                path = directory / "output.md"
+                path.write_text(
+                    path.read_text().replace("- Status: completed", "- Status: pending")
+                )
+            elif corruption == "checklist":
+                path = directory / "checklist.md"
+                path.write_text(path.read_text().replace("[x]", "[ ]", 1))
+            return frame
+        store.update_handoff_contract(
+            current,
+            from_step=name,
+            to_owner=HandoffOwner.DONE,
+            to_step="done",
+            intent=HandoffIntent.WORKFLOW_COMPLETE,
+        )
+        return StepExecutionResult(response="", artifacts={})
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=executor.issue_dir, playbook=executor.playbook, executor=execute
+    )
+    if corruption and corruption.startswith("crash_"):
+        with monkeypatch.context() as crash:
+            if corruption == "crash_before_settle":
+
+                def fail_settle(*args, **kwargs):
+                    raise OSError("Simulated interruption before settlement")
+
+                crash.setattr(WorkflowFeedbackLedger, "settle_or_reconcile_reviewed", fail_settle)
+            else:
+                original_record = BlackboardStore.record_event
+
+                def fail_record(self, current, name, data, **kwargs):
+                    if name == "workflow_feedback_delivered":
+                        raise OSError("Simulated interruption after settlement")
+                    return original_record(self, current, name, data, **kwargs)
+
+                crash.setattr(BlackboardStore, "record_event", fail_record)
+            with pytest.raises(OSError):
+                runtime.run(start_step="assemble")
+
+        def no_reexecution(*args, **kwargs):
+            raise AssertionError("Completed work must not invoke an executor during reconciliation")
+
+        resumed = BlackboardWorkflowRuntime(
+            issue_dir=executor.issue_dir, playbook=executor.playbook, executor=no_reexecution
+        )
+        resumed.run()
+        assert not ledger.pending()
+        assert executor.agent_manager.calls == 1
+        delivered = [
+            event
+            for event in resumed.blackboard.events
+            if event.event_type == "workflow_feedback_delivered"
+        ]
+        assert len(delivered) == 1
+        return
+    if corruption and corruption.startswith("historical"):
+        monkeypatch.setattr(runtime, "_finalize_feedback_delivery", lambda **kwargs: None)
+    if corruption == "output":
+        with pytest.raises(ValueError):
+            runtime.run(start_step="assemble")
+        assert ledger.pending() and not ledger.load()[0].consumed
+        return
+    result = runtime.run(start_step="assemble", single_step=corruption == "handoff")
+    if corruption == "handoff":
+        assert not result.completed
+        # An event-driven/single-step restart must retain the consumer distinction.
+        resumed = BlackboardWorkflowRuntime(
+            issue_dir=executor.issue_dir, playbook=executor.playbook, executor=execute
+        )
+        result = resumed.run(single_step=True)
+        if not result.completed:
+            # Legacy lifecycle recovery publishes the exact saved transition
+            # and yields once before the downstream step can execute.
+            assert result.final_status_code != "INVALID_FEEDBACK_DELIVERY"
+            assert resumed.blackboard.current_step == "inspect"
+            resumed = BlackboardWorkflowRuntime(
+                issue_dir=executor.issue_dir, playbook=executor.playbook, executor=execute
+            )
+            result = resumed.run(single_step=True)
+        assert result.completed
+    assert executor.agent_manager.calls == 1
+    if corruption and corruption.startswith("historical"):
+        from cafe.core.workflow_repair import reconcile_completed_feedback
+
+        assert result.completed and ledger.pending()
+        original_baton = (executor.issue_dir / "next_step.txt").read_bytes()
+        original_output = (directory / "output.md").read_bytes()
+        original_context = (directory / "iteration.json").read_bytes()
+        if corruption == "historical_changed_output":
+            (directory / "output.md").write_text("Changed after accepted handoff")
+        if corruption == "historical_changed_batch":
+            path = directory / "workflow_feedback_batch.json"
+            batch = json.loads(path.read_text())
+            batch["entries"][0]["content"] = "Unreviewed replacement work"
+            path.write_text(json.dumps(batch))
+        if corruption == "historical_untrusted":
+            path = directory / "iteration.json"
+            context = json.loads(path.read_text())
+            context["workflow_completion_trusted"] = False
+            path.write_text(json.dumps(context))
+        preview = reconcile_completed_feedback(
+            executor.issue_dir, playbook=executor.playbook, step="assemble", iteration=1
+        )
+        if corruption in {
+            "historical_changed_output",
+            "historical_changed_batch",
+            "historical_untrusted",
+        }:
+            assert preview["status"] == "refused"
+            assert ledger.pending()
+            return
+        assert preview["status"] == "proposed", preview
+        assert ledger.pending()  # Preview never settles work.
+        repaired = reconcile_completed_feedback(
+            executor.issue_dir,
+            playbook=executor.playbook,
+            step="assemble",
+            iteration=1,
+            execute=True,
+        )
+        assert repaired["status"] == "repaired", repaired
+        assert not ledger.pending()
+        repeated = reconcile_completed_feedback(
+            executor.issue_dir,
+            playbook=executor.playbook,
+            step="assemble",
+            iteration=1,
+            execute=True,
+        )
+        assert repeated["status"] == "no-op", repeated
+        assert (executor.issue_dir / "next_step.txt").read_bytes() == original_baton
+        assert (directory / "output.md").read_bytes() == original_output
+        assert (directory / "iteration.json").read_bytes() == original_context
+        assert executor.agent_manager.calls == 1
+        return
+    entries = {entry.source_identity: entry for entry in ledger.load()}
+    if corruption:
+        if corruption != "handoff":
+            assert not result.completed
+        if corruption == "clarification":
+            assert result.final_status_code == "BATON_NEED_CLARIFICATION"
+        assert entries[identity].actionable and not entries[identity].consumed
+        return
+    assert result.completed
+    assert entries[identity].consumed and not entries[identity].actionable
+    assert [entry.source_identity for entry in ledger.pending()] == (
+        ["delivery:producer:repair:2"] if late_feedback else []
+    )
+    # No provider or GitHub read is necessary to discover genuinely new local work.
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        "cafe.ui.cli.GitHubOps", lambda: SimpleNamespace(get_pr_for_branch=lambda _: None)
+    )
+    next_step = _find_external_resume_step(
+        issue_dir=executor.issue_dir,
+        playbook_data=executor.playbook,
+        git_ops=SimpleNamespace(get_current_branch=lambda: "test"),
+    )
+    assert next_step == ("assemble" if late_feedback else None)
+
+
 def direct_subagent_review_fixture(tmp_path, monkeypatch):
     """Use the production direct-subagent-review declarations without prior artifacts."""
     import copy
