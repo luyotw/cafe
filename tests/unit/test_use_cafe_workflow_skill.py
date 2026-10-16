@@ -3394,6 +3394,25 @@ def test_use_cafe_workflow_defines_phase_scoped_proactive_manager_review() -> No
     assert "must not launch a separate reviewer" in normalized
 
 
+def test_due_review_includes_evidence_fit_without_changing_review_eligibility() -> None:
+    running = _read_skill_resource("references/running_workflow.md")
+    due_review = running.split("For every due phase,", 1)[1].split(
+        "Bind that work to a composite review snapshot:", 1
+    )[0]
+    normalized = " ".join(due_review.split())
+    for obligation in (
+        "public entry",
+        "data shapes",
+        "observed results",
+        "fixture",
+        "deferred",
+        "existing findings",
+    ):
+        assert obligation in normalized
+    assert "A not_required phase, a skipped" in running
+    assert "phase, and an all-not_required contract perform no proactive review" in running
+
+
 def test_kickoff_defaults_assignable_gates_to_manager_confirmation() -> None:
     module = _load_script_module(
         SKILL_ROOT / "scripts" / "format_kickoff_contract.py",

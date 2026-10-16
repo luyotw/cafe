@@ -474,6 +474,21 @@ work, unnecessary abstraction, and extension work. These checks apply equally
 to code and non-code phase output. An incomplete, interrupted, or ambiguous
 pass is not a no-blocking result.
 
+At this existing due-phase review, check that QA and delivery claims match the
+affected public entry, prerequisite state, normal-operation data shapes, and
+observed results in their evidence. Look for fixture starting points that
+pre-unlock or seed state and truncate the promised sequence; independent UI and
+SDK/Rules passes do not by themselves establish a connected journey. Preserve
+their local evidence value and request only the missing applicable proof through
+the existing findings and correction process. Distinguish accepted stage scope
+from the full product outcome: deferred capabilities remain incomplete, while
+sufficient current-stage evidence is acceptable without unrelated OAuth, cloud,
+device, or whole-App demands. Reuse unaffected evidence where its boundaries
+remain valid. This check adds no QA pause, changes no `not_required` eligibility,
+and does not authorize implementation work or rerunning every test during
+ordinary supervision; immediately advancing QA handoffs may remain outside this
+second layer of review.
+
 Bind that work to a composite review snapshot: artifact identity,
 accepted-requirements identity, correction-history identity, active task
 identity, handoff/baton identity, and manager-contract identity. Re-resolve and
