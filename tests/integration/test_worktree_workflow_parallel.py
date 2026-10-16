@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from tests.prepare_support import with_delivery_choices
+
+from cafe.workflow_execution.automatic import (
+    automatic_executor_registry as _automatic_executor_registry,
+)
+
 import json
 from pathlib import Path
 
@@ -52,6 +58,7 @@ def _run_until_settled(
             issue_dir=issue_dir,
             playbook=playbook,
             executor=executor,
+            automatic_registry=_automatic_executor_registry(),
         )
         last_result = runner.run(start_step=pending_start, max_transitions=max_transitions)
         latest = BlackboardStore(issue_dir).load_or_create(
@@ -151,6 +158,7 @@ def test_worktree_workflow_spec_pause_resume_reaches_plan(
         issue_dir=issue_dir,
         playbook=playbook,
         executor=executor,
+        automatic_registry=_automatic_executor_registry(),
     )
     paused = runner.run(start_step="spec", max_transitions=10)
 
@@ -181,6 +189,7 @@ def test_worktree_workflow_spec_pause_resume_reaches_plan(
             issue_dir=issue_dir,
             playbook=playbook,
             executor=executor,
+            automatic_registry=_automatic_executor_registry(),
         ).run(max_transitions=2)
 
     assert confirmed.target == "plan"
@@ -258,11 +267,13 @@ def test_parallel_worktrees_keep_issue_state_isolated(
         issue_dir=issue_a,
         playbook=playbook,
         executor=make_executor(issue_a, "alpha"),
+        automatic_registry=_automatic_executor_registry(),
     )
     runtime_b = BlackboardWorkflowRuntime(
         issue_dir=issue_b,
         playbook=playbook,
         executor=make_executor(issue_b, "beta"),
+        automatic_registry=_automatic_executor_registry(),
     )
 
     runtime_a.run(start_step="spec", max_transitions=3)

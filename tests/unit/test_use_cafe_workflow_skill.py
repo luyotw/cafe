@@ -3082,7 +3082,7 @@ def test_kickoff_formatter_accepts_phase_chains_without_rationale(
     command = _kickoff_formatter_command(
         tmp_path / "absent-context.yaml", "--project-root", str(tmp_path)
     )
-    assert not any("rationale" in argument for argument in command)
+    assert "--phase-rationale" not in command
     result = run_kickoff_formatter(command)
     assert result.returncode == 0, result.stderr
     assert (
@@ -3516,7 +3516,6 @@ def test_kickoff_derives_proactive_defaults_only_at_scheduled_pauses(
         "develop": "not_required",
         "review": "not_required",
         "pr": "required",
-        "deliver": "not_required",
     }
     section = result.stdout.split("### Proactive review at scheduled pauses", 1)[1]
     section = section.split("### Reactive user handoffs", 1)[0]
@@ -3527,10 +3526,7 @@ def test_kickoff_derives_proactive_defaults_only_at_scheduled_pauses(
     assert "| review |" not in section
     assert section.count("Manager may confirm and advance after clean review") == 2
     assert section.count("user confirmation remains required") == 1
-    assert (
-        "| deliver | not_required | Manager may confirm after ordinary evidence verification |"
-        in section
-    )
+    assert "| deliver |" not in section  # Automatic owner has no agent review row.
 
 
 def test_kickoff_defaults_apply_to_custom_assignable_and_mandatory_gates(
@@ -4026,6 +4022,8 @@ def test_kickoff_accepts_required_review_at_scheduled_pauses(
     )
     decisions: list[str] = []
     for phase in PRIMARY_ONLY_PHASE_CHAINS:
+        if phase == "deliver":
+            continue  # Automatic delivery has outcome acceptance, no agent review.
         state = "required" if phase in {"spec", "plan"} else "not_required"
         decisions.extend(
             [
@@ -4253,8 +4251,7 @@ def test_manager_confirms_cleanup_or_terminal_archive() -> None:
     assert "without merging, pushing, closing the GitHub issue" in normalized
     assert "Stop and report the first command failure." in normalized
     assert "final cleanup command" in normalized
-    assert "valid only in confirmed local-review mode" in normalized
-    assert "rejected in create-PR mode" in normalized
+    assert "`cafe close --squash`, `--message`, and `-m` have been removed" in normalized
     assert "inspect the completed issue's remaining lifecycle state read-only" in normalized
     assert '"merge and close" must not be silently reduced to an issue closure' in normalized
 

@@ -1,7 +1,7 @@
 ---
 name: cafe-qa
 description: Use this skill when a workflow needs independent black-box acceptance before PR publication.
-version: 1.4.0
+version: 1.5.0
 workflow:
   step_defaults:
     version: 1
@@ -66,6 +66,12 @@ workflow:
     optional_spec_context: optional_spec_context.md
     optional_plan_context: optional_plan_context.md
     optional_review_context: optional_review_context.md
+  checklist:
+    variants:
+    - when: {}
+      sections:
+      - reference: regression_acceptance.md
+    include_role_guidance: true
 ---
 
 # QA
@@ -86,6 +92,10 @@ Read your agent file: {agent_file}
 - When `workspace_file` is supplied, verify its Git head and changed-file set before accepting the development summary as current.
 - When an implementation plan is provided, exercise its Test List; otherwise derive observable scenarios from the available requirements and acceptance evidence.
 - When a review result is provided, prioritize its identified risks and confirm that unresolved findings do not escape acceptance.
+- Before selecting acceptance commands and on every correction, complete `references/regression_acceptance.md` and its runtime checklist. Keep its Regression Coverage table in the QA report; shared-entry callers and existing tests remain in scope even when the latest correction changes only a few files.
+- When the project explicitly adopts `verification.profile_file` and `verification.profile` in `.cafe/config.yaml`, use `cafe verification run --output-file {output_file}` and `cafe verification check --output-file {output_file}` as its shared repository-owned profile entry. Repeat any selected `--add-suite` values on run/check/reuse. The public adapter reads only the project binding; issue overrides cannot replace its mandatory suites. CI uses the same manifest/profile explicitly. A malformed binding is an actionable configuration error.
+- For adopted profiles, record required/selected/completed/reused/pending suites, actual exits, receipt/log provenance and context applicability reasons. A partial targeted pass, `full` label, or stale receipt cannot satisfy missing mandatory coverage. Optional `run --reuse-from <source-output>` executes pending rows; `reuse` alone must validate every required row before materializing evidence. Retain independent black-box acceptance and semantic coverage judgment. See `docs/verification/profiles.md` for the public contract.
+- Without explicit adoption, retain existing acceptance and receipt limitations; a missing profile or receipt creates no new mandatory stop. Develop/Review targeted checks, repository CI owners and confirmed postmerge/deployed-identity gates retain their existing responsibilities.
 - Exercise every applicable acceptance criterion using observable scenarios or commands; do not infer a pass from code inspection alone.
 - Do not modify product code. When acceptance fails, record reproducible evidence and select the injected discretionary route marked `carries_feedback`.
 - When acceptance fails, emit at most 100 corrections under `## Todo List`, each once as ``- [ ] `QA-NNN` — Source: `qa` — Work: ... — Closure: ... — Evidence: ...``. Keep stable unique IDs; ordinary report checkboxes are not correction work. When no correction exists, write only the canonical marker `No actionable work.` in that section; never leave it blank.
@@ -95,6 +105,7 @@ Read your agent file: {agent_file}
 
 ## Output
 Write QA report to: {output_file}
+Include the Regression Coverage table, current and reused evidence HEADs, unresolved failures, and any repository-owned checks still pending with their existing owner. State separately whether this QA acceptance passed and whether full CI or delivery validation is still pending. For profile adoption include a suite evidence table (required/selected, completion/actual exit, executed/reused/pending, evidence HEAD/source/log, context applicability reason, owner). Record equal-coverage executed/reused counts and observed durations when comparing reuse; do not claim unmeasured speedups. Include escape observations for defects first discovered after QA and after merge: observation status (`known` or `unknown`), count only when known, source/window and unresolved owner. Unavailable observation is unknown, never zero.
 
 ## Handoff
 - Write the next-step baton for this result; the runtime updates the blackboard.

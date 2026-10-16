@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including passive supervision, bounded recovery, and declarative repair when execution leaves its safe operating envelope.
-metadata: {version: 1.76.2}
+metadata: {version: 1.76.3}
 ---
 
 # Use CAFE Workflow
@@ -66,7 +66,8 @@ contract; new preferences never rewrite it.
    persisted baton. Never reconstruct the `cafe workflow` arguments from prose.
 5. While work is active, apply the non-intervention envelope in
    `references/supervision_and_recovery.md`. The continuous workflow worker owns
-   ordinary advancement.
+   ordinary advancement. A confirmed anomaly outside that envelope requires
+   immediate bounded intervention; do not wait for the next scheduled PR gate.
 6. At an existing pause, route the exact active task through its declared owner
    and schema. At the declared terminal state, use the completion route.
    For development delivery, verify integration into the confirmed base branch

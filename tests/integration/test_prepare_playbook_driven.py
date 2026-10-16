@@ -1,5 +1,7 @@
 """Integration tests for playbook-driven cafe prepare behavior."""
 
+from tests.prepare_support import with_delivery_choices
+
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -120,7 +122,7 @@ class TestPreparePlaybookDriven:
         mock_phase_list.return_value = "2. GitHub issue"
         mock_cli_list.return_value = "Quick setup (use recommended defaults)"
 
-        result = runner.invoke(app, ["prepare", "--auto-create-pr"])
+        result = runner.invoke(app, with_delivery_choices(["prepare", "--auto-create-pr"]))
 
         assert result.exit_code == 0
         config_file = temp_repo_dir / ".cafe" / "issues" / "parity-quick" / "issue.yaml"
@@ -135,13 +137,15 @@ class TestPreparePlaybookDriven:
         """Integration #2 — default playbook non-interactive parity."""
         result = runner.invoke(
             app,
-            [
-                "prepare",
-                "parity-ni",
-                "--no-interactive",
-                "--input-method=manual",
-                "--no-auto-create-pr",
-            ],
+            with_delivery_choices(
+                [
+                    "prepare",
+                    "parity-ni",
+                    "--no-interactive",
+                    "--input-method=manual",
+                    "--no-auto-create-pr",
+                ]
+            ),
         )
 
         assert result.exit_code == 0
@@ -160,7 +164,9 @@ class TestPreparePlaybookDriven:
         """Integration 1: every public prepare shape requires the confirmed choice."""
         result = runner.invoke(
             app,
-            ["prepare", "probe-missing-choice", "--playbook", "standard", "--no-check"],
+            with_delivery_choices(
+                ["prepare", "probe-missing-choice", "--playbook", "standard", "--no-check"]
+            ),
         )
 
         assert result.exit_code == 1
@@ -176,15 +182,17 @@ class TestPreparePlaybookDriven:
         """A confirmed issue playbook drives prepare without repository config."""
         result = runner.invoke(
             app,
-            [
-                "prepare",
-                "issue-owned-hotfix",
-                "--playbook",
-                "hotfix",
-                "--no-interactive",
-                "--input-method=manual",
-                "--no-auto-create-pr",
-            ],
+            with_delivery_choices(
+                [
+                    "prepare",
+                    "issue-owned-hotfix",
+                    "--playbook",
+                    "hotfix",
+                    "--no-interactive",
+                    "--input-method=manual",
+                    "--no-auto-create-pr",
+                ]
+            ),
         )
 
         assert result.exit_code == 0, result.stdout
@@ -213,15 +221,17 @@ commands:
 
         result = runner.invoke(
             app,
-            [
-                "prepare",
-                "no-pr-issue",
-                "--no-interactive",
-                "--input-method=github",
-                "--issue-id=28",
-                "--auto-create-pr",
-                "--post-pr-todo-list",
-            ],
+            with_delivery_choices(
+                [
+                    "prepare",
+                    "no-pr-issue",
+                    "--no-interactive",
+                    "--input-method=github",
+                    "--issue-id=28",
+                    "--auto-create-pr",
+                    "--post-pr-todo-list",
+                ]
+            ),
         )
 
         assert result.exit_code == 1
@@ -256,13 +266,15 @@ commands:
 
         result = runner.invoke(
             app,
-            [
-                "prepare",
-                f"capable-{str(expected).lower()}",
-                "--no-interactive",
-                "--input-method=manual",
-                flag,
-            ],
+            with_delivery_choices(
+                [
+                    "prepare",
+                    f"capable-{str(expected).lower()}",
+                    "--no-interactive",
+                    "--input-method=manual",
+                    flag,
+                ]
+            ),
         )
 
         assert result.exit_code == 0, result.stdout
@@ -290,13 +302,15 @@ commands:
 
         result = runner.invoke(
             app,
-            [
-                "prepare",
-                "no-pr-issue",
-                "--no-interactive",
-                "--input-method=github",
-                "--issue-id=28",
-            ],
+            with_delivery_choices(
+                [
+                    "prepare",
+                    "no-pr-issue",
+                    "--no-interactive",
+                    "--input-method=github",
+                    "--issue-id=28",
+                ]
+            ),
         )
 
         assert result.exit_code == 0
@@ -314,7 +328,7 @@ commands:
         mock_prompt_text.return_value = "hotfix-issue"
         mock_prompt_confirm.return_value = False
 
-        result = runner.invoke(app, ["prepare", "--no-auto-create-pr"])
+        result = runner.invoke(app, with_delivery_choices(["prepare", "--no-auto-create-pr"]))
 
         assert result.exit_code == 0
         assert "Pre-configure spec and plan phases" not in result.stdout
@@ -359,7 +373,7 @@ commands:
         mock_phase_list.return_value = "1. Manual input"
         mock_cli_list.return_value = "Quick setup (use recommended defaults)"
 
-        quick_result = runner.invoke(app, ["prepare"])
+        quick_result = runner.invoke(app, with_delivery_choices(["prepare"]))
         assert quick_result.exit_code == 0
         config_file = temp_repo_dir / ".cafe" / "issues" / "strict-quick" / "issue.yaml"
         config_data = yaml.safe_load(config_file.read_text(encoding="utf-8"))
@@ -367,13 +381,15 @@ commands:
 
         bad_result = runner.invoke(
             app,
-            [
-                "prepare",
-                "strict-bad",
-                "--no-interactive",
-                "--input-method=manual",
-                "--rigor=low",
-            ],
+            with_delivery_choices(
+                [
+                    "prepare",
+                    "strict-bad",
+                    "--no-interactive",
+                    "--input-method=manual",
+                    "--rigor=low",
+                ]
+            ),
         )
         assert bad_result.exit_code == 1
 
@@ -418,7 +434,7 @@ commands:
         ]
         mock_template_list.return_value = "auto"
 
-        result = runner.invoke(app, ["prepare"])
+        result = runner.invoke(app, with_delivery_choices(["prepare"]))
 
         assert result.exit_code == 0
         rigor_prompt = mock_phase_list.call_args_list[1]
@@ -433,7 +449,7 @@ commands:
         """DoD — unloadable playbook fails gracefully."""
         _write_config_with_playbook(temp_repo_dir, "does-not-exist")
 
-        result = runner.invoke(app, ["prepare", "bad-playbook"])
+        result = runner.invoke(app, with_delivery_choices(["prepare", "bad-playbook"]))
 
         assert result.exit_code == 1
         assert "Failed to load playbook" in result.stdout
@@ -448,22 +464,28 @@ commands:
 
         result = runner.invoke(
             app,
-            [
-                "prepare",
-                f"ni-{playbook_id}",
-                "--no-interactive",
-                "--input-method=manual",
-                "--no-auto-create-pr",
-            ],
+            with_delivery_choices(
+                [
+                    "prepare",
+                    f"ni-{playbook_id}",
+                    "--no-interactive",
+                    "--input-method=manual",
+                    "--no-auto-create-pr",
+                ]
+            ),
         )
 
         assert result.exit_code == 0
         config_file = temp_repo_dir / ".cafe" / "issues" / f"ni-{playbook_id}" / "issue.yaml"
         config_data = yaml.safe_load(config_file.read_text(encoding="utf-8"))
-        assert config_data["spec"]["input_method"] == "manual"
-        assert config_data["spec"]["rigor"] == "medium"
-        assert config_data["spec"]["template"] == "auto"
-        assert config_data["plan"]["template"] == "default"
+        if playbook_id == "hotfix":
+            assert "spec" not in config_data and "plan" not in config_data
+            assert config_data["deliver"]["mode"] == "local"
+        else:
+            assert config_data["spec"]["input_method"] == "manual"
+            assert config_data["spec"]["rigor"] == "medium"
+            assert config_data["spec"]["template"] == "auto"
+            assert config_data["plan"]["template"] == "default"
 
     def test_direct_non_interactive_prepare_records_only_entry_input(
         self, temp_repo_dir, mock_git_ops
@@ -473,14 +495,16 @@ commands:
 
         result = runner.invoke(
             app,
-            [
-                "prepare",
-                "direct-issue",
-                "--no-interactive",
-                "--input-method=github",
-                "--issue-id=420",
-                "--no-auto-create-pr",
-            ],
+            with_delivery_choices(
+                [
+                    "prepare",
+                    "direct-issue",
+                    "--no-interactive",
+                    "--input-method=github",
+                    "--issue-id=420",
+                    "--no-auto-create-pr",
+                ]
+            ),
         )
 
         assert result.exit_code == 0
@@ -512,13 +536,15 @@ commands:
 
         result = runner.invoke(
             app,
-            [
-                "prepare",
-                "strict-bad",
-                "--no-interactive",
-                "--input-method=manual",
-                "--rigor=low",
-            ],
+            with_delivery_choices(
+                [
+                    "prepare",
+                    "strict-bad",
+                    "--no-interactive",
+                    "--input-method=manual",
+                    "--rigor=low",
+                ]
+            ),
         )
 
         assert result.exit_code == 1
@@ -533,13 +559,15 @@ commands:
         """Integration — missing plan template fails before polluted issue.yaml write."""
         result = runner.invoke(
             app,
-            [
-                "prepare",
-                "bad-template",
-                "--no-interactive",
-                "--input-method=manual",
-                "--plan-template=missing-template-name",
-            ],
+            with_delivery_choices(
+                [
+                    "prepare",
+                    "bad-template",
+                    "--no-interactive",
+                    "--input-method=manual",
+                    "--plan-template=missing-template-name",
+                ]
+            ),
         )
 
         assert result.exit_code == 1

@@ -1315,3 +1315,54 @@ def test_overlay_auto_template_catalog_uses_resolved_primary_loader(tmp_path):
         artifacts={},
     )
     assert str(primary / "assets/templates/owned.md") in result.content
+
+
+@pytest.mark.parametrize("playbook_id", ["simple", "direct-qa", "standard-qa", "subagent-flow-qa"])
+@pytest.mark.parametrize("iteration", [1, 5])
+def test_qa_regression_coverage_reaches_first_and_correction_passes(
+    tmp_path, monkeypatch, playbook_id, iteration
+):
+    """Every shipped QA entry must receive the same issue-wide regression gates."""
+    from cafe.skills.checklist_composer import compose_effective_checklist
+    from cafe.skills.workflow_composition import resolve_step_workflow_composition
+
+    monkeypatch.chdir(tmp_path)
+    step = PlaybookLoader().load_model(playbook_id, strict=True).model.steps["qa"]
+    loader = SkillLoader()
+    contract = loader.get_workflow_declaration(step.skill)
+    reference = load_skill_reference("cafe-qa", "regression_acceptance.md")
+    expected_rows = [line for line in reference.splitlines() if line.startswith("- [ ]")]
+    assert len(expected_rows) == 6
+    target = tmp_path / "checklist.md"
+    assert compose_declared_checklist(
+        skill_name=step.skill,
+        contract=contract,
+        agent_name="Quinn",
+        role=step.role,
+        checklist_file_path=target,
+        iteration=iteration,
+        context={"output_file": "qa.md", "develop_file": "code.md"},
+        artifacts={"code": "code.md"},
+        feedback=iteration > 1,
+    )
+    rendered = target.read_text()
+    assert "## Regression coverage" in rendered
+    assert all(row in rendered for row in expected_rows)
+    composition = resolve_step_workflow_composition(
+        loader, primary_skill=step.skill, step_name="custom_acceptance"
+    )
+    composed = compose_effective_checklist(
+        composition=composition,
+        agent_name="Quinn",
+        role=step.role,
+        checklist_file_path=tmp_path / "effective.md",
+        iteration=iteration,
+        context={"output_file": "qa.md", "develop_file": "code.md"},
+        artifacts={"code": "code.md"},
+        feedback=iteration > 1,
+        skill_loader=loader,
+    )
+    assert all(row in composed.content for row in expected_rows)
+    guidance = "Verify observable acceptance behavior without modifying product code."
+    assert guidance in rendered
+    assert guidance in composed.content

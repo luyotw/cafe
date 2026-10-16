@@ -152,7 +152,6 @@ def request_schema() -> dict[str, Any]:
         "generated_inputs": "Helper-owned provenance map retained in editable requests: field -> origin, dependency and value_fingerprint. Preserve it when editing formatter_inputs; unchanged source-backed values are revalidated at render. For deliberate same-value reassessment after invalidation, see kickoff_input_reference.md. It grants no authority.",
         "decision_examples": {
             "phase_chain": ['develop=[{"cli":"codex","model":"<exact-model>","reasoning_effort":"<verified-effort>"}]'],
-            "phase_rationale": ['develop={"band":"balanced","model":"<model rationale>","effort":"<effort rationale>"}'],
             "capability_choice": ["pr.auto_create=true"],
             "cleanup": [],
         },
@@ -624,20 +623,8 @@ def _delivery_dependency(discovery: dict[str, Any] | None, values: dict[str, Any
 
 
 def _default_cleanup(project_root: Path, values: dict[str, Any], phase_owned: bool):
-    worktree = values.get("worktree")
-    if phase_owned and worktree and Path(worktree).resolve() != project_root.resolve():
-        command = [sys.executable, str(Path(__file__).with_name("cleanup_worktree.py").resolve()),
-                   "--project-root", str(project_root.resolve()), "--worktree", str(Path(worktree).resolve()),
-                   "--issue-name", values["issue_name"]]
-        remote = subprocess.run(["git", "-C", str(project_root), "remote", "get-url", "origin"],
-                                capture_output=True, text=True, check=False)
-        if remote.returncode == 0:
-            command.extend(["--remote", "origin"])
-        return command, "Archive this CAFE issue, then remove its managed worktree and local branch" + (
-            " and its origin branch." if remote.returncode == 0 else ".")
-    return (["cafe", "close", "--archive-only"],
-            "Archive this CAFE issue; retain the current checkout because it is not a separate feature worktree.") if phase_owned else (
-                ["cafe", "close"], "Archive this CAFE issue and remove its managed worktree and branch.")
+    return (["cafe", "close"],
+            "Verify existing integration, archive this CAFE issue, and clean its feature resources.")
 
 
 def _prefill_checkout(values: dict[str, Any], *, project_root: Path, sources: dict[str, str],

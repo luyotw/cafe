@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.prepare_support import with_delivery_choices
+
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -196,7 +198,7 @@ def _prepare_intake_issue(
         patch("cafe.utils.git_utils.is_github_repo", return_value=True),
         patch("cafe.ui.phase_prompts.is_github_repo", return_value=True),
     ):
-        result = runner.invoke(app, command)
+        result = runner.invoke(app, with_delivery_choices(command))
     assert result.exit_code == 0, result.stdout
 
     builtin_root = tmp_path / "builtin"
@@ -270,14 +272,16 @@ def _prepare_builtin_issue(
     ):
         result = runner.invoke(
             app,
-            [
-                "prepare",
-                issue_name,
-                "--no-interactive",
-                f"--input-method={input_method}",
-                *(["--issue-id=434"] if input_method == "github" else []),
-                "--no-auto-create-pr",
-            ],
+            with_delivery_choices(
+                [
+                    "prepare",
+                    issue_name,
+                    "--no-interactive",
+                    f"--input-method={input_method}",
+                    *(["--issue-id=434"] if input_method == "github" else []),
+                    "--no-auto-create-pr",
+                ]
+            ),
         )
     assert result.exit_code == 0, result.stdout
 
@@ -406,10 +410,22 @@ def test_background_manual_input_reaches_the_first_agent(tmp_path, monkeypatch):
     executor, manager, issue_dir, step = _prepare_intake_issue(tmp_path, input_method="manual")
     content = "新增孩子後，首頁立即顯示；保留其他裝置的授權。"
     with patch("cafe.ui.commands.workflow.FixedWorkerLauncher.launch", return_value=1234) as launch:
-        result = runner.invoke(app, [
-            "workflow", "--issue", "intake-journey", "--playbook", "intake",
-            "--execute", "--background", "--user-input", content,
-        ])
+        result = runner.invoke(
+            app,
+            with_delivery_choices(
+                [
+                    "workflow",
+                    "--issue",
+                    "intake-journey",
+                    "--playbook",
+                    "intake",
+                    "--execute",
+                    "--background",
+                    "--user-input",
+                    content,
+                ]
+            ),
+        )
     assert result.exit_code == 0, result.stdout
     launch.assert_called_once()
     state = BlackboardStore(issue_dir).load_or_create("intake")
@@ -470,7 +486,9 @@ steps:
         patch("cafe.core.hooks.native.InitialInputProviderResolver._fetch_github_issue") as fetch,
         patch("cafe.ui.cli.AgentManager") as agents,
     ):
-        result = runner.invoke(app, ["playbook", "validate", "invalid-intake"])
+        result = runner.invoke(
+            app, with_delivery_choices(["playbook", "validate", "invalid-intake"])
+        )
 
     assert result.exit_code == 1
     assert "bind.artifact" in result.stdout

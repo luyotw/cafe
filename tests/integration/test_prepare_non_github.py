@@ -1,5 +1,7 @@
 """測試 cafe prepare 在非 GitHub repo 行為."""
 
+from tests.prepare_support import with_delivery_choices
+
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -75,7 +77,7 @@ class TestPrepareNonGitHubRepo:
         mock_phase_list.return_value = "Medium"
         mock_template_list.return_value = "default (system default)"
 
-        result = runner.invoke(app, ["prepare"])
+        result = runner.invoke(app, with_delivery_choices(["prepare"]))
 
         assert result.exit_code == 0
         assert "Successfully prepared issue: test-issue" in result.stdout
@@ -108,7 +110,7 @@ class TestPrepareNonGitHubRepo:
         mock_phase_list.return_value = "Medium"
         mock_template_list.return_value = "default (system default)"
 
-        result = runner.invoke(app, ["prepare"])
+        result = runner.invoke(app, with_delivery_choices(["prepare"]))
 
         assert result.exit_code == 0
 
@@ -127,7 +129,7 @@ class TestPrepareNonGitHubRepo:
     ):
         """測試在非 GitHub repo 非互動模式下 prepare 行為."""
         # Non-interactive mode: provide issue name as argument
-        result = runner.invoke(app, ["prepare", "quick-fix"])
+        result = runner.invoke(app, with_delivery_choices(["prepare", "quick-fix"]))
 
         assert result.exit_code == 0
         assert "Successfully prepared issue: quick-fix" in result.stdout
@@ -149,7 +151,9 @@ class TestPrepareNonGitHubRepo:
         """Explicit --no-interactive on non-GitHub repo writes spec/plan defaults."""
         result = runner.invoke(
             app,
-            ["prepare", "ni-non-github", "--no-interactive", "--input-method=manual"],
+            with_delivery_choices(
+                ["prepare", "ni-non-github", "--no-interactive", "--input-method=manual"]
+            ),
         )
 
         assert result.exit_code == 0
@@ -211,7 +215,7 @@ class TestPrepareGitHubRepo:
         ]
         mock_template_list.return_value = "default (system default)"  # template
 
-        result = runner.invoke(app, ["prepare"])
+        result = runner.invoke(app, with_delivery_choices(["prepare"]))
 
         assert result.exit_code == 0
 

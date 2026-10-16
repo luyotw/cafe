@@ -282,6 +282,9 @@ def capability_context(cli: str, model: str | None, effort: str | None) -> str:
             str(path): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in control_paths(cli, environment)
             if path.is_file()
+            # Selected model capabilities are represented by "levels" above;
+            # cache refresh timestamps and unrelated models are not controls.
+            and not (cli == "codex" and path.name == "models_cache.json")
         },
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()

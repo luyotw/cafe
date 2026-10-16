@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from cafe.workflow_execution.automatic import (
+    automatic_executor_registry as _automatic_executor_registry,
+)
+
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -159,6 +163,7 @@ def test_builtin_pr_pauses_for_action_review_before_delivery(
         issue_dir=issue_dir,
         playbook=playbook,
         executor=executor,
+        automatic_registry=_automatic_executor_registry(),
     ).run(start_step="pr")
 
     state = BlackboardStore(issue_dir).load_or_create("pr")
@@ -268,6 +273,7 @@ def test_custom_pr_keeps_its_declared_terminal_route(tmp_path: Path) -> None:
         issue_dir=issue_dir,
         playbook=playbook,
         executor=executor,
+        automatic_registry=_automatic_executor_registry(),
     ).run(start_step="pr")
 
     assert result.completed is True
@@ -463,6 +469,7 @@ def test_runtime_replacement_handoff_supersedes_and_notifies_only_the_new_task(
         issue_dir=issue_dir,
         playbook=PlaybookLoader().load("standard"),
         executor=executor,
+        automatic_registry=_automatic_executor_registry(),
     ).run(start_step="develop")
     records = HumanTaskRecordStore(issue_dir)
     original = records.tasks()[0]
@@ -471,6 +478,7 @@ def test_runtime_replacement_handoff_supersedes_and_notifies_only_the_new_task(
         issue_dir=issue_dir,
         playbook=PlaybookLoader().load("standard"),
         executor=executor,
+        automatic_registry=_automatic_executor_registry(),
     )
     replacement = replacement_runtime.run(start_step="develop")
     tasks = HumanTaskRecordStore(issue_dir).tasks()
@@ -821,6 +829,7 @@ def test_pr_supervisor_continuation_reaches_qa_without_recurating_raw_feedback(
         issue_dir=issue_dir,
         playbook=playbook,
         executor=executor,
+        automatic_registry=_automatic_executor_registry(),
     ).run(max_transitions=2)
     assert result.completed
     assert calls == ["develop", "qa"]

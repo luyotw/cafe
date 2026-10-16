@@ -626,8 +626,8 @@ class StepConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["skill", "subflow"] = "skill"
-    skill: SkillSelector
-    role: str
+    skill: Optional[SkillSelector] = None
+    role: str = ""
     assignee_type: Literal["agent", "human", "auto", "hybrid"] = "agent"
     automatic: Optional[AutomaticStepConfig] = None
     hybrid: Optional[HybridStepConfig] = None
@@ -684,6 +684,8 @@ class StepConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_input_artifact_scope(self) -> "StepConfig":
+        if self.assignee_type != "auto" and (self.skill is None or not self.role):
+            raise ValueError("agent, human and hybrid steps require skill and role")
         if "input_artifacts" in self.model_fields_set and self.input_artifacts is None:
             raise ValueError("input_artifacts must be a list when specified")
         if self.todo_identity_input_artifact is not None:
@@ -711,8 +713,8 @@ class StepConfig(BaseModel):
                 )
         if self.assignee_type == "hybrid" and self.hybrid is None:
             raise ValueError("assignee_type=hybrid requires hybrid portion declaration")
-        if self.assignee_type == "auto" and self.human_tasks:
-            raise ValueError("assignee_type=auto cannot declare human_tasks")
+        if self.assignee_type == "auto" and self.human_tasks and self.skill is None:
+            raise ValueError("automatic human-task bindings require their skill policy metadata")
         if self.workspace_artifact is not None:
             if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", self.workspace_artifact.strip()):
                 raise ValueError("workspace_artifact must be a safe identifier")
@@ -1755,6 +1757,8 @@ def declared_template_managers(
     """Resolve template catalogs from each step's selected skill contract."""
     managers: Dict[str, TemplateManager] = {}
     for step_name, step in model.steps.items():
+        if step.skill is None:
+            continue
         selectors = [step.skill] if isinstance(step.skill, str) else list(step.skill.values())
         contracts = [skill_loader.get_workflow_declaration(skill) for skill in selectors]
         catalogs = {
@@ -1813,6 +1817,8 @@ def _report_structural_issue(
 
 
 def _validate_step_role(step_name: str, step: StepConfig, roles: Dict[str, PlaybookRole]) -> None:
+    if step.assignee_type == "auto" and not step.role:
+        return
     if roles and step.role not in roles:
         raise ValueError(f"Step '{step_name}' references unknown role '{step.role}'")
 
@@ -1825,6 +1831,8 @@ def _validate_step_chat_role(
 
 
 def _validate_step_skills(step_name: str, step: StepConfig, skill_loader: SkillLoader) -> None:
+    if step.skill is None:
+        return
     selectors = [step.skill] if isinstance(step.skill, str) else list(step.skill.values())
     for skill_name in selectors:
         try:
@@ -1840,6 +1848,8 @@ def _resolve_step_compositions(
     skill_loader: SkillLoader,
 ) -> tuple[StepWorkflowComposition, ...]:
     """Resolve every declared primary branch against one workflow environment."""
+    if step.skill is None:
+        return ()
     workflow_skills = resolve_playbook_skills(
         model,
         channel="workflow",

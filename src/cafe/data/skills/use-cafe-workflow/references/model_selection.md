@@ -296,10 +296,14 @@ independently controlled candidates cannot satisfy the phase, present the exact
 limitation and proposed default-only exception through the existing human route.
 The Manager cannot authorize that exception itself.
 
-Use lossless JSON entries with `--phase-chain 'STEP=[{"cli":"...","model":"...","reasoning_effort":"..."}]'`
-and `--phase-rationale 'STEP={"band":"balanced","model":"...","effort":"..."}'`.
-Compact inputs carry the same per-phase `rationale` object. Keep evidence in the
-existing review/output surfaces; add no assessment sidecar or role-scoped default.
+Use lossless JSON entries with `--phase-chain 'STEP=[{"cli":"...","model":"...","reasoning_effort":"..."}]'`.
+Compact phase inputs likewise carry only the step name and exact ordered chain.
+Keep capability bands and model/effort rationale in the existing Manager
+review/output surfaces, outside both the confirmation text and durable policy;
+add no assessment sidecar or role-scoped default. Older preparation requests may
+still supply `--phase-rationale` or compact phase `rationale`; new proposals omit
+that diagnostic input. Existing confirmed contracts retain their original bytes
+and digests and are never rewritten just to remove rationale.
 
 ## Reassess at existing return-of-control boundaries
 

@@ -28,8 +28,6 @@ class ProcessOutput:
         self.stderr_bytes = 0
         self.stderr_read_failed = False
         self.stderr_complete = Event()
-        self.first_stderr_ready = Event()
-        self.first_stderr_line = ""
         self._threads = [
             Thread(target=self._read_stdout, args=(process.stdout,), daemon=True),
             Thread(target=self._read_stderr, args=(process.stderr,), daemon=True),
@@ -112,12 +110,6 @@ class ProcessOutput:
             for chunk in self._chunks(stream):
                 with self._lock:
                     self.stderr_bytes += len(chunk.encode("utf-8", errors="replace"))
-                    if not self.first_stderr_ready.is_set():
-                        self.first_stderr_line += chunk
-                        if "\n" in self.first_stderr_line:
-                            self.first_stderr_line = self.first_stderr_line.split("\n", 1)[0]
-                            self.first_stderr_ready.set()
-                        self.first_stderr_line = self.first_stderr_line[:8192]
                     half = self._STDERR_LIMIT // 2
                     remaining = max(0, half - len(self._stderr_prefix))
                     self._stderr_prefix += chunk[:remaining]
@@ -127,7 +119,6 @@ class ProcessOutput:
             self.stderr_read_failed = True
             self._put_stdout(ProcessOutputError("Unable to read provider stderr."))
         finally:
-            self.first_stderr_ready.set()
             self.stderr_complete.set()
 
     def readline(self, timeout):

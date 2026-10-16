@@ -193,7 +193,10 @@ steps:
     skill: cafe-deliver_development
     handoff_label: Recover delivery actions
     role: developer
-    assignee_type: agent
+    assignee_type: auto
+    automatic:
+      executor: delivery
+      inputs: {}
     input_artifacts:
     - pr_result
     - workspace
@@ -241,15 +244,15 @@ steps:
       feedback_delivery: {artifact: workflow_feedback, source_kind: delivery, todo_source: workflow_feedback, todo_id_prefix: DLV}
       outcomes:
         confirm: _done
-        revise: deliver
+        revise: develop
     - trigger: need_clarification
       task_id: delivery-recovery
       outcomes:
-        submit: deliver
+        submit: develop
     - trigger: need_permission
       task_id: delivery-review
       outcomes:
-        fix_now: deliver
+        fix_now: develop
         integrate_selected: deliver
         integrate_only: deliver
         review_only: deliver

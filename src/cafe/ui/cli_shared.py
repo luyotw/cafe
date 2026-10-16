@@ -2217,7 +2217,15 @@ def _handle_phase_exception(e: Exception, phase_name: str) -> None:
     raise typer.Exit(1)
 
 
-def _execute_single_step_alias(
+def _execute_single_step_alias(**kwargs) -> Dict[str, Any]:
+    from cafe.workflow_execution.workflow_hosting import WorkflowHost
+    issue_dir = Path(".cafe/issues") / kwargs["issue_name"]
+    return WorkflowHost(issue_dir).run(
+        lambda: _execute_single_step_alias_owned(**kwargs), hosting="foreground",
+    ).result
+
+
+def _execute_single_step_alias_owned(
     *,
     issue_name: str,
     step_name: str,
@@ -2264,8 +2272,10 @@ def _execute_single_step_alias(
     )
     step_executor.agent_manager.show_prompt = show_prompt
 
+    from cafe.workflow_execution.automatic import automatic_executor_registry
     runner = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
+        automatic_registry=automatic_executor_registry(),
         playbook=playbook_data,
         executor=step_executor.execute_step,
     )

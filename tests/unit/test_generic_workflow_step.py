@@ -872,7 +872,10 @@ def test_preparation_cannot_clear_prior_agent_invocation_marker(tmp_path):
 
 
 @pytest.mark.parametrize("tampered", [False, True])
-@pytest.mark.parametrize("legacy_workspace", [False, True])
+@pytest.mark.parametrize("legacy_workspace", [
+    False, True, "native_skill", "native_skill_bad_marker", "native_skill_unknown_error",
+    "native_skill_recovery_error",
+])
 def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
     tmp_path,
     monkeypatch,
@@ -883,6 +886,7 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
 
     from cafe.ui.cli import app
 
+    native_skill = isinstance(legacy_workspace, str) and legacy_workspace.startswith("native_skill")
     monkeypatch.chdir(tmp_path)
     executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
     executor.phase_name = "spec"
@@ -933,18 +937,51 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
         ),
     )
     if legacy_workspace:
+        if native_skill:
+            marker = {
+                "id": state.handoff_contract.created_at,
+                "reason": "agent_error",
+                "workflow_id": state.workflow_id,
+                "step": "spec",
+                "iteration": 1,
+            }
+            metadata = json.loads(path.read_text())
+            metadata["agent_interruption"] = marker
+            path.write_text(json.dumps(metadata))
         boards.record_event(
             state,
             "step_interrupted",
             {
                 "step": "spec", "attempt": 1, "reason": "agent_error",
-                "detail": "workspace artifact 'workspace' is stale or contradictory: "
-                "workspace worktree is dirty; refresh it or resolve the conflict before retrying",
+                "detail": (
+                    "Skill not found: Unmanaged or changed native skill conflict: "
+                    "/repo/.codex/skills/shared. Back up and relocate the entry, "
+                    "then rerun prepare or launch; legacy names or matching contents "
+                    "alone do not prove ownership."
+                    if native_skill and legacy_workspace not in {
+                        "native_skill_unknown_error", "native_skill_recovery_error",
+                    }
+                    else "Fresh-session recovery has no matching preparation evidence"
+                    if legacy_workspace == "native_skill_recovery_error"
+                    else "provider failed unexpectedly"
+                    if legacy_workspace == "native_skill_unknown_error"
+                    else "workspace artifact 'workspace' is stale or contradictory: "
+                    "workspace worktree is dirty; refresh it or resolve the conflict before retrying"
+                ),
             },
         )
+        if native_skill:
+            boards.record_event(
+                state, "agent_interruption_prepared",
+                {"step": "spec", "marker": marker},
+            )
         boards.record_event(
             state, "agent_execution_task_materialized", {"step": "spec", "task_id": task.id}
         )
+        if legacy_workspace == "native_skill_bad_marker":
+            metadata = json.loads(path.read_text())
+            metadata["agent_interruption"]["workflow_id"] = "another-workflow"
+            path.write_text(json.dumps(metadata))
     completed = CliRunner().invoke(
         app,
         [
@@ -957,6 +994,10 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
             "--json",
         ],
     )
+    if legacy_workspace in {"native_skill_bad_marker", "native_skill_unknown_error"}:
+        assert completed.exit_code != 0
+        assert records.get_result(task.id) is None
+        return
     assert completed.exit_code == 0, completed.stdout
     if tampered:
         path.write_text(json.dumps({"agent_invoked": True}))
@@ -7293,6 +7334,7 @@ def test_missing_workspace_companion_recovers_from_declared_verified_producer(
 
     verify = Mock(wraps=verify_workspace_artifact)
     monkeypatch.setattr("cafe.phases.generic_workflow_step.verify_workspace_artifact", verify)
+    monkeypatch.setattr("cafe.core.workspace_inputs.verify_workspace_artifact", verify)
     with workspace_execution_lock(repo):
         for _ in range(2):
             executor._refresh_and_validate_workspace_inputs(
@@ -7317,6 +7359,7 @@ def test_missing_workspace_companion_recovers_from_declared_verified_producer(
 
     with monkeypatch.context() as context:
         context.setattr("cafe.phases.generic_workflow_step.verify_workspace_artifact", dirty_after_refresh)
+        context.setattr("cafe.core.workspace_inputs.verify_workspace_artifact", dirty_after_refresh)
         with pytest.raises(ValueError, match="worktree is dirty"):
             executor._refresh_and_validate_workspace_inputs(
                 step_def=playbook["steps"]["consume"], blackboard_state=state,

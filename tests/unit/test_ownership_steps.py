@@ -586,8 +586,8 @@ def test_automatic_inputs_are_validated_before_a_visit_is_persisted(tmp_path: Pa
     assert BlackboardStore(issue_dir).load_or_create("automatic").step_attempt_counts == {}
 
 
-def test_invalid_automatic_result_is_rejected_before_visits_or_artifacts(tmp_path: Path) -> None:
-    """UT-003/UT-006: an undeclared result cannot create workflow progress."""
+def test_invalid_automatic_result_retains_reserved_visit_without_publishing_artifacts(tmp_path: Path) -> None:
+    """An executor reserves its identity before effects, but invalid output cannot advance."""
     issue_dir = tmp_path / ".cafe" / "issues" / "invalid-automatic-result"
     playbook = {
         "playbook": {"id": "owner-test"},
@@ -618,7 +618,11 @@ def test_invalid_automatic_result_is_rejected_before_visits_or_artifacts(tmp_pat
 
     state = BlackboardStore(issue_dir).load_or_create("automatic")
     assert result.final_status_code == "AUTOMATIC_EXECUTOR_REJECTED"
-    assert state.step_attempt_counts == {}
+    assert state.step_attempt_counts == {"automatic": 1}
+    assert state.ownership_cursor["owner"] == "auto"
+    assert state.ownership_cursor["step"] == "automatic"
+    assert state.ownership_cursor["execution_id"]
+    assert state.current_step == "automatic"
     assert "escaped" not in state.artifacts
 
 
@@ -1153,3 +1157,29 @@ def test_resume_materializes_recovery_for_preexisting_checklist_failure(
     (task,) = HumanTaskRecordStore(issue_dir).tasks()
     assert task.status.value == "pending"
     assert task.continuations == {"retry": "build", "retry_fresh_session": "build"}
+
+
+@pytest.mark.parametrize("mismatch", ["workflow", "step", "iteration", "trigger", "policy"])
+def test_automatic_pause_rejects_unrelated_task_before_publishing(tmp_path, mismatch):
+    issue = tmp_path / ".cafe/issues/automatic-task"
+    playbook = {"playbook": {"id": "automatic-task"}, "steps": {"compute": {
+        "assignee_type": "auto", "skill": "cafe-deliver_development",
+        "automatic": {"executor": "pause", "inputs": {}},
+        "on": {"need_clarification": "compute"},
+        "human_tasks": [{"trigger": "need_clarification", "task_id": "delivery-recovery", "outcomes": {"submit": "compute"}}],
+    }}}
+    state = BlackboardStore(issue).load_or_create("compute")
+    values = {"workflow_id": state.workflow_id, "step": "compute", "iteration": 1,
+              "trigger": "need_clarification", "policy_id": "delivery-recovery"}
+    key = {"workflow": "workflow_id", "policy": "policy_id"}.get(mismatch, mismatch)
+    values[key] = 2 if key == "iteration" else "unrelated"
+    task = HumanTaskRecordStore(issue).materialize(**values, prompt="Unrelated task",
+        expected_result={}, continuations={"submit": "compute"}, assignee_type="user")
+    registry = AutomaticExecutorRegistry({"pause": lambda _: AutomaticExecutionResult(
+        intent="need_clarification", task_id=task.id, artifacts={"unsafe": "should-not-publish"})})
+    runtime = BlackboardWorkflowRuntime(issue_dir=issue, playbook=playbook,
+        executor=lambda *a, **kw: pytest.fail("no agent fallback"), automatic_registry=registry)
+    result = runtime.run()
+    assert result.final_status_code == "AUTOMATIC_EXECUTOR_REJECTED"
+    assert runtime.blackboard.current_step == "compute"
+    assert "unsafe" not in runtime.blackboard.artifacts

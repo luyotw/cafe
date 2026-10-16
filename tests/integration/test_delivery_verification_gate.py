@@ -75,7 +75,8 @@ def test_changed_tool_cannot_run_and_delivery_can_help_draft(
     result = prepare(ctx)
     assert result.continue_pipeline
     assert result.context_updates["delivery_complete"] == "false"
-    assert "Help draft" in result.context_updates["continuation_prompt"]
+    assert "Identify the confirmed requirement" in result.context_updates["continuation_prompt"]
+    assert "Do not execute unapproved host code" in result.context_updates["continuation_prompt"]
     assert not [t for t in HumanTaskRecordStore(ctx[2]).tasks()
                 if t.policy_id == "delivery-outcome"]
     assert json.loads(fake_github.read_text())["effects"] == ["merge"]
@@ -129,7 +130,8 @@ def test_missing_skill_owner_delivery_can_help_draft(
     result = prepare(ctx)
     assert result.continue_pipeline
     assert result.context_updates["delivery_complete"] == "false"
-    assert "Help draft" in result.context_updates["continuation_prompt"]
+    assert "Identify the confirmed requirement" in result.context_updates["continuation_prompt"]
+    assert "Do not execute unapproved host code" in result.context_updates["continuation_prompt"]
     assert not [t for t in HumanTaskRecordStore(ctx[2]).tasks()
                 if t.policy_id == "delivery-outcome"]
     assert json.loads(fake_github.read_text())["effects"] == ["merge"]

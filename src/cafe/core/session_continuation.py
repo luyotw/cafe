@@ -112,9 +112,14 @@ def pre_invocation_recovery_evidence(
     ):
         return None
 
-    # Older runtimes wrote the invocation marker after workspace/checklist preparation.
+    # Older runtimes wrote the invocation marker after skill/workspace/checklist preparation.
     # Accept only the specific, workflow/task-bound audit evidence for that gap.
-    if set(context) <= {"effective_inputs", "workflow_completion_trusted", "agent_invoked"}:
+    if set(context) <= {
+        "effective_inputs",
+        "workflow_completion_trusted",
+        "agent_invoked",
+        "agent_interruption",
+    }:
         audit = AuditEventStore(issue_dir)
         try:
             task = audit.latest_record(
@@ -123,23 +128,76 @@ def pre_invocation_recovery_evidence(
                 step=step_name,
             )
             failure = audit.latest_record(workflow_id, {"step_interrupted"}, step=step_name)
+            prepared = (
+                audit.latest_record(workflow_id, {"agent_interruption_prepared"}, step=step_name)
+                if "agent_interruption" in context
+                else None
+            )
         except (OSError, ValueError):
-            task = failure = None
+            task = failure = prepared = None
+        marker = context.get("agent_interruption")
+        marker_matches = True
+        if "agent_interruption" in context:
+            marker_matches = (
+                task is not None
+                and failure is not None
+                and prepared is not None
+                and isinstance(marker, dict)
+                and marker.get("workflow_id") == workflow_id
+                and marker.get("step") == step_name
+                and prepared["data"].get("marker") == marker
+                and failure["sequence"] < prepared["sequence"] < task["sequence"]
+            )
         if (
-            task is not None
+            marker_matches
+            and task is not None
             and failure is not None
             and task["data"].get("task_id") == task_id
             and task["sequence"] > failure["sequence"]
             and failure["data"].get("reason") == "agent_error"
             and failure["data"].get("attempt") == 1
         ):
+            marker = context.get("agent_interruption")
+            if marker is not None:
+                prepared = audit.latest_record(
+                    workflow_id, {"agent_interruption_prepared"}, step=step_name,
+                )
+                if (
+                    not isinstance(marker, dict)
+                    or marker.get("workflow_id") != workflow_id
+                    or marker.get("step") != step_name
+                    or marker.get("reason") != "agent_error"
+                    or prepared is None
+                    or not failure["sequence"] < prepared["sequence"] < task["sequence"]
+                    or prepared["data"].get("marker") != marker
+                ):
+                    return None
             detail = str(failure["data"].get("detail", ""))
+            if (
+                marker is not None
+                and detail == "Fresh-session recovery has no matching preparation evidence"
+            ):
+                # Session selection precedes invocation. A rejected preparation
+                # must remain recoverable without inventing a provider session.
+                return {"kind": "session_preparation_failed", "event_id": failure["event_id"]}
+            if marker is not None and re.fullmatch(
+                r"Skill not found: Unmanaged or changed native skill conflict: [^\n]+\. "
+                r"Back up and relocate the entry, then rerun prepare or launch; "
+                r"legacy names or matching contents alone do not prove ownership\.",
+                detail,
+            ):
+                return {"kind": "native_skill_preparation_failed", "event_id": failure["event_id"]}
             if re.fullmatch(
                 rf"Step {re.escape(repr(step_name))}, skill '[^']+', "
                 r"workflow\.checklist\.[^\n]+: unresolved placeholders \[[^\n]+\]",
                 detail,
             ):
                 return {"kind": "checklist_preparation_failed", "event_id": failure["event_id"]}
+            if re.fullmatch(
+                r"Skill not found: Unmanaged or changed native skill conflict: [^\n]+",
+                detail,
+            ):
+                return {"kind": "skill_preparation_failed", "event_id": failure["event_id"]}
             if re.fullmatch(
                 r"workspace artifact '[^'\n]+' is stale or contradictory: "
                 r"workspace worktree is dirty; refresh it or resolve the conflict before retrying",

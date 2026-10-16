@@ -682,6 +682,10 @@ class GenericWorkflowStepExecutor(Phase):
         )
 
         self.iteration = self._get_next_iteration_number(step_name, self.phase_dir)
+        from cafe.core.workflow_control import current_control
+        control = current_control()
+        if control is not None:
+            control.position(blackboard_state, self.playbook["steps"], iteration=self.iteration)
         self._resolved_iteration_user_input = None
         self._session_recovery = None
         self._restart_recovery = None
@@ -3535,80 +3539,14 @@ class GenericWorkflowStepExecutor(Phase):
 
         return context
 
-    def _validate_workspace_inputs(
-        self, artifacts: Mapping[str, Any], *, step_def: Optional[Mapping[str, Any]] = None,
-        verified_workspace: WorkspaceArtifact | None = None,
-    ) -> None:
-        """Reject stale current-contract workspace companions before agent launch."""
-        required_name = (
-            step_def.get("workspace_input_artifact") if step_def is not None else None
+    def _validate_workspace_inputs(self, artifacts, *, step_def=None, verified_workspace=None):
+        from cafe.core.workspace_inputs import validate_workspace_inputs
+        validate_workspace_inputs(
+            artifacts,
+            root=getattr(getattr(self, "git_ops", None), "repo_path", Path.cwd()),
+            step_def=step_def,
+            verified_workspace=verified_workspace,
         )
-        if isinstance(required_name, str):
-            required_entry = artifacts.get(required_name)
-            if required_entry is None:
-                raise ValueError(
-                    f"required workspace artifact {required_name!r} is missing; "
-                    "refresh the workspace"
-                )
-            if getattr(required_entry, "kind", None) != ArtifactKind.WORKSPACE:
-                raise ValueError(
-                    f"required workspace artifact {required_name!r} has the wrong kind"
-                )
-        summary_name = (
-            step_def.get("output_artifact") if step_def is not None else None
-        )
-        workspace_entries: list[tuple[str, Any, Path]] = []
-        for name, entry in artifacts.items():
-            if getattr(entry, "kind", None) != ArtifactKind.WORKSPACE:
-                continue
-            path = Path(str(getattr(entry, "path", entry)))
-            if not isinstance(required_name, str) and path.name != "workspace.json":
-                # Bounded v0.2 adapter: a mixed code/workspace record remains
-                # readable for legacy consumers, but is never certified as a
-                # current Git workspace.
-                continue
-            workspace_entries.append((name, entry, path))
-
-        if not workspace_entries:
-            return
-
-        active_repo = Path(getattr(self.git_ops, "repo_path", Path.cwd())).resolve()
-        for name, entry, path in workspace_entries:
-            try:
-                workspace = WorkspaceArtifact.from_dict(
-                    json.loads(path.read_text(encoding="utf-8"))
-                )
-            except (OSError, UnicodeError, json.JSONDecodeError, WorkspaceArtifactError) as exc:
-                raise ValueError(
-                    f"workspace artifact {name!r} is missing or malformed; refresh it"
-                ) from exc
-            if workspace.name != name or getattr(entry, "name", name) != workspace.name:
-                raise ValueError(
-                    f"workspace artifact {name!r} has contradictory logical identity"
-                )
-            if summary_name is not None and name == summary_name:
-                raise ValueError("workspace artifact must be distinct from the summary artifact")
-            if getattr(entry, "version", workspace.version) != workspace.version:
-                raise ValueError(f"workspace artifact {name!r} version is contradictory")
-            if getattr(entry, "base_sha", workspace.base_sha) != workspace.base_sha:
-                raise ValueError(f"workspace artifact {name!r} base SHA is contradictory")
-            if getattr(entry, "head_sha", workspace.head_sha) != workspace.head_sha:
-                raise ValueError(f"workspace artifact {name!r} head SHA is contradictory")
-            if workspace == verified_workspace and workspace.repository == str(active_repo):
-                # Reuse only the exact snapshot just checked by refresh in this
-                # same leased guard invocation. Every subsequent guard checks
-                # Git again, including the immediate second stability check.
-                continue
-            checked = verify_workspace_artifact(
-                workspace,
-                repo=active_repo,
-            )
-            if not checked.valid:
-                detail = "; ".join(checked.reasons)
-                raise ValueError(
-                    f"workspace artifact {name!r} is stale or contradictory: {detail}; "
-                    "refresh it or resolve the conflict before retrying"
-                )
 
     def _refresh_declared_workspace_input(
         self,

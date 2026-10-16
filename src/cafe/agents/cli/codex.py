@@ -38,6 +38,14 @@ class CodexCLI(AbstractCLI):
         # read-only to workspaceWrite in a metadata-only probe (no file write).
         # This is not immutable OS/IPC protection. Native persistence continues,
         # and the built-in sandbox/backend may fail; surface that actual error.
+        if operation == "run_one_shot":
+            global_end = command.index("exec")
+            if "--sandbox" in command[1:global_end]:
+                # Empty-scope execution already supplies a global sandbox option.
+                restricted = command.copy()
+                sandbox_index = restricted.index("--sandbox", 1, global_end)
+                restricted[sandbox_index + 1] = "read-only"
+                return restricted
         options = ["--sandbox", "read-only"]
         if operation == "open_interactive_session":
             options += ["--ask-for-approval", "never"]

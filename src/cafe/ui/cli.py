@@ -25,6 +25,7 @@ from cafe.ui.commands import verification as verification_commands
 from cafe.ui.commands import trust as trust_commands
 from cafe.ui.commands import update as update_commands
 from cafe.ui.commands import settings as settings_commands
+from cafe.ui.commands.delivery import delivery_app
 from cafe.ui.commands.pricing import pricing_app
 from cafe.ui.cli_shared import (
     CONTENT_TYPE_FILE_MAP as _SHARED_CONTENT_TYPE_FILE_MAP,
@@ -795,6 +796,8 @@ app.command()(workflow_commands.show)
 app.command()(workflow_commands.status)
 app.command()(workflow_commands.workflow)
 app.command()(workflow_commands.repair)
+from cafe.ui.commands.workflow_interrupt import workflow_interrupt
+app.command("workflow-interrupt")(workflow_interrupt)
 
 app.command(name="audit")(audit_commands.audit)
 
@@ -839,6 +842,7 @@ app.add_typer(pricing_app, name="pricing")
 # Workflow verification receipts
 app.add_typer(verification_commands.verification_app, name="verification")
 app.add_typer(trust_commands.trust_app, name="trust")
+app.add_typer(delivery_app, name="delivery")
 
 
 def _print_agents(custom_only: bool = False) -> None:

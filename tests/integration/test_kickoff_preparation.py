@@ -241,7 +241,8 @@ def test_compact_cli_reports_preserve_selected_facts_and_full_render(
     formatter_inputs["phase_chain"] = [name + "=" + ",".join(
         entry["cli"] + ":" + entry["model"] for entry in fields["clis"])
         for name, fields in configured.items()]
-    formatter_inputs["proactive_review_decision"].insert(-2, "qa=not_required")
+    review_decisions = formatter_inputs["proactive_review_decision"]
+    review_decisions.insert(review_decisions.index("pr=not_required"), "qa=not_required")
     request = {
         "schema_version": 1,
         "project_root": str(PROJECT_ROOT),
@@ -519,9 +520,7 @@ def test_cached_delivery_and_issue_defaults_reach_the_complete_formatter(tmp_pat
     assert "deliver" not in fields and "deliver_description" not in fields
     assert fields["cleanup"][0] == ["gh", "issue", "close", "999573", "--repo", "example/project"]
     cleanup = fields["cleanup"][1]
-    assert Path(cleanup[1]).name == "cleanup_worktree.py"
-    assert cleanup[cleanup.index("--project-root") + 1] == str(Path(values["project_root"]).resolve())
-    assert cleanup[cleanup.index("--issue-name") + 1] == values["issue_name"]
+    assert cleanup == ["cafe", "close"]
     assert fields["manager_mode"] == "event-driven" and fields["event_manager"] == ["codex"]
     assert fields["worktree"].endswith("/.cafe/worktrees/" + values["issue_name"])
     # Only fill the actual gaps; do not hand-copy any prefilled field.
@@ -786,7 +785,7 @@ def test_public_schema_example_preserves_exact_model_identity_through_render(
     selected = "gpt-5.5"
     example = schema["decision_examples"]["phase_chain"][0].replace("<exact-model>", selected).replace("<verified-effort>", "high")
     values["phase_chain"] = [entry for entry in values["phase_chain"] if not entry.startswith("develop=")] + [example]
-    values["phase_rationale"] = schema["decision_examples"]["phase_rationale"]
+    assert "phase_rationale" not in schema["decision_examples"]
     request = {"schema_version": 1, "project_root": str(PROJECT_ROOT), "issue_name": values["issue_name"],
                "playbook_id": values["playbook_id"], "formatter_inputs": values}
     path = tmp_path / "request.json"
@@ -795,6 +794,7 @@ def test_public_schema_example_preserves_exact_model_identity_through_render(
                      "--cache-dir", str(tmp_path / "cache")]) == 0
     phases = json.loads(capsys.readouterr().out)["render"]["proposal"]["phases"]
     assert next(phase["chain"] for phase in phases if phase["name"] == "develop") == [{"cli": "codex", "model": selected, "reasoning_effort": "high"}]
+    assert all("rationale" not in phase for phase in phases)
 
 
 def test_selected_draft_supplies_owner_typed_contract_and_renders_without_repairs(
@@ -830,9 +830,7 @@ def test_selected_draft_supplies_owner_typed_contract_and_renders_without_repair
     assert set(template["delivery_contract"]) == set(values["delivery_contract"])
     assert "deliver" not in template
     cleanup = template["cleanup"][0]
-    assert Path(cleanup[1]).name == "cleanup_worktree.py"
-    assert cleanup[cleanup.index("--worktree") + 1] == str((PROJECT_ROOT / values["worktree"]).resolve())
-    assert cleanup[cleanup.index("--issue-name") + 1] == values["issue_name"]
+    assert cleanup == ["cafe", "close"]
     assert cli.main(["assemble", *common, "--summary", "--draft-output", str(draft)]) == 3
     capsys.readouterr()
     draft_request = json.loads(draft.read_text())

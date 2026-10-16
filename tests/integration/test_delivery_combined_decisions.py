@@ -45,7 +45,7 @@ def activate_closeout(context, command):
     path.write_text(content)
     for binding in context[5]["steps"][delivery]["human_tasks"]:
         if binding["task_id"] == "delivery-outcome":
-            binding["outcomes"].update(confirm_cleanup="_done", confirm_archive="_done")
+            binding["outcomes"].update(confirm_cleanup="_done", confirm_archive="_done", revise=delivery)
     proposal = _manager_proposal()
     proposal["delivery_contract"]["schema_version"] = 5
     proposal["delivery_contract"]["terminal_selection"] = "delivery_outcome"

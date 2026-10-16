@@ -861,6 +861,9 @@ def _launch_chat_session(
                         **({"read_only": True} if read_only else {}),
                     )
                 except (AgentExecutionError, OSError, ValueError) as error:
+                    diagnostics = getattr(error, "stderr_diagnostics", None)
+                    if isinstance(diagnostics, dict) and diagnostics.get("stderr_log"):
+                        print(f"\nPrivate stderr diagnostic: {diagnostics['stderr_log']}")
                     partial = getattr(error, "transport_result", None) or TransportResult(
                         failure_code=getattr(error, "error_type", None) or "execution_failed",
                     )
@@ -997,7 +1000,7 @@ def launch_chat_session(
     prompt: Optional[str] = None,
     read_only: bool = False,
 ) -> int:
-    """Launch chat with optional native model-tool limits and no CAFE writes.
+    """Launch chat with optional native model-tool limits and no CAFE state writes.
 
     Native UI/integrations and provider persistence remain outside this limit.
     Read-only context failures are reported without initializing or repairing it.

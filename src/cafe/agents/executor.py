@@ -259,7 +259,8 @@ class AgentExecutor:
             cli_strategy = self._get_cli_strategy()
             if read_only:
                 cli_strategy.require_read_only("run_one_shot")
-                # Diagnostic output is terminal/response only; no CAFE log file.
+                # Do not write workflow logs. Failed attempts may retain private
+                # stderr diagnostics in the system temporary directory.
                 streaming_output_file = None
             # Normal Gemini agents keep the repository-owned ignore file.
             # Decision-only execution creates it only inside its isolated cwd.
@@ -1467,6 +1468,13 @@ class AgentExecutor:
             from cafe.agents.cli.codex_usage import prepare_model_reader
 
             native_model_reader = prepare_model_reader(accounting_environment)
+        from cafe.core.workflow_control import current_control, check_control, SupervisorCorrection
+        control = current_control()
+        if control is not None and not control.supports_provider_interruption:
+            control = None
+        check_control()
+        if control is not None:
+            control.provider_starting()
         try:
             process = subprocess.Popen(
                 cmd,
@@ -1477,8 +1485,11 @@ class AgentExecutor:
                 bufsize=1,  # Line buffered
                 env=env,
                 cwd=str(process_cwd) if process_cwd is not None else None,
+                start_new_session=control is not None,
             )
         except FileNotFoundError as e:
+            if control is not None:
+                control.provider_stopped()  # Popen did not dispatch the executable.
             if provider_usage is not None:
                 provider_usage.close()
             # CLI command not found - provide user-friendly error
@@ -1488,16 +1499,42 @@ class AgentExecutor:
             )
             err.error_type = "cli_not_found"
             raise err from e
+        except OSError:
+            if control is not None:
+                control.provider_stopped()  # Popen did not hand off an executable.
+            if provider_usage is not None:
+                provider_usage.close()
+            raise
         except BaseException:
             if provider_usage is not None:
                 provider_usage.close()
             raise
 
-        if execution_control is not None and execution_control.on_process_started is not None:
+        def stop_controlled_provider(*, strict=True):
+            if control is None:
+                return
+            from cafe.agents.process_control import stop_provider
             try:
-                execution_control.on_process_started()
+                stop_provider(process)
+            except Exception as exc:
+                control.provider_unverified()
+                if strict:
+                    raise SupervisorCorrection("provider quiescence is unverified") from exc
+            else:
+                control.provider_stopped()
+
+        if control is not None or (execution_control is not None and execution_control.on_process_started is not None):
+            try:
+                if control is not None:
+                    control.provider_started(process.pid)
+                if execution_control is not None and execution_control.on_process_started is not None:
+                    execution_control.on_process_started()
+            except SupervisorCorrection:
+                stop_controlled_provider()
+                raise
             except BaseException:
                 # Submission has happened; a caller error must not leave its child running.
+                stop_controlled_provider(strict=False)
                 try:
                     process.terminate()
                 except OSError:
@@ -1511,7 +1548,6 @@ class AgentExecutor:
                     provider_usage.close()
                 raise
 
-        # Check stderr first for immediate errors (e.g., session locked)
         import sys
 
         process_output = ProcessOutput(process)
@@ -1525,23 +1561,11 @@ class AgentExecutor:
         retained_output_bytes = 0
         received_terminal_stream_event = False
         try:
-            startup_fatal_error = False
-            if sys.platform != "win32":
-                process_output.first_stderr_ready.wait(timeout=0.5)
-                stderr_line = process_output.first_stderr_line
-                if stderr_line:
-                    # Only treat as fatal error if it's NOT a tool execution error
-                    # Tool errors like "Error executing tool" are recoverable and agent continues
-                    is_tool_error = "error executing tool" in stderr_line.lower()
-                    startup_fatal_error = stderr_line and (
-                        "already in use" in stderr_line.lower()
-                        or "limit reached" in stderr_line.lower()
-                        or "hit your limit" in stderr_line.lower()
-                        or ("error" in stderr_line.lower() and not is_tool_error)
-                    )
+            # Providers may log recoverable startup errors on stderr. Only their
+            # exit status, structured result and existing deadlines decide failure.
             # Agent narration may be muted for a supervising driver. Parsing, durable
             # streaming logs, lifecycle events, and error output remain unaffected.
-            if self.stream_output and not startup_fatal_error:
+            if self.stream_output:
                 print(f"\n{'=' * 80}")
                 print(f"{cli_name} Response (streaming):")
                 print(f"{'=' * 80}")
@@ -1782,47 +1806,17 @@ class AgentExecutor:
                         streaming_file_handle.write(encoded_activity)
                         streaming_file_handle.flush()
 
-            def raise_startup_error() -> None:
-                # Drain already received identity events before acting on startup
-                # stderr. Otherwise a fast CLI failure discards its session ID.
-                nonlocal returncode
-                process.kill()
-                returncode = process.wait(timeout=2)
-                full_stderr = process_output.stderr_text()
-                error_type, display_message = self._classify_execution_error(
-                    cli_name, full_stderr
-                )
-                error = AgentExecutionError(
-                    f"{cli_name} execution failed: {full_stderr}",
-                    error_type=error_type,
-                    display_message=display_message or (
-                        f"{cli_name} failed before producing a complete response."
-                    ),
-                )
-                error.cli_command_args = cmd[1:]
-                persist_safe_stream_error(error)
-                raise error
-
-            startup_error_deadline = (
-                time.monotonic() + 1 if startup_fatal_error else None
-            )
             try:
                 if process.stdout:
                     while True:
-                        if (
-                            startup_error_deadline is not None
-                            and time.monotonic() >= startup_error_deadline
-                        ):
-                            raise_startup_error()
+                        check_control()
                         if execution_limit_reached.is_set():
                             break
                         record_stream_activity()
                         if execution_limit_reached.is_set():
                             break
                         try:
-                            line = process_output.readline(
-                                timeout=0.1 if startup_fatal_error else 1.0
-                            )
+                            line = process_output.readline(timeout=1.0)
                         except ProcessOutputError as cause:
                             error = AgentExecutionError(
                                 "Unable to read provider output.", error_type="pipe_read_error"
@@ -1830,8 +1824,6 @@ class AgentExecutor:
                             persist_safe_stream_error(error)
                             raise error from cause
                         except Empty:
-                            if startup_fatal_error:
-                                raise_startup_error()
                             # Activity can arrive while stdout readline is waiting.
                             record_stream_activity()
                             if execution_limit_reached.is_set():
@@ -1842,8 +1834,6 @@ class AgentExecutor:
                                 break
                             continue
                         if line is None:
-                            if startup_fatal_error:
-                                raise_startup_error()
                             break
 
                         if (self.config.native_review_configuration and len(native_observed_at) < 512
@@ -2085,8 +2075,6 @@ class AgentExecutor:
                                 observe_native(data)
                                 if data.get("type") in terminal_stream_event_types:
                                     received_terminal_stream_event = True
-                                    if startup_fatal_error:
-                                        raise_startup_error()
                                     break
 
                                 # Extract content using custom extractor or default Claude extractor
@@ -2172,7 +2160,13 @@ class AgentExecutor:
                 if execution_timer is not None:
                     execution_timer.cancel()
                 raise
+            except SupervisorCorrection:
+                if execution_timer is not None:
+                    execution_timer.cancel()
+                stop_controlled_provider()
+                raise
             except KeyboardInterrupt:
+                stop_controlled_provider(strict=False)
                 if execution_timer is not None:
                     execution_timer.cancel()
                 print(f"\n\n⚠️  Interrupted by user, terminating {cli_name} process...")
@@ -2188,6 +2182,7 @@ class AgentExecutor:
                     streaming_file_handle.close()
                 raise
             except BaseException as error:
+                stop_controlled_provider(strict=False)
                 if execution_timer is not None:
                     execution_timer.cancel()
                 if process.poll() is None:
@@ -2206,6 +2201,7 @@ class AgentExecutor:
                 execution_timer.cancel()
 
             if execution_limit_reached.is_set():
+                stop_controlled_provider(strict=False)
                 try:
                     process.wait(timeout=2)
                 except subprocess.TimeoutExpired:
@@ -2230,6 +2226,7 @@ class AgentExecutor:
 
             # If idle timeout triggered, terminate process immediately
             if idle_timeout_triggered:
+                stop_controlled_provider(strict=False)
                 print(f"⚠️  Terminating {cli_name} process due to idle timeout...")
                 process.terminate()
                 try:
@@ -2468,7 +2465,7 @@ class AgentExecutor:
                     process.wait(timeout=2)
             try:
                 stderr_snapshot = process_output.stderr_text()
-                if streaming_output_file:
+                if streaming_output_file or isinstance(attempt_error, AgentExecutionError):
                     actual_returncode = process.poll()
                     metadata = save_stderr_diagnostics(
                         streaming_output_file,
@@ -2498,13 +2495,13 @@ class AgentExecutor:
                             }
                     if streaming_file_handle is not None and not streaming_file_handle.closed:
                         streaming_file_handle.close()
-                    if safe_error_record is not None:
+                    if streaming_output_file and safe_error_record is not None:
                         safe_error_record["stderr_diagnostics"] = metadata
                         Path(streaming_output_file).write_text(
                             json.dumps(safe_error_record, ensure_ascii=False) + "\n",
                             encoding="utf-8",
                         )
-                    elif attempt_error is None:
+                    elif streaming_output_file and attempt_error is None:
                         with open(streaming_output_file, "a", encoding="utf-8") as handle:
                             handle.write(
                                 json.dumps({"type": "stderr_diagnostics", **metadata}) + "\n"
@@ -2515,6 +2512,10 @@ class AgentExecutor:
                 if streaming_file_handle is not None and not streaming_file_handle.closed:
                     streaming_file_handle.close()
                 process_output.close()
+                if control is not None:
+                    from cafe.agents.process_control import group_stopped
+                    if process.returncode is not None and group_stopped(process.pid):
+                        control.provider_stopped()
                 if provider_usage is not None:
                     provider_usage.close()
 

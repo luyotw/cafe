@@ -1,5 +1,9 @@
 """Durable answers retain their saved contract across owner-copy changes."""
 
+from cafe.workflow_execution.automatic import (
+    automatic_executor_registry as _automatic_executor_registry,
+)
+
 import json
 import shutil
 from pathlib import Path
@@ -49,6 +53,7 @@ def pending_owner(tmp_path, monkeypatch, request):
             status_code=status,
             auto_continue=False,
         ),
+        automatic_registry=_automatic_executor_registry(),
     ).run(start_step="spec")
     task = HumanTaskRecordStore(issue).tasks()[0]
     assert task.status is HumanTaskStatus.PENDING

@@ -41,3 +41,5 @@ human_task.delivery.delivery_draft: '{id}：{title}
 human_task.delivery.delivery_review_source: Review 來源：{artifact} v{version}，{path}，產生者
   {producer}，SHA256 {sha256}
 human_task.delivery.delivery_publication: 已驗證 PR 連結：{url}
+
+human_task.delivery.result_summary: "儲存庫：{repository}\n來源：{source}\n目標：{target}\n策略：{strategy}\n已驗證整合 commit：{commit}"

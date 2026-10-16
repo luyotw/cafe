@@ -1356,6 +1356,12 @@ def _apply_human_task_payload(
             transition_intent=HandoffIntent.AWAIT_AGENT.value,
             transition_source=f"human_task.{source}",
         )
+    cursor = blackboard.ownership_cursor
+    if (isinstance(cursor, dict) and cursor.get("owner") == "auto" and cursor.get("step") == from_step
+            and (continuation != from_step or delivery_decision is not None and delivery_decision.correction)):
+        blackboard.ownership_cursor = None
+    if blackboard.host_wait and blackboard.host_wait.get("step") == from_step:
+        blackboard.host_wait = None
     store.set_current_step(blackboard, "done" if is_done else continuation)
     store.set_handoff_summary(blackboard, f"Completed human task {policy.id} for {from_step}")
     store.update_handoff_contract(

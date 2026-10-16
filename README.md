@@ -495,6 +495,13 @@ native restrictions and the configured provider/model, updating session identity
 only in memory. Diagnostic output remains available, but CAFE does not record
 chat usage or save the recovered session.
 
+Failed one-shot attempts retain bounded raw stderr in a unique private file in
+the system temporary directory (owner-only permissions on Unix); chat prints
+its path, not its contents. This also applies to recovered failed attempts and
+does not write project, workflow, session or usage records. A stderr message
+containing `error` is not itself a failure: CAFE uses the provider's exit status,
+structured completion and existing time/output limits.
+
 These native model-tool parameters are not immutable protection of the entire
 CLI process. Provider-owned history/session/configuration persistence may still
 write inside or outside the repository. Native UI commands, permission changes,
@@ -571,7 +578,7 @@ Versioning policy, while roadmap stages describe product direction independently
 - [Roadmap](docs/roadmap.md)
 - [Versioning policy](docs/versioning.md)
 - [Changelog](CHANGELOG.md)
-- [Latest release notes](docs/releases/v0.11.2.md)
+- [Latest release notes](docs/releases/v0.12.0.md)
 - [Strategic positioning](docs/positioning.md)
 - [Known runtime constraints](docs/known-constraints.md)
 - [Cost accounting and automatic OpenAI rate updates](docs/cost-accounting.md)

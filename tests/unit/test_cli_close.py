@@ -2,7 +2,7 @@
 
 from pathlib import Path
 import subprocess
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import patch
 
 import pytest
 import yaml
@@ -10,9 +10,58 @@ from typer.testing import CliRunner
 
 from cafe.core.git import GitError
 from cafe.ui.cli import app
-from cafe.utils.github import GitHubError
 
 runner = CliRunner()
+
+
+@pytest.mark.parametrize("invalid", [None, "traversal", "symlink", "wrong_checkout", "wrong_identity", "missing", "normal_close"])
+def test_explicit_archive_on_different_branch_uses_only_current_registered_issue(tmp_path, monkeypatch, invalid):
+    from cafe.core.git import GitOperations
+
+    def git(root, *args):
+        return subprocess.check_output(["git", "-C", str(root), *args], text=True).strip()
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    root, worktree = tmp_path / "repo", tmp_path / "feature"
+    root.mkdir()
+    git(root, "init", "-b", "develop")
+    git(root, "config", "user.name", "Test")
+    git(root, "config", "user.email", "test@example.com")
+    (root / ".gitignore").write_text(".cafe/\n")
+    git(root, "add", ".gitignore")
+    git(root, "commit", "-m", "base")
+    git(root, "worktree", "add", "-b", "issue474-date-fix", str(worktree))
+    issue = worktree / ".cafe/issues/issue474"
+    issue.mkdir(parents=True)
+    config = {"issue_name": "issue474", "worktree_path": str(worktree), "base_branch": "develop"}
+    if invalid == "wrong_checkout":
+        config["worktree_path"] = str(root)
+    if invalid == "wrong_identity":
+        config["issue_name"] = "another"
+    (issue / "issue.yaml").write_text(yaml.safe_dump(config))
+    (issue / "evidence.txt").write_text("retain")
+    selected = "../issue474" if invalid == "traversal" else "absent" if invalid == "missing" else "issue474"
+    if invalid == "symlink":
+        selected = "alias"
+        (issue.parent / selected).symlink_to(issue, target_is_directory=True)
+    monkeypatch.chdir(worktree)
+    argv = ["close", "--issue", selected]
+    if invalid != "normal_close":
+        argv.append("--archive-only")
+    with patch("cafe.ui.cli.GitOperations", GitOperations), patch("cafe.ui.cli.GitHubOps") as gh:
+        result = runner.invoke(app, argv)
+    gh.assert_not_called()
+    assert worktree.is_dir() and git(worktree, "branch", "--show-current") == "issue474-date-fix"
+    archived = list(home.glob(".cafe/projects/*/archived/issue474/evidence.txt"))
+    if invalid:
+        assert result.exit_code != 0, result.output
+        assert issue.exists() and not archived
+    else:
+        assert result.exit_code == 0, result.output
+        assert not issue.exists() and len(archived) == 1
+        assert archived[0].read_text() == "retain"
 
 
 @pytest.mark.parametrize("linked_base", [False, True])
@@ -68,766 +117,70 @@ def test_close_external_worktree_uses_the_checkout_owning_base(tmp_path, monkeyp
     assert archives[0].read_text() == "preserve review evidence"
 
 
-@pytest.fixture
-def temp_repo_dir(tmp_path, monkeypatch):
-    """Create a temporary git repository directory."""
-    # Change to temp directory
-    monkeypatch.chdir(tmp_path)
 
-    # Create .cafe directory
-    cafe_dir = tmp_path / ".cafe"
-    cafe_dir.mkdir(parents=True)
-
-    return tmp_path
-
-
-@pytest.fixture
-def mock_git_ops():
-    """Create a mock GitOperations instance."""
-    with patch('cafe.ui.cli.GitOperations') as MockGitOperations:
-        mock_git = MagicMock()
-        MockGitOperations.return_value = mock_git
-
-        # Default behaviors
-        mock_git.get_current_branch.return_value = "test-issue"
-        mock_git.checkout_branch.return_value = None
-        mock_git.delete_branch.return_value = None
-        mock_git.delete_remote_branch_if_exists.return_value = True
-        mock_git.pull.return_value = None
-
-        yield mock_git
-
-
-@pytest.fixture
-def mock_github_ops_no_pr():
-    """Create a mock GitHubOps instance with no PR."""
-    with patch('cafe.ui.cli.GitHubOps') as MockGitHubOps:
-        mock_gh = MagicMock()
-        MockGitHubOps.return_value = mock_gh
-
-        # Default: no PR exists
-        mock_gh.get_pr_for_branch.return_value = None
-
-        yield mock_gh
-
-
-@pytest.fixture
-def issue_with_config(temp_repo_dir):
-    """Create an issue directory with config.yaml."""
-    issue_dir = temp_repo_dir / ".cafe" / "issues" / "test-issue"
-    issue_dir.mkdir(parents=True)
-
-    config_file = issue_dir / "issue.yaml"
-    config_data = {
-        "base_branch": "main",
-        "feature_branch": "test-issue",
-        "pr": {"auto_create": True},
-    }
-    with open(config_file, "w") as f:
-        yaml.dump(config_data, f)
-
-    return issue_dir
-
-
-@pytest.fixture(autouse=True)
-def cleanup_archive(temp_repo_dir):
-    """Clean up archived directories after each test."""
-    yield
-    # Clean up archive directory after test
-    import shutil
-    project_path = str(temp_repo_dir.resolve()).lstrip('/').replace('/', '-')
-    archive_base = Path.home() / ".cafe" / "projects" / project_path
-    if archive_base.exists():
-        shutil.rmtree(archive_base)
-
-
-class TestCloseCommand:
-    """Test close command."""
-
-    def test_close_success(self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_config):
-        """測試成功執行 close 指令（AC-1）"""
-        result = runner.invoke(app, ["close"])
-
-        assert result.exit_code == 0
-        assert "Switching to base branch: main" in result.stdout
-        assert "Deleting feature branch: test-issue" in result.stdout
-        assert "Updating base branch" in result.stdout
-        assert "Successfully closed issue: test-issue" in result.stdout
-
-        # Verify git operations called in correct order
-        mock_git_ops.get_current_branch.assert_called()
-        mock_git_ops.checkout_branch.assert_called_once_with("main")
-        mock_git_ops.delete_branch.assert_called_once_with("test-issue")
-        mock_git_ops.delete_remote_branch_if_exists.assert_called_once_with("test-issue")
-        mock_git_ops.pull.assert_called_once()
-
-        # Verify issue directory moved to archive
-        assert not issue_with_config.exists(), "Issue directory should be moved to archive"
-
-        # Verify archived location
-        project_path = str(temp_repo_dir.resolve()).lstrip('/').replace('/', '-')
-        archive_path = Path.home() / ".cafe" / "projects" / project_path / "archived" / "test-issue"
-        assert archive_path.exists(), f"Issue should be archived at {archive_path}"
-
-    def test_archive_only_bypasses_delivery_and_retains_source_state(
-        self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_config
-    ):
-        mock_github_ops_no_pr.get_pr_for_branch.return_value = {
-            "number": 123,
-            "title": "Open PR",
-            "url": "https://github.com/owner/repo/pull/123",
-            "state": "OPEN",
-            "isDraft": False,
-        }
-        marker = temp_repo_dir / ".cafe" / "active_issue"
-        marker.write_text("test-issue\n", encoding="utf-8")
-
-        result = runner.invoke(app, ["close", "--archive-only"])
-
-        assert result.exit_code == 0
-        assert "Archived issue without delivery: test-issue" in result.stdout
-        assert "Feature branch and worktree retained" in result.stdout
-        assert not issue_with_config.exists()
-        assert not marker.exists()
-        project_path = str(temp_repo_dir.resolve()).lstrip("/").replace("/", "-")
-        archive_path = Path.home() / ".cafe" / "projects" / project_path / "archived" / "test-issue"
-        assert (archive_path / "issue.yaml").exists()
-
-        mock_github_ops_no_pr.get_pr_for_branch.assert_not_called()
-        mock_git_ops.checkout_branch.assert_not_called()
-        mock_git_ops.pull.assert_not_called()
-        mock_git_ops.merge.assert_not_called()
-        mock_git_ops.merge_squash.assert_not_called()
-        mock_git_ops.delete_remote_branch_if_exists.assert_not_called()
-        mock_git_ops.delete_branch.assert_not_called()
-        mock_git_ops.remove_worktree.assert_not_called()
-
-    def test_archive_only_rejects_squash(self, temp_repo_dir, mock_git_ops, issue_with_config):
-        result = runner.invoke(app, ["close", "--archive-only", "--squash"])
-
-        assert result.exit_code == 1
-        assert "--archive-only cannot be combined with --squash" in result.stdout
-        mock_git_ops.get_current_branch.assert_not_called()
-
-    def test_close_remote_delete_failure_preserves_local_cleanup_state(
-        self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_config
-    ):
-        mock_git_ops.delete_remote_branch_if_exists.side_effect = GitError(
-            "remote permission denied"
-        )
-
-        result = runner.invoke(app, ["close"])
-
-        assert result.exit_code == 1
-        assert "Failed to delete remote branch" in result.stdout
-        assert "Restored feature branch for retry: test-issue" in result.stdout
-        assert "git push origin --delete test-issue" in result.stdout
-        mock_git_ops.delete_branch.assert_not_called()
-        assert mock_git_ops.checkout_branch.call_args_list == [
-            call("main"),
-            call("test-issue"),
-        ]
-        assert issue_with_config.exists()
-
-    def test_close_remote_delete_and_branch_restore_failure_has_manual_recovery(
-        self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_config
-    ):
-        mock_git_ops.checkout_branch.side_effect = [None, GitError("checkout failed")]
-        mock_git_ops.delete_remote_branch_if_exists.side_effect = GitError(
-            "remote permission denied"
-        )
-
-        result = runner.invoke(app, ["close"])
-
-        assert result.exit_code == 1
-        assert "Failed to restore feature branch: checkout failed" in result.stdout
-        assert "git checkout test-issue" in result.stdout
-        assert "git push origin --delete test-issue" in result.stdout
-        mock_git_ops.delete_branch.assert_not_called()
-        assert issue_with_config.exists()
-
-    def test_close_checkout_fails(self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_config):
-        """測試切換分支失敗（AC-2）"""
-        mock_git_ops.checkout_branch.side_effect = GitError("Cannot checkout branch")
-
-        result = runner.invoke(app, ["close"])
-
-        assert result.exit_code == 1
-        assert "Failed" in result.stdout
-        assert "Cannot checkout branch" in result.stdout
-
-        # Verify subsequent operations not called
-        mock_git_ops.delete_branch.assert_not_called()
-        mock_git_ops.pull.assert_not_called()
-
-    def test_close_delete_branch_fails(self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_config):
-        """測試刪除分支失敗（AC-3）"""
-        mock_git_ops.delete_branch.side_effect = GitError("Cannot delete branch")
-
-        result = runner.invoke(app, ["close"])
-
-        assert result.exit_code in [0, 1]
-        assert ("Warning" in result.stdout or "Failed" in result.stdout or "delete branch" in result.stdout.lower())
-
-        # Verify checkout was called
-        mock_git_ops.checkout_branch.assert_called_once_with("main")
-
-    def test_close_pull_fails(self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_config):
-        """測試更新 base_branch 失敗（AC-4）"""
-        mock_git_ops.pull.side_effect = GitError("Cannot pull")
-
-        result = runner.invoke(app, ["close"])
-
-        assert result.exit_code in [0, 1]
-        assert ("Warning" in result.stdout or "Failed" in result.stdout or "pull" in result.stdout.lower())
-
-        # Verify previous operations were called
-        mock_git_ops.checkout_branch.assert_called_once_with("main")
-
-    def test_close_archives_issue_directory(self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_config):
-        """測試確認資料夾被歸檔（AC-5）"""
-        result = runner.invoke(app, ["close"])
-
-        assert result.exit_code == 0
-
-        # Issue directory should be moved to archive
-        assert not issue_with_config.exists(), "Issue directory should be moved to archive"
-
-        # Verify archived location
-        from pathlib import Path
-        project_path = str(temp_repo_dir.resolve()).lstrip('/').replace('/', '-')
-        archive_path = Path.home() / ".cafe" / "projects" / project_path / "archived" / "test-issue"
-        assert archive_path.exists(), f"Issue should be archived at {archive_path}"
-
-    def test_close_fails_when_issue_archive_cannot_be_written(
-        self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_config
-    ):
-        with patch(
-            "cafe.ui.commands.lifecycle.shutil.move", side_effect=OSError("archive disk full")
-        ):
-            result = runner.invoke(app, ["close"])
-
-        assert result.exit_code == 1
-        assert "Failed to archive issue data: archive disk full" in result.stdout
-        assert "Successfully closed issue" not in result.stdout
-        assert issue_with_config.exists()
-
-    def test_close_without_issue_config(self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr):
-        """測試當 issue config 不存在時"""
-        mock_git_ops.get_current_branch.return_value = "nonexistent-issue"
-
-        result = runner.invoke(app, ["close"])
-
-        assert result.exit_code == 1
-        assert "Error" in result.stdout
-        assert "Issue config not found" in result.stdout
-
-    def test_close_with_custom_base_branch(self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr):
-        """測試使用自訂 base branch"""
-        # Create issue with custom base branch
-        issue_dir = temp_repo_dir / ".cafe" / "issues" / "custom-issue"
-        issue_dir.mkdir(parents=True)
-
-        config_file = issue_dir / "issue.yaml"
-        config_data = {
-            "base_branch": "develop",
-            "feature_branch": "custom-issue"
-        }
-        with open(config_file, "w") as f:
-            yaml.dump(config_data, f)
-
-        mock_git_ops.get_current_branch.return_value = "custom-issue"
-
-        result = runner.invoke(app, ["close"])
-
-        assert result.exit_code == 0
-        assert "Switching to base branch: develop" in result.stdout
-        mock_git_ops.checkout_branch.assert_called_once_with("develop")
-
-
-class TestCloseCommandWithPRCheck:
-    """Test close command with PR checks."""
-
-    def test_close_blocked_by_open_pr(self, temp_repo_dir, mock_git_ops, issue_with_config):
-        """測試當有 open PR 時無法 close"""
-        with patch('cafe.ui.cli.GitHubOps') as MockGitHubOps:
-            mock_gh = MagicMock()
-            MockGitHubOps.return_value = mock_gh
-
-            # Mock open PR
-            mock_gh.get_pr_for_branch.return_value = {
-                "number": 123,
-                "title": "Test PR",
-                "url": "https://github.com/owner/repo/pull/123",
-                "state": "OPEN",
-                "isDraft": False
-            }
-
-            result = runner.invoke(app, ["close"])
-
-            assert result.exit_code == 1
-            assert "Cannot close: Open PR found" in result.stdout
-            assert "PR #123" in result.stdout
-            assert "Test PR" in result.stdout
-            assert "State: OPEN" in result.stdout
-
-            # Verify git operations not called
-            mock_git_ops.checkout_branch.assert_not_called()
-            mock_git_ops.delete_branch.assert_not_called()
-
-    def test_close_blocked_by_draft_pr(self, temp_repo_dir, mock_git_ops, issue_with_config):
-        """測試當有 draft PR 時無法 close"""
-        with patch('cafe.ui.cli.GitHubOps') as MockGitHubOps:
-            mock_gh = MagicMock()
-            MockGitHubOps.return_value = mock_gh
-
-            # Mock draft PR
-            mock_gh.get_pr_for_branch.return_value = {
-                "number": 456,
-                "title": "Draft PR",
-                "url": "https://github.com/owner/repo/pull/456",
-                "state": "OPEN",
-                "isDraft": True
-            }
-
-            result = runner.invoke(app, ["close"])
-
-            assert result.exit_code == 1
-            assert "Cannot close: Open PR found" in result.stdout
-            assert "PR #456" in result.stdout
-            assert "Draft PR" in result.stdout
-            assert "(DRAFT)" in result.stdout
-
-            # Verify git operations not called
-            mock_git_ops.checkout_branch.assert_not_called()
-            mock_git_ops.delete_branch.assert_not_called()
-
-    def test_close_allowed_with_merged_pr(self, temp_repo_dir, mock_git_ops, issue_with_config):
-        """測試當 PR 已合併時允許 close"""
-        with patch('cafe.ui.cli.GitHubOps') as MockGitHubOps:
-            mock_gh = MagicMock()
-            MockGitHubOps.return_value = mock_gh
-
-            # Mock merged PR
-            mock_gh.get_pr_for_branch.return_value = {
-                "number": 789,
-                "title": "Merged PR",
-                "url": "https://github.com/owner/repo/pull/789",
-                "state": "MERGED",
-                "isDraft": False
-            }
-
-            result = runner.invoke(app, ["close"])
-
-            assert result.exit_code == 0
-            assert "Successfully closed issue: test-issue" in result.stdout
-
-            # Verify git operations were called
-            mock_git_ops.checkout_branch.assert_called_once_with("main")
-            mock_git_ops.delete_branch.assert_called_once_with("test-issue", force=True)
-
-    def test_close_allowed_with_closed_pr(self, temp_repo_dir, mock_git_ops, issue_with_config):
-        """測試當 PR 已關閉時允許 close"""
-        with patch('cafe.ui.cli.GitHubOps') as MockGitHubOps:
-            mock_gh = MagicMock()
-            MockGitHubOps.return_value = mock_gh
-
-            # Mock closed PR
-            mock_gh.get_pr_for_branch.return_value = {
-                "number": 999,
-                "title": "Closed PR",
-                "url": "https://github.com/owner/repo/pull/999",
-                "state": "CLOSED",
-                "isDraft": False
-            }
-
-            result = runner.invoke(app, ["close"])
-
-            assert result.exit_code == 0
-            assert "Successfully closed issue: test-issue" in result.stdout
-
-            # Verify git operations were called
-            mock_git_ops.checkout_branch.assert_called_once_with("main")
-            mock_git_ops.delete_branch.assert_called_once_with("test-issue")
-
-    def test_close_continues_when_github_unavailable(self, temp_repo_dir, mock_git_ops, issue_with_config):
-        """測試當 GitHub 不可用時仍可繼續 close"""
-        with patch('cafe.ui.cli.GitHubOps') as MockGitHubOps:
-            # Mock GitHubOps constructor to raise error (e.g., gh CLI not installed)
-            MockGitHubOps.side_effect = GitHubError("gh CLI not installed")
-
-            result = runner.invoke(app, ["close"])
-
-            # Should continue without PR check
-            assert result.exit_code == 0
-            assert "Successfully closed issue: test-issue" in result.stdout
-
-            # Verify git operations were called
-            mock_git_ops.checkout_branch.assert_called_once_with("main")
-            mock_git_ops.delete_branch.assert_called_once_with("test-issue")
-
-
-class TestCloseCommandWorktree:
-    """Test close command with worktree support (TDD Red phase)."""
-
-    @pytest.fixture
-    def issue_with_worktree_config(self, temp_repo_dir):
-        """Create an issue with worktree configuration."""
-        (temp_repo_dir / ".git").mkdir(exist_ok=True)
-        # Create issue directory with config
-        issue_dir = temp_repo_dir / ".cafe" / "issues" / "test-worktree-issue"
-        issue_dir.mkdir(parents=True)
-
-        config_file = issue_dir / "issue.yaml"
-        config_data = {
-            "base_branch": "main",
-            "feature_branch": "test-worktree-issue",
-            "worktree_path": "worktrees/test-worktree-issue",
-        }
-
-        with open(config_file, 'w', encoding='utf-8') as f:
-            yaml.dump(config_data, f)
-
-        worktree_issue_dir = (
-            temp_repo_dir
-            / "worktrees"
-            / "test-worktree-issue"
-            / ".cafe"
-            / "issues"
-            / "test-worktree-issue"
-        )
-        worktree_issue_dir.mkdir(parents=True)
-        with open(worktree_issue_dir / "issue.yaml", "w", encoding="utf-8") as f:
-            yaml.dump(config_data, f)
-
-        return issue_dir
-
-    def test_close_with_worktree_success(
-        self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_worktree_config
-    ):
-        """測試 worktree 模式下成功清理"""
-        mock_git_ops.get_current_branch.return_value = "test-worktree-issue"
-
-        # 確保 branch 刪除成功
-        mock_git_ops.delete_branch.return_value = None
-
-        result = runner.invoke(app, ["close"])
-
-        assert result.exit_code == 0
-        # 驗證 branch 先被刪除
-        mock_git_ops.delete_branch.assert_called_once_with("test-worktree-issue")
-        # 驗證 worktree 目錄被刪除
-        mock_git_ops.remove_worktree.assert_called_once_with("worktrees/test-worktree-issue")
-
-    def test_close_missing_checkout_preserves_cwd_and_issue(
-        self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_worktree_config
-    ):
-        """定位失敗必須在切換目錄及任何清理之前停止。"""
-        mock_git_ops.get_current_branch.return_value = "test-worktree-issue"
-        mock_git_ops.list_worktrees.return_value = [
-            {"branch": "main", "path": str(temp_repo_dir / "missing-checkout")}
-        ]
-        result = runner.invoke(app, ["close"])
-        assert result.exit_code == 1
-        assert "Cannot locate a valid checkout" in result.output
-        assert "✓ Switched to main repository" not in result.output
-        assert Path.cwd() == temp_repo_dir
-        assert issue_with_worktree_config.exists()
-        mock_git_ops.checkout_branch.assert_not_called()
-        mock_git_ops.pull.assert_not_called()
-        mock_git_ops.delete_remote_branch_if_exists.assert_not_called()
-        mock_git_ops.remove_worktree.assert_not_called()
-        mock_git_ops.delete_branch.assert_not_called()
-
-    def test_archive_only_removes_the_matching_worktree_inventory_pointer(
-        self, temp_repo_dir, monkeypatch, mock_git_ops, mock_github_ops_no_pr
-    ):
-        (temp_repo_dir / ".git").mkdir()
-        worktree_path = temp_repo_dir / ".cafe" / "worktrees" / "archive-test"
-        issue_dir = worktree_path / ".cafe" / "issues" / "archive-test"
-        issue_dir.mkdir(parents=True)
-        config = {
-            "base_branch": "main",
-            "feature_branch": "archive-test",
-            "worktree_path": str(worktree_path),
-        }
-        (issue_dir / "issue.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
-        (worktree_path / ".cafe" / "active_issue").write_text(
-            "archive-test\n", encoding="utf-8"
-        )
-        pointer_dir = temp_repo_dir / ".cafe" / "issues" / "archive-test"
-        pointer_dir.mkdir(parents=True)
-        (pointer_dir / "issue.yaml").write_text(
-            yaml.safe_dump({"issue_name": "archive-test", "worktree_path": str(worktree_path)}),
-            encoding="utf-8",
-        )
-        monkeypatch.chdir(worktree_path)
-        mock_git_ops.get_current_branch.return_value = "archive-test"
-
-        result = runner.invoke(app, ["close", "--archive-only"])
-
-        assert result.exit_code == 0
-        assert not pointer_dir.exists()
-        assert not (worktree_path / ".cafe" / "active_issue").exists()
-        assert worktree_path.exists()
-        assert not issue_dir.exists()
-        project_path = str(temp_repo_dir.resolve()).lstrip("/").replace("/", "-")
-        archive_path = Path.home() / ".cafe" / "projects" / project_path / "archived" / "archive-test"
-        assert (archive_path / "issue.yaml").exists()
-        mock_github_ops_no_pr.get_pr_for_branch.assert_not_called()
-        mock_git_ops.remove_worktree.assert_not_called()
-        mock_git_ops.delete_branch.assert_not_called()
-
-    def test_archive_only_uses_the_main_repo_key_for_an_external_worktree(
-        self, temp_repo_dir, monkeypatch, mock_git_ops, mock_github_ops_no_pr
-    ):
-        (temp_repo_dir / ".git").mkdir()
-        external_worktree = temp_repo_dir.parent / f"{temp_repo_dir.name}-external-worktree"
-        external_worktree.mkdir()
-        (external_worktree / ".git").write_text("gitdir: external\n", encoding="utf-8")
-        issue_dir = external_worktree / ".cafe" / "issues" / "external-test"
-        issue_dir.mkdir(parents=True)
-        config = {
-            "base_branch": "main",
-            "feature_branch": "external-test",
-            "worktree_path": str(external_worktree),
-        }
-        (issue_dir / "issue.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
-        pointer_dir = temp_repo_dir / ".cafe" / "issues" / "external-test"
-        pointer_dir.mkdir(parents=True)
-        (pointer_dir / "issue.yaml").write_text(
-            yaml.safe_dump({"issue_name": "external-test", "worktree_path": str(external_worktree)}),
-            encoding="utf-8",
-        )
-        monkeypatch.chdir(external_worktree)
-        mock_git_ops.get_current_branch.return_value = "external-test"
-
-        with patch("cafe.ui.commands.lifecycle.subprocess.run") as run:
-            run.return_value = MagicMock(
-                returncode=0,
-                stdout=f"{temp_repo_dir / '.git'}\n",
-            )
-            result = runner.invoke(app, ["close", "--archive-only"])
-
-        assert result.exit_code == 0
-        assert not pointer_dir.exists()
-        project_path = str(temp_repo_dir.resolve()).lstrip("/").replace("/", "-")
-        archive_path = Path.home() / ".cafe" / "projects" / project_path / "archived" / "external-test"
-        assert (archive_path / "issue.yaml").exists()
-        mock_github_ops_no_pr.get_pr_for_branch.assert_not_called()
-
-    def test_close_with_worktree_branch_delete_fails(
-        self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_worktree_config
-    ):
-        """測試 branch 刪除失敗時行為"""
-        mock_git_ops.get_current_branch.return_value = "test-worktree-issue"
-
-        # 模擬 branch 刪除失敗（未合併）
-        mock_git_ops.delete_branch.side_effect = GitError("The branch 'test-worktree-issue' is not fully merged")
-
-        result = runner.invoke(app, ["close"])
-
-        # branch 刪除失敗時可能返回非 0 exit code
-        assert result.exit_code in [0, 1]
-        # 驗證 branch 刪除被嘗試
-        mock_git_ops.delete_branch.assert_called_once()
-        assert "git branch -D test-worktree-issue" in result.stdout
-        assert "cafe rm test-worktree-issue" in result.stdout
-
-    def test_close_with_worktree_remote_delete_failure_preserves_worktree(
-        self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_worktree_config
-    ):
-        mock_git_ops.get_current_branch.return_value = "test-worktree-issue"
-        mock_git_ops.delete_remote_branch_if_exists.side_effect = GitError(
-            "remote permission denied"
-        )
-
-        result = runner.invoke(app, ["close"])
-
-        assert result.exit_code == 1
-        assert "Failed to delete remote branch" in result.stdout
-        mock_git_ops.remove_worktree.assert_not_called()
-        mock_git_ops.delete_branch.assert_not_called()
-        assert issue_with_worktree_config.exists()
-
-    def test_close_worktree_remove_failure_preserves_active_issue_marker(
-        self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_worktree_config
-    ):
-        """Worktree marker must remain when remove_worktree fails."""
-        (temp_repo_dir / ".git").mkdir(exist_ok=True)
-        worktree_path = temp_repo_dir / "worktrees" / "test-worktree-issue"
-        worktree_cafe = worktree_path / ".cafe"
-        worktree_cafe.mkdir(parents=True, exist_ok=True)
-        marker = worktree_cafe / "active_issue"
-        marker.write_text("test-worktree-issue\n", encoding="utf-8")
-        worktree_issue = worktree_cafe / "issues" / "test-worktree-issue"
-        worktree_issue.mkdir(parents=True, exist_ok=True)
-
-        mock_git_ops.get_current_branch.return_value = "test-worktree-issue"
-        mock_git_ops.remove_worktree.side_effect = GitError("failed to remove worktree")
-
-        result = runner.invoke(app, ["close"])
-
-        assert result.exit_code == 1
-        assert marker.exists()
-        assert marker.read_text(encoding="utf-8").strip() == "test-worktree-issue"
-
-    def test_close_clears_matching_active_issue_marker(
-        self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_config
-    ):
-        marker = temp_repo_dir / ".cafe" / "active_issue"
-        marker.write_text("test-issue\n", encoding="utf-8")
-
-        result = runner.invoke(app, ["close"])
-
-        assert result.exit_code == 0
-        assert not marker.exists()
-
-    def test_close_blocked_by_open_pr_preserves_active_issue_marker(
-        self, temp_repo_dir, mock_git_ops, issue_with_config
-    ):
-        marker = temp_repo_dir / ".cafe" / "active_issue"
-        marker.write_text("test-issue\n", encoding="utf-8")
-
-        with patch("cafe.ui.cli.GitHubOps") as MockGitHubOps:
-            mock_gh = MagicMock()
-            MockGitHubOps.return_value = mock_gh
-            mock_gh.get_pr_for_branch.return_value = {
-                "number": 1,
-                "state": "OPEN",
-                "isDraft": False,
-                "title": "Open PR",
-                "url": "https://example.com/pr/1",
-            }
-            result = runner.invoke(app, ["close"])
-
-        assert result.exit_code == 1
-        assert marker.read_text(encoding="utf-8").strip() == "test-issue"
-
-    def test_close_without_worktree_normal_flow(
-        self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr
-    ):
-        """測試沒有 worktree 時正常流程"""
-        # Create issue directory without worktree config
-        issue_dir = temp_repo_dir / ".cafe" / "issues" / "normal-issue"
-        issue_dir.mkdir(parents=True)
-
-        config_file = issue_dir / "issue.yaml"
-        config_data = {
-            "base_branch": "main",
-            "feature_branch": "normal-issue",
-            # 沒有 worktree_path
-        }
-
-        with open(config_file, 'w', encoding='utf-8') as f:
-            yaml.dump(config_data, f)
-
-        mock_git_ops.get_current_branch.return_value = "normal-issue"
-
-        result = runner.invoke(app, ["close"])
-
-        assert result.exit_code == 0
-        # 驗證 branch 被刪除
-        mock_git_ops.delete_branch.assert_called_once_with("normal-issue")
-        # 驗證 worktree 方法沒有被呼叫
-        assert not hasattr(mock_git_ops, 'remove_worktree') or not mock_git_ops.remove_worktree.called
-
-    def test_close_without_worktree_branch_delete_fails_shows_rm_step(
-        self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr
-    ):
-        issue_dir = temp_repo_dir / ".cafe" / "issues" / "normal-issue"
-        issue_dir.mkdir(parents=True)
-
-        config_file = issue_dir / "issue.yaml"
-        config_data = {
-            "base_branch": "main",
-            "feature_branch": "normal-issue",
-        }
-        with open(config_file, 'w', encoding='utf-8') as f:
-            yaml.dump(config_data, f)
-
-        mock_git_ops.get_current_branch.return_value = "normal-issue"
-        mock_git_ops.delete_branch.side_effect = GitError("The branch 'normal-issue' is not fully merged")
-
-        result = runner.invoke(app, ["close"])
-
-        assert result.exit_code in [0, 1]
-        assert "git branch -D normal-issue" in result.stdout
-        assert "cafe rm normal-issue" in result.stdout
-
-    def test_close_worktree_success_message(
-        self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_worktree_config
-    ):
-        """測試 worktree 清理成功訊息"""
-        mock_git_ops.get_current_branch.return_value = "test-worktree-issue"
-
-        result = runner.invoke(app, ["close"])
-
-        assert result.exit_code == 0
-        assert "worktree" in result.stdout.lower() or "worktrees/test-worktree-issue" in result.stdout
-
-    def test_close_syncs_worktree_issue_data_back_to_repo_root(
-        self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr
-    ):
-        """測試 worktree 模式下會將 .cafe/issues/{issue_name}/ 同步回 repo root"""
-        # Setup: 創建 .git 目錄（模擬 git repository）
-        (temp_repo_dir / ".git").mkdir(exist_ok=True)
-
-        # Setup: 創建 worktree and repo root  .cafe 目錄
-        worktree_path = temp_repo_dir / "worktrees" / "sync-test"
-        worktree_path.mkdir(parents=True)
-
-        # 創建 worktree  .cafe/issues/sync-test/ 並寫入一些檔案
-        worktree_cafe_issue = worktree_path / ".cafe" / "issues" / "sync-test"
-        worktree_cafe_issue.mkdir(parents=True)
-        (worktree_cafe_issue / "spec").mkdir()
-        (worktree_cafe_issue / "spec" / "spec_001.md").write_text("Worktree spec content")
-        (worktree_cafe_issue / "plan").mkdir()
-        (worktree_cafe_issue / "plan" / "plan_001.md").write_text("Worktree plan content")
-
-        # 創建 worktree  issue.yaml
-        worktree_config_data = {
-            "base_branch": "main",
-            "feature_branch": "sync-test",
-            "worktree_path": str(worktree_path),
-        }
-        with open(worktree_cafe_issue / "issue.yaml", 'w', encoding='utf-8') as f:
-            yaml.dump(worktree_config_data, f)
-
-        # 創建 repo root  issue config
-        repo_issue_dir = temp_repo_dir / ".cafe" / "issues" / "sync-test"
-        repo_issue_dir.mkdir(parents=True)
-        config_file = repo_issue_dir / "issue.yaml"
-        config_data = {
-            "base_branch": "main",
-            "feature_branch": "sync-test",
-            "worktree_path": str(worktree_path),
-        }
-        with open(config_file, 'w', encoding='utf-8') as f:
-            yaml.dump(config_data, f)
-
-        mock_git_ops.get_current_branch.return_value = "sync-test"
-        mock_git_ops.delete_branch.return_value = None
-
-        result = runner.invoke(app, ["close"])
-
-        assert result.exit_code == 0
-
-        # 驗證 worktree  spec/plan 被同步到 repo root 後歸檔
-        # Issue directory should be moved to archive after sync
-        assert not repo_issue_dir.exists(), "Issue directory should be moved to archive"
-
-        # Verify archived location contains synced data
-        from pathlib import Path
-        project_path = str(temp_repo_dir.resolve()).lstrip('/').replace('/', '-')
-        archive_path = Path.home() / ".cafe" / "projects" / project_path / "archived" / "sync-test"
-        assert archive_path.exists(), f"Issue should be archived at {archive_path}"
-
-        archive_spec = archive_path / "spec" / "spec_001.md"
-        archive_plan = archive_path / "plan" / "plan_001.md"
-        archive_config = archive_path / "issue.yaml"
-        assert archive_spec.exists(), "spec_001.md should be in archive"
-        assert archive_spec.read_text() == "Worktree spec content"
-        assert archive_plan.exists(), "plan_001.md should be in archive"
-        assert archive_plan.read_text() == "Worktree plan content"
-        assert archive_config.exists(), "issue.yaml should be in archive"
+# Real repositories exercise failure retention rather than mocking integration proof.
+from tests.integration.test_close_cleanup_only import feature, integrate, git, assert_retained
+
+
+@pytest.mark.parametrize("boundary", ["checkout", "remote", "archive"])
+def test_cleanup_failure_keeps_live_issue_and_local_source(feature, monkeypatch, boundary):
+    from cafe.core.git import GitOperations
+    from cafe.ui.commands import lifecycle
+
+    integrate(feature)
+    root, worktree, issue, source, linked = feature
+    def fail(*args, **kwargs):
+        raise GitError("injected boundary failure")
+    if boundary == "checkout":
+        monkeypatch.setattr(GitOperations, "checkout_branch", fail)
+    elif boundary == "remote":
+        monkeypatch.setattr(GitOperations, "delete_cleanup_remote", fail)
+    else:
+        monkeypatch.setattr(lifecycle, "_backup_issue_directory", fail)
+    result = runner.invoke(app, ["close"])
+    assert result.exit_code != 0
+    assert_retained(feature)
+    assert Path.cwd() == worktree
+
+
+def test_worktree_remove_failure_retains_live_issue_and_backup(feature, monkeypatch, tmp_path):
+    from cafe.core.git import GitOperations
+    root, worktree, issue, source, linked = feature
+    if not linked:
+        pytest.skip("normal checkout is retained by design")
+    integrate(feature)
+    def fail(*args, **kwargs):
+        raise GitError("worktree removal failed")
+    monkeypatch.setattr(GitOperations, "remove_worktree", fail)
+    result = runner.invoke(app, ["close"])
+    assert result.exit_code != 0
+    assert issue.exists() and worktree.exists()
+    assert git(root, "rev-parse", "feature") == source
+    assert list((tmp_path / "home").glob(".cafe/projects/*/archived/feature/evidence"))
+
+
+def test_archive_only_removes_only_matching_inventory_pointer(feature):
+    root, worktree, issue, source, linked = feature
+    if not linked:
+        pytest.skip("normal checkout has no inventory pointer or separate target")
+    pointer = root / ".cafe/issues/feature"
+    pointer.mkdir(parents=True)
+    (pointer / "issue.yaml").write_text(yaml.safe_dump({
+        "issue_name": "feature", "worktree_path": str(worktree),
+    }))
+    result = runner.invoke(app, ["close", "--archive-only"])
+    assert result.exit_code == 0, result.output
+    assert not pointer.exists() and worktree.exists()
+    assert git(root, "rev-parse", "feature") == source
+
+
+def test_dirty_retained_checkout_stops_before_cleanup(feature):
+    root, worktree, issue, source, linked = feature
+    if not linked:
+        pytest.skip("normal checkout has no inventory pointer or separate target")
+    integrate(feature)
+    (root / "unsaved").write_text("unrelated work")
+    result = runner.invoke(app, ["close"])
+    assert result.exit_code != 0
+    assert_retained(feature)
+    assert (root / "unsaved").read_text() == "unrelated work"

@@ -299,7 +299,7 @@ def test_fresh_session_recovery_after_unobserved_new_session(tmp_path, monkeypat
 
 
 @pytest.mark.parametrize("legacy", [False, True])
-@pytest.mark.parametrize("failure_kind", ["checklist", "workspace"])
+@pytest.mark.parametrize("failure_kind", ["checklist", "workspace", "skill"])
 def test_fresh_session_recovers_preparation_failure_without_provider_identity(
     tmp_path,
     monkeypatch,
@@ -325,6 +325,8 @@ def test_fresh_session_recovers_preparation_failure_without_provider_identity(
                 "Step 'spec', skill 'cafe-spec', workflow.checklist.variants[0].sections[0]: "
                 "unresolved placeholders ['optional_input']"
                 if failure_kind == "checklist"
+                else "Skill not found: Unmanaged or changed native skill conflict: /native/example"
+                if failure_kind == "skill"
                 else "workspace artifact 'workspace' is stale or contradictory: "
                 "workspace worktree is dirty; refresh it or resolve the conflict before retrying"
             ),
@@ -399,7 +401,7 @@ def test_preparation_recovery_rejects_ambiguous_or_invoked_context(
     assert records.get_result(task.id) is None
 
 
-@pytest.mark.parametrize("failure_kind", ["checklist", "workspace"])
+@pytest.mark.parametrize("failure_kind", ["checklist", "workspace", "skill"])
 @pytest.mark.parametrize(
     "change",
     [
@@ -428,6 +430,8 @@ def test_legacy_preparation_recovery_requires_correlated_first_attempt_audit(
             "Step 'spec', skill 'cafe-spec', workflow.checklist.variants[0].sections[0]: "
             "unresolved placeholders ['optional_input']"
             if failure_kind == "checklist"
+            else "Skill not found: Unmanaged or changed native skill conflict: /native/example"
+            if failure_kind == "skill"
             else "workspace artifact 'workspace' is stale or contradictory: "
             "workspace worktree is dirty; refresh it or resolve the conflict before retrying"
         ),

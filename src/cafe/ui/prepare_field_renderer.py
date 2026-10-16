@@ -60,6 +60,7 @@ class NonInteractiveCliAnswers:
     sync_plan_github: Optional[bool] = None
     auto_create_pr: Optional[bool] = None
     post_pr_todo_list: Optional[bool] = None
+    field_values: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -247,6 +248,8 @@ def _cli_value_for_field(
     answers: NonInteractiveCliAnswers,
 ) -> tuple[bool, Any]:
     """Return an explicitly supplied CLI value for one declared field."""
+    if field.id in answers.field_values:
+        return True, answers.field_values[field.id]
     if field.id == "input_method":
         return answers.input_method is not None, answers.input_method
     if field.id == "github_issue_id" or field.normalize == "github_issue":
@@ -265,6 +268,31 @@ def _cli_value_for_field(
         return answers.auto_create_pr is not None, answers.auto_create_pr
     value = values.get(field.write)
     return value is not None, value
+
+
+def parse_explicit_fields(values: list[str], parsed: ParsedPrepareFields | None,
+                          profile: PrepareProfile) -> dict[str, Any]:
+    """Resolve --set by declared field ID, preserving each value as one scalar."""
+    fields = {item.id: item for item in parsed.fields} if parsed else {}
+    result: dict[str, Any] = {}
+    for raw in values:
+        name, separator, value = raw.partition("=")
+        item = fields.get(name)
+        if not separator or item is None or item.write is None or name in result:
+            raise PrepareNonInteractiveError(f"--set requires a unique declared FIELD_ID=VALUE: {name!r}")
+        # Existing capability/publication flags keep their own authoritative validation.
+        from cafe.core.prepare_fields import ALLOWED_WRITE_TARGETS
+        if item.write in ALLOWED_WRITE_TARGETS:
+            raise PrepareNonInteractiveError(f"use the existing prepare option for {item.write}")
+        if item.type == "boolean":
+            if value not in {"true", "false"}:
+                raise PrepareNonInteractiveError(f"field {name!r} requires true or false")
+            value = value == "true"
+        if item.type == "template":
+            raise PrepareNonInteractiveError("--set does not select template catalogs")
+        _validate_field_enum_value(item, value, profile=profile)
+        result[name] = value
+    return result
 
 
 def _field_default_for_non_interactive(field: PrepareField) -> Any:

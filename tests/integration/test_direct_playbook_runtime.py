@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from cafe.workflow_execution.automatic import (
+    automatic_executor_registry as _automatic_executor_registry,
+)
+
 from pathlib import Path
 
 import pytest
@@ -51,6 +55,7 @@ def test_direct_happy_path_always_reviews_before_pr(tmp_path: Path) -> None:
         issue_dir=issue_dir,
         playbook=_direct_runtime_playbook(),
         executor=executor,
+        automatic_registry=_automatic_executor_registry(),
     ).run(start_step="develop")
 
     assert result.completed is True
@@ -77,6 +82,7 @@ def test_direct_develop_manual_handoff_cannot_bypass_review(tmp_path: Path) -> N
         issue_dir=issue_dir,
         playbook=_direct_runtime_playbook(),
         executor=executor,
+        automatic_registry=_automatic_executor_registry(),
     ).run(start_step="develop")
 
     assert result.completed is True
@@ -103,6 +109,7 @@ def test_direct_review_correction_repeats_develop_and_review(tmp_path: Path) -> 
         issue_dir=issue_dir,
         playbook=_direct_runtime_playbook(),
         executor=executor,
+        automatic_registry=_automatic_executor_registry(),
     ).run(start_step="review")
 
     assert result.completed is True
@@ -129,6 +136,7 @@ def test_direct_pr_correction_repeats_develop_and_review(tmp_path: Path) -> None
         issue_dir=issue_dir,
         playbook=_direct_runtime_playbook(),
         executor=executor,
+        automatic_registry=_automatic_executor_registry(),
     ).run(start_step="pr")
 
     assert result.completed is True
@@ -156,6 +164,7 @@ def test_direct_review_permission_resumes_before_pr(tmp_path: Path) -> None:
         issue_dir=issue_dir,
         playbook=_direct_runtime_playbook(),
         executor=executor,
+        automatic_registry=_automatic_executor_registry(),
     ).run(start_step="review")
 
     assert result.completed is True

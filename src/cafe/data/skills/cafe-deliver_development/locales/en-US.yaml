@@ -49,3 +49,5 @@ human_task.delivery.delivery_draft: '{id}: {title}
 human_task.delivery.delivery_review_source: 'Review source: {artifact} v{version},
   {path}, producer {producer}, SHA256 {sha256}'
 human_task.delivery.delivery_publication: 'Verified PR URL: {url}'
+
+human_task.delivery.result_summary: "Repository: {repository}\nSource: {source}\nTarget: {target}\nStrategy: {strategy}\nVerified integration commit: {commit}"

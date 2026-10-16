@@ -28,6 +28,9 @@ def test_content_review_then_delivery_permission_wait_restart_and_outcome(
     ctx = journey.setup_action(local_action, tmp_path, github=True, renamed=renamed,
                                verification=verification_plan(), prepare_review=False)
     root, dest, issue, state, phase, data, engine, args, _, delivery = ctx
+    # An existing project catalog may retain its agent delivery contract.
+    data["steps"][delivery]["assignee_type"] = "agent"
+    data["steps"][delivery].pop("automatic", None)
     publication = "package" if renamed else "pr"
     request = args["output_file"].parent / "delivery_request.json"
     draft = request.read_bytes()
@@ -139,7 +142,7 @@ def test_non_action_decisions_return_to_delivery_plan_without_integration(
         raw_payload={"task": task.policy_id, "human_task_id": task.id,
                      "decision": decision, "feedback": feedback},
     )
-    assert reply.target == delivery, reply.rejection
+    assert reply.target == (delivery if decision == "review_only" else data["steps"][delivery]["delivery"]["correction_step"]), reply.rejection
     result = journey.hook(engine, "prepare_input", "DevelopmentDeliveryExecutor", args)
     assert result.context_updates["delivery_stage"] == "prepare_action"
     assert json.loads(fake_github.read_text())["effects"] == []

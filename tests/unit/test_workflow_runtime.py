@@ -27,6 +27,7 @@ from cafe.core.packet_io import atomic_write_bytes, canonical_json
 from cafe.core.workflow_models import BatonRejected, PlaybookRunResult, StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.playbooks.loader import PlaybookLoader
+from cafe.workflow_execution.automatic import automatic_executor_registry
 from cafe.ui.human_tasks import resolve_step_human_task
 
 pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
@@ -532,6 +533,7 @@ def _notify_human_task_in_process(
         runtime_mod.default_capability_definition_dirs = lambda _root: []
         runtime_mod.run_capability_request = _dispatch
         runtime = BlackboardWorkflowRuntime(
+            automatic_registry=automatic_executor_registry(),
             issue_dir=issue_dir,
             playbook=PlaybookLoader().load("standard"),
             executor=lambda *_args: None,
@@ -1247,6 +1249,7 @@ def test_local_review_task_reports_an_emitted_pr_url_only(
         return StepExecutionResult(response="", artifacts={}, events=events)
 
     runtime = BlackboardWorkflowRuntime(
+        automatic_registry=automatic_executor_registry(),
         issue_dir=issue_dir,
         playbook=playbook,
         executor=executor,
@@ -1313,6 +1316,7 @@ def test_published_review_routes_without_current_url_evidence(
         return StepExecutionResult(response="", artifacts={}, events=events)
 
     runtime = BlackboardWorkflowRuntime(
+        automatic_registry=automatic_executor_registry(),
         issue_dir=issue_dir,
         playbook=PlaybookLoader().load("standard"),
         executor=executor,
@@ -3360,6 +3364,7 @@ def test_runtime_revision_materializes_a_fresh_plan_confirmation_task(tmp_path: 
         return StepExecutionResult(response="confirmed plan revision", artifacts={})
 
     result = BlackboardWorkflowRuntime(
+        automatic_registry=automatic_executor_registry(),
         issue_dir=issue_dir,
         playbook=playbook,
         executor=executor,
@@ -3398,6 +3403,7 @@ def test_runtime_enforces_confirmation_gate_over_agent_baton(tmp_path: Path) -> 
         return StepExecutionResult(response="plan complete", artifacts={})
 
     result = BlackboardWorkflowRuntime(
+        automatic_registry=automatic_executor_registry(),
         issue_dir=issue_dir,
         playbook=playbook,
         executor=executor,
@@ -3869,7 +3875,7 @@ def test_runtime_materializes_one_declared_task_and_recovers_it_after_restart(
             auto_continue=False,
         )
 
-    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
+    runtime = BlackboardWorkflowRuntime(automatic_registry=automatic_executor_registry(), issue_dir=issue_dir, playbook=playbook, executor=executor)
     paused = runtime.run(start_step="spec")
     state = BlackboardStore(issue_dir).load_or_create("spec")
     records = HumanTaskRecordStore(issue_dir)
@@ -3877,6 +3883,7 @@ def test_runtime_materializes_one_declared_task_and_recovers_it_after_restart(
     wait = records.get_wait_state(task.id)
 
     recovered = BlackboardWorkflowRuntime(
+        automatic_registry=automatic_executor_registry(),
         issue_dir=issue_dir, playbook=playbook, executor=executor
     ).run(max_transitions=2)
     restored = HumanTaskRecordStore(issue_dir)
@@ -4064,6 +4071,7 @@ def test_runtime_notifies_human_owned_creation_for_builtin_and_project_playbooks
     trusted_playbook.update(_human_playbook("standard"))
     standard_dir = tmp_path / ".cafe" / "issues" / "human-standard"
     standard = BlackboardWorkflowRuntime(
+        automatic_registry=automatic_executor_registry(),
         issue_dir=standard_dir,
         playbook=trusted_playbook,
         executor=lambda *_args: (_ for _ in ()).throw(AssertionError("human step ran agent")),
@@ -4073,6 +4081,7 @@ def test_runtime_notifies_human_owned_creation_for_builtin_and_project_playbooks
 
     project_dir = tmp_path / ".cafe" / "issues" / "spoofed-standard"
     BlackboardWorkflowRuntime(
+        automatic_registry=automatic_executor_registry(),
         issue_dir=project_dir,
         playbook=_human_playbook("standard"),
         executor=lambda *_args: (_ for _ in ()).throw(AssertionError("human step ran agent")),
@@ -4113,6 +4122,7 @@ def test_notification_failure_preserves_pending_task_and_user_handoff(
     )
 
     result = BlackboardWorkflowRuntime(
+        automatic_registry=automatic_executor_registry(),
         issue_dir=issue_dir,
         playbook=playbook,
         executor=lambda *_args: StepExecutionResult(
@@ -4156,6 +4166,7 @@ def test_runtime_recovers_notification_when_task_commit_precedes_attempt(
         )
 
     interrupted = BlackboardWorkflowRuntime(
+        automatic_registry=automatic_executor_registry(),
         issue_dir=issue_dir,
         playbook=playbook,
         executor=_executor,
@@ -4183,6 +4194,7 @@ def test_runtime_recovers_notification_when_task_commit_precedes_attempt(
     )
 
     BlackboardWorkflowRuntime(
+        automatic_registry=automatic_executor_registry(),
         issue_dir=issue_dir,
         playbook=PlaybookLoader().load("standard"),
         executor=_executor,
@@ -4222,6 +4234,7 @@ def test_runtime_audits_interrupted_attempt_without_duplicate_dispatch(
     monkeypatch.setattr(runtime_mod, "run_capability_request", _stop_after_attempt_begins)
     with pytest.raises(SystemExit, match="simulated process stop"):
         BlackboardWorkflowRuntime(
+            automatic_registry=automatic_executor_registry(),
             issue_dir=issue_dir,
             playbook=PlaybookLoader().load("standard"),
             executor=_executor,
@@ -4237,6 +4250,7 @@ def test_runtime_audits_interrupted_attempt_without_duplicate_dispatch(
         ),
     )
     BlackboardWorkflowRuntime(
+        automatic_registry=automatic_executor_registry(),
         issue_dir=issue_dir,
         playbook=PlaybookLoader().load("standard"),
         executor=_executor,
@@ -4272,6 +4286,7 @@ def test_concurrent_stale_runtimes_claim_one_notification_attempt(
 
     runtimes = [
         BlackboardWorkflowRuntime(
+            automatic_registry=automatic_executor_registry(),
             issue_dir=issue_dir,
             playbook=PlaybookLoader().load("standard"),
             executor=lambda *_args: None,
@@ -4340,6 +4355,7 @@ def test_two_notification_processes_claim_one_provider_attempt(
         monkeypatch.setattr(runtime_mod, "run_capability_request", provider)
         runtimes = [
             BlackboardWorkflowRuntime(
+                automatic_registry=automatic_executor_registry(),
                 issue_dir=issue_dir,
                 playbook=PlaybookLoader().load("standard"),
                 executor=lambda *_args: None,
@@ -4377,6 +4393,7 @@ def test_independent_runtimes_claim_one_notification_attempt_across_processes(
     """Unit Tests 7-8: process-level claim serialization permits one dispatch."""
     issue_dir = tmp_path / ".cafe" / "issues" / "process-notification-recovery"
     runtime = BlackboardWorkflowRuntime(
+        automatic_registry=automatic_executor_registry(),
         issue_dir=issue_dir,
         playbook=PlaybookLoader().load("standard"),
         executor=lambda *_args: None,
@@ -4481,6 +4498,7 @@ def test_unavailable_process_lock_preserves_user_handoff(
     _write_publication_contract(issue_dir, persisted=False)
 
     result = BlackboardWorkflowRuntime(
+        automatic_registry=automatic_executor_registry(),
         issue_dir=issue_dir,
         playbook=PlaybookLoader().load("standard"),
         executor=lambda *_args: StepExecutionResult(
@@ -4557,6 +4575,7 @@ def test_windows_process_lock_failure_preserves_human_owned_handoff(
     issue_dir = tmp_path / ".cafe" / "issues" / "lock-failure-human-owned"
 
     result = BlackboardWorkflowRuntime(
+        automatic_registry=automatic_executor_registry(),
         issue_dir=issue_dir,
         playbook=playbook,
         executor=lambda *_args: (_ for _ in ()).throw(AssertionError("human step ran agent")),
@@ -7972,6 +7991,7 @@ def test_runtime_recovered_user_handoff_materializes_one_actionable_task(
     )
     _canonicalize_board_fixture(issue_dir)
     runtime = BlackboardWorkflowRuntime(
+        automatic_registry=automatic_executor_registry(),
         issue_dir=issue_dir,
         playbook=PlaybookLoader().load("tdd-qa"),
         executor=lambda *_args, **_kwargs: pytest.fail("reconciliation must not rerun the agent"),
@@ -8042,6 +8062,7 @@ def test_runtime_recovered_user_handoff_remains_actionable_after_reconciliation_
     )
     _canonicalize_board_fixture(issue_dir)
     interrupted_runtime = BlackboardWorkflowRuntime(
+        automatic_registry=automatic_executor_registry(),
         issue_dir=issue_dir,
         playbook=PlaybookLoader().load("tdd-qa"),
         executor=lambda *_args, **_kwargs: pytest.fail("reconciliation must not rerun the agent"),
@@ -8076,6 +8097,7 @@ def test_runtime_recovered_user_handoff_remains_actionable_after_reconciliation_
     assert interrupted_tasks[0].status is HumanTaskStatus.PENDING
 
     resumed = BlackboardWorkflowRuntime(
+        automatic_registry=automatic_executor_registry(),
         issue_dir=issue_dir,
         playbook=PlaybookLoader().load("tdd-qa"),
         executor=lambda *_args, **_kwargs: pytest.fail("resume must not rerun the agent"),

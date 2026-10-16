@@ -199,6 +199,36 @@ def setup_action(
     return root, dest, issue, state, phase, data, engine, kwargs, task, delivery
 
 
+@pytest.mark.parametrize("renamed", [False, True])
+def test_action_review_uses_open_status_not_fixed_narrative_references(
+    local_action, tmp_path, renamed
+):
+    context = setup_action(
+        local_action, tmp_path, renamed=renamed, prepare_review=False,
+        proposals=[{"id": "FUP-002", "title": "Open draft", "body": "Original",
+                    "evidence": "path:1"}],
+    )
+    _, dest, issue, state, _, _, engine, kwargs, _, _ = context
+    review = Path(state.artifacts["review_feedback"].path)
+    review.write_text(review.read_text().replace(
+        "## Follow-up Proposals\n\n",
+        "## Follow-up Proposals\n\nFUP-006 is fixed and no longer open.\n\n"
+        "| ID | title | status |\n| --- | --- | --- |\n"
+        "| FUP-002 | Open draft | open |\n\n",
+    ))
+    before = review.read_bytes()
+    target = git(dest, "rev-parse", "HEAD")
+    result = hook(engine, "publish_output", "DevelopmentActionContext", kwargs)
+    assert result.continue_pipeline, result.context_updates
+    task = HumanTaskRecordStore(issue).get_task(
+        result.context_updates["delivery_action_review_task"]
+    )
+    assert "FUP-002" in task.prompt and "FUP-006" not in task.prompt
+    assert task.status.value == "pending"
+    assert review.read_bytes() == before
+    assert git(dest, "rev-parse", "HEAD") == target
+
+
 def approve_action(context, *, selected=""):
     root, dest, issue, state, phase, data, engine, kwargs, task, delivery = context
     pause(issue, state, kwargs["step_name"], HandoffIntent.NEED_PERMISSION)
@@ -632,7 +662,7 @@ def test_delivery_recovery_accepts_declared_mapping_feedback_route(local_action,
         ),
         source="test",
     )
-    assert result.target == delivery, result.rejection
+    assert result.target == data["steps"][delivery]["delivery"]["correction_step"], result.rejection
     assert HumanTaskRecordStore(issue).get_result(recovery.id) is not None
     assert git(dest, "rev-parse", "HEAD") == local_action[3].proposal.target_oid
 

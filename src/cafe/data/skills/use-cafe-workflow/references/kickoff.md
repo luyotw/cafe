@@ -155,19 +155,19 @@ Propose local integration into the base branch when remote PR publication is not
 
 Repository delivery discovery retains descriptive conventions, source coverage, freshness and gaps. Resolve exact PR/source/target/strategy or local destination when the PR action review presents actual immutable artifacts. The authorized decision owner selects an explicit subset of original Review drafts or an empty selection. The displayed PR decision covers action selection and its host capability boundaries together, while preserving distinct durable approvals. Final result acceptance remains a separate decision governed by the confirmed gate ownership: assignable delivery gates default to `manager_confirmable`; mandatory gates remain user-owned. Action execution additionally requires the shown bundle's task and capability approvals; delegation of result acceptance alone does not supply them. Legacy proposals without displayed host boundaries retain separate capability approval.
 
-The formatter produces version-6 product `delivery_contract` facts and a separate version-1 Manager `closeout_contract` for adopting graphs. Keep exact literal cleanup argv and one description per action. The default is full cleanup: close a verified bound GitHub issue, then use `scripts/cleanup_worktree.py` to archive CAFE state and remove the exact feature worktree, local branch, and bound remote branch. This is a Manager skill default; explicit current decisions and repository preferences retain precedence. The preparation helper fills literal interpreter, script, repository, worktree, issue, and remote arguments. Explain all deletion effects before kickoff confirmation. Never remove the canonical checkout; when no separate feature worktree exists, propose archive-only and explain that limitation. Ordinary `cafe close` can integrate a local branch and is not a fresh phase-owned cleanup fallback. The PR decision explicitly covers the displayed action and host capability boundaries together. Kickoff confirmation selects the displayed Manager closeout action. Delivery acceptance only confirms results; Manager executes the already-confirmed choice after completion without a second terminal question.
+The formatter produces version-6 product `delivery_contract` facts and a separate version-1 Manager `closeout_contract` for adopting graphs. Keep exact literal cleanup argv and one description per action. The default is full cleanup: close a verified bound GitHub issue, then run `cafe close` to verify existing integration, archive CAFE state, and remove the exact source resources. This applies to both normal checkouts and feature worktrees. Explain deletion effects before kickoff confirmation. Explicit current decisions and saved preservation preferences take precedence. Use `cafe close --archive-only` for an explicit preservation choice. Delivery owns integration; close never integrates the source. Existing confirmed helper commands retain their original argv and authority. The PR decision covers the displayed action and host capability boundaries; delivery acceptance confirms results only. Manager executes the previously confirmed closeout choice after completion without a second terminal question.
 
 For a verified repository and issue, a literal cleanup proposal is:
 
 ```yaml
 cleanup:
   - argv: [gh, issue, close, "123", --repo, owner/repo]
-  - argv: [python3, /path/to/use-cafe-workflow/scripts/cleanup_worktree.py, --project-root, /path/to/repo, --worktree, /path/to/repo/.cafe/worktrees/issue123, --issue-name, issue123, --remote, origin]
+  - argv: [cafe, close]
 ```
 
 Replace every example path and issue identifier with the verified literal value. Omit remote deletion when no remote is bound, and omit GitHub issue closure when no binding is available. An explicit empty cleanup list is valid when the user excludes cleanup. Unknown endpoints remain gaps. Inspect actual targets and worker quiescence before any authorized cleanup. Existing confirmed contracts retain their original exact argv, digest and receipts; a changed default never rewrites them. Compact and non-adopting graphs retain their declared delivery path.
 
-When the user explicitly prefers preservation, use `argv: [cafe, close, --archive-only]` instead of the full-cleanup helper.
+When the user explicitly prefers preservation, use `argv: [cafe, close, --archive-only]` instead of full cleanup.
 
 ## Kickoff contract: first blocking gate
 
@@ -622,8 +622,8 @@ consolidated helper requires none of those execution examples.
 ### Manager closeout selection
 
 For phase-owned development delivery, retain the generated applicable cleanup
-plan and propose `closeout_choice: cleanup`. Use archive-only when no separate
-feature worktree exists. An empty plan and `leave` require an explicit user
+plan and propose `closeout_choice: cleanup`. Use archive-only for an explicit
+preservation choice. An empty plan and `leave` require an explicit user
 exclusion; `pending` requires an explicit choice to decide later. Never empty the
 plan merely to avoid executing cleanup. The formatter displays this selection
 and persists a separate Manager `closeout_contract`; kickoff confirmation

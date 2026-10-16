@@ -1,5 +1,9 @@
 """Behavior-contract tests for arbitrary playbook step names."""
 
+from cafe.workflow_execution.automatic import (
+    automatic_executor_registry as _automatic_executor_registry,
+)
+
 import ast
 import inspect
 
@@ -301,6 +305,7 @@ def test_custom_named_publish_step_uses_declared_baton_without_core_receipt_gate
         issue_dir=issue_dir,
         playbook=playbook,
         executor=lambda *_args, **_kwargs: None,
+        automatic_registry=_automatic_executor_registry(),
     )
 
     assert runtime._is_baton_driven_step("build") is True
@@ -321,6 +326,7 @@ def test_declared_delivery_uses_host_action_receipts_not_all_capability_alternat
         issue_dir=tmp_path / "issue",
         playbook=playbook,
         executor=lambda *_args, **_kwargs: None,
+        automatic_registry=_automatic_executor_registry(),
     )
 
     assert playbook["steps"][delivery_name]["capability_requests"] == [
@@ -337,6 +343,7 @@ def test_generic_capability_step_keeps_its_required_receipt_gate(tmp_path):
         issue_dir=tmp_path / "issue",
         playbook=playbook,
         executor=lambda *_args, **_kwargs: None,
+        automatic_registry=_automatic_executor_registry(),
     )
 
     assert runtime._required_capability_ids("build") == ["cafe.github.issue.create"]
@@ -353,8 +360,10 @@ def test_delivery_exemption_requires_host_hooks_and_preserves_unrelated_capabili
         step["hooks"][missing_hook] = []
     PlaybookDefinition.model_validate(playbook)
     runtime = BlackboardWorkflowRuntime(
-        issue_dir=tmp_path / "issue", playbook=playbook,
+        issue_dir=tmp_path / "issue",
+        playbook=playbook,
         executor=lambda *_args, **_kwargs: None,
+        automatic_registry=_automatic_executor_registry(),
     )
 
     assert runtime._required_capability_ids("deliver") == (

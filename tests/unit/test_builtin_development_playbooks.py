@@ -52,13 +52,17 @@ def test_adopting_graphs_have_separate_action_review_and_result_acceptance():
         review = next(t for t in delivery.human_tasks if t.trigger == "need_permission")
         assert review.task_id == delivery.delivery.approval_task == "delivery-review"
         assert delivery.delivery.approval_step == "deliver"
-        assert set(review.outcomes.values()) == {"deliver"}
+        assert delivery.assignee_type == "auto"
+        assert delivery.automatic.executor == "delivery"
+        assert delivery.automatic.inputs == {}
+        assert review.outcomes == {"fix_now": "develop", "integrate_selected": "deliver",
+                                   "integrate_only": "deliver", "review_only": "deliver"}
         outcome = next(t for t in delivery.human_tasks if t.trigger == "confirm_output")
         assert outcome.mandatory_confirmation is False, name
         assert "deliver" in confirmation_gate_steps(model), name
         assert "deliver" not in mandatory_confirmation_gate_steps(model), name
         assert outcome.outcomes == {
-            "confirm": "_done", "revise": "deliver",
+            "confirm": "_done", "revise": "develop",
         }
         assert delivery.delivery.publication_artifact in delivery.input_artifacts
         assert delivery.delivery.correction_step in delivery.allowed_goto
@@ -770,6 +774,18 @@ def test_phase_defaults_preserve_pre_change_complete_semantic_contracts(tmp_path
     )
     for name, expected in fixture["playbooks"].items():
         model = loader.load_model(name, strict=True).model
+        if name in DEVELOPMENT_PLAYBOOKS:
+            # Automatic delivery's exact changes are asserted above; retain the old
+            # baseline for all other phase defaults, tools, gates and graph edges.
+            data = model.model_dump(mode="json")
+            delivery = data["steps"]["deliver"]
+            delivery.update(assignee_type="agent", automatic=None)
+            for task in delivery["human_tasks"]:
+                for decision in ("fix_now", "revise", "submit"):
+                    if decision in task["outcomes"]:
+                        task["outcomes"][decision] = "deliver"
+            from cafe.core.playbook import PlaybookDefinition
+            model = PlaybookDefinition.model_validate(data)
         contract = {
             "model": model.model_dump(mode="json"),
             "behavior": {step: resolve_step_behavior(model, step).model_dump(mode="json")

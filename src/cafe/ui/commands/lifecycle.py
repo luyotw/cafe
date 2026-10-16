@@ -18,6 +18,7 @@ from cafe.core.blackboard import (
     is_genuine_cold_start,
 )
 from cafe.core.conversation_locale import ConversationLocaleError, supplied_locale_from_inputs
+from cafe.core.git import GitError
 from cafe.updates.service import UpdateApplyError, UpdateService
 from cafe.utils.issue_config import resolve_issue_config_path, resolve_issue_id
 from cafe.utils.yaml_utils import safe_load
@@ -446,6 +447,9 @@ def prepare(
         "--conversation-locale-source",
         help="Tier that supplied the conversation language: explicit or inferred",
     ),
+    field_values: Optional[List[str]] = typer.Option(
+        None, "--set", help="Set a declared step prepare field: FIELD_ID=VALUE (repeatable).",
+    ),
 ) -> None:
     """Prepare issue environment (directory, config, git branch) before running spec phase.
 
@@ -862,6 +866,7 @@ def prepare(
                 NonInteractiveResolverDeps,
                 PrepareNonInteractiveError,
                 PrepareNonInteractiveTemplateError,
+                parse_explicit_fields,
                 resolve_non_interactive_issue_config,
             )
 
@@ -878,6 +883,9 @@ def prepare(
                     skill_loader,
                 ),
             )
+            if field_values:
+                from cafe.delivery.prepared import extend_prepare_fields
+                parsed_fields = extend_prepare_fields(parsed_fields, loaded_playbook.as_dict(), field_values)
             try:
                 resolved_config = resolve_non_interactive_issue_config(
                     profile,
@@ -891,6 +899,7 @@ def prepare(
                         sync_plan_github=sync_plan_github,
                         auto_create_pr=auto_create_pr,
                         post_pr_todo_list=post_pr_todo_list,
+                        field_values=parse_explicit_fields(field_values or [], parsed_fields, profile),
                     ),
                     parsed_fields=parsed_fields,
                     deps=resolver_deps,
@@ -952,6 +961,20 @@ def prepare(
             if auto_create_pr is not False:
                 pr_config["post_todo_list"] = post_pr_todo_list
 
+        if field_values and interactive:
+            from cafe.ui.prepare_field_renderer import parse_explicit_fields
+            from cafe.skills.loader import SkillLoader
+            fields = profile.resolved_prepare_fields(
+                playbook_path=loaded_playbook.path, skill_loader=SkillLoader(),
+            )
+            from cafe.delivery.prepared import extend_prepare_fields
+            fields = extend_prepare_fields(fields, loaded_playbook.as_dict(), field_values)
+            explicit = parse_explicit_fields(field_values, fields, profile)
+            for item in fields.fields:
+                if item.id in explicit:
+                    section, key = item.write.split(".", 1)
+                    step_configs.setdefault(section, {})[key] = explicit[item.id]
+
         # 11. Prepare config data (but don't write yet)
         feature_branch = issue_name
 
@@ -978,6 +1001,9 @@ def prepare(
         for step_name, step_config in step_configs.items():
             if step_config:
                 config_data[step_name] = step_config
+
+        from cafe.delivery.prepared import validate_prepared_delivery
+        validate_prepared_delivery(config_data, loaded_playbook.as_dict())
 
         # Add worktree_path if using worktree mode
         if use_worktree:
@@ -1257,567 +1283,166 @@ def _backup_issue_directory(issue_dir: Path, issue_name: str) -> Path:
     return archive_path
 
 
-def _resolve_squash_message(
-    issue_name: str,
-    override: Optional[str],
-    issue_config_file: Optional[Path] = None,
-    github_ops: Any = None,
-) -> str:
-    """Resolve the commit message for a squash merge.
-
-    Resolution order:
-    1. ``override`` (the ``-m`` / ``--message`` value) if provided.
-    2. GitHub issue title from ``issue.yaml``'s issue id, when available.
-    3. Fallback to ``issue_name``.
-
-    Args:
-        issue_name: Issue name, used as the final fallback.
-        override: Explicit message from --message, or None.
-        issue_config_file: Optional path to ``issue.yaml`` for GitHub issue id lookup.
-        github_ops: Optional GitHubOps instance. A new one is created when needed.
-
-    Returns:
-        The resolved commit message.
-    """
-    if override is not None and override.strip():
-        return override.strip()
-
-    if issue_config_file is not None:
-        issue_id = resolve_issue_id(issue_config_file)
-        if issue_id:
-            try:
-                ops = github_ops if github_ops is not None else GitHubOps()
-                issue = ops.get_issue(issue_id)
-            except GitHubError:
-                issue = None
-            if isinstance(issue, dict):
-                title = issue.get("title")
-                if isinstance(title, str) and title.strip():
-                    return title.strip()
-
-    return issue_name
-
-
-def _perform_squash_merge(
-    git_ops,
-    feature_branch,
-    issue_name,
-    message,
-    issue_config_file: Optional[Path] = None,
-    github_ops: Any = None,
-):
-    """Run a squash merge and commit the result.
-
-    Stages the feature branch via ``git merge --squash``, then commits with a
-    resolved message. If nothing was staged (feature branch is not ahead of
-    base), skips the commit and reports that no merge was needed.
-
-    Args:
-        git_ops: GitOperations instance bound to the base-branch checkout.
-        feature_branch: Branch to squash-merge.
-        issue_name: Issue name, used as the fallback commit message.
-        message: Optional --message override.
-        issue_config_file: Optional issue config used for GitHub issue title lookup.
-        github_ops: Optional GitHubOps instance reused from the PR check.
-    """
-    console.print("[dim]Squash-merging feature branch into base branch...[/dim]")
-    git_ops.merge_squash(feature_branch)
-
-    # A squash merge stages nothing when the feature branch is not ahead of
-    # base. Committing then fails with "nothing to commit", so guard for it.
-    # Check staged changes specifically: untracked files (e.g. .cafe issue
-    # data) would make has_uncommitted_changes() true even with nothing staged.
-    if not git_ops.has_staged_changes():
-        console.print(
-            f"[green]✓ Base branch already up to date; no merge needed for: {feature_branch}[/green]"
-        )
-        return
-
-    commit_message = _resolve_squash_message(
-        issue_name,
-        message,
-        issue_config_file=issue_config_file,
-        github_ops=github_ops,
+def _merged_cleanup_pr(snapshot: dict) -> dict | None:
+    """Observe a same-endpoint PR only when Git ancestry cannot prove integration."""
+    if not snapshot["remote"]:
+        return None
+    observed = subprocess.run(
+        ["gh", "pr", "list", "--repo", snapshot["remote"]["fetch"],
+         "--state", "merged", "--head", snapshot["source"], "--base", snapshot["target"],
+         "--json", "state,isCrossRepository,headRefName,headRefOid,baseRefName,mergeCommit"],
+        check=True, capture_output=True, text=True, timeout=30,
     )
-    git_ops.commit(commit_message)
-    console.print(
-        f"[green]✓ Squash-merged feature branch: {feature_branch} ({commit_message})[/green]"
-    )
-
-
-def _delete_remote_feature_branch(
-    git_ops: GitOperations,
-    feature_branch: str,
-    *,
-    restore_local_branch_on_failure: bool = False,
-) -> None:
-    """Delete one remote feature branch without losing retryable local state."""
-    try:
-        console.print(f"[dim]Deleting remote branch: origin/{feature_branch}[/dim]")
-        deleted = git_ops.delete_remote_branch_if_exists(feature_branch)
-        if deleted:
-            console.print(f"[green]✓ Deleted remote branch: origin/{feature_branch}[/green]")
-        else:
-            console.print(
-                f"[green]✓ Remote branch already absent: origin/{feature_branch}[/green]"
-            )
-    except Exception as e:
-        console.print(f"[red]❌ Failed to delete remote branch: {e}[/red]")
-        console.print()
-        restored = False
-        if restore_local_branch_on_failure:
-            try:
-                git_ops.checkout_branch(feature_branch)
-                restored = True
-                console.print(
-                    f"[green]✓ Restored feature branch for retry: {feature_branch}[/green]"
-                )
-            except Exception as restore_error:
-                console.print(
-                    f"[yellow]⚠️  Failed to restore feature branch: {restore_error}[/yellow]"
-                )
-        console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
-        if restored or not restore_local_branch_on_failure:
-            console.print(f"  1. git push origin --delete {feature_branch}")
-            console.print("  2. cafe close")
-        else:
-            console.print(f"  1. git checkout {feature_branch}")
-            console.print(f"  2. git push origin --delete {feature_branch}")
-            console.print("  3. cafe close")
-        console.print()
-        raise typer.Exit(1)
+    prs = json.loads(observed.stdout)
+    return next((pr for pr in prs if pr.get("headRefOid") == snapshot["source_oid"]
+                 and pr.get("isCrossRepository") is False), None)
 
 
 def close(
-    squash: bool = typer.Option(
-        False,
-        "--squash",
-        help="Squash-merge the feature branch into the base branch (local review mode only)",
-    ),
-    message: Optional[str] = typer.Option(
-        None,
-        "-m",
-        "--message",
-        help="Override the squash commit message (only used with --squash)",
-    ),
     archive_only: bool = typer.Option(
-        False,
-        "--archive-only",
-        help="Archive CAFE issue state without merging, delivering, or removing source branches",
+        False, "--archive-only",
+        help="Archive CAFE issue state while retaining source branches and worktrees",
+    ),
+    issue: Optional[str] = typer.Option(
+        None, "--issue", help="Exact issue to archive in this checkout (requires --archive-only)",
     ),
 ) -> None:
-    """Close current feature and return to base branch.
+    """Archive and clean an already integrated feature. Delivery performs integration.
 
-    \b
-    This command:
-    1. Normally checks for open/draft PRs, integrates delivery, and removes
-       feature resources.
-    2. With --archive-only, archives only CAFE issue state and retains all
-       source branches and worktrees.
+    Without --archive-only, require a clean source and target checkout and proof
+    that the exact source tip is integrated into the configured base branch.
+    Local target synchronization is fast-forward only. No merge is performed.
     """
     import os
+
+    original = Path.cwd().resolve()
     try:
-        if archive_only and squash:
-            console.print("[red]Error: --archive-only cannot be combined with --squash.[/red]")
-            raise typer.Exit(1)
-
-        # 1. Initialize Git operations
-        try:
-            git_ops = GitOperations()
-        except Exception as e:
-            console.print(f"[red]Error: Not a git repository. {e}[/red]")
-            raise typer.Exit(1)
-
-        # 2. Get current branch
-        current_branch = git_ops.get_current_branch()
-        if not current_branch:
-            console.print("[red]Error: Not on a valid branch (detached HEAD?).[/red]")
-            raise typer.Exit(1)
-
-        # 3. Load issue config
-        issue_config_file = Path(f".cafe/issues/{current_branch}/issue.yaml").resolve()
-        if not issue_config_file.exists():
-            console.print(f"[red]Error: Issue config not found: {issue_config_file}[/red]")
-            console.print(
-                "[yellow]Hint: This branch may not be initialized with 'cafe prepare'.[/yellow]"
-            )
-            raise typer.Exit(1)
-
-        with open(issue_config_file, "r", encoding="utf-8") as f:
-            config_data = safe_load(f)
-
-        pr_auto_create = config_data.get("pr", {}).get("auto_create", False)
-        if message is not None and not squash:
-            console.print("[red]Error: --message requires --squash.[/red]")
-            raise typer.Exit(1)
-        if squash and pr_auto_create is not False:
-            console.print(
-                "[red]Error: --squash is available only in local review mode; "
-                "it requires pr.auto_create to be false.[/red]"
-            )
-            raise typer.Exit(1)
-
-        base_branch = config_data.get("base_branch", "main")
-        feature_branch = current_branch
-        issue_name = current_branch  # Issue name is the same as current branch
-        worktree_path = config_data.get("worktree_path")
-
+        explicit_issue = issue is not None
+        if explicit_issue:
+            if not archive_only:
+                raise ValueError("--issue requires --archive-only")
+            import re
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", issue):
+                raise ValueError("invalid archive issue name")
+        git_ops = GitOperations()
+        source = git_ops.get_current_branch()
+        if not source:
+            raise ValueError("cleanup requires a named source branch")
+        issue_name = issue if explicit_issue else source
+        issue = original / ".cafe" / "issues" / issue_name
+        config_file = issue / "issue.yaml"
+        if explicit_issue:
+            resolved = resolve_issue_config_path(config_file, require_registered_worktree=True)
+            if resolved != config_file or resolved.parents[3] != original:
+                raise ValueError("explicit archive issue must belong to this checkout")
+        config = safe_load(config_file.read_text(encoding="utf-8"))
+        if explicit_issue:
+            if config.get("issue_name", issue_name) != issue_name:
+                raise ValueError("archive issue configuration identity differs from the selected issue")
+            if config.get("worktree_path") and Path(config["worktree_path"]).resolve() != original:
+                raise ValueError("archive issue checkout differs from the current checkout")
+        target = config.get("base_branch", "main")
+        worktree = config.get("worktree_path")
+        project_root = _get_project_root()
         if archive_only:
-            project_root = _get_project_root()
-            archive_path = _archive_issue_directory(
-                issue_config_file.parent,
-                issue_name,
-                copy_current_config=True,
-            )
-            if archive_path is None:
-                console.print(f"[red]Error: No issue data found for: {issue_name}[/red]")
-                raise typer.Exit(1)
-            if isinstance(worktree_path, str) and worktree_path.strip():
-                _remove_worktree_inventory_pointer(
-                    project_root=project_root,
-                    issue_name=issue_name,
-                    worktree_path=worktree_path,
-                )
-            clear_marker_if_matches(Path(".cafe"), issue_name)
+            archive = _archive_issue_directory(issue, issue_name, copy_current_config=True)
+            if archive is None:
+                raise ValueError(f"no issue data found for: {issue_name}")
+            if worktree:
+                _remove_worktree_inventory_pointer(project_root=project_root,
+                    issue_name=issue_name, worktree_path=worktree)
+            clear_marker_if_matches(original / ".cafe", issue_name)
             console.print(f"[green]✓ Archived issue without delivery: {issue_name}[/green]")
-            console.print(f"  📁 Issue data archived to: {archive_path}")
-            console.print("  🌿 Feature branch and worktree retained")
+            console.print(f"  Issue data archived to: {archive}")
             return
 
-        # 4. Check for open/draft PRs
-        github_ops = None
-        pr = None
+        if (config.get("feature_branch", source) != source
+                or config.get("issue_name", source) != source):
+            raise ValueError("configured feature branch differs from the current source")
+        source_root = Path(git_ops.run_git("rev-parse", "--show-toplevel")).resolve()
+        if source_root != original:
+            raise ValueError("run close from the source checkout root")
+        if not worktree and source_root != project_root:
+            raise ValueError("linked source checkout has no matching worktree configuration")
+        if worktree:
+            declared = Path(worktree)
+            if not declared.is_absolute():
+                declared = project_root / declared
+            if declared.resolve() != source_root:
+                raise ValueError("configured worktree differs from the current checkout")
+        snapshot = git_ops.cleanup_snapshot(source, target)
         try:
-            github_ops = GitHubOps()
-            pr = github_ops.get_pr_for_branch(current_branch)
+            git_ops.require_integrated(snapshot)
+        except GitError:
+            git_ops.require_integrated(snapshot, _merged_cleanup_pr(snapshot))
 
-            if pr:
-                pr_state = pr.get("state", "UNKNOWN")
-                is_draft = pr.get("isDraft", False)
-                pr_url = pr.get("url", "")
-
-                # Block if PR is open (OPEN state) or draft
-                if pr_state == "OPEN" or is_draft:
-                    console.print()
-                    console.print("[red]❌ Cannot close: Open PR found for this branch[/red]")
-                    console.print(f"   PR #{pr.get('number')}: {pr.get('title')}")
-                    console.print(f"   State: {pr_state}{' (DRAFT)' if is_draft else ''}")
-                    console.print(f"   URL: {pr_url}")
-                    console.print()
-                    console.print(
-                        "[yellow]Please merge or close the PR first, or use --no-pr-check to skip the check.[/yellow]"
-                    )
-                    raise typer.Exit(1)
-        except GitHubError:
-            # If gh CLI is not installed or not authenticated, skip PR check
+        # Retain the existing open/draft PR guard, independently of integration proof.
+        try:
+            pr = GitHubOps().get_pr_for_branch(source)
+            if pr and (pr.get("state") == "OPEN" or pr.get("isDraft")):
+                raise ValueError("cannot close a source with an open or draft PR")
+        except (GitHubError, FileNotFoundError):
             pass
 
-        merged_pr = bool(pr and pr.get("state") == "MERGED")
-
-        console.print()
-        console.print(f"[bold blue]🔒 Closing issue: {issue_name}[/bold blue]")
-        console.print()
-
-        # 5. Handle worktree mode vs normal mode
-        if worktree_path:
-            # === WORKTREE MODE ===
-
-            # Step 1: Switch back to main repository
-            try:
-                console.print("[dim]Switching to main repository...[/dim]")
-                # 基底分支可能已由另一個 linked worktree 持有；不可只找 .git 目錄。
-                worktrees = git_ops.list_worktrees()
-                main_repo = next(
-                    (
-                        Path(tree["path"]).resolve()
-                        for tree in worktrees
-                        if tree.get("branch") == base_branch
-                    ),
-                    _get_project_root(),
-                )
-                if not (main_repo / ".git").exists():
-                    raise ValueError(f"Cannot locate a valid checkout for {base_branch}")
-
-                os.chdir(str(main_repo))
-                console.print(f"[green]✓ Switched to main repository: {main_repo}[/green]")
-            except Exception as e:
-                console.print(f"[red]❌ Failed to switch to main repository: {e}[/red]")
-                console.print()
-                console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
-                console.print("  1. cd to main repository")
-                console.print(f"  2. git checkout {base_branch}")
-                console.print("  3. git pull")
-                console.print(f"  4. git worktree remove {worktree_path}")
-                console.print(f"  5. git branch -d {feature_branch}")
-                console.print()
-                raise typer.Exit(1)
-
-            # Step 2: Checkout base branch (in main repo)
-            try:
-                console.print(f"[dim]Switching to base branch: {base_branch}[/dim]")
-                # Re-initialize git_ops in main repo
-                git_ops = GitOperations()
-                git_ops.checkout_branch(base_branch)
-                console.print(f"[green]✓ Switched to base branch: {base_branch}[/green]")
-            except Exception as e:
-                console.print(f"[red]❌ Failed to switch to base branch: {e}[/red]")
-                console.print()
-                console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
-                console.print(f"  1. git checkout {base_branch}")
-                console.print("  2. git pull")
-                console.print(f"  3. git worktree remove {worktree_path}")
-                console.print(f"  4. git branch -D {feature_branch}  # Force delete if needed")
-                console.print(f"  5. cafe rm {issue_name}")
-                console.print()
-                raise typer.Exit(1)
-
-            # Step 3: Merge or pull changes based on pr.auto_create config
-            worktree_abs = Path(worktree_path).resolve()
-            worktree_issue_dir = worktree_abs / ".cafe" / "issues" / feature_branch
-            try:
-                if squash:
-                    _perform_squash_merge(
-                        git_ops,
-                        feature_branch,
-                        issue_name,
-                        message,
-                        issue_config_file=issue_config_file,
-                        github_ops=github_ops,
-                    )
-                elif pr_auto_create is False and not merged_pr:
-                    # Local review mode: merge feature branch into base branch
-                    console.print("[dim]Merging feature branch into base branch...[/dim]")
-                    git_ops.merge(feature_branch)
-                    console.print(f"[green]✓ Merged feature branch: {feature_branch}[/green]")
-                else:
-                    # GitHub PR mode: pull latest changes
-                    console.print("[dim]Updating base branch...[/dim]")
-                    git_ops.pull()
-                    console.print("[green]✓ Updated base branch[/green]")
-            except Exception as e:
-                console.print(f"[red]❌ Failed to update base branch: {e}[/red]")
-                console.print()
-                console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
-                if squash:
-                    console.print(f"  1. git merge --squash {feature_branch} && git commit")
-                elif pr_auto_create is False and not merged_pr:
-                    console.print(f"  1. git merge {feature_branch}")
-                else:
-                    console.print("  1. git pull")
-                console.print(f"  2. git worktree remove {worktree_path}")
-                console.print(f"  3. git branch -D {feature_branch}  # Force delete if needed")
-                console.print(f"  4. cafe rm {issue_name}")
-                console.print()
-                raise typer.Exit(1)
-
-            # Step 4: Delete the remote feature branch while the local
-            # worktree is still intact, so a transport or permission failure
-            # leaves the lifecycle command safely retryable.
-            _delete_remote_feature_branch(git_ops, feature_branch)
-
-            # Step 5: Move worktree config.yaml into issue dir before sync
-            # so it gets archived and restore puts it back in issue dir (override)
-            worktree_config = worktree_abs / ".cafe" / "config.yaml"
-            if worktree_config.exists() and worktree_issue_dir.exists():
-                shutil.move(str(worktree_config), str(worktree_issue_dir / "config.yaml"))
-
-            # Step 6: Sync .cafe/issues/{issue_name}/ from worktree to repo root
-            try:
-                console.print("[dim]Syncing issue data from worktree to repo root...[/dim]")
-                # Use absolute path for repo_issue_dir since we're in main_repo after os.chdir()
-                repo_issue_dir = (Path.cwd() / ".cafe" / "issues" / feature_branch).resolve()
-
-                if worktree_issue_dir.exists():
-                    # Ensure repo issue dir exists
-                    repo_issue_dir.mkdir(parents=True, exist_ok=True)
-
-                    # Copy all subdirectories and files from worktree to repo root
-                    for item in worktree_issue_dir.iterdir():
-                        if item.is_dir():
-                            dest = repo_issue_dir / item.name
-                            if dest.exists():
-                                shutil.rmtree(dest)
-                            shutil.copytree(item, dest)
-                        else:
-                            shutil.copy2(item, repo_issue_dir / item.name)
-
-                console.print("[green]✓ Synced issue data to repo root[/green]")
-            except Exception as e:
-                console.print(f"[yellow]⚠️  Failed to sync issue data: {e}[/yellow]")
-                console.print(
-                    f"[yellow]   Issue data remains in worktree at: {worktree_path}/.cafe/issues/{feature_branch}/[/yellow]"
-                )
-                # Continue with worktree removal even if sync fails
-
-            # Step 7: Remove worktree
-            try:
-                console.print(f"[dim]Removing worktree: {worktree_path}[/dim]")
-                git_ops.remove_worktree(worktree_path)
-                console.print(f"[green]✓ Removed worktree: {worktree_path}[/green]")
-            except Exception as e:
-                console.print(f"[red]❌ Failed to remove worktree: {e}[/red]")
-                console.print()
-                console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
-                console.print(f"  1. git worktree remove {worktree_path}")
-                console.print(f"  2. git branch -D {feature_branch}  # Force delete if needed")
-                console.print(f"  3. cafe rm {issue_name}")
-                console.print()
-                raise typer.Exit(1)
-
-            clear_marker_if_matches(worktree_abs / ".cafe", issue_name)
-
-            # Step 8: Delete local feature branch. A confirmed merged PR is
-            # authoritative even when local ancestry cannot prove the merge.
-            try:
-                console.print(f"[dim]Deleting feature branch: {feature_branch}[/dim]")
-                if merged_pr:
-                    git_ops.delete_branch(feature_branch, force=True)
-                elif squash:
-                    # Local review mode may have produced a squash commit.
-                    git_ops.delete_branch(feature_branch, force=True)
-                else:
-                    git_ops.delete_branch(feature_branch)
-                console.print(f"[green]✓ Deleted feature branch: {feature_branch}[/green]")
-            except Exception as e:
-                console.print(f"[red]❌ Failed to delete branch: {e}[/red]")
-                console.print("[yellow]The branch may not be fully merged.[/yellow]")
-                console.print()
-                console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
-                console.print(f"  1. cd {Path.cwd()}")
-                console.print(f"  2. git branch -D {feature_branch}  # Force delete if needed")
-                console.print(f"  3. cafe rm {issue_name}")
-                console.print()
-                raise typer.Exit(1)
-
-        else:
-            # === NORMAL MODE (no worktree) ===
-            # Step 1: Checkout base branch
-            try:
-                console.print(f"[dim]Switching to base branch: {base_branch}[/dim]")
-                git_ops.checkout_branch(base_branch)
-                console.print(f"[green]✓ Switched to base branch: {base_branch}[/green]")
-            except Exception as e:
-                console.print(f"[red]❌ Failed to switch to base branch: {e}[/red]")
-                console.print(
-                    "[yellow]Hint: You may have uncommitted changes. Please commit or stash them first.[/yellow]"
-                )
-                console.print()
-                console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
-                console.print(f"  1. git checkout {base_branch}")
-                console.print("  2. git pull")
-                console.print(f"  3. git branch -d {feature_branch}")
-                console.print()
-                raise typer.Exit(1)
-
-            # Step 2: Merge or pull changes based on pr.auto_create config
-            try:
-                if squash:
-                    _perform_squash_merge(
-                        git_ops,
-                        feature_branch,
-                        issue_name,
-                        message,
-                        issue_config_file=issue_config_file,
-                        github_ops=github_ops,
-                    )
-                elif pr_auto_create is False and not merged_pr:
-                    # Local review mode: merge feature branch into base branch
-                    console.print("[dim]Merging feature branch into base branch...[/dim]")
-                    git_ops.merge(feature_branch)
-                    console.print(f"[green]✓ Merged feature branch: {feature_branch}[/green]")
-                else:
-                    # GitHub PR mode: pull latest changes
-                    console.print("[dim]Updating base branch...[/dim]")
-                    git_ops.pull()
-                    console.print("[green]✓ Updated base branch[/green]")
-            except Exception as e:
-                console.print(f"[red]❌ Failed to update base branch: {e}[/red]")
-                console.print()
-                console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
-                if squash:
-                    console.print(f"  1. git merge --squash {feature_branch} && git commit")
-                elif pr_auto_create is False and not merged_pr:
-                    console.print(f"  1. git merge {feature_branch}")
-                else:
-                    console.print("  1. git pull")
-                console.print(f"  2. git branch -D {feature_branch}  # Force delete if needed")
-                console.print(f"  3. cafe rm {issue_name}")
-                console.print()
-                raise typer.Exit(1)
-
-            # Step 3: Delete the remote feature branch before deleting its
-            # local counterpart, preserving a retryable local state on error.
-            _delete_remote_feature_branch(
-                git_ops,
-                feature_branch,
-                restore_local_branch_on_failure=True,
-            )
-
-            # Step 4: Delete local feature branch. A confirmed merged PR is
-            # authoritative even when local ancestry cannot prove the merge.
-            try:
-                console.print(f"[dim]Deleting feature branch: {feature_branch}[/dim]")
-                if merged_pr:
-                    git_ops.delete_branch(feature_branch, force=True)
-                elif squash:
-                    # Local review mode may have produced a squash commit.
-                    git_ops.delete_branch(feature_branch, force=True)
-                else:
-                    git_ops.delete_branch(feature_branch)
-                console.print(f"[green]✓ Deleted feature branch: {feature_branch}[/green]")
-            except Exception as e:
-                console.print(f"[red]❌ Failed to delete branch: {e}[/red]")
-                console.print("[yellow]The branch may not be fully merged.[/yellow]")
-                console.print()
-                console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
-                console.print(f"  1. git branch -D {feature_branch}  # Force delete if needed")
-                console.print(f"  2. cafe rm {issue_name}")
-                console.print()
-                raise typer.Exit(1)
-
-        # 6. Archive issue data to ~/.cafe/projects/<project-path>/archived/<issue-name>/
-        try:
-            console.print("[dim]Archiving issue data...[/dim]")
-
-            issue_dir = Path.cwd() / ".cafe" / "issues" / issue_name
-            archive_path = _archive_issue_directory(
-                issue_dir,
-                issue_name,
-                copy_current_config=not worktree_path,
-            )
-            if archive_path is None:
-                raise FileNotFoundError(f"No issue data found at: {issue_dir}")
-            console.print(f"[green]✓ Archived issue data to: {archive_path}[/green]")
-        except Exception as e:
-            console.print(f"[red]❌ Failed to archive issue data: {e}[/red]")
-            console.print(f"[yellow]   Issue data remains at: .cafe/issues/{issue_name}/[/yellow]")
-            raise typer.Exit(1)
-
-        clear_marker_if_matches(Path(".cafe"), issue_name)
-
-        # 7. Display success message
-        console.print()
-        console.print(f"[green]✓ Successfully closed issue: {issue_name}[/green]")
-        console.print(
-            f"  📁 Issue data archived to: {archive_path if 'archive_path' in locals() else '~/.cafe/projects/.../archived/' + issue_name}"
-        )
-        console.print(f"  🌿 Current branch: {base_branch}")
-
-        # For worktree mode, remind user to change directory
-        if worktree_path:
-            console.print()
-            console.print(
-                "[yellow]⚠️  Your terminal is still in the deleted worktree directory.[/yellow]"
-            )
-            console.print(f"[yellow]   Please run:[/yellow] [bold]cd {main_repo}[/bold]")
-
-        console.print()
-
+        trees = git_ops.list_worktrees()
+        registered = next((tree for tree in trees
+            if Path(tree["path"]).resolve() == original and tree.get("branch") == source), None)
+        if registered is None:
+            raise ValueError("source worktree identity is not registered")
+        destination = next((Path(tree["path"]).resolve() for tree in trees
+                            if tree.get("branch") == target), project_root if worktree else original)
+        if (worktree and destination == original) or not (destination / ".git").exists():
+            raise ValueError("cannot locate the retained target checkout")
+        retained = GitOperations(str(destination))
+        if retained.has_in_progress_operation():
+            raise ValueError("retained checkout has a pending Git operation")
+        if retained.run_git("status", "--porcelain", "--untracked-files=all"):
+            raise ValueError("retained checkout has uncommitted or untracked changes")
+        # Back up all evidence before any destructive cleanup. Keep live state on failure.
+        if _get_issue_archive_path(source).exists():
+            raise ValueError("cleanup archive already exists; preserve it before retrying")
+        local_config = original / ".cafe" / "config.yaml"
+        if local_config.exists() and not (issue / "config.yaml").exists():
+            shutil.copy2(local_config, issue / "config.yaml")
+        archive = _backup_issue_directory(issue, source)
+        retained.checkout_branch(target)
+        retained.run_git("merge", "--ff-only", snapshot["target_oid"])
+        if git_ops.run_git("rev-parse", f"refs/heads/{source}") != snapshot["source_oid"]:
+            raise ValueError("source tip changed after preflight")
+        # Revalidate source, target and remote identity before the first deletion.
+        if worktree and git_ops.run_git("status", "--porcelain", "--untracked-files=all"):
+            raise ValueError("source checkout changed after preflight")
+        if not worktree and destination != original:
+            if (git_ops.get_current_branch() != source or git_ops.has_in_progress_operation()
+                    or git_ops.run_git("status", "--porcelain", "--untracked-files=all")):
+                raise ValueError("source checkout changed after preflight")
+            # Preserve a normal source checkout and its files when delivery's
+            # destination already owns the target branch. Release only its ref.
+            git_ops.run_git("checkout", "--detach", snapshot["source_oid"])
+        retained.delete_cleanup_remote(snapshot)
+        os.chdir(destination)
+        if worktree:
+            retained.remove_worktree(str(original))
+        # The exact source was proven integrated, including squash/rebase PRs.
+        retained.delete_cleanup_branch(snapshot)
+        if not worktree and issue.exists():
+            shutil.rmtree(issue)
+            clear_marker_if_matches(original / ".cafe", source)
+        if worktree:
+            _remove_worktree_inventory_pointer(project_root=project_root,
+                issue_name=source, worktree_path=str(original))
+        clear_marker_if_matches(destination / ".cafe", source)
+        console.print(f"[green]✓ Successfully closed issue: {source}[/green]")
+        console.print(f"  Issue data archived to: {archive}")
+        if destination != original:
+            console.print(f"  Retained checkout: {destination}")
     except typer.Exit:
         raise
-    except Exception as e:
-        console.print(f"[red]Error during close: {e}[/red]")
-        raise typer.Exit(1)
+    except Exception as exc:
+        if original.exists():
+            os.chdir(original)
+        console.print(f"[red]Error during close: {exc}[/red]")
+        raise typer.Exit(1) from exc
 
 
 def restore(issue_name: str = typer.Argument(..., help="Issue name to restore")) -> None:

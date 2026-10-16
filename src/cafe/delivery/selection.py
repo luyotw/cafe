@@ -38,6 +38,18 @@ def validate_reviewed_artifact(issue_dir, proposal):
         raise ActionReviewRequired("reviewed artifact changed; fresh action review is required")
 
 
+def validate_publication_reference(issue_dir, state, binding, snapshot):
+    entry = state.artifacts.get(binding.publication_artifact)
+    if entry is None:
+        raise ActionReviewRequired("declared PR publication artifact is missing")
+    published = Path(entry.path).resolve()
+    if (not published.is_relative_to(issue_dir.resolve())
+            or str(published.relative_to(issue_dir.resolve())) != snapshot.proposal.reviewed_artifact
+            or hashlib.sha256(published.read_bytes()).hexdigest()
+            != snapshot.proposal.reviewed_artifact_sha256):
+        raise ActionReviewRequired("current PR publication changed; fresh action review is required")
+
+
 def approved_snapshot(issue_dir: Path, *, workflow_id: str, binding) -> ActionSnapshot:
     records = HumanTaskRecordStore(issue_dir)
     tasks = [

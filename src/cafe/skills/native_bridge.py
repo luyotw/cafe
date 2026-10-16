@@ -145,7 +145,6 @@ class NativeSkillBridge:
             if self.is_active_project_skill(name) and cli in self.PROJECT_LINK_CLIS:
                 self._install_project_link(cli, source_dir, records)
             else:
-                self._require_replaceable(target_dir, records)
                 staging = Path(tempfile.mkdtemp(dir=target_dir.parent, prefix=".cafe-install-"))
                 try:
                     shutil.copytree(source_dir, staging, dirs_exist_ok=True)
@@ -172,8 +171,8 @@ class NativeSkillBridge:
     def reconcile_project_skills(self) -> list[str]:
         """Expose fresh active-local entries in all three named providers.
 
-        Unrelated conflicts are reported while safe entries proceed. A selected
-        conflict is rejected by install_skill before the agent can be launched.
+        Existing same-name entries are refreshed from the resolved authority,
+        including legacy copies without current ownership metadata.
         """
         errors: list[str] = []
         with global_catalog_lock(self.skill_loader.global_root):
@@ -259,8 +258,6 @@ class NativeSkillBridge:
             records[target.name] = self._entry_record(target, "project_link", source)
             self._write_managed_skills(cli, records)
             return target
-        if not (target.is_symlink() and target.resolve() == source.resolve()):
-            self._require_replaceable(target, records)
         staging = Path(tempfile.mkdtemp(dir=target.parent, prefix=".cafe-link-"))
         staging.rmdir()
         try:
@@ -271,25 +268,10 @@ class NativeSkillBridge:
                 staging.unlink()
         return target
 
-    def _require_replaceable(self, target: Path, records: dict) -> None:
-        if (target.exists() or target.is_symlink()) and not self._owns_entry(
-            target, records.get(target.name)
-        ):
-            raise SkillDiscoveryError(
-                f"Unmanaged or changed native skill conflict: {target}. "
-                "Back up and relocate the entry, then rerun prepare or launch; "
-                "legacy names or matching contents alone do not prove ownership."
-            )
-
     def _replace_entry(
         self, cli: AgentCLI, target: Path, staging: Path, records: dict, kind: str, source: Path
     ) -> None:
         self._ensure_native_skills_dir(cli)
-        correct_link = (
-            kind == "project_link" and target.is_symlink() and target.resolve() == source.resolve()
-        )
-        if not correct_link:
-            self._require_replaceable(target, records)
         backup = Path(tempfile.mkdtemp(dir=target.parent, prefix=".cafe-backup-"))
         backup.rmdir()
         had_target = target.exists() or target.is_symlink()
@@ -319,7 +301,7 @@ class NativeSkillBridge:
         finally:
             # If rollback itself failed, leave the backup available for recovery.
             if succeeded:
-                if backup.is_symlink():
+                if backup.is_symlink() or backup.is_file():
                     backup.unlink()
                 elif backup.exists():
                     shutil.rmtree(backup)

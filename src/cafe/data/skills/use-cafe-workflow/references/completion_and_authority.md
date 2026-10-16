@@ -4,7 +4,13 @@ For an adopting graph, the declared delivery phase owns exact integration and se
 
 For local development delivery, require host receipts proving the reviewed source was integrated into the confirmed base branch and agreed checks passed. A source-branch commit, clean workspace, PR draft or artifact-only acceptance is insufficient. If an existing historical contract explicitly excluded integration, report that limited outcome and its remaining integration work accurately; do not rewrite its authority or describe it as integrated delivery.
 
-Fresh nested contract version 5 has cleanup only. Default a separate feature worktree to full cleanup through `scripts/cleanup_worktree.py`, which archives before removing its exact local and remote resources without repeating integration. Retain archive-only as the explicit preservation choice. Existing contracts and compact routes keep their original authority and receipts; a new default never broadens their approved commands.
+Fresh nested contract version 5 has cleanup only. Default full cleanup to `cafe close`, which verifies the existing integration before archiving and removing its exact local and remote feature resources. Retain archive-only as the explicit preservation choice. Existing contracts and compact routes keep their original authority and receipts; a new default never broadens their approved commands.
+
+The full-cleanup helper passes its exact issue identity to `cafe close
+--archive-only --issue <issue-name>` internally. This archive-only selector
+resolves the current registered checkout's issue authority; a correction branch
+does not become a different issue. It cannot select integration or branch
+removal through ordinary `close`.
 
 # Completion And Action Authority
 
@@ -199,12 +205,7 @@ registered worktrees plus dirty/untracked content. The confirmed argv must use
 explicit targets. When a command needs another Git context, make that context
 an exact argument (for example `git -C <retained-checkout> worktree remove
 <target>`), rather than changing the Manager's working directory. Never add force
-flags. A remote branch deletion lease is a compare-and-delete guard, never permission to overwrite a changed tip. For full cleanup, use the confirmed `cleanup_worktree.py` command as the final action through `execute_closeout.py`. It checks completed acceptance, exact integrated source and remote tip, and a clean worktree; archives first; then removes only that worktree and its local/remote branch. It performs no integration or base-branch update and stops on failure. Inspect its archive plus the absence of all named resources before offering the optional inclusive-cost calculation. If `cafe close` is confirmed, it must be the exact final cleanup command,
-after any `gh issue close` command. It may archive the issue and remove its
-worktree; render final progress from the archive path it reports.
-`cafe close --squash` and its optional message are valid only in confirmed
-local-review mode and are rejected in create-PR mode. Remote PR merge strategy
-flags are separate delivery behavior.
+flags. A remote branch deletion lease is a compare-and-delete guard, never permission to overwrite a changed tip. For new full cleanup plans, use the confirmed `cafe close` as the final cleanup command through `execute_closeout.py`, after any separately authorized `gh issue close`. It checks the exact source/target identity, existing integration, clean checkouts, and remote tips before cleanup. A local target update is ff-only. Inspect the archive and absence of named local/remote resources before offering inclusive cost calculation. Retain a previously confirmed `cleanup_worktree.py` command as a compatibility entry with its original scope; do not replace it during resume. Its accepted snapshot identifies the source branch independently of the issue name. A different original issue-name branch is eligible only with an exact successful integration receipt retained in the accepted result, matching workflow, repository, destination, target and unchanged tips. Validate both branches and their worktree ownership before archival; unrelated branches are never selected. Legacy cleanup without an accepted snapshot retains its same-name restriction. Both paths use neutral Git integration proof. `cafe close --squash`, `--message`, and `-m` have been removed. PR merge strategies belong to delivery. `--archive-only` continues to retain feature resources.
 
 ### Assist when no argv closeout plan exists
 
@@ -219,7 +220,7 @@ For an older contract or a useful follow-up outside the confirmed arrays:
    workflow may end with an editable document and guidance for its intended use.
    None of these outcomes implies a standard publication or merge. New confirmed
    kickoff contracts instead use the default cleanup proposal from `kickoff.md`:
-   close a verified bound GitHub issue, then archive and remove its exact feature resources through `cleanup_worktree.py`, unless the user
+   close a verified bound GitHub issue, then archive and remove its exact feature resources through `cafe close`, unless the user
    explicitly excludes either action.
 3. Complete useful read-only or reversible preparation already within scope.
    For an applicable follow-up action with existing explicit authority, check
@@ -295,8 +296,7 @@ is separate from the runtime's terminal state; execute the already-confirmed
 applicable cleanup plan before reporting overall closeout complete. For new
 phase-owned contracts, full cleanup closes the verified bound GitHub issue,
 archives CAFE state and removes the exact feature worktree and bound branches
-through `cleanup_worktree.py`. Use archive-only when there is no separate feature
-worktree. Preserve resources only for an explicit user choice. Report any blocked
+through `cafe close`. Use archive-only for an explicit preservation choice. Preserve resources only for an explicit user choice. Report any blocked
 or excluded action and retained resources; `next=done` alone is not cleanup proof.
 
 Completion and closeout replies still end with `workflow_progress.md` output.

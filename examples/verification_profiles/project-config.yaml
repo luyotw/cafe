@@ -1,0 +1,3 @@
+verification:
+  profile_file: profiles.json
+  profile: acceptance
