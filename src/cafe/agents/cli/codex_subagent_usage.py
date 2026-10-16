@@ -103,8 +103,13 @@ class NativeInterval:
             try:
                 sources, gaps = self._discover()
                 self.entry_gaps.extend(gaps)
+                data = {}
                 for identity, path in sources.items():
-                    meta, rows, boundary = self._read(path)
+                    try:
+                        data[identity] = self._read(path)
+                    except (OSError, ValueError, TypeError, KeyError):
+                        self.entry_gaps.append("entry_unavailable")
+                for identity, (meta, rows, boundary) in self._without_inherited_turns(data).items():
                     latest = {}
                     counter_source = "token_count"
                     active = None
@@ -204,8 +209,53 @@ class NativeInterval:
         meta = row["payload"]
         session_id(meta.get("id"))
         if not path.name.endswith(f"-{meta['id']}.jsonl"):
-            raise ValueError("native filename identity mismatch")
+            # Fork journals can retain their source header under an
+            # <original-id>_<fork-id> filename. That header still describes
+            # ancestry for discovery; it cannot certify the fork's counters.
+            alias = session_id(path.name[-42:-6])
+            if not discovery or not path.name.endswith(f"-{meta['id']}_{alias}.jsonl"):
+                raise ValueError("native filename identity mismatch")
         return meta
+
+    @staticmethod
+    def _without_inherited_turns(data):
+        """Exclude copied lifecycle only when its pre-birth owner is observed.
+
+        A child can copy/restamp its parent's still-open turn at fork time.
+        Exact turn IDs observed in the fork source before child birth prove
+        those events are inherited. Unproven/overlapping child turns remain
+        visible, including turns with no usage record yet.
+        """
+        result = {}
+        for identity, (meta, rows, boundary) in data.items():
+            inherited = set()
+            source = meta.get("forked_from_id")
+            if isinstance(source, str) and source in data and source == NativeInterval._parent(meta):
+                try:
+                    born = instant(meta["timestamp"])
+                except (ValueError, TypeError, KeyError, AttributeError):
+                    result[identity] = meta, rows, boundary
+                    continue
+                for row in data[source][1]:
+                    payload = row["payload"]
+                    if row["at"] < born and (
+                        row["type"] == "turn_context" or payload.get("type") == "task_started"
+                    ):
+                        turn = payload.get("turn_id")
+                        if isinstance(turn, str) and turn:
+                            inherited.add(turn)
+            result[identity] = (
+                meta,
+                [row for row in rows if not (
+                    isinstance(row["payload"].get("turn_id"), str)
+                    and row["payload"].get("turn_id") in inherited
+                    and (row["type"] == "turn_context" or row["payload"].get("type") in {
+                        "task_started", "task_complete", "turn_aborted"
+                    })
+                )],
+                boundary,
+            )
+        return result
 
     @staticmethod
     def _parent(meta):
@@ -703,6 +753,7 @@ class NativeInterval:
                 data[identity] = meta, rows, boundary
             except (OSError, ValueError, TypeError, KeyError):
                 gaps.append("native_observation_unavailable")
+        data = self._without_inherited_turns(data)
         self.root_version = data[self.root][0].get("cli_version") if self.root in data else None
         self.root_observed = self.root in data
         if not self.root_observed:

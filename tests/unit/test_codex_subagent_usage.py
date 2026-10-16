@@ -270,6 +270,117 @@ def test_fresh_fork_per_thread_usage_records_do_not_inherit_parent_history(tmp_p
     assert row["native_usage"]["source"]["counter_source"] == "token_usage_record"
 
 
+@pytest.mark.parametrize("overlap", [False, True])
+def test_copied_parent_lifecycle_does_not_overlap_child_work(tmp_path, overlap):
+    from tests.unit.test_cost_accounting import state
+
+    root = journal(tmp_path, ROOT, second=-30)
+    turn(root, second=-20, turn_id="parent-turn", complete=False, model="parent-model")
+    scope = interval(tmp_path)
+    scope.rate = state()
+    # Codex copies an unfinished parent turn and restamps it at child birth.
+    child = request_child(tmp_path, scope, per_thread=True, fork=True, sizes=(100,))
+    rows = child.read_text().splitlines()
+    prefix = [json.dumps(event("task_started", 1, turn_id="parent-turn")),
+              json.dumps(dict(type="turn_context", timestamp=(START + timedelta(seconds=1)).isoformat(),
+                              payload=dict(turn_id="parent-turn", model="parent-model")))]
+    if overlap:
+        prefix.append(json.dumps(event("task_started", 1, turn_id="another-child-turn")))
+    child.write_text("\n".join([rows[0], *prefix, *rows[1:]]) + "\n")
+    row = next(r for r in collect(scope) if r["native_usage"]["kind"] == "child")
+    assert "parent-turn" not in row["native_usage"]["turn_ids"]
+    if overlap:
+        assert "concurrent_child_turns" in row["native_usage"]["gaps"]
+        assert row["amount_usd"] is None
+    else:
+        assert row["usage"]["input_tokens"] == 100
+        assert row["complete"]
+        assert row["model"] == "gpt-test"
+        assert row["native_usage"]["turn_ids"] == ["t1"]
+
+
+@pytest.mark.parametrize("related", [False, True])
+@pytest.mark.parametrize("archived", [False, True])
+def test_fork_named_sources_do_not_poison_unrelated_coverage(tmp_path, related, archived):
+    journal(tmp_path, ROOT, second=-30)
+    path = journal(tmp_path, CHILD, ROOT if related else None)
+    alias = path.with_name(f"rollout-test-{CHILD}_{NESTED}.jsonl")
+    if archived:
+        alias = tmp_path / "archived_sessions" / alias.name
+        alias.parent.mkdir()
+    path.rename(alias)
+    scope = interval(tmp_path)
+    assert ROOT in scope.baselines
+    records = collect(scope)
+    gaps = records[0]["native_usage"]["gaps"]
+    if related:
+        # The inherited header proves ancestry, but cannot certify child counters.
+        assert "native_observation_unavailable" in gaps
+    else:
+        assert records[0]["complete"]
+        assert not gaps
+    assert len(records) == 1
+
+
+def test_arbitrary_filename_identity_mismatch_is_still_unknown(tmp_path):
+    journal(tmp_path, ROOT, second=-30)
+    path = journal(tmp_path, CHILD)
+    path.rename(path.with_name(f"rollout-test-{NESTED}.jsonl"))
+    assert "native_metadata_unavailable" in collect(interval(tmp_path))[0]["native_usage"]["gaps"]
+
+
+def test_copied_parent_turn_is_also_excluded_from_entry_baseline(tmp_path):
+    root = journal(tmp_path, ROOT, second=-30)
+    turn(root, second=-25, turn_id="parent-turn", complete=False)
+    child = journal(tmp_path, CHILD, ROOT, second=-20, fork=ROOT)
+    append(child, event("task_started", -20, turn_id="parent-turn"))
+    turn(child, 100, second=-19, turn_id="old-child-turn")
+    scope = interval(tmp_path)
+    assert scope.baselines[CHILD]["active_turn"] is None
+    append(root, event("collab_resume_end", 1, receiver_thread_id=CHILD))
+    turn(child, 150, turn_id="new-child-turn")
+    row = next(r for r in collect(scope) if r["native_usage"]["kind"] == "child")
+    assert row["usage"]["input_tokens"] == 50
+    assert "entry_child_already_active" not in row["native_usage"]["gaps"]
+
+
+@pytest.mark.parametrize("parent_started", [None, 2])
+def test_unproven_parent_turn_is_not_silently_removed(tmp_path, parent_started):
+    root = journal(tmp_path, ROOT, second=-30)
+    scope = interval(tmp_path)
+    child = request_child(tmp_path, scope, per_thread=True, fork=True, sizes=(100,))
+    if parent_started is not None:
+        turn(root, second=parent_started, turn_id="unproven-turn", complete=False)
+    rows = child.read_text().splitlines()
+    child.write_text("\n".join([rows[0], json.dumps(event("task_started", 1,
+                     turn_id="unproven-turn")), *rows[1:]]) + "\n")
+    row = next(r for r in collect(scope) if r["native_usage"]["kind"] == "child")
+    assert "concurrent_child_turns" in row["native_usage"]["gaps"]
+    assert row["amount_usd"] is None
+
+
+def test_active_child_without_usage_is_still_pending(tmp_path):
+    root = journal(tmp_path, ROOT, second=-30)
+    turn(root, second=-20, turn_id="parent-turn", complete=False)
+    scope = interval(tmp_path)
+    child = journal(tmp_path, CHILD, ROOT, fork=ROOT)
+    append(child, event("task_started", 1, turn_id="parent-turn"),
+           event("task_started", 2, turn_id="child-turn"))
+    row = next(r for r in collect(scope) if r["native_usage"]["kind"] == "child")
+    assert row["native_usage"]["turn_ids"] == ["child-turn"]
+    assert "child_active_at_cutoff" in row["native_usage"]["gaps"]
+    assert not row["complete"]
+
+
+def test_malformed_turn_identity_keeps_collection_partial_without_crashing(tmp_path):
+    journal(tmp_path, ROOT, second=-30)
+    scope = interval(tmp_path)
+    child = journal(tmp_path, CHILD, ROOT, fork=ROOT)
+    turn(child, turn_id=["invalid"])
+    records = collect(scope)
+    assert records[0]["native_usage"]["gaps"] == ["child_interval_unavailable"]
+
+
 def test_truncated_suffix_keeps_verified_prefix_and_marks_partial(tmp_path):
     journal(tmp_path, ROOT, second=-30)
     scope = interval(tmp_path)
