@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.12.1] - 2026-10-16
+
+### Fixed
+
+- Render reactive corrections, redirected retries and accepted automatic
+  delivery accurately in workflow progress, including terminal completion.
+- Settle proven completed causal feedback across workflow runtimes without
+  replaying work; scope session recovery to the actual retried step.
+- Preserve known cost subtotals, distinguish descendant coverage from other
+  missing evidence, and require verified receipts before treating an execution
+  as model-free. Preserve prior calls, chat usage and historical amounts.
+- Bind QA and Manager conclusions to observed public entry, prerequisite state,
+  connected journey and normal-operation data evidence; retain explicit stage
+  limits and original, reviewed evaluation sources (#647, #667).
+
+See [the v0.12.1 release notes](docs/releases/v0.12.1.md) for recovery,
+accounting and QA evidence guidance.
+
 ## [0.12.0] - 2026-10-16
 
 ### Added
