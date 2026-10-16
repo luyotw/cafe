@@ -1,0 +1,14 @@
+{
+  "name": "qa_feedback",
+  "kind": "document",
+  "version": 1,
+  "updated_by": "qa",
+  "path": ".cafe/issues/issue67/qa/iteration_001/output.md",
+  "updated_at": "2026-10-12T11:50:02.049433+08:00",
+  "summary": "",
+  "base_sha": null,
+  "head_sha": null,
+  "content_sha256": "892765462b5f209df7bc2f8e4906f19acbde629f235dcfafdd393df1b8464ee7",
+  "todo_identities": null,
+  "todo_work_identities": null
+}

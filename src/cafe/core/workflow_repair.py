@@ -210,6 +210,150 @@ def repair_workflow(issue_dir: Path, *, kind: str, step: str, iteration: int,
         return {'status': 'interrupted', 'reason': str(error), 'next_action': 'explicitly reenter under the same selection; verify durable bytes and audit'}
 
 
+def reconcile_completed_feedback(
+    issue_dir: Path, *, playbook: dict, step: str, iteration: int, execute: bool = False
+) -> dict:
+    """Settle an exact legacy consumer completion without replaying its work.
+
+    This owner operation leaves tasks, handoffs and original iteration artifacts
+    untouched. A saved transition must authenticate the still-current artifact;
+    checked boxes or a provider exit alone cannot authorize reconciliation.
+    """
+    from cafe.core.checklist import load_materialization
+    from cafe.core.phase_state_mixin import validated_completion_receipt
+    from cafe.core.workflow_feedback import (
+        WorkflowFeedbackError,
+        WorkflowFeedbackLedger,
+        feedback_todo_mappings,
+        validate_completed_feedback_projection,
+    )
+    from cafe.utils.checklist_validator import completion_requires_checklist, validate_checklist
+
+    issue = Path(issue_dir).absolute()
+    try:
+        directory = _selected(issue, step, iteration)
+
+        def operation():
+            state = _snapshot(issue)
+            if state.playbook_id != playbook.get("playbook", {}).get("id"):
+                raise ValueError("completed feedback playbook identity changed")
+            output = directory / "output.md"
+            for path in (
+                output,
+                directory / "iteration.json",
+                directory / "checklist.md",
+                directory / "workflow_feedback_batch.json",
+            ):
+                _read(path, 1_048_576)
+            context = _json(_read(directory / "iteration.json", 1_048_576)[0])
+            if not isinstance(context, dict):
+                raise ValueError("original consumer control metadata is malformed")
+            marker = context.get("workflow_completion_trusted", True)
+            if (
+                context.get("agent_invoked") is not True
+                or not context.get("end_time")
+                or context.get("workflow_id") != state.workflow_id
+                or context.get("step_name") != step
+                or type(context.get("iteration")) is not int
+                or context.get("iteration") != iteration
+                or (marker is not True and validated_completion_receipt(directory, context) is None)
+            ):
+                raise ValueError("original consumer completion is not trusted")
+            name = playbook.get("steps", {}).get(step, {}).get("output_artifact")
+            artifact = state.artifacts.get(name)
+            if (
+                artifact is None
+                or artifact.updated_by != step
+                or (issue.parents[2] / artifact.path).resolve() != output.resolve()
+                or artifact.content_sha256 != sha256_bytes(output.read_bytes())
+            ):
+                raise ValueError("original completed feedback artifact changed")
+            audit = AuditEventStore(issue)
+            _repair_events(audit, state, step, iteration, set())  # existing bounded audit admission
+            previous = None
+            transitions = []
+            for sequence in range(1, audit.high_water(state.workflow_id) + 1):
+                record = audit.read(state.workflow_id, sequence, bounded=True)
+                if not record or record["event_type"] == "workflow_event_callback_enqueued":
+                    continue
+                if (
+                    record["event_type"] == "transition"
+                    and record["data"].get("from") == step
+                    and completion_requires_checklist(
+                        baton_intent=record["data"].get("transition_intent")
+                    )
+                    and record["data"].get("source_artifact") == artifact.to_dict()
+                    and previous is not None
+                    and previous["step"] == step
+                    and previous["event_type"] in {"step_completed", "single_step_completed"}
+                ):
+                    transitions.append(record)
+                previous = record
+            if (
+                len(transitions) != 1
+                or not validate_checklist(directory / "checklist.md").is_complete
+            ):
+                raise ValueError("original successful consumer handoff is not uniquely proven")
+            ledger = WorkflowFeedbackLedger(issue)
+            _read(ledger.path, 1_048_576)
+            batch = _json(_read(directory / "workflow_feedback_batch.json", 1_048_576)[0])
+            identities = tuple(entry["source_identity"] for entry in batch["entries"])
+            mappings = feedback_todo_mappings(playbook, target_step=step)
+            if load_materialization(
+                directory / "iteration.json"
+            ) is None or not validate_completed_feedback_projection(
+                issue, step=step, output=output, source_identities=identities, mappings=mappings
+            ):
+                raise ValueError("original source-bound completion projection is missing")
+            pending = ledger.pending(target_step=step)
+            selected = [entry for entry in ledger.load() if entry.source_identity in identities]
+            if len(selected) != len(identities):
+                raise ValueError("completed feedback sources are missing or duplicated")
+            proof = {
+                "step": step,
+                "source_identities": list(identities),
+                "excluded_source_identities": [],
+                "deferred_source_identities": [
+                    entry.source_identity
+                    for entry in pending
+                    if entry.source_identity not in identities
+                ],
+                "recovered_from_iteration": str(directory.relative_to(issue)),
+                "transition_id": transitions[0]["data"]["transition_id"],
+                "artifact": artifact.to_dict(),
+            }
+            if not execute:
+                return {"status": "proposed", "proof": proof}
+            done, excluded = ledger.settle_or_reconcile_reviewed(identities, ())
+            if len(done) != len(identities) or excluded:
+                raise ValueError("completed feedback lifecycle conflicts with its completion")
+            state = BlackboardStore(issue).load_or_create(state.current_step)
+            if any(
+                event.event_type == "workflow_feedback_delivered" and event.data == proof
+                for event in state.events
+            ):
+                return {"status": "no-op", "proof": proof}
+            _event(audit, state, step, "workflow_feedback_delivered", proof)
+            return {"status": "repaired", "proof": proof}
+
+        if not execute:
+            _quiescent(issue)
+            return operation()
+        with _guard(issue):
+            return operation()
+    except (
+        ValueError,
+        KeyError,
+        TypeError,
+        FileNotFoundError,
+        UnicodeError,
+        WorkflowFeedbackError,
+    ) as error:
+        return {"status": "refused", "reason": str(error)}
+    except OSError as error:
+        return {"status": "interrupted", "reason": str(error)}
+
+
 def _interruption(issue, state, directory, step, iteration, execute):
     from cafe.core.blackboard import HandoffContract, HandoffIntent, HandoffOwner
     from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus

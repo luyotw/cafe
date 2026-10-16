@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 from decimal import Decimal, InvalidOperation
+from hashlib import sha256
 from pathlib import Path
 
 import yaml
@@ -17,27 +19,166 @@ from cafe.core.cost import (
     source_remainder,
     summarize_cost,
 )
-from cafe.core.usage import _usage_parent, phase_stats_without_chat
+from cafe.core.usage import _usage_parent, chat_usage_has_gap, phase_stats_without_chat
 
 MAX_SOURCE_BYTES = 16 * 1024 * 1024
 
 
-def read_accounting_file(path: Path):
+def confirmed_no_model_source(source):
+    """Validate retained owner evidence; an empty source alone never proves zero."""
+    proof = source.get("no_model_execution")
+    if proof is None:
+        return False
+    if (
+        not isinstance(proof, dict)
+        or set(proof) != {"version", "owner", "workflow_id", "source_id", "evidence"}
+        or type(proof["version"]) is not int
+        or proof["version"] != 1
+        or not isinstance(proof["owner"], str)
+        or not proof["owner"]
+        or not isinstance(proof["workflow_id"], str)
+        or not proof["workflow_id"]
+        or proof["source_id"] != source.get("source_id")
+        or not isinstance(proof["evidence"], dict)
+        or not 1 <= len(proof["evidence"]) <= 128
+    ):
+        raise ValueError("invalid no-model accounting proof")
+    for name, fingerprint in proof["evidence"].items():
+        if (
+            not isinstance(name, str)
+            or not name
+            or Path(name).is_absolute()
+            or ".." in Path(name).parts
+            or not isinstance(fingerprint, str)
+            or re.fullmatch(r"[0-9a-f]{64}", fingerprint) is None
+        ):
+            raise ValueError("invalid no-model accounting evidence")
+    return (
+        not source.get("records")
+        and source.get("legacy_cost") in (None, 0)
+        and source.get("legacy_residual", 0) == 0
+        and not source.get("gap")
+        and not source.get("read_error")
+    )
+
+
+def _execution_context(issue_dir):
+    try:
+        board = read_accounting_file(issue_dir / "blackboard.json")
+        workflow_id = board["workflow_id"]
+        binding = read_accounting_file(issue_dir / "audit_events/workflow.json", max_bytes=4096)
+        next_sequence = binding.get("next_sequence")
+        if (
+            binding.get("workflow_id") != workflow_id
+            or binding.get("version") != 1
+            or type(next_sequence) is not int
+            or not 1 <= next_sequence <= 4097
+        ):
+            return None
+        budget, events = 4 * 1024 * 1024, []
+        for sequence in range(1, next_sequence):
+            event, _, size = read_accounting_file(
+                issue_dir / f"audit_events/events/{sequence:010d}.json",
+                max_bytes=min(budget, 256 * 1024),
+                with_fingerprint=True,
+            )
+            budget -= size
+            if (
+                budget <= 0
+                or event.get("workflow_id") != workflow_id
+                or event.get("sequence") != sequence
+                or not isinstance(event.get("data"), dict)
+            ):
+                return None
+            events.append(event)
+        return workflow_id, events
+    except (
+        OSError,
+        ValueError,
+        KeyError,
+        TypeError,
+        AttributeError,
+        OverflowError,
+        RecursionError,
+    ):
+        return None
+
+
+def _uninvoked_proof(issue_dir, identity, data, stats, context):
+    from cafe.core.packet_io import canonical_json
+
+    if context is None or data.get("agent_invoked") is not False:
+        return None
+    workflow_id, events = context
+    step, directory = identity.split("/")
+    iteration = int(directory.removeprefix("iteration_"))
+    marker = data.get("agent_interruption", {})
+    if (
+        not isinstance(marker, dict)
+        or marker.get("workflow_id") != workflow_id
+        or marker.get("step") != step
+        or marker.get("iteration") != iteration
+        or data.get("workflow_completion_trusted") is not False
+        or stats.get("cost_records")
+        or any(
+            value
+            for key, value in stats.items()
+            if key in {*COUNTERS, "cache_creation_input_tokens", "total_cost_usd"}
+        )
+    ):
+        return None
+    metadata_name = (
+        "iteration.json" if (issue_dir / identity / "iteration.json").exists() else "context.json"
+    )
+    _, fingerprint, _ = read_accounting_file(
+        issue_dir / identity / metadata_name, with_fingerprint=True
+    )
+    matching = [
+        event
+        for event in events
+        if event.get("event_type") == "agent_interruption_prepared"
+        and event.get("step") == step
+        and event.get("data", {}).get("iteration") == iteration
+        and event["data"].get("marker") == marker
+        and event["data"].get("context_target_sha256") == fingerprint
+    ]
+    if not matching:
+        return None
+    event = matching[-1]
+    paths = [
+        "blackboard.json",
+        f"{identity}/{metadata_name}",
+        f"audit_events/events/{event['sequence']:010d}.json",
+    ]
+    return dict(
+        version=1,
+        owner="phase",
+        workflow_id=workflow_id,
+        source_id=identity,
+        evidence={
+            name: sha256(canonical_json(read_accounting_file(issue_dir / name))).hexdigest()
+            for name in paths
+        },
+    )
+
+
+def read_accounting_file(path: Path, *, with_fingerprint=False, max_bytes=MAX_SOURCE_BYTES):
     """Bounded no-follow read; reject unsafe ancestors and special files."""
     path = Path(os.path.abspath(path))
     with _usage_parent(path) as (parent_fd, _):
         fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
         with os.fdopen(fd, "rb") as stream:
             info = os.fstat(stream.fileno())
-            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_SOURCE_BYTES:
+            limit = min(max_bytes, MAX_SOURCE_BYTES)
+            if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
                 raise ValueError("accounting source is unsafe or oversized")
-            data = stream.read(MAX_SOURCE_BYTES + 1)
-    if len(data) > MAX_SOURCE_BYTES:
+            data = stream.read(limit + 1)
+    if len(data) > limit:
         raise ValueError("accounting source is oversized")
     value = yaml.safe_load(data) if path.suffix == ".yaml" else json.loads(data)
     if not isinstance(value, dict):
         raise ValueError("accounting source must be an object")
-    return value
+    return (value, sha256(data).hexdigest(), len(data)) if with_fingerprint else value
 
 
 def unrecorded_usage(stats, records):
@@ -76,6 +217,7 @@ def _coverage_gap(stats, records):
 def collect_cost_sources(issue_dir: Path) -> list[dict]:
     """Keep source identities stable across active/archive/snapshot copies."""
     sources = []
+    execution = _execution_context(issue_dir)
 
     def add(identity, stats, records=None, gap=False):
         stats = stats if isinstance(stats, dict) else {}
@@ -99,10 +241,7 @@ def collect_cost_sources(issue_dir: Path) -> list[dict]:
                 f"{identity}/chat/{index}",
                 group.get("stats"),
                 group.get("cost_records", []),
-                bool(
-                    group.get("incomplete_calls")
-                    or "total_cost_usd" in group.get("unknown_fields", [])
-                ),
+                chat_usage_has_gap(group),
             )
 
     candidates = sorted(issue_dir.glob("*/iteration_*"))
@@ -124,11 +263,20 @@ def collect_cost_sources(issue_dir: Path) -> list[dict]:
                 or any(unrecorded_usage(stats, []).values())
             ):
                 phase_source = add(identity, stats)
+                proof = _uninvoked_proof(issue_dir, identity, data, stats, execution)
+                if proof is not None:
+                    phase_source.update(no_model_execution=proof, gap=False)
             chats(identity, groups)
         except (OSError, ValueError, TypeError, AttributeError, InvalidOperation, yaml.YAMLError):
             if phase_source is None:
                 phase_source = add(identity, {}, gap=True)
             phase_source.update(gap=True, read_error=path.exists() or path.is_symlink())
+            if not phase_source["read_error"] and execution is not None:
+                from cafe.delivery.accounting import no_model_delivery_proof
+
+                proof = no_model_delivery_proof(issue_dir, identity, *execution)
+                if proof is not None:
+                    phase_source.update(no_model_execution=proof, gap=False)
     path = issue_dir / "issue.yaml"
     if path.exists() or path.is_symlink():
         try:
@@ -199,7 +347,10 @@ def summarize_sources(sources, *, exclude_ids=(), ambiguous_sources=()):
                 residual = Decimal(0)
             if residual:
                 parts.append(summarize_cost([], legacy_cost=residual))
-            if source.get("gap") or identity in ambiguous or (not raw and not residual):
+            no_model = confirmed_no_model_source(source) and identity not in ambiguous
+            if no_model:
+                parts.append(combine_cost_summaries([]))
+            elif source.get("gap") or identity in ambiguous or (not raw and not residual):
                 parts.append(summarize_cost([]))
         except (ValueError, TypeError, KeyError, InvalidOperation):
             parts.append(summarize_cost([]))
@@ -214,6 +365,10 @@ def accounting_source_versions(issue_dir, *, extra_paths=()):
     paths = [issue_dir / "issue.yaml", *extra_paths]
     paths.extend(issue_dir.glob("*/iteration_*/iteration.json"))
     paths.extend(issue_dir.glob("*/iteration_*/context.json"))
+    paths.extend([issue_dir / "blackboard.json", issue_dir / "human_tasks.json",
+                  issue_dir / "audit_events/workflow.json"])
+    paths.extend(issue_dir.glob("audit_events/events/*.json"))
+    paths.extend(issue_dir.glob("delivery/*/*.json"))
     versions = {}
     for path in paths:
         try:

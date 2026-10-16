@@ -578,7 +578,7 @@ Versioning policy, while roadmap stages describe product direction independently
 - [Roadmap](docs/roadmap.md)
 - [Versioning policy](docs/versioning.md)
 - [Changelog](CHANGELOG.md)
-- [Latest release notes](docs/releases/v0.12.0.md)
+- [Latest release notes](docs/releases/v0.12.1.md)
 - [Strategic positioning](docs/positioning.md)
 - [Known runtime constraints](docs/known-constraints.md)
 - [Cost accounting and automatic OpenAI rate updates](docs/cost-accounting.md)

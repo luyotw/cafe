@@ -148,6 +148,7 @@ def test_phase_copy_is_absent_from_central_catalogs():
             "status.returned", "status.awaiting_confirmation", "status.skipped", "status.blocked",
             "status.unknown", "cost_footer", "cost.reported", "cost.estimated",
             "cost.legacy", "cost.unknown", "cost.partial", "cost.stale",
+            "cost.native_partial", "cost.no_model",
         )],
         *[f"manager.kickoff.{name}" for name in (
             "header_field", "header_value", "confirmation", "checks", "global_sync_heading",

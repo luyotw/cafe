@@ -308,6 +308,14 @@ def _runtime_progress(
     attempts: dict[str, tuple] = {}
     latest_starts: dict[str, str] = {}
     latest_forward_evidence: dict[str, str] = {}
+    latest_stop_evidence: dict[str, str] = {}
+    phase_metadata: dict[str, Mapping[str, Any]] = {}
+
+    def record_stop(step, timestamp):
+        previous = latest_stop_evidence.get(step)
+        if previous is None or _after(timestamp, previous):
+            latest_stop_evidence[step] = timestamp
+
     if issue_dir is None:
         return statuses, iterations
     blackboard = _read_json(issue_dir / "blackboard.json")
@@ -382,12 +390,14 @@ def _runtime_progress(
                 terminal_evidence.discard(step)
             elif event_type in {"step_skipped", "workflow_step_skipped"}:
                 statuses[step] = "skipped"
+                record_stop(step, str(event.get("timestamp", "")))
                 terminal_evidence.add(step)
             elif event_type == "workflow_paused" and str(data.get("status_code", "")).upper() in {
                 "BATON_NEED_CLARIFICATION",
                 "BATON_NEED_PERMISSION",
             }:
                 statuses[step] = "awaiting_input"
+                record_stop(step, str(event.get("timestamp", "")))
                 terminal_evidence.add(step)
             elif event_type == "human_task_completed" and statuses[step] == "awaiting_input":
                 statuses[step] = "completed" if step in verified_completion else "in_progress"
@@ -397,6 +407,7 @@ def _runtime_progress(
                 and str(data.get("status_code", "")).upper() == "INTERRUPTED"
             ):
                 statuses[step] = "blocked"
+                record_stop(step, str(event.get("timestamp", "")))
                 terminal_evidence.add(step)
         if event_type == "transition":
             source, target = str(data.get("from", "")), str(data.get("to", ""))
@@ -432,11 +443,33 @@ def _runtime_progress(
             "BLOCKED",
         }:
             statuses[target] = "blocked"
+            record_stop(target, str(handoff.get("created_at", "")))
             terminal_evidence.add(target)
     task_store = _read_json(issue_dir / "human_tasks.json") or {}
     tasks = task_store.get("tasks", [])
     if isinstance(tasks, Mapping):
         tasks = list(tasks.values())
+    results = task_store.get("results", [])
+    result_by_task = {
+        str(result.get("task_id")): result
+        for result in results if isinstance(result, Mapping) and result.get("task_id")
+    } if isinstance(results, list) else {}
+    latest_tasks: dict[str, Mapping[str, Any]] = {}
+
+    for task in tasks:
+        if not isinstance(task, Mapping):
+            continue
+        step = str(task.get("step", ""))
+        previous = latest_tasks.get(step)
+        iteration = _iteration_number(task.get("iteration")) or 0
+        previous_iteration = (_iteration_number(previous.get("iteration")) or 0) if previous else 0
+        if (
+            previous is None
+            or iteration > previous_iteration
+            or iteration == previous_iteration
+            and not _after(previous.get("created_at"), task.get("created_at"))
+        ):
+            latest_tasks[step] = task
     for task in tasks:
         if not isinstance(task, Mapping) or task.get("status") != "pending":
             continue
@@ -468,17 +501,93 @@ def _runtime_progress(
             continue
         if iteration < iterations.get(step, 0):
             continue
+        phase_metadata[step] = metadata
         marker = metadata.get("agent_interruption") or metadata.get("restart_preparation_failure")
         stale_stop = isinstance(marker, Mapping) and _after(latest_forward_evidence.get(step), marker.get("id"))
         code = str(metadata.get("status_code", "")).upper()
         if code == "SKIPPED":
             statuses[step] = "skipped"
+            record_stop(step, str(metadata.get("timestamp", "")))
             terminal_evidence.add(step)
         elif not stale_stop and code in {"INTERRUPTED", "BLOCKED"}:
             statuses[step] = "blocked"
+            record_stop(step, str(
+                marker.get("id", metadata.get("timestamp", ""))
+                if isinstance(marker, Mapping) else metadata.get("timestamp", "")
+            ))
             terminal_evidence.add(step)
         elif metadata.get("timestamp") and statuses[step] == "pending":
             statuses[step] = "in_progress"
+    for step, task in latest_tasks.items():
+        if step not in statuses or task.get("status") != "completed":
+            continue
+        result = result_by_task.get(str(task.get("id", "")), {})
+        payload = result.get("payload", {})
+        outcome = _declared_task_outcome(task, payload)
+        completed_at = task.get("completed_at")
+        if (
+            outcome is not None
+            and outcome[0].get("correction") is True
+            and outcome[1] in statuses
+            and isinstance(completed_at, str)
+            and completed_at
+            and not _after(latest_forward_evidence.get(step), completed_at)
+            and not _after(latest_stop_evidence.get(step), completed_at)
+            and iterations.get(step, 0) <= (_iteration_number(task.get("iteration")) or 0)
+        ):
+            statuses[step] = "returned"
+            terminal_evidence.add(step)
+        # Task completion can finish an automatic phase without an agent
+        # completion event. It can also explicitly abandon an uninvoked retry.
+        # Neither case makes historical interruptions or mere answers successful.
+        workflow_id = blackboard.get("workflow_id")
+        if (
+            not isinstance(payload, Mapping)
+            or task.get("workflow_id") != workflow_id
+            or result.get("workflow_id") != workflow_id
+            or not isinstance(completed_at, str)
+            or (latest_forward_evidence.get(step) is not None
+                and not _after(completed_at, latest_forward_evidence[step]))
+            or (latest_stop_evidence.get(step) is not None
+                and not _after(completed_at, latest_stop_evidence[step]))
+            or iterations.get(step, 0) != _iteration_number(task.get("iteration"))
+        ):
+            continue
+        if (
+            outcome is not None
+            and outcome[0].get("correction") is not True
+            and outcome[1] in {"done", "_done"}
+            and task.get("trigger") == "confirm_output"
+            and blackboard.get("current_step") == "done"
+            and isinstance(handoff, Mapping)
+            and handoff.get("from_step") == step
+            and handoff.get("to_owner") == "done"
+            and handoff.get("to_step") == "done"
+            and handoff.get("intent") == "workflow_complete"
+        ):
+            statuses[step] = "completed"
+            continue
+        target = payload.get("supervisor_handoff_to")
+        declared = payload.get("declared_continuation")
+        redirected_outcome = _declared_task_outcome(task, {**payload, "continuation": declared})
+        metadata = phase_metadata.get(step, {})
+        interruption = metadata.get("agent_interruption")
+        if (
+            task.get("trigger") == "agent_execution_interrupted"
+            and redirected_outcome is not None
+            and redirected_outcome[0].get("correction") is not True
+            and redirected_outcome[1] == declared == step
+            and isinstance(target, str) and target in statuses and target != step
+            and payload.get("continuation") == target
+            and metadata.get("agent_invoked") is False
+            and metadata.get("workflow_completion_trusted") is False
+            and isinstance(interruption, Mapping)
+            and interruption.get("workflow_id") == workflow_id
+            and interruption.get("step") == step
+            and _iteration_number(interruption.get("iteration")) == iterations[step]
+            and _after(completed_at, interruption.get("id"))
+        ):
+            statuses[step] = "skipped"
     if workflow_finished:
         statuses = {
             step: "skipped" if status == "pending" else status for step, status in statuses.items()
@@ -520,6 +629,36 @@ def _post_confirmation_handoff_iteration(
             ):
                 return iteration
     return None
+
+
+def _declared_task_outcome(
+    task: Mapping[str, Any], payload: Any
+) -> tuple[Mapping[str, Any], str] | None:
+    if not isinstance(payload, Mapping):
+        return None
+    decision = payload.get("decision")
+    if not isinstance(decision, str) or not decision:
+        return None
+    expected = task.get("expected_result", {})
+    decisions = expected.get("decisions", []) if isinstance(expected, Mapping) else []
+    matched = (
+        next(
+            (item for item in decisions if isinstance(item, Mapping) and item.get("id") == decision),
+            None,
+        )
+        if isinstance(decisions, list)
+        else None
+    )
+    continuations = task.get("continuations", {})
+    target = continuations.get(decision) if isinstance(continuations, Mapping) else None
+    if (
+        matched is None
+        or not isinstance(target, str)
+        or not target
+        or payload.get("continuation") not in (None, target)
+    ):
+        return None
+    return matched, target
 
 
 def _confirmation_statuses(
@@ -568,34 +707,8 @@ def _confirmation_statuses(
             result = result_by_task.get(str(task.get("id", "")), {})
             payload = result.get("payload", {}) if isinstance(result, Mapping) else {}
             payload = payload if isinstance(payload, Mapping) else {}
-            decision = str(payload.get("decision", ""))
-            expected = task.get("expected_result", {})
-            expected = expected if isinstance(expected, Mapping) else {}
-            decisions = expected.get("decisions", [])
-            matched = (
-                next(
-                    (
-                        item
-                        for item in decisions
-                        if isinstance(item, Mapping) and item.get("id") == decision
-                    ),
-                    None,
-                )
-                if isinstance(decisions, list)
-                else None
-            )
-            continuations = task.get("continuations", {})
-            declared_target = (
-                continuations.get(decision) if isinstance(continuations, Mapping) else None
-            )
-            payload_target = payload.get("continuation")
-            outcome_is_valid = (
-                matched is not None
-                and isinstance(declared_target, str)
-                and bool(declared_target)
-                and (payload_target is None or payload_target == declared_target)
-            )
-            if not outcome_is_valid:
+            outcome = _declared_task_outcome(task, payload)
+            if outcome is None:
                 statuses[step] = "unknown"
                 if (
                     isinstance(task_iteration, int)
@@ -603,6 +716,7 @@ def _confirmation_statuses(
                 ):
                     statuses[step] = "pending"
                 continue
+            matched, declared_target = outcome
             correction = matched.get("correction") is True
             if correction:
                 statuses[step] = "returned"
@@ -754,7 +868,7 @@ def render_progress(
                 # execution alone must never make its one progress node green.
                 status = phase_statuses[step]
                 if status == "completed" or (
-                    status in {"pending", "awaiting_input"}
+                    status in {"pending", "in_progress", "awaiting_input"}
                     and confirmation_statuses[step] == "awaiting_confirmation"
                 ):
                     status = confirmation_statuses[step]

@@ -1177,6 +1177,7 @@ def _apply_human_task_payload(
                 )
                 if (
                     trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER
+                    and continuation == from_step
                     and validated_completion.decision == "retry"
                 ):
                     iteration_data = _load_recovery_json(
@@ -1190,6 +1191,7 @@ def _apply_human_task_payload(
                         )
                 if (
                     trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER
+                    and continuation == from_step
                     and validated_completion.decision == AGENT_EXECUTION_FRESH_SESSION_DECISION
                 ):
                     completion_payload["session_continuation"] = _fresh_session_recovery_payload(
@@ -1200,6 +1202,7 @@ def _apply_human_task_payload(
                         iteration=iteration,
                     )
                 if (trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER
+                        and continuation == from_step
                         and validated_completion.decision == "retry_configured_order"):
                     completion_payload["restart_recovery"] = _configured_order_recovery_payload(
                         issue_dir=issue_dir, workflow_id=blackboard.workflow_id,

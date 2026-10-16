@@ -130,6 +130,121 @@ def test_unpriced_legacy_usage_keeps_source_incomplete(tmp_path):
     assert not result["incomplete"]
 
 
+@pytest.mark.parametrize("damage", [None, "missing_call", "unpriced", "other_missing", "conflict"])
+def test_old_chat_alias_flag_needs_complete_per_call_evidence(tmp_path, damage):
+    phase = tmp_path / "custom/iteration_001"
+    phase.mkdir(parents=True)
+    usage = dict(
+        input_tokens=10,
+        output_tokens=2,
+        cache_write_input_tokens=0,
+        cache_read_input_tokens=0,
+        reasoning_output_tokens=0,
+    )
+    if damage == "conflict":
+        usage["cache_creation_input_tokens"] = 1
+    row = record("chat", usage=usage, model="actual")
+    if damage == "unpriced":
+        row.update(provenance="unavailable", amount_usd=None)
+    group = dict(
+        calls=2 if damage == "missing_call" else 1,
+        incomplete_calls=1,
+        mode="one_shot",
+        reported_model=None,
+        stats={"total_cost_usd": 1},
+        unknown_fields=["cache_creation_input_tokens"],
+        cost_records=[row],
+    )
+    if damage == "other_missing":
+        group["unknown_fields"].append("input_tokens")
+    (phase / "iteration.json").write_text(json.dumps({"chat_usage": [group]}))
+    before = (phase / "iteration.json").read_bytes()
+    summary = summarize_sources(collect_cost_sources(tmp_path))
+    assert summary["incomplete"] == (damage is not None)
+    assert summary["known"] == 1
+    assert (phase / "iteration.json").read_bytes() == before
+
+
+def uninvoked_iteration(issue, *, invoked=False, stats=None):
+    from hashlib import sha256
+
+    from cafe.core.audit_events import AuditEventStore
+
+    directory = issue / "compose/iteration_004"
+    directory.mkdir(parents=True, exist_ok=True)
+    (issue / "blackboard.json").write_text('{"workflow_id":"wf"}')
+    marker = dict(id="2026-10-16T00:00:00Z", workflow_id="wf", step="compose", iteration=4)
+    data = dict(agent_invoked=invoked, workflow_completion_trusted=False, agent_interruption=marker)
+    if stats is not None:
+        data["stats"] = stats
+    path = directory / "iteration.json"
+    path.write_text(json.dumps(data))
+    audit = AuditEventStore(issue)
+    audit.initialize("wf")
+    sequence = audit.reserve("wf")
+    event = dict(
+        workflow_id="wf",
+        sequence=sequence,
+        event_id="prepared",
+        step="compose",
+        message="",
+        timestamp="2026-10-16T00:00:00Z",
+        event_type="agent_interruption_prepared",
+        data=dict(
+            iteration=4, marker=marker, context_target_sha256=sha256(path.read_bytes()).hexdigest()
+        ),
+    )
+    audit.commit("wf", event)
+    return path
+
+
+@pytest.mark.parametrize(
+    "case", ["uninvoked", "invoked", "changed", "old_call", "legacy_tokens", "no_proof"]
+)
+def test_only_proven_uninvoked_iteration_has_complete_zero_model_cost(tmp_path, case):
+    stats = (
+        {"cost_records": [record("earlier", "2")]}
+        if case == "old_call"
+        else {"cache_creation_input_tokens": 3}
+        if case == "legacy_tokens"
+        else None
+    )
+    path = uninvoked_iteration(tmp_path, invoked=case == "invoked", stats=stats)
+    if case == "changed":
+        path.write_text(path.read_text() + "\n")
+    if case == "no_proof":
+        from cafe.core.audit_events import AuditEventStore
+
+        AuditEventStore(tmp_path)._path(1).unlink()
+    summary = summarize_sources(collect_cost_sources(tmp_path))
+    assert summary["incomplete"] == (case not in {"uninvoked", "old_call"})
+    assert summary["known"] == (2 if case == "old_call" else 0)
+    (source,) = collect_cost_sources(tmp_path)
+    assert bool(source.get("no_model_execution")) == (case == "uninvoked")
+
+
+@pytest.mark.parametrize("damage", ["binding_array", "event_array", "oversized", "symlink"])
+def test_optional_execution_proof_cannot_break_known_cost_collection(tmp_path, damage):
+    uninvoked_iteration(tmp_path)
+    phase = tmp_path / "paid/iteration_001"
+    phase.mkdir(parents=True)
+    (phase / "iteration.json").write_text(json.dumps({"stats": {"total_cost_usd": 2}}))
+    binding = tmp_path / "audit_events/workflow.json"
+    event = tmp_path / "audit_events/events/0000000001.json"
+    if damage == "binding_array":
+        binding.write_text("[]")
+    elif damage == "event_array":
+        event.write_text("[]")
+    elif damage == "oversized":
+        event.write_text(" " * (256 * 1024 + 1))
+    else:
+        event.unlink()
+        event.symlink_to("/dev/zero")
+    summary = summarize_sources(collect_cost_sources(tmp_path))
+    assert summary["known"] == 2
+    assert summary["incomplete"]
+
+
 @pytest.mark.parametrize("provider", ["custom-provider", "codex"])
 @pytest.mark.parametrize("total", [None, 12])
 def test_custom_report_uses_explicit_neutral_totals_and_preserves_unknowns(

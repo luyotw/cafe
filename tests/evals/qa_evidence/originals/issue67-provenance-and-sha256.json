@@ -1,0 +1,104 @@
+{
+  "source_issue": "https://github.com/luyotw/kid-todolist/issues/67",
+  "destination_issue": "https://github.com/luyotw/cafe/issues/647",
+  "report_metadata": [
+    {
+      "iteration": 1,
+      "timestamp": "2026-10-12T11:41:03.266440+08:00",
+      "workflow_id": "48a82454-ba1b-4c7f-829f-90d311cb425f",
+      "skill_name": "cafe-qa",
+      "playbook_id": "subagent-flow-qa",
+      "effective_checklist": {
+        "version": 1,
+        "content": "",
+        "gates": [],
+        "projections": [],
+        "overlays": false,
+        "agent_owned": true
+      }
+    },
+    {
+      "iteration": 2,
+      "timestamp": "2026-10-12T15:39:19.350891+08:00",
+      "workflow_id": "48a82454-ba1b-4c7f-829f-90d311cb425f",
+      "skill_name": "cafe-qa",
+      "playbook_id": "subagent-flow-qa",
+      "effective_checklist": {
+        "version": 1,
+        "content": "",
+        "gates": [],
+        "projections": [],
+        "overlays": false,
+        "agent_owned": true
+      }
+    }
+  ],
+  "files": [
+    {
+      "file": "issue67-qa-001-report.md",
+      "source": "qa/iteration_001/output.md",
+      "bytes": 15532,
+      "sha256": "892765462b5f209df7bc2f8e4906f19acbde629f235dcfafdd393df1b8464ee7"
+    },
+    {
+      "file": "issue67-qa-001-checklist.md",
+      "source": "qa/iteration_001/checklist.md",
+      "bytes": 978,
+      "sha256": "ab48cb631979f1d5c5dd10875fc58833d6422ffb7bc0805b2c54258969937cd4"
+    },
+    {
+      "file": "issue67-qa-001-artifact.json",
+      "source": "qa/iteration_001/artifact.json",
+      "bytes": 404,
+      "sha256": "fbf4e434d944d9c3ddc22f2213a9f130ca863f7439da88a0e64684fa9331b0c4"
+    },
+    {
+      "file": "issue67-qa-002-report.md",
+      "source": "qa/iteration_002/output.md",
+      "bytes": 12969,
+      "sha256": "10434ee067a6774eb46ff9134185715ab74c0ebf8603a7eb2db3969c33e52d52"
+    },
+    {
+      "file": "issue67-qa-002-checklist.md",
+      "source": "qa/iteration_002/checklist.md",
+      "bytes": 816,
+      "sha256": "b01cdf67f4b71c7a3c111911c1e59d8d7e87b14ec2ffba7f83357ba5a8a36a80"
+    },
+    {
+      "file": "issue67-qa-002-artifact.json",
+      "source": "qa/iteration_002/artifact.json",
+      "bytes": 404,
+      "sha256": "e08bfd201e99e616ac30e8ec97120cebb85305a17bfa17e21981fcb9a01b0fcd"
+    },
+    {
+      "file": "issue67-c9d57861-browser-TaskWorkspace-fixture.tsx",
+      "source": "functions/test/browser/tasks.tsx",
+      "identical_at_commits": [
+        "c9d5786126dba2a0c8a1ce22c7dd8e9538489771",
+        "416f6ace985bf95cdccb76a2d7d02b254b71cdad",
+        "eea7a862bee6b192870f10a63713db796c288796"
+      ],
+      "bytes": 7231,
+      "sha256": "0dfc8be83390f28d3120f98e1646c45b89087e71f466461d73c21cdfa34603e1"
+    },
+    {
+      "file": "issue67-c9d57861-schedule-journeys.integration.vnext.ts",
+      "source": "functions/test/schedule-journeys.integration.vnext.ts",
+      "identical_at_commits": [
+        "c9d5786126dba2a0c8a1ce22c7dd8e9538489771",
+        "416f6ace985bf95cdccb76a2d7d02b254b71cdad"
+      ],
+      "bytes": 31858,
+      "sha256": "f77178aa4ccdda96657f0b458dacb0f0344152c05dd72e0136c27ed697bceab8"
+    },
+    {
+      "file": "issue67-eea7a862-schedule-journeys.integration.vnext.ts",
+      "source": "functions/test/schedule-journeys.integration.vnext.ts",
+      "identical_at_commits": [
+        "eea7a862bee6b192870f10a63713db796c288796"
+      ],
+      "bytes": 32213,
+      "sha256": "af0797b6c5cbaa852b923d89965a507707e47a15ebed4895a8e04a2ad10b99ae"
+    }
+  ]
+}

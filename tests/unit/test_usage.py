@@ -30,6 +30,43 @@ def test_merge_preserves_supported_statistics_and_unrelated_fields():
             assert merged[name] == value
 
 
+def test_mixed_replay_deducts_equal_cache_aliases_without_changing_records():
+    from tests.unit.test_workflow_cost_summary import record
+
+    first = record(
+        "first",
+        usage=dict(input_tokens=10, cache_creation_input_tokens=3, cache_write_input_tokens=3),
+    )
+    second = record(
+        "second",
+        usage=dict(input_tokens=10, cache_creation_input_tokens=5, cache_write_input_tokens=5),
+    )
+    merged = merge_token_usage_stats(
+        {},
+        TokenUsage(
+            input_tokens=10,
+            cache_creation_input_tokens=3,
+            cache_write_input_tokens=3,
+            total_cost_usd=1,
+            cost_records=[first],
+        ),
+    )
+    merged = merge_token_usage_stats(
+        merged,
+        TokenUsage(
+            input_tokens=20,
+            cache_creation_input_tokens=8,
+            cache_write_input_tokens=8,
+            total_cost_usd=2,
+            cost_records=[first, second],
+        ),
+    )
+    assert merged["input_tokens"] == 20
+    assert merged["cache_creation_input_tokens"] == merged["cache_write_input_tokens"] == 8
+    assert merged["total_cost_usd"] == 2
+    assert merged["cost_records"] == [first, second]
+
+
 def test_existing_iteration_sink_preserves_concurrent_metadata(tmp_path):
     target = tmp_path / ".cafe/issues/x/custom/iteration_004/iteration.json"
     target.parent.mkdir(parents=True)
