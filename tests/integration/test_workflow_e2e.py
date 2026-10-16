@@ -9,6 +9,10 @@
 
 from __future__ import annotations
 
+from cafe.workflow_execution.automatic import (
+    automatic_executor_registry as _automatic_executor_registry,
+)
+
 import json
 from hashlib import sha256
 from pathlib import Path
@@ -323,6 +327,7 @@ steps:
             issue_dir=issue_dir,
             playbook=playbook,
             executor=executor.execute_step,
+            automatic_registry=_automatic_executor_registry(),
         ).run(start_step="release")
 
     assert result.completed is True
@@ -363,6 +368,7 @@ steps:
         issue_dir=issue_dir,
         playbook=playbook,
         executor=feedback_executor.execute_step,
+        automatic_registry=_automatic_executor_registry(),
     ).run(start_step="release", single_step=True)
 
     state = BlackboardStore(issue_dir).load_or_create("release")
@@ -751,6 +757,7 @@ def _run_until_settled(
             issue_dir=issue_dir,
             playbook=playbook,
             executor=executor,
+            automatic_registry=_automatic_executor_registry(),
         )
         last_result = runner.run(start_step=pending_start, max_transitions=max_transitions)
         latest = BlackboardStore(issue_dir).load_or_create(
@@ -989,6 +996,7 @@ class TestSelfLoop:
             issue_dir=issue_dir,
             playbook=playbook,
             executor=executor,
+            automatic_registry=_automatic_executor_registry(),
         )
         result = runner.run(max_transitions=30)
 
@@ -1054,6 +1062,7 @@ class TestSelfLoop:
             issue_dir=issue_dir,
             playbook=playbook,
             executor=executor,
+            automatic_registry=_automatic_executor_registry(),
         ).run(max_transitions=10)
 
         assert result.completed is True
@@ -1102,6 +1111,7 @@ class TestSelfLoop:
             issue_dir=issue_dir,
             playbook=playbook,
             executor=executor,
+            automatic_registry=_automatic_executor_registry(),
         )
         runner.run(max_transitions=30)
 
@@ -1138,6 +1148,7 @@ class TestUserHandoff:
             issue_dir=issue_dir,
             playbook=playbook,
             executor=executor,
+            automatic_registry=_automatic_executor_registry(),
         )
         result = runner.run(start_step="spec", max_transitions=10)
 
@@ -1196,6 +1207,7 @@ class TestUserHandoff:
             issue_dir=issue_dir,
             playbook=playbook,
             executor=executor,
+            automatic_registry=_automatic_executor_registry(),
         ).run(max_transitions=10)
 
         assert first.completed is True
@@ -1209,6 +1221,7 @@ class TestUserHandoff:
             issue_dir=issue_dir,
             playbook=playbook,
             executor=executor,
+            automatic_registry=_automatic_executor_registry(),
         ).run(max_transitions=10)
 
         assert second.completed is True
@@ -1259,6 +1272,7 @@ class TestUserHandoff:
             issue_dir=user_issue_dir,
             playbook=playbook,
             executor=executor,
+            automatic_registry=_automatic_executor_registry(),
         ).run(max_transitions=10)
 
         assert user_result.completed is False
@@ -1289,6 +1303,7 @@ class TestUserHandoff:
             issue_dir=done_issue_dir,
             playbook=playbook,
             executor=executor,
+            automatic_registry=_automatic_executor_registry(),
         ).run(max_transitions=10)
 
         assert done_result.completed is True

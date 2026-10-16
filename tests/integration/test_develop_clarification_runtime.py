@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from cafe.workflow_execution.automatic import (
+    automatic_executor_registry as _automatic_executor_registry,
+)
+
 from pathlib import Path
 
 import pytest
@@ -39,6 +43,7 @@ def _run_until_settled(
             issue_dir=issue_dir,
             playbook=playbook,
             executor=executor,
+            automatic_registry=_automatic_executor_registry(),
         )
         last_result = runner.run(start_step=pending_start, max_transitions=max_transitions)
         latest = BlackboardStore(issue_dir).load_or_create(
@@ -92,6 +97,7 @@ def test_develop_need_clarification_pauses_at_user(tmp_path: Path) -> None:
         issue_dir=issue_dir,
         playbook=playbook,
         executor=executor,
+        automatic_registry=_automatic_executor_registry(),
     )
     result = runner.run(start_step="develop", max_transitions=10)
 

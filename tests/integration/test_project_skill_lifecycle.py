@@ -1,5 +1,7 @@
 """I1/I4: prepare links resulting checkouts and refreshes legacy upgrade copies."""
 
+from tests.prepare_support import with_delivery_choices
+
 import os
 import shutil
 import subprocess
@@ -72,7 +74,7 @@ def test_prepare_exposes_resulting_root_and_reruns_without_source_changes(
     if worktree:
         arguments += ["--worktree", str(active)]
     for _ in range(2):
-        result = CliRunner().invoke(app, arguments)
+        result = CliRunner().invoke(app, with_delivery_choices(arguments))
         assert result.exit_code == 0, result.output
         for cli in NativeSkillBridge.PROJECT_LINK_CLIS:
             root = active / NativeSkillBridge.CLI_SKILL_DIRS[cli]
@@ -95,7 +97,7 @@ def test_prepare_git_failure_installs_no_project_links(tmp_path, monkeypatch):
     with patch.object(
         GitOperations, "create_branch", side_effect=GitError("injected checkout failure")
     ):
-        result = CliRunner().invoke(app, prepare_args("failed-task"))
+        result = CliRunner().invoke(app, with_delivery_choices(prepare_args("failed-task")))
     assert result.exit_code != 0
     assert all(
         not (repo / NativeSkillBridge.CLI_SKILL_DIRS[cli]).exists()
@@ -116,7 +118,7 @@ def test_prepare_upgrade_refreshes_legacy_copy_and_repairs_broken_copilot_root(
     broken.symlink_to(".claude/skills")
     monkeypatch.chdir(repo)
     for _ in range(2):
-        result = CliRunner().invoke(app, prepare_args("upgrade-task"))
+        result = CliRunner().invoke(app, with_delivery_choices(prepare_args("upgrade-task")))
         assert result.exit_code == 0, result.output
         assert "incomplete" not in result.output
         assert target.is_symlink() and target.resolve() == source

@@ -1,5 +1,9 @@
 """Notification preparation follows selected declarations rather than phase IDs."""
 
+from cafe.workflow_execution.automatic import (
+    automatic_executor_registry as _automatic_executor_registry,
+)
+
 import json
 import shutil
 from pathlib import Path
@@ -112,6 +116,7 @@ def test_actual_materialization_and_callback_use_selected_primary_and_shared_own
             status_code="ready_for_review",
             auto_continue=False,
         ),
+        automatic_registry=_automatic_executor_registry(),
     )
     runtime.run(start_step="renamed")
     task = HumanTaskRecordStore(issue).tasks()[0]
@@ -188,6 +193,7 @@ def test_identical_task_uses_composition_chosen_producer(notification_owner, fir
             status_code="ready_for_review",
             auto_continue=False,
         ),
+        automatic_registry=_automatic_executor_registry(),
     ).run(start_step="renamed")
     expected = (
         "Selected action zh-TW"
@@ -286,6 +292,7 @@ def test_iteration_selector_and_primary_producer_reach_both_notifications(notifi
             status_code="ready_for_review",
             auto_continue=False,
         ),
+        automatic_registry=_automatic_executor_registry(),
     )
     runtime.run(start_step="renamed")
     task = HumanTaskRecordStore(issue).tasks()[0]
@@ -339,6 +346,7 @@ def test_actual_preparation_bounds_project_authored_labels(notification_owner, v
             status_code="ready_for_review",
             auto_continue=False,
         ),
+        automatic_registry=_automatic_executor_registry(),
     ).run(start_step="renamed")
     assert len(posts) == 1 and posts[0].count("\n") == 5
     assert (
@@ -363,6 +371,7 @@ def test_real_label_limit_and_literal_braces(notification_owner, label, accepted
             status_code="ready_for_review",
             auto_continue=False,
         ),
+        automatic_registry=_automatic_executor_registry(),
     ).run(start_step="renamed")
     rendered = label.replace("{{", "{").replace("}}", "}") + " zh-TW"
     assert (rendered in posts[0]) is accepted
@@ -398,6 +407,7 @@ def test_selected_declaration_uses_notification_locale_authority(
             status_code="ready_for_review",
             auto_continue=False,
         ),
+        automatic_registry=_automatic_executor_registry(),
     ).run(start_step="renamed")
     assert f"Selected primary {selected}" in posts[0] and f"Shared action {selected}" in posts[0]
     assert store.load_or_create("renamed").conversation_locale == locale

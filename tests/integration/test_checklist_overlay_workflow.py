@@ -1,5 +1,9 @@
 """Production journeys for independently selected checklist overlays."""
 
+from cafe.workflow_execution.automatic import (
+    automatic_executor_registry as _automatic_executor_registry,
+)
+
 import json
 from pathlib import Path
 
@@ -770,7 +774,10 @@ def test_direct_subagent_review_user_agreement_reenters_the_composed_gate_once(
     executor.step_user_inputs["develop"] = "Confirm whether this already-complete change needs work."
     executor.agent_manager = JourneyAgent(executor, [no_change])
     first = BlackboardWorkflowRuntime(
-        issue_dir=executor.issue_dir, playbook=executor.playbook, executor=executor.execute_step
+        issue_dir=executor.issue_dir,
+        playbook=executor.playbook,
+        executor=executor.execute_step,
+        automatic_registry=_automatic_executor_registry(),
     ).run(start_step="develop")
     assert not first.completed
     assert executor.agent_manager.calls == 1
@@ -914,7 +921,10 @@ def test_real_no_change_human_task_returns_to_finish_gates_without_reasking(
     from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 
     first = BlackboardWorkflowRuntime(
-        issue_dir=executor.issue_dir, playbook=executor.playbook, executor=executor.execute_step
+        issue_dir=executor.issue_dir,
+        playbook=executor.playbook,
+        executor=executor.execute_step,
+        automatic_registry=_automatic_executor_registry(),
     ).run(start_step="assemble")
     assert not first.completed
     assert executor.agent_manager.calls == 1
@@ -1301,7 +1311,10 @@ def test_completed_decision_continuation_obeys_final_retry_handoff(
 
     executor.agent_manager = JourneyAgent(executor, [no_change])
     BlackboardWorkflowRuntime(
-        issue_dir=executor.issue_dir, playbook=executor.playbook, executor=executor.execute_step
+        issue_dir=executor.issue_dir,
+        playbook=executor.playbook,
+        executor=executor.execute_step,
+        automatic_registry=_automatic_executor_registry(),
     ).run(start_step="assemble")
     records = HumanTaskRecordStore(executor.issue_dir)
     task = records.tasks()[0]
@@ -1494,7 +1507,10 @@ def test_full_runtime_unclassified_retry_cannot_waive_live_evidence(
 
     executor.agent_manager = JourneyAgent(executor, [attempt])
     result = BlackboardWorkflowRuntime(
-        issue_dir=executor.issue_dir, playbook=executor.playbook, executor=executor.execute_step
+        issue_dir=executor.issue_dir,
+        playbook=executor.playbook,
+        executor=executor.execute_step,
+        automatic_registry=_automatic_executor_registry(),
     ).run(start_step="assemble")
     assert result.completed == (repair_attempt is not None)
     assert executor.agent_manager.calls == (repair_attempt or 4)

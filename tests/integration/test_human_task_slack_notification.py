@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from cafe.workflow_execution.automatic import (
+    automatic_executor_registry as _automatic_executor_registry,
+)
+
 import json
 from pathlib import Path
 from urllib.error import URLError
@@ -81,6 +85,7 @@ def _pause_for_output_review(issue_dir: Path, *, response: str = "ready_for_revi
             status_code="ready_for_review",
             auto_continue=False,
         ),
+        automatic_registry=_automatic_executor_registry(),
     )
     return runtime.run(start_step="spec")
 
@@ -96,6 +101,7 @@ def _pause_for_iteration_limit(issue_dir: Path):
         executor=lambda *_args: (_ for _ in ()).throw(
             AssertionError("an iteration-limit pause must not invoke an agent")
         ),
+        automatic_registry=_automatic_executor_registry(),
     )
     runtime.blackboard.step_attempt_counts["review"] = 1
     runtime.blackboard_store.save(runtime.blackboard)
@@ -282,6 +288,7 @@ def test_project_playbook_named_standard_receives_machine_controlled_notificatio
             status_code="ready_for_review",
             auto_continue=False,
         ),
+        automatic_registry=_automatic_executor_registry(),
     ).run(start_step="spec")
 
     task = HumanTaskRecordStore(issue_dir).tasks()[0]
@@ -332,6 +339,7 @@ def test_global_playbook_receives_machine_controlled_notification(
             status_code="ready_for_review",
             auto_continue=False,
         ),
+        automatic_registry=_automatic_executor_registry(),
     ).run(start_step="spec")
 
     task = HumanTaskRecordStore(issue_dir).tasks()[0]

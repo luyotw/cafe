@@ -131,6 +131,12 @@ def test_prior_effects_cannot_be_hidden_by_switching_to_local_only(local_action,
 def test_local_delivery_revision_binds_immutable_feedback_batch(local_action, tmp_path, change_batch):
     context = prepare(local_action, tmp_path)
     _, _, issue, state, phase, data, engine, kwargs, _, delivery = context
+    # This legacy project graph keeps its original same-delivery correction;
+    # new bundled graphs route implementation correction to Develop.
+    data["steps"][delivery]["behavior"]["feedback_target"] = delivery
+    for binding in data["steps"][delivery]["human_tasks"]:
+        if binding["trigger"] == "confirm_output":
+            binding["outcomes"]["revise"] = delivery
     hook(engine, "publish_output", "DevelopmentDeliveryOutcome", kwargs)
     task = HumanTaskRecordStore(issue).tasks()[-1]
     pause(issue, state, delivery)

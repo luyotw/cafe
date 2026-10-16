@@ -32,6 +32,8 @@ All notable changes to this project will be documented in this file.
   preparation failures without requiring a previous provider session.
 - Preserve startup diagnostics without killing healthy silent providers, and
   retain sanitized early worker failures before runtime construction.
+- Release finished host invocation PID ownership for same-process reentry,
+  retaining uncertain provider ownership and existing quiescence checks.
 - Preserve delivery destination checkouts; archive the correct issue and verify
   exact integration/branch identities before correction-branch cleanup.
 - Require issue-wide QA regression coverage and distinguish open delivery
