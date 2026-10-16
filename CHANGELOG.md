@@ -4,6 +4,46 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.12.0] - 2026-10-16
+
+### Added
+
+- Share repository verification profiles across QA and CI, with mandatory and
+  optional suites, context-checked evidence and selective reuse (#656, #662).
+- Execute declared command steps without a phase agent, and prepare delivery
+  choices before execution through public CLI settings (#663).
+- Run bundled development delivery automatically with approved actions,
+  receipt-based outcomes, verification waiting and existing final acceptance
+  (#658); expose `cafe delivery run` for approved delivery reconciliation.
+- Inspect and interrupt an owned execution for controlled same-step correction
+  through `cafe workflow-interrupt`, preserving explicit resume and authority
+  boundaries (#664).
+
+### Changed
+
+- Make `cafe close` verify integration and clean up only. Remove `--squash`,
+  `--message` and `-m`; integrate through delivery before close (#660, #661).
+- Keep model-selection assessments out of new kickoff confirmations/contracts;
+  preserve exact CLI/model/effort choices and historical contract identity.
+
+### Fixed
+
+- Remove native skill ownership gates from startup and recover legacy
+  preparation failures without requiring a previous provider session.
+- Preserve startup diagnostics without killing healthy silent providers, and
+  retain sanitized early worker failures before runtime construction.
+- Release finished host invocation PID ownership for same-process reentry,
+  retaining uncertain provider ownership and existing quiescence checks.
+- Preserve delivery destination checkouts; archive the correct issue and verify
+  exact integration/branch identities before correction-branch cleanup.
+- Require issue-wide QA regression coverage and distinguish open delivery
+  proposals from fixed finding references.
+- Avoid duplicate Codex sandbox options in read-only empty-scope execution and
+  keep preflight identity stable across unrelated model-cache refreshes.
+
+See [the v0.12.0 release notes](docs/releases/v0.12.0.md) for migration,
+delivery settings and verification-profile guidance.
+
 ## [0.11.2] - 2026-10-14
 
 ### Fixed

@@ -44,10 +44,11 @@ This inventory is executable documentation: the unit contract discovers every `s
 | `src/cafe/manager/costs.py::common_dir` | Internal fixed Git common-directory query |
 | `src/cafe/manager/costs.py::_archive` | Internal fixed Git common-directory query |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/cleanup_worktree.py::_git` | Confirmed cleanup Git query and exact resource command family |
-| `src/cafe/data/skills/use-cafe-workflow/scripts/cleanup_worktree.py::cleanup` ×2 | Confirmed archive-only lifecycle command adapter |
+| `src/cafe/data/skills/use-cafe-workflow/scripts/cleanup_worktree.py::cleanup` | Confirmed archive-only lifecycle command adapter |
+| `src/cafe/data/skills/use-cafe-workflow/scripts/cleanup_worktree.py::_verify_integration` | Read-only exact cleanup integration observation |
+| `src/cafe/ui/commands/lifecycle.py::_merged_cleanup_pr` | Read-only exact merged PR cleanup observation |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/report_closeout_cost.py::_effect_complete` ×6 | Internal read-only closeout resource verification queries |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/report_closeout_cost.py::verify_closeout` | Internal fixed Git common-directory query |
-| `src/cafe/data/skills/use-cafe-workflow/scripts/kickoff_inputs.py::_default_cleanup` | Internal read-only origin remote discovery |
 | `src/cafe/data/skills/cafe-deliver_development/scripts/verify_github_actions.py::api` | Approved GitHub Actions observation query |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/execute_closeout.py::_common_dir` | Internal fixed Git common-directory query |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/execute_closeout.py::main` ×2 | Explicit confirmed closeout command adapter |

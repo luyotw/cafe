@@ -120,3 +120,50 @@ def test_only_one_host_worker_advances_at_a_time(tmp_path: Path) -> None:
         assert future.result(timeout=2).result == "done"
 
     assert host.run_worker(lambda: "next", worker_id="next").result == "next"
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_finished_host_releases_its_own_pid_for_same_process_reentry(tmp_path, fails):
+    import os
+    from cafe.core.workflow_repair import _quiescent
+
+    def invocation():
+        if fails:
+            raise ValueError("stopped runtime")
+        return "done"
+
+    host = WorkflowHost(tmp_path)
+    if fails:
+        with pytest.raises(ValueError, match="stopped runtime"):
+            host.run_worker(invocation, worker_id="owned")
+    else:
+        host.run_worker(invocation, worker_id="owned")
+    record = WorkerLaunchStore(tmp_path).get("owned")
+    assert record["pid"] is None and record["last_pid"] == os.getpid()
+    _quiescent(tmp_path)
+    assert host.run_worker(lambda: "resumed").result == "resumed"
+
+
+@pytest.mark.parametrize("provider_state", ["starting", "running", "unverified", None])
+def test_host_never_releases_uncertain_provider_ownership(tmp_path, provider_state):
+    import json
+    import os
+    from cafe.core.workflow_repair import _quiescent
+
+    store = WorkerLaunchStore(tmp_path)
+
+    def invocation():
+        with store._locked_records() as records:
+            records["owned"]["provider"] = {"state": provider_state}
+
+    if provider_state is None:
+        with pytest.raises(ValueError, match="provider ownership state is malformed"):
+            WorkflowHost(tmp_path).run_worker(invocation, worker_id="owned")
+        expected = "live or uncertain worker"
+    else:
+        WorkflowHost(tmp_path).run_worker(invocation, worker_id="owned")
+        expected = "PID is still live"
+    record = json.loads(store.path.read_text())["attempts"]["owned"]
+    assert record["pid"] == os.getpid()
+    with pytest.raises(ValueError, match=expected):
+        _quiescent(tmp_path)

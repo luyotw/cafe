@@ -78,11 +78,13 @@ class WorkflowHost:
             except BaseException:
                 try:
                     store.mark(identity, "failed")
+                    store.release_owned_process(identity)
                 except (OSError, ValueError):
                     pass  # Retain the original error; unreadable control stays frozen.
                 raise
             if control.on_quiesced is None:
                 store.mark(identity, "stopped")
+                store.release_owned_process(identity)
         if control.on_quiesced is not None:
             control.finish()
         return HostRunResult(hosting=hosting, worker_id=identity, result=result)

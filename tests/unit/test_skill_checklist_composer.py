@@ -1332,7 +1332,7 @@ def test_qa_regression_coverage_reaches_first_and_correction_passes(
     contract = loader.get_workflow_declaration(step.skill)
     reference = load_skill_reference("cafe-qa", "regression_acceptance.md")
     expected_rows = [line for line in reference.splitlines() if line.startswith("- [ ]")]
-    assert len(expected_rows) == 4
+    assert len(expected_rows) == 6
     target = tmp_path / "checklist.md"
     assert compose_declared_checklist(
         skill_name=step.skill,

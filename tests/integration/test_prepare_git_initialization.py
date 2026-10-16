@@ -1,5 +1,7 @@
 """End-to-end coverage for guided Git initialization during prepare."""
 
+from tests.prepare_support import with_delivery_choices
+
 from unittest.mock import patch
 
 import pytest
@@ -23,16 +25,18 @@ def test_prepare_initializes_git_only_with_explicit_non_interactive_flag(
 
     result = CliRunner().invoke(
         app,
-        [
-            "prepare",
-            "first-task",
-            "--no-interactive",
-            "--init-git",
-            "--input-method=manual",
-            "--rigor=medium",
-            "--spec-template=auto",
-            "--plan-template=default",
-        ],
+        with_delivery_choices(
+            [
+                "prepare",
+                "first-task",
+                "--no-interactive",
+                "--init-git",
+                "--input-method=manual",
+                "--rigor=medium",
+                "--spec-template=auto",
+                "--plan-template=default",
+            ]
+        ),
     )
 
     assert result.exit_code == 0, result.output
@@ -48,7 +52,7 @@ def test_prepare_interactive_decline_leaves_folder_without_git(tmp_path, monkeyp
     monkeypatch.chdir(tmp_path)
 
     with patch("cafe.ui.cli.prompt_confirm", return_value=False):
-        result = CliRunner().invoke(app, ["prepare", "first-task"])
+        result = CliRunner().invoke(app, with_delivery_choices(["prepare", "first-task"]))
 
     assert result.exit_code == 1
     assert "Git was not initialized" in result.output
@@ -84,8 +88,8 @@ def test_prepare_resumes_baseline_after_commit_failure(tmp_path, monkeypatch) ->
     retry_arguments = [argument for argument in first_arguments if argument != "--init-git"]
 
     with patch.object(GitOperations, "run_git", new=run_git_with_one_failure):
-        first_result = CliRunner().invoke(app, first_arguments)
-        retry_result = CliRunner().invoke(app, retry_arguments)
+        first_result = CliRunner().invoke(app, with_delivery_choices(first_arguments))
+        retry_result = CliRunner().invoke(app, with_delivery_choices(retry_arguments))
 
     assert first_result.exit_code == 1
     assert retry_result.exit_code == 0, retry_result.output
@@ -115,8 +119,8 @@ def test_prepare_keeps_worktree_blocked_when_initialization_is_retried(
         "--plan-template=default",
     ]
 
-    first_result = runner.invoke(app, [*common_arguments, "--init-git"])
-    second_result = runner.invoke(app, common_arguments)
+    first_result = runner.invoke(app, with_delivery_choices([*common_arguments, "--init-git"]))
+    second_result = runner.invoke(app, with_delivery_choices(common_arguments))
 
     assert first_result.exit_code == 1
     assert second_result.exit_code == 1
@@ -139,7 +143,7 @@ def test_pending_bootstrap_still_warns_about_tracked_modifications(tmp_path, mon
     tracked_file.write_text("print('modified')\n", encoding="utf-8")
 
     with patch("cafe.ui.cli.prompt_confirm", return_value=False):
-        result = CliRunner().invoke(app, ["prepare", "second-task"])
+        result = CliRunner().invoke(app, with_delivery_choices(["prepare", "second-task"]))
 
     assert result.exit_code == 0
     assert "Warning: You have uncommitted changes" in result.output
@@ -160,13 +164,15 @@ def test_pending_bootstrap_blocks_worktree_for_staged_starting_file(tmp_path, mo
 
     result = CliRunner().invoke(
         app,
-        [
-            "prepare",
-            "first-task",
-            "--no-check",
-            "--worktree",
-            ".cafe/worktrees/first-task",
-        ],
+        with_delivery_choices(
+            [
+                "prepare",
+                "first-task",
+                "--no-check",
+                "--worktree",
+                ".cafe/worktrees/first-task",
+            ]
+        ),
     )
 
     assert result.exit_code == 1

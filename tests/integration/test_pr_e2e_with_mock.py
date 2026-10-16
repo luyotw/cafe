@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from cafe.workflow_execution.automatic import (
+    automatic_executor_registry as _automatic_executor_registry,
+)
+
 import json
 import re
 import subprocess
@@ -174,6 +178,7 @@ def test_pr_runtime_routes_generic_success_receipt_without_verified_url(
         issue_dir=issue_dir,
         playbook=playbook,
         executor=executor,
+        automatic_registry=_automatic_executor_registry(),
     )
     result = runtime.run(start_step="pr", max_transitions=5)
 
@@ -278,7 +283,10 @@ def test_pr_review_handoff_tracks_published_or_local_only_journey(
         )
 
     result = BlackboardWorkflowRuntime(
-        issue_dir=issue_dir, playbook=playbook, executor=executor,
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+        automatic_registry=_automatic_executor_registry(),
     ).run(start_step="pr", max_transitions=5)
 
     assert result.final_status_code == "BATON_CONFIRM_OUTPUT"
@@ -525,6 +533,7 @@ def test_declared_pr_feedback_source_records_and_delivers_each_item_once(
             issue_dir=issue_dir,
             playbook=playbook,
             executor=delivery_executor.execute_step,
+            automatic_registry=_automatic_executor_registry(),
         ).run(start_step="pr", single_step=True)
 
     assert len(delivery_manager.prompts) == 1, runtime_result

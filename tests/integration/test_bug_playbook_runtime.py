@@ -6,6 +6,10 @@ or a claim about arbitrary model judgment. Local Git/test processes are real.
 
 from __future__ import annotations
 
+from cafe.workflow_execution.automatic import (
+    automatic_executor_registry as _automatic_executor_registry,
+)
+
 import hashlib
 import json
 import os
@@ -336,6 +340,7 @@ def journey(tmp_path, monkeypatch):
             issue_dir=issue_dir,
             playbook=playbook,
             executor=execute,
+            automatic_registry=_automatic_executor_registry(),
         )
         return runtime.run(start_step=start, max_transitions=30)
 
@@ -592,7 +597,10 @@ def test_publication_permission_approves_only_exact_request_then_returns_to_loca
         )
 
     resumed = BlackboardWorkflowRuntime(
-        issue_dir=journey.issue_dir, playbook=journey.playbook, executor=resume_publication
+        issue_dir=journey.issue_dir,
+        playbook=journey.playbook,
+        executor=resume_publication,
+        automatic_registry=_automatic_executor_registry(),
     ).run(start_step="pr")
     assert not resumed.completed
     assert published == ["published"], (resumed.final_status_code, resumed.detail)

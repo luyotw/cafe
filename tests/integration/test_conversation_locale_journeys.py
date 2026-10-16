@@ -7,6 +7,12 @@ production code.
 
 from __future__ import annotations
 
+from tests.prepare_support import with_delivery_choices
+
+from cafe.workflow_execution.automatic import (
+    automatic_executor_registry as _automatic_executor_registry,
+)
+
 import importlib.util
 import json
 from pathlib import Path
@@ -93,6 +99,7 @@ def _pause_for_output_review(issue_dir: Path, *, playbook_overrides=None):
             status_code="ready_for_review",
             auto_continue=False,
         ),
+        automatic_registry=_automatic_executor_registry(),
     )
     return runtime.run(start_step="spec")
 
@@ -262,7 +269,7 @@ def test_a_pending_confirmation_survives_a_deliberate_language_change(
             captured_result
         )
     )
-    inspected = runner.invoke(app, ["task", "inspect", pending.id, "--json"])
+    inspected = runner.invoke(app, with_delivery_choices(["task", "inspect", pending.id, "--json"]))
 
     assert unchanged.prompt == captured_prompt
     assert unchanged.expected_result == captured_result
@@ -303,19 +310,21 @@ def test_preparation_creates_the_workflow_with_the_supplied_language(
 
         prepared = runner.invoke(
             app,
-            [
-                "prepare",
-                "kickoff-locale",
-                "--playbook",
-                "standard",
-                "--no-interactive",
-                "--input-method=manual",
-                "--no-auto-create-pr",
-                "--conversation-locale",
-                "zh-TW",
-                "--conversation-locale-source",
-                "inferred",
-            ],
+            with_delivery_choices(
+                [
+                    "prepare",
+                    "kickoff-locale",
+                    "--playbook",
+                    "standard",
+                    "--no-interactive",
+                    "--input-method=manual",
+                    "--no-auto-create-pr",
+                    "--conversation-locale",
+                    "zh-TW",
+                    "--conversation-locale-source",
+                    "inferred",
+                ]
+            ),
         )
 
         assert prepared.exit_code == 0, prepared.stdout
@@ -327,19 +336,21 @@ def test_preparation_creates_the_workflow_with_the_supplied_language(
         # A repeated preparation writes no new language.
         runner.invoke(
             app,
-            [
-                "prepare",
-                "kickoff-locale",
-                "--playbook",
-                "standard",
-                "--no-interactive",
-                "--input-method=manual",
-                "--no-auto-create-pr",
-                "--conversation-locale",
-                "ja-JP",
-                "--conversation-locale-source",
-                "explicit",
-            ],
+            with_delivery_choices(
+                [
+                    "prepare",
+                    "kickoff-locale",
+                    "--playbook",
+                    "standard",
+                    "--no-interactive",
+                    "--input-method=manual",
+                    "--no-auto-create-pr",
+                    "--conversation-locale",
+                    "ja-JP",
+                    "--conversation-locale-source",
+                    "explicit",
+                ]
+            ),
         )
 
     repeated = json.loads((issue_dir / "blackboard.json").read_text(encoding="utf-8"))
@@ -365,17 +376,19 @@ def test_preparation_rejects_a_locale_without_a_declared_tier(
         mock_git_cls.return_value = MagicMock()
         result = runner.invoke(
             app,
-            [
-                "prepare",
-                "rejected-locale",
-                "--playbook",
-                "standard",
-                "--no-interactive",
-                "--input-method=manual",
-                "--no-auto-create-pr",
-                "--conversation-locale",
-                "zh-TW",
-            ],
+            with_delivery_choices(
+                [
+                    "prepare",
+                    "rejected-locale",
+                    "--playbook",
+                    "standard",
+                    "--no-interactive",
+                    "--input-method=manual",
+                    "--no-auto-create-pr",
+                    "--conversation-locale",
+                    "zh-TW",
+                ]
+            ),
         )
 
     assert result.exit_code != 0
@@ -418,16 +431,18 @@ def test_a_driver_started_workflow_stores_what_the_adapter_supplied(
 
         prepared = runner.invoke(
             app,
-            [
-                "prepare",
-                "driver-started",
-                "--playbook",
-                "standard",
-                "--no-interactive",
-                "--input-method=manual",
-                "--no-auto-create-pr",
-                *adapter.creation_locale_arguments(supplied),
-            ],
+            with_delivery_choices(
+                [
+                    "prepare",
+                    "driver-started",
+                    "--playbook",
+                    "standard",
+                    "--no-interactive",
+                    "--input-method=manual",
+                    "--no-auto-create-pr",
+                    *adapter.creation_locale_arguments(supplied),
+                ]
+            ),
         )
 
     assert prepared.exit_code == 0, prepared.stdout

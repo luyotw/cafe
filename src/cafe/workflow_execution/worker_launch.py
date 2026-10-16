@@ -107,6 +107,29 @@ class WorkerLaunchStore:
                 record.pop("error_code", None)
             return dict(record)
 
+    def release_owned_process(self, worker_id: str) -> None:
+        """Release this finished invocation, retaining uncertain provider ownership."""
+        from cafe.agents.process_control import process_birth
+
+        with self._locked_records() as records:
+            record = records.get(worker_id)
+            if (
+                not isinstance(record, dict)
+                or record.get("pid") != os.getpid()
+                or record.get("status") not in {"stopped", "failed"}
+                or record.get("process_birth") != process_birth(os.getpid())
+            ):
+                return
+            provider = record.get("provider")
+            if provider is not None and (
+                not isinstance(provider, dict) or provider.get("state") != "stopped"
+            ):
+                return
+            record["last_pid"] = record["pid"]
+            record["last_process_birth"] = record.get("process_birth")
+            record["pid"] = None
+            record["process_birth"] = None
+
     def set_pid(self, worker_id: str, pid: int) -> dict[str, Any] | None:
         """Attach the parent-observed PID without changing a child-owned status."""
         with self._locked_records() as records:

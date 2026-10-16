@@ -3541,8 +3541,12 @@ class GenericWorkflowStepExecutor(Phase):
 
     def _validate_workspace_inputs(self, artifacts, *, step_def=None, verified_workspace=None):
         from cafe.core.workspace_inputs import validate_workspace_inputs
-        validate_workspace_inputs(artifacts, root=getattr(self.git_ops, "repo_path", Path.cwd()), step_def=step_def,
-                                  verified_workspace=verified_workspace)
+        validate_workspace_inputs(
+            artifacts,
+            root=getattr(getattr(self, "git_ops", None), "repo_path", Path.cwd()),
+            step_def=step_def,
+            verified_workspace=verified_workspace,
+        )
 
     def _refresh_declared_workspace_input(
         self,

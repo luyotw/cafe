@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from cafe.workflow_execution.automatic import (
+    automatic_executor_registry as _automatic_executor_registry,
+)
+
 from pathlib import Path
 
 import pytest
@@ -59,6 +63,7 @@ def test_qa_happy_path_reaches_pr(tmp_path: Path, name: str) -> None:
         issue_dir=issue_dir,
         playbook=_runtime_playbook(name),
         executor=executor,
+        automatic_registry=_automatic_executor_registry(),
     ).run(start_step="review")
 
     assert result.completed is True
@@ -86,6 +91,7 @@ def test_every_correction_repeats_develop_review_and_qa(tmp_path: Path, origin: 
         issue_dir=issue_dir,
         playbook=_runtime_playbook("standard-qa"),
         executor=executor,
+        automatic_registry=_automatic_executor_registry(),
     ).run(start_step=origin)
 
     assert result.completed is True
@@ -114,6 +120,7 @@ def test_blocked_qa_resumes_in_qa_before_pr(tmp_path: Path) -> None:
         issue_dir=issue_dir,
         playbook=_runtime_playbook("standard-qa"),
         executor=executor,
+        automatic_registry=_automatic_executor_registry(),
     ).run(start_step="qa")
 
     assert result.completed is True
@@ -140,6 +147,7 @@ def test_simple_qa_failure_repeats_develop_and_qa_before_pr(tmp_path: Path) -> N
         issue_dir=issue_dir,
         playbook=_runtime_playbook("simple"),
         executor=executor,
+        automatic_registry=_automatic_executor_registry(),
     ).run(start_step="develop")
 
     assert result.completed is True
@@ -172,6 +180,7 @@ def test_simple_no_change_correction_returns_to_qa_before_pr(tmp_path: Path) -> 
         issue_dir=issue_dir,
         playbook=_runtime_playbook("simple"),
         executor=executor,
+        automatic_registry=_automatic_executor_registry(),
     ).run(start_step="qa")
 
     assert result.completed is True
@@ -199,6 +208,7 @@ def test_subagent_qa_corrections_repeat_reviewed_development_and_acceptance(
         issue_dir=issue_dir,
         playbook=_runtime_playbook("subagent-flow-qa"),
         executor=executor,
+        automatic_registry=_automatic_executor_registry(),
     ).run(start_step=origin)
 
     assert result.completed is True
