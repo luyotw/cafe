@@ -213,6 +213,61 @@ def test_task_command_allows_supervisor_to_handoff_to_any_playbook_phase(
     assert "Completed work outside the normal phase order." in receipt
 
 
+@pytest.mark.parametrize("target", [None, "develop", "deliver"])
+def test_supervisor_redirect_does_not_retry_a_missing_agent_session(tmp_path, monkeypatch, target):
+    """A pre-invocation interruption can leave its step without creating a session."""
+    from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
+    from cafe.workflow_execution.automatic import automatic_executor_registry
+
+    monkeypatch.chdir(tmp_path)
+    issue = tmp_path / ".cafe/issues/pre-invocation-error"
+    directory = issue / "develop/iteration_001"
+    directory.mkdir(parents=True)
+    (issue / "issue.yaml").write_text("playbook_id: direct-qa\n")
+    context = b'{"agent_invoked":false,"workflow_completion_trusted":false}'
+    (directory / "iteration.json").write_bytes(context)
+
+    def fail_before_agent(*args, **kwargs):
+        raise RuntimeError("Input preparation failed before provider invocation")
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue,
+        playbook=PlaybookLoader().load("direct-qa"),
+        executor=fail_before_agent,
+        automatic_registry=automatic_executor_registry(),
+    )
+    monkeypatch.setattr(runtime, "_notify_new_human_task", lambda task: None)
+    assert not runtime.run(start_step="develop").completed
+    records = HumanTaskRecordStore(issue)
+    task = next(task for task in records.tasks() if task.status is HumanTaskStatus.PENDING)
+    assert task.policy_id == "agent-execution-interrupted"
+    context = (directory / "iteration.json").read_bytes()
+    argv = [
+        "task",
+        "complete",
+        task.id,
+        "--result",
+        '{"decision":"retry"}',
+        "--no-resume",
+        "--json",
+    ]
+    if target:
+        argv.extend(["--handoff-to", target])
+    result = runner.invoke(app, argv)
+    if target == "deliver":
+        assert result.exit_code == 0, result.stdout
+        saved = records.get_result(task.id)
+        assert saved.payload["continuation"] == "deliver"
+        assert saved.payload["declared_continuation"] == "develop"
+        assert "session_continuation" not in saved.payload
+        assert "restart_recovery" not in saved.payload
+    else:
+        assert result.exit_code == 1
+        assert json.loads(result.stdout)["error"]["code"] == "invalid_response"
+        assert records.get_task(task.id).status is HumanTaskStatus.PENDING
+    assert (directory / "iteration.json").read_bytes() == context
+
+
 def test_task_command_rejects_supervisor_handoff_outside_playbook(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
