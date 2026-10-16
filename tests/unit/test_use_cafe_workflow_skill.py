@@ -3403,6 +3403,8 @@ def test_due_review_includes_evidence_fit_without_changing_review_eligibility() 
     for obligation in (
         "public entry",
         "data shapes",
+        "populated payload fields",
+        "ordinary use",
         "observed results",
         "fixture",
         "deferred",

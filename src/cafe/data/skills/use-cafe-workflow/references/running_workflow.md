@@ -476,7 +476,10 @@ pass is not a no-blocking result.
 
 At this existing due-phase review, check that QA and delivery claims match the
 affected public entry, prerequisite state, normal-operation data shapes, and
-observed results in their evidence. Look for fixture starting points that
+observed results in their evidence. Compare the tested combinations of populated
+payload fields and prerequisite states with necessary branches of ordinary use;
+matching record counts or command names does not establish that coverage.
+Look for fixture starting points that
 pre-unlock or seed state and truncate the promised sequence; independent UI and
 SDK/Rules passes do not by themselves establish a connected journey. Preserve
 their local evidence value and request only the missing applicable proof through
