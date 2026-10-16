@@ -18,7 +18,7 @@ also establishes the ordinary family homepage to child-task edit/save journey
 and return to the parent's role. Current QA has an executable App/emulator harness;
 adding observations with it needs no product changes or new permission.
 
-Browser harness excerpts (lines 1–16 and 77–90; only these are supplied):
+Browser harness excerpts (lines 1–16 and 67–80; only these are supplied):
 
 ```tsx
 import React from 'react';

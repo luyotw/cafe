@@ -1,0 +1,22 @@
+{
+  "R1": {
+    "variant": "candidate",
+    "role": "manager",
+    "output_sha256": "51ce89f91e9b4bc84ffb130017719ea14b7630f73c53fc1231a537110821192f"
+  },
+  "R2": {
+    "variant": "baseline",
+    "role": "qa",
+    "output_sha256": "bda1d34547fb461b2d2f437b8637ce8ef5ed430e2a85320dc4ff733db6ae966c"
+  },
+  "R3": {
+    "variant": "baseline",
+    "role": "manager",
+    "output_sha256": "f92af5b8c415b93bb13361779b60e71e1e7a433d761bf2d59236ff3f34f17837"
+  },
+  "R4": {
+    "variant": "candidate",
+    "role": "qa",
+    "output_sha256": "da2a86b9b213a29922f4f31df117a6ff273c7c500518d4306e3ddbc6ecc7cf82"
+  }
+}
