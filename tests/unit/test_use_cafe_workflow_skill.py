@@ -3082,7 +3082,7 @@ def test_kickoff_formatter_accepts_phase_chains_without_rationale(
     command = _kickoff_formatter_command(
         tmp_path / "absent-context.yaml", "--project-root", str(tmp_path)
     )
-    assert not any("rationale" in argument for argument in command)
+    assert "--phase-rationale" not in command
     result = run_kickoff_formatter(command)
     assert result.returncode == 0, result.stderr
     assert (

@@ -241,7 +241,8 @@ def test_compact_cli_reports_preserve_selected_facts_and_full_render(
     formatter_inputs["phase_chain"] = [name + "=" + ",".join(
         entry["cli"] + ":" + entry["model"] for entry in fields["clis"])
         for name, fields in configured.items()]
-    formatter_inputs["proactive_review_decision"].insert(-2, "qa=not_required")
+    review_decisions = formatter_inputs["proactive_review_decision"]
+    review_decisions.insert(review_decisions.index("pr=not_required"), "qa=not_required")
     request = {
         "schema_version": 1,
         "project_root": str(PROJECT_ROOT),
@@ -784,7 +785,7 @@ def test_public_schema_example_preserves_exact_model_identity_through_render(
     selected = "gpt-5.5"
     example = schema["decision_examples"]["phase_chain"][0].replace("<exact-model>", selected).replace("<verified-effort>", "high")
     values["phase_chain"] = [entry for entry in values["phase_chain"] if not entry.startswith("develop=")] + [example]
-    values["phase_rationale"] = schema["decision_examples"]["phase_rationale"]
+    assert "phase_rationale" not in schema["decision_examples"]
     request = {"schema_version": 1, "project_root": str(PROJECT_ROOT), "issue_name": values["issue_name"],
                "playbook_id": values["playbook_id"], "formatter_inputs": values}
     path = tmp_path / "request.json"
@@ -793,6 +794,7 @@ def test_public_schema_example_preserves_exact_model_identity_through_render(
                      "--cache-dir", str(tmp_path / "cache")]) == 0
     phases = json.loads(capsys.readouterr().out)["render"]["proposal"]["phases"]
     assert next(phase["chain"] for phase in phases if phase["name"] == "develop") == [{"cli": "codex", "model": selected, "reasoning_effort": "high"}]
+    assert all("rationale" not in phase for phase in phases)
 
 
 def test_selected_draft_supplies_owner_typed_contract_and_renders_without_repairs(

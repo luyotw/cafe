@@ -152,7 +152,6 @@ def request_schema() -> dict[str, Any]:
         "generated_inputs": "Helper-owned provenance map retained in editable requests: field -> origin, dependency and value_fingerprint. Preserve it when editing formatter_inputs; unchanged source-backed values are revalidated at render. For deliberate same-value reassessment after invalidation, see kickoff_input_reference.md. It grants no authority.",
         "decision_examples": {
             "phase_chain": ['develop=[{"cli":"codex","model":"<exact-model>","reasoning_effort":"<verified-effort>"}]'],
-            "phase_rationale": ['develop={"band":"balanced","model":"<model rationale>","effort":"<effort rationale>"}'],
             "capability_choice": ["pr.auto_create=true"],
             "cleanup": [],
         },

@@ -555,7 +555,7 @@ def _parser() -> argparse.ArgumentParser:
         metavar="JSON_ARGV_LIST",
         help="Legacy/nonadopting closeout only; rejected by phase-owned development graphs.",
     )
-    parser.add_argument("--phase-rationale", action="append", default=[], help="STEP=JSON_OBJECT with band, model and effort rationale")
+    parser.add_argument("--phase-rationale", action="append", default=[], help="Legacy STEP=JSON_OBJECT assessment input; omitted from the confirmation and contract")
     parser.add_argument("--closeout-choice", choices=["cleanup", "archive", "leave", "pending"])
     parser.add_argument(
         "--cleanup",
@@ -761,12 +761,15 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
     phase_config = _project_path(args.phase_config, project_root)
     overrides = _parse_phase_chains(args.phase_chain, step_names=set(model.steps),
                                    phase_config=phase_config)
-    rationales = {}
+    # Accept older preparation requests without promoting assessment to policy.
+    rationale_steps = set()
     for raw in getattr(args, "phase_rationale", []):
         name, separator, value = raw.partition("=")
-        if not separator or name not in model.steps or name in rationales:
+        if not separator or name not in model.steps or name in rationale_steps:
             raise ValueError("phase rationale requires a distinct declared STEP=JSON_OBJECT")
-        rationales[name] = json.loads(value)
+        if not isinstance(json.loads(value), dict):
+            raise ValueError("phase rationale must be a JSON object")
+        rationale_steps.add(name)
     phases: list[dict[str, Any]] = []
     for step_name, step in model.steps.items():
         if step.assignee_type not in {"agent", "hybrid"}:
@@ -776,17 +779,8 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
             selected, _ = _resolve_configured_chain(
                 step_name=step_name, role=step.role, phase_config=phase_config
             )
-        if step_name in overrides and step_name not in rationales:
-            try:
-                configured, _ = _resolve_configured_chain(
-                    step_name=step_name, role=step.role, phase_config=phase_config)
-            except ValueError:
-                configured = None
-            if selected != configured:
-                raise ValueError(f"new selection for {step_name} requires a capability band and model/effort rationale")
         phases.append(
             {
-                **({"rationale": rationales[step_name]} if step_name in rationales else {}),
                 "name": step_name,
                 "chain": [entry.as_dict() for entry in selected],
             }
@@ -1009,9 +1003,6 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
                 " → ".join(tuple_text(entry) for entry in chain[1:]) or "—",
             ]
         )
-    for phase in proposal["phases"]:
-        if "rationale" in phase:
-            model_rows.append([phase["name"] + ".rationale", json.dumps(phase["rationale"], ensure_ascii=False), "—"])
     confirmation = proposal["confirmation_contract"]
     manager_confirmable = set(confirmation["manager_confirmable"])
     eligible = set(confirmation_gate_steps(model)) | set(mandatory_confirmation_gate_steps(model))

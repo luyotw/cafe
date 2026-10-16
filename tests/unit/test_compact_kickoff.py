@@ -154,6 +154,22 @@ def test_compact_public_discovery_assembly_render_only_three_groups(compact_requ
     assert "outcome" not in rendered["proposal"]["delivery_contract"]
     assert rendered["proposal"]["manager"] == {"mode": "event-driven", "clis": [{"cli": "codex"}]}
     assert rendered["decision_groups"]["execution"]["manager"] == rendered["proposal"]["manager"]
+    assert rendered["proposal"]["phases"] == [
+        {"name": phase["name"], "chain": phase["chain"]}
+        for phase in compact_request["compact_inputs"]["phases"]
+    ]
+    assert "rationale" not in rendered["output"]
+
+
+def test_compact_new_selection_does_not_require_rationale(compact_request, tmp_path):
+    compact_request["compact_inputs"]["phases"][0].pop("rationale")
+    owner = load_kickoff_module("kickoff_inputs")
+    report = owner.discover_kickoff(
+        compact_request, config_dir=tmp_path / "config", cache_dir=tmp_path / "cache"
+    )
+    assembly = owner.assemble_kickoff(compact_request, discovery=report)
+    assert assembly["status"] == "ready", assembly
+    assert assembly["proposal"]["phases"] == compact_request["compact_inputs"]["phases"]
 
 
 @pytest.mark.parametrize("mode,settings", [
@@ -236,9 +252,9 @@ def test_saved_effort_preferences_remain_hints_until_phase_selection_is_complete
     store.set("phase.chains", {"steps":{"build":chain}}, scope="repository", origin="explicit")
     discovered = owner.discover_kickoff(compact_request, config_dir=config, cache_dir=tmp_path / "cache")
     assembled = owner.assemble_kickoff(compact_request, discovery=discovered)
-    assert assembled["status"] == "incomplete"
+    assert assembled["status"] == ("ready" if explicit else "incomplete")
     requirements = {gap["requirement"] for gap in assembled["missing_decisions"]}
-    assert "model_effort_rationale:build" in requirements
+    assert "model_effort_rationale:build" not in requirements
     assert ("explicit_effort:build" in requirements) == (not explicit)
     selected = discovered["inputs"]["phases"][0]["chain"][0]
     assert selected.get("reasoning_effort") == ("high" if explicit else None)
