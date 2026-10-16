@@ -308,6 +308,13 @@ def _runtime_progress(
     attempts: dict[str, tuple] = {}
     latest_starts: dict[str, str] = {}
     latest_forward_evidence: dict[str, str] = {}
+    latest_stop_evidence: dict[str, str] = {}
+
+    def record_stop(step, timestamp):
+        previous = latest_stop_evidence.get(step)
+        if previous is None or _after(timestamp, previous):
+            latest_stop_evidence[step] = timestamp
+
     if issue_dir is None:
         return statuses, iterations
     blackboard = _read_json(issue_dir / "blackboard.json")
@@ -382,12 +389,14 @@ def _runtime_progress(
                 terminal_evidence.discard(step)
             elif event_type in {"step_skipped", "workflow_step_skipped"}:
                 statuses[step] = "skipped"
+                record_stop(step, str(event.get("timestamp", "")))
                 terminal_evidence.add(step)
             elif event_type == "workflow_paused" and str(data.get("status_code", "")).upper() in {
                 "BATON_NEED_CLARIFICATION",
                 "BATON_NEED_PERMISSION",
             }:
                 statuses[step] = "awaiting_input"
+                record_stop(step, str(event.get("timestamp", "")))
                 terminal_evidence.add(step)
             elif event_type == "human_task_completed" and statuses[step] == "awaiting_input":
                 statuses[step] = "completed" if step in verified_completion else "in_progress"
@@ -397,6 +406,7 @@ def _runtime_progress(
                 and str(data.get("status_code", "")).upper() == "INTERRUPTED"
             ):
                 statuses[step] = "blocked"
+                record_stop(step, str(event.get("timestamp", "")))
                 terminal_evidence.add(step)
         if event_type == "transition":
             source, target = str(data.get("from", "")), str(data.get("to", ""))
@@ -432,11 +442,33 @@ def _runtime_progress(
             "BLOCKED",
         }:
             statuses[target] = "blocked"
+            record_stop(target, str(handoff.get("created_at", "")))
             terminal_evidence.add(target)
     task_store = _read_json(issue_dir / "human_tasks.json") or {}
     tasks = task_store.get("tasks", [])
     if isinstance(tasks, Mapping):
         tasks = list(tasks.values())
+    results = task_store.get("results", [])
+    result_by_task = {
+        str(result.get("task_id")): result
+        for result in results if isinstance(result, Mapping) and result.get("task_id")
+    } if isinstance(results, list) else {}
+    latest_tasks: dict[str, Mapping[str, Any]] = {}
+
+    for task in tasks:
+        if not isinstance(task, Mapping):
+            continue
+        step = str(task.get("step", ""))
+        previous = latest_tasks.get(step)
+        iteration = _iteration_number(task.get("iteration")) or 0
+        previous_iteration = (_iteration_number(previous.get("iteration")) or 0) if previous else 0
+        if (
+            previous is None
+            or iteration > previous_iteration
+            or iteration == previous_iteration
+            and not _after(previous.get("created_at"), task.get("created_at"))
+        ):
+            latest_tasks[step] = task
     for task in tasks:
         if not isinstance(task, Mapping) or task.get("status") != "pending":
             continue
@@ -473,12 +505,36 @@ def _runtime_progress(
         code = str(metadata.get("status_code", "")).upper()
         if code == "SKIPPED":
             statuses[step] = "skipped"
+            record_stop(step, str(metadata.get("timestamp", "")))
             terminal_evidence.add(step)
         elif not stale_stop and code in {"INTERRUPTED", "BLOCKED"}:
             statuses[step] = "blocked"
+            record_stop(step, str(
+                marker.get("id", metadata.get("timestamp", ""))
+                if isinstance(marker, Mapping) else metadata.get("timestamp", "")
+            ))
             terminal_evidence.add(step)
         elif metadata.get("timestamp") and statuses[step] == "pending":
             statuses[step] = "in_progress"
+    for step, task in latest_tasks.items():
+        if step not in statuses or task.get("status") != "completed":
+            continue
+        result = result_by_task.get(str(task.get("id", "")), {})
+        payload = result.get("payload", {})
+        outcome = _declared_task_outcome(task, payload)
+        completed_at = task.get("completed_at")
+        if (
+            outcome is not None
+            and outcome[0].get("correction") is True
+            and outcome[1] in statuses
+            and isinstance(completed_at, str)
+            and completed_at
+            and not _after(latest_forward_evidence.get(step), completed_at)
+            and not _after(latest_stop_evidence.get(step), completed_at)
+            and iterations.get(step, 0) <= (_iteration_number(task.get("iteration")) or 0)
+        ):
+            statuses[step] = "returned"
+            terminal_evidence.add(step)
     if workflow_finished:
         statuses = {
             step: "skipped" if status == "pending" else status for step, status in statuses.items()
@@ -520,6 +576,36 @@ def _post_confirmation_handoff_iteration(
             ):
                 return iteration
     return None
+
+
+def _declared_task_outcome(
+    task: Mapping[str, Any], payload: Any
+) -> tuple[Mapping[str, Any], str] | None:
+    if not isinstance(payload, Mapping):
+        return None
+    decision = payload.get("decision")
+    if not isinstance(decision, str) or not decision:
+        return None
+    expected = task.get("expected_result", {})
+    decisions = expected.get("decisions", []) if isinstance(expected, Mapping) else []
+    matched = (
+        next(
+            (item for item in decisions if isinstance(item, Mapping) and item.get("id") == decision),
+            None,
+        )
+        if isinstance(decisions, list)
+        else None
+    )
+    continuations = task.get("continuations", {})
+    target = continuations.get(decision) if isinstance(continuations, Mapping) else None
+    if (
+        matched is None
+        or not isinstance(target, str)
+        or not target
+        or payload.get("continuation") not in (None, target)
+    ):
+        return None
+    return matched, target
 
 
 def _confirmation_statuses(
@@ -568,34 +654,8 @@ def _confirmation_statuses(
             result = result_by_task.get(str(task.get("id", "")), {})
             payload = result.get("payload", {}) if isinstance(result, Mapping) else {}
             payload = payload if isinstance(payload, Mapping) else {}
-            decision = str(payload.get("decision", ""))
-            expected = task.get("expected_result", {})
-            expected = expected if isinstance(expected, Mapping) else {}
-            decisions = expected.get("decisions", [])
-            matched = (
-                next(
-                    (
-                        item
-                        for item in decisions
-                        if isinstance(item, Mapping) and item.get("id") == decision
-                    ),
-                    None,
-                )
-                if isinstance(decisions, list)
-                else None
-            )
-            continuations = task.get("continuations", {})
-            declared_target = (
-                continuations.get(decision) if isinstance(continuations, Mapping) else None
-            )
-            payload_target = payload.get("continuation")
-            outcome_is_valid = (
-                matched is not None
-                and isinstance(declared_target, str)
-                and bool(declared_target)
-                and (payload_target is None or payload_target == declared_target)
-            )
-            if not outcome_is_valid:
+            outcome = _declared_task_outcome(task, payload)
+            if outcome is None:
                 statuses[step] = "unknown"
                 if (
                     isinstance(task_iteration, int)
@@ -603,6 +663,7 @@ def _confirmation_statuses(
                 ):
                     statuses[step] = "pending"
                 continue
+            matched, declared_target = outcome
             correction = matched.get("correction") is True
             if correction:
                 statuses[step] = "returned"

@@ -2295,3 +2295,140 @@ def test_issue646_blk002_later_start_resets_invocation_counters_without_admittin
     _append_runtime_event(issue, {'step': step, 'event_type': 'step_completed',
                                  'timestamp': '2026-10-01T01:04:00Z', 'data': new})
     assert render() == 'completed'
+
+
+@pytest.mark.parametrize("trigger", ["need_permission", "need_clarification"])
+@pytest.mark.parametrize("later_evidence", [
+    None, "step_started", "step_completed", "iteration_directory",
+    "workflow_blocked", "step_interrupted", "blocked_handoff",
+    "metadata_blocked", "metadata_skipped", "newer_pending_task",
+    "older_metadata_after_block", "older_handoff_after_block",
+])
+def test_reactive_correction_returns_phase_until_fresh_execution(
+    tmp_path: Path, trigger: str, later_evidence: str | None
+) -> None:
+    """A decision returning automatic delivery must not look like live delivery."""
+    graph = _delivery_graph()
+    issue_dir = tmp_path / "issue"
+    issue_dir.mkdir()
+    events = [
+        {"event_type": "step_started", "step": "ship", "data": {"iteration": 1},
+         "timestamp": "2026-09-20T01:00:00+00:00"},
+        {"event_type": "workflow_paused", "step": "ship",
+         "data": {"status_code": "BATON_NEED_PERMISSION" if trigger == "need_permission"
+                  else "BATON_NEED_CLARIFICATION"},
+         "timestamp": "2026-09-20T01:01:00+00:00"},
+        {"event_type": "human_task_completed", "step": "ship",
+         "data": {"task_id": "release-options", "trigger": trigger, "to_step": "build"},
+         "timestamp": "2026-09-20T01:02:00+00:00"},
+        {"event_type": "step_started", "step": "build", "data": {"iteration": 2},
+         "timestamp": "2026-09-20T01:03:00+00:00"},
+    ]
+    if later_evidence and later_evidence not in {
+        "iteration_directory", "blocked_handoff", "metadata_blocked", "metadata_skipped",
+    }:
+        events.append({"event_type": ("workflow_paused" if later_evidence == "newer_pending_task"
+                                      else "workflow_blocked" if later_evidence in {
+                                          "older_metadata_after_block", "older_handoff_after_block",
+                                      } else later_evidence), "step": "ship",
+                       "data": {"iteration": 1, "status_code": "BATON_NEED_PERMISSION"},
+                       "timestamp": "2026-09-20T01:04:00+00:00"})
+    state = {"current_step": "build", "events": events}
+    if later_evidence in {"blocked_handoff", "older_handoff_after_block"}:
+        state["handoff_contract"] = {
+            "from_step": "ship", "to_owner": "user", "to_step": "user",
+            "status_code": "BLOCKED", "created_at": (
+                "2026-09-20T03:01:00+02:00" if later_evidence == "older_handoff_after_block"
+                else "2026-09-20T01:04:00+00:00"
+            ),
+        }
+    _write_runtime_state(issue_dir, state)
+    if later_evidence == "iteration_directory":
+        directory = issue_dir / "ship" / "iteration_002"
+        directory.mkdir(parents=True)
+        (directory / "iteration.json").write_text(json.dumps({
+            "timestamp": "2026-09-20T01:04:00+00:00", "iteration": 2,
+        }))
+    if later_evidence in {"metadata_blocked", "metadata_skipped", "older_metadata_after_block"}:
+        directory = issue_dir / "ship" / "iteration_001"
+        directory.mkdir(parents=True)
+        (directory / "iteration.json").write_text(json.dumps({
+            "timestamp": ("2026-09-20T03:01:00+02:00" if later_evidence == "older_metadata_after_block"
+                          else "2026-09-20T01:04:00+00:00"),
+            "status_code": "SKIPPED" if later_evidence == "metadata_skipped" else "BLOCKED",
+        }))
+    (issue_dir / "human_tasks.json").write_text(json.dumps({
+        "tasks": [{"id": "release-task", "step": "ship", "iteration": 1,
+                   "trigger": trigger, "status": "completed",
+                   "created_at": "2026-09-20T01:01:00+00:00",
+                   "completed_at": "2026-09-20T01:02:00+00:00",
+                   "continuations": {"revise-release": "build"},
+                   "expected_result": {"decisions": [
+                       {"id": "revise-release", "correction": True},
+                   ]}}],
+        "results": [{"task_id": "release-task", "payload": {
+            "decision": "revise-release", "continuation": "build",
+        }}],
+    }))
+    if later_evidence == "newer_pending_task":
+        records_path = issue_dir / "human_tasks.json"
+        records = json.loads(records_path.read_text())
+        records["tasks"].append({
+            "id": "newer-task", "step": "ship", "iteration": 1,
+            "trigger": "need_permission", "status": "pending",
+            "created_at": "2026-09-19T23:04:00-02:00",
+        })
+        records_path.write_text(json.dumps(records))
+    rendered = _module().render_progress(
+        playbook=graph, issue_dir=issue_dir,
+        contract={"confirmation_contract": {"mandatory_human_stops": ["ship"]}},
+        manager_state={"cleanup": "pending"}, locale="en",
+    )
+    expected = {None: "Returned", "step_started": "In progress",
+                "step_completed": "Pending", "iteration_directory": "In progress",
+                "workflow_blocked": "Blocked", "step_interrupted": "Blocked",
+                "blocked_handoff": "Blocked", "metadata_blocked": "Blocked",
+                "metadata_skipped": "Skipped", "newer_pending_task": "Awaiting response",
+                "older_metadata_after_block": "Blocked",
+                "older_handoff_after_block": "Blocked"}[later_evidence]
+    # Completed delivery execution still awaits its separate result acceptance.
+    assert expected in next(line for line in rendered.splitlines() if " ship ·" in line)
+    assert "build · iteration 2 · In progress" in rendered
+
+
+@pytest.mark.parametrize("case", ["approved", "unknown_decision", "wrong_target", "unknown_target"])
+def test_reactive_task_requires_declared_correction_to_show_return(
+    tmp_path: Path, case: str
+) -> None:
+    issue_dir = tmp_path / "issue"
+    issue_dir.mkdir()
+    _write_runtime_state(issue_dir, {"current_step": "ship", "events": [
+        {"event_type": "step_started", "step": "ship", "data": {"iteration": 1}},
+        {"event_type": "workflow_paused", "step": "ship",
+         "data": {"status_code": "BATON_NEED_PERMISSION"}},
+        {"event_type": "human_task_completed", "step": "ship", "data": {}},
+    ]})
+    task = {"id": "release-task", "step": "ship", "iteration": 1,
+            "trigger": "need_permission", "status": "completed",
+            "completed_at": "2026-09-20T01:00:00+00:00",
+            "continuations": {"revise-release": "build"},
+            "expected_result": {"decisions": [
+                {"id": "revise-release", "correction": case != "approved"},
+            ]}}
+    payload = {"decision": "revise-release", "continuation": "build"}
+    if case == "unknown_decision":
+        payload["decision"] = "undeclared"
+    elif case == "wrong_target":
+        payload["continuation"] = "package"
+    elif case == "unknown_target":
+        task["continuations"]["revise-release"] = payload["continuation"] = "undeclared"
+    (issue_dir / "human_tasks.json").write_text(json.dumps({
+        "tasks": [task], "results": [{"task_id": "release-task", "payload": payload}],
+    }))
+    rendered = _module().render_progress(
+        playbook=_delivery_graph(), issue_dir=issue_dir,
+        contract={"confirmation_contract": {"mandatory_human_stops": ["ship"]}},
+        manager_state={"cleanup": "pending"}, locale="en",
+    )
+    assert "ship · iteration" not in rendered
+    assert "▶︎ ship · In progress" in rendered
