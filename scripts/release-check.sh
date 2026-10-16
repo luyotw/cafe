@@ -228,6 +228,72 @@ assert result.returncode == 2, (result.stdout, result.stderr)
 assert json.loads(result.stdout)["status"] == "refused"
 PYEFFORTREPAIR
 
+echo "Verifying packaged profile execution/reuse, delivery and cleanup surfaces..."
+"$SMOKE_VENV/bin/python" - "$SMOKE_VENV/bin/cafe" <<'PYV0120'
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+
+cli = sys.argv[1]
+for arguments, options in (
+    (["verification", "run", "--help"], ("--profile-file", "--profile", "--add-suite", "--reuse-from")),
+    (["delivery", "run", "--help"], ("--issue", "--step", "--iteration")),
+    (["workflow-interrupt", "--help"], ("--inspect", "--recover", "--worker-id", "--feedback")),
+):
+    help_text = subprocess.run([cli, *arguments], capture_output=True, text=True, check=True).stdout
+    assert all(option in help_text for option in options), help_text
+close_help = subprocess.run([cli, "close", "--help"], capture_output=True, text=True, check=True).stdout
+assert "--archive-only" in close_help
+assert all(option not in close_help for option in ("--squash", "--message"))
+
+with tempfile.TemporaryDirectory(prefix="cafe-packaged-profile.") as temporary:
+    root = Path(temporary)
+    def git(*args):
+        subprocess.run(["git", *args], cwd=root, capture_output=True, check=True)
+    git("init")
+    git("config", "user.email", "release-check@example.invalid")
+    git("config", "user.name", "Release Check")
+    (root / ".gitignore").write_text(".cafe/\n__pycache__/\n")
+    (root / ".cafe").mkdir()
+    (root / ".cafe/config.yaml").write_text(
+        "verification:\n  profile_file: profiles.json\n  profile: acceptance\n"
+    )
+    (root / "suite.py").write_text(
+        "from pathlib import Path\n"
+        "with Path('.cafe/trace').open('a') as stream: stream.write('executed\\n')\n"
+        "print('passed')\n"
+    )
+    manifest = {
+        "schema_version": 1,
+        "profiles": {"acceptance": {"mandatory": ["smoke"], "optional": []}},
+        "suites": {"smoke": {
+            "argv": [sys.executable, "suite.py"], "reuse": True,
+            "context": {"files": ["suite.py"], "env": []},
+        }},
+    }
+    (root / "profiles.json").write_text(json.dumps(manifest))
+    git("add", ".")
+    git("commit", "-m", "Seed isolated packaged profile")
+    def verify(*args):
+        result = subprocess.run([cli, "verification", *args], cwd=root,
+                                capture_output=True, text=True)
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        return json.loads(result.stdout)
+    first = verify("run", "--output-file", ".cafe/first/output.md")
+    assert first["status"] == "passed" and first["executed"] == 1
+    assert verify("check", "--output-file", ".cafe/first/output.md")["valid"]
+    second = verify("run", "--reuse-from", ".cafe/first/output.md",
+                    "--output-file", ".cafe/second/output.md")
+    assert second["status"] == "passed" and second["executed"] == 0 and second["reused"] == 1
+    assert (root / ".cafe/trace").read_text() == "executed\n"
+    (root / "suite.py").write_text("raise SystemExit('changed evidence')\n")
+    stale = subprocess.run([cli, "verification", "check", "--output-file", ".cafe/first/output.md"],
+                           cwd=root, capture_output=True, text=True)
+    assert stale.returncode != 0, "Changed source must invalidate prior verification"
+PYV0120
+
 echo "Verifying packaged planning, bug and compact playbooks..."
 for playbook in subagent-flow subagent-flow-qa bug streamlined; do
     "$SMOKE_VENV/bin/cafe" playbook validate "$playbook" --strict >/dev/null
