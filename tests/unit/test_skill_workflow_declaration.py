@@ -70,6 +70,25 @@ def test_workflow_declaration_parses_declared_inputs_checklists_and_templates() 
     assert contract.output_templates.catalog == "research-report"
 
 
+def test_qa_declares_evidence_checks_alongside_existing_regression_coverage(tmp_path) -> None:
+    """The packaged QA declaration owns both procedures without another artifact."""
+    from pathlib import Path
+
+    loader = SkillLoader(
+        project_root=tmp_path,
+        global_root=tmp_path / "global",
+        builtin_root=Path(__file__).resolve().parents[2] / "src/cafe/data",
+    )
+    contract = loader.get_workflow_declaration("cafe-qa")
+    assert contract is not None and contract.checklist is not None
+    sections = contract.checklist.variants[0].sections
+    assert [section.reference for section in sections] == [
+        "execution_steps.md",
+        "regression_acceptance.md",
+    ]
+    assert contract.step_defaults.values["output_artifact"] == "qa_feedback"
+
+
 def test_todo_projection_requires_exactly_one_source_strategy() -> None:
     def contract(projection: dict) -> SkillWorkflowDeclaration:
         return SkillWorkflowDeclaration.model_validate(

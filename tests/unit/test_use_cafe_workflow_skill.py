@@ -3394,6 +3394,27 @@ def test_use_cafe_workflow_defines_phase_scoped_proactive_manager_review() -> No
     assert "must not launch a separate reviewer" in normalized
 
 
+def test_due_review_includes_evidence_fit_without_changing_review_eligibility() -> None:
+    running = _read_skill_resource("references/running_workflow.md")
+    due_review = running.split("For every due phase,", 1)[1].split(
+        "Bind that work to a composite review snapshot:", 1
+    )[0]
+    normalized = " ".join(due_review.split())
+    for obligation in (
+        "public entry",
+        "data shapes",
+        "populated payload fields",
+        "ordinary use",
+        "observed results",
+        "fixture",
+        "deferred",
+        "existing findings",
+    ):
+        assert obligation in normalized
+    assert "A not_required phase, a skipped" in running
+    assert "phase, and an all-not_required contract perform no proactive review" in running
+
+
 def test_kickoff_defaults_assignable_gates_to_manager_confirmation() -> None:
     module = _load_script_module(
         SKILL_ROOT / "scripts" / "format_kickoff_contract.py",
@@ -4495,3 +4516,197 @@ def test_version_update_helper_rejects_wrong_version_before_publication(monkeypa
     assert (code == 0) is (observed == "0.8.0")
     assert (receipt["publication"] is not None) is (observed == "0.8.0")
     assert (len(calls) == 5) is (observed == "0.8.0")
+
+
+EVIDENCE_EVAL_ROOT = PROJECT_ROOT / "tests" / "evals" / "qa_evidence"
+
+
+def _evidence_evaluator():
+    return _load_script_module(EVIDENCE_EVAL_ROOT / "run_eval.py", "evidence_evaluator")
+
+
+def test_consolidated_evidence_reconstructs_reviewed_bytes_and_metadata():
+    evaluator = _evidence_evaluator()
+    counts = evaluator.verify_archives()
+    assert counts == {"texts": 21, "metadata": 8, "role_prompts": 14, "assessor_prompts": 5}
+
+
+@pytest.mark.parametrize("packet", ["historical", "scope", "preliminary"])
+def test_evidence_replay_prepares_exact_archived_inputs_outside_checkout(tmp_path, packet):
+    import shutil
+
+    # A real isolated checkout has newer poisoned policies/common inputs, while
+    # its shared Git objects retain the exact reviewed versions.
+    checkout = tmp_path / "later-checkout"
+    cloned = subprocess.run(
+        ["git", "clone", "--quiet", "--shared", "--no-checkout", str(PROJECT_ROOT), str(checkout)],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert cloned.returncode == 0, cloned.stderr
+    copied_eval = checkout / EVIDENCE_EVAL_ROOT.relative_to(PROJECT_ROOT)
+    copied_eval.mkdir(parents=True)
+    for name in (
+        "run_eval.py",
+        "original-results.md",
+        "original-provenance.json",
+        "preliminary-results.md",
+        "preliminary-provenance.json",
+    ):
+        shutil.copyfile(EVIDENCE_EVAL_ROOT / name, copied_eval / name)
+    for name in (
+        "src/cafe/data/agents/qa/Quinn.md",
+        "src/cafe/data/skills/cafe-qa/SKILL.md",
+        "src/cafe/data/skills/cafe-qa/references/regression_acceptance.md",
+        "src/cafe/data/skills/cafe-qa/references/execution_steps.md",
+        "src/cafe/data/skills/use-cafe-workflow/references/running_workflow.md",
+    ):
+        poison = checkout / name
+        poison.parent.mkdir(parents=True, exist_ok=True)
+        poison.write_text("Unreviewed later checkout instructions")
+    evaluator = _evidence_evaluator()
+    records = evaluator.role_records(packet)
+    for record in records:
+        variant = "initial" if record.get("round") == "initial" else record["variant"]
+        destination = tmp_path / f"{packet}-{variant}-{record['role']}"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(copied_eval / "run_eval.py"),
+                variant,
+                record["role"],
+                "--packet",
+                packet,
+                "--prepare-only",
+            ],
+            cwd=tmp_path,
+            env={**os.environ, "CAFE_QA_EVAL_DIR": str(destination)},
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        assert result.returncode == 0, result.stderr
+        manifest = json.loads((destination / "inputs.json").read_text())
+        assert manifest["prompt_sha256"] == record["prompt_sha256"]
+        assert (
+            evaluator.sha256((destination / "prompt.txt").read_bytes()) == record["prompt_sha256"]
+        )
+        assert manifest["materialized_sources"]
+        for item in manifest["materialized_sources"]:
+            assert evaluator.sha256((destination / item["file"]).read_bytes()) == item["sha256"]
+        assert not list(destination.glob("*-completion.json"))
+
+
+@pytest.mark.parametrize(
+    "terminal,provider_exit,expected", [(True, 0, 0), (False, 0, 1), (True, 7, 1)]
+)
+def test_evidence_replay_cli_retains_permissions_and_separate_completion(
+    tmp_path, terminal, provider_exit, expected
+):
+    provider = tmp_path / "bin" / "codex"
+    provider.parent.mkdir()
+    provider.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, pathlib, sys\n"
+        "args = sys.argv[1:]\n"
+        "pathlib.Path(os.environ['CAPTURE']).write_text(json.dumps({'args':args,'prompt':sys.stdin.read()}))\n"
+        "pathlib.Path(args[args.index('--output-last-message')+1])"
+        ".write_text('Durable fake answer\\n')\n"
+        "print(json.dumps({'type':'item.completed','item':{'type':'agent_message'}}), flush=True)\n"
+        f"if {terminal!r}: print(json.dumps({{'type':'turn.completed'}}), flush=True)\n"
+        f"sys.exit({provider_exit})\n"
+    )
+    provider.chmod(0o755)
+    destination = tmp_path / "replay"
+    capture = tmp_path / "capture.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(EVIDENCE_EVAL_ROOT / "run_eval.py"),
+            "candidate",
+            "qa",
+            "--packet",
+            "historical",
+        ],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PATH": f"{provider.parent}:{os.environ['PATH']}",
+            "CAFE_QA_EVAL_DIR": str(destination),
+            "CAPTURE": str(capture),
+        },
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == expected, result.stderr
+    evaluator = _evidence_evaluator()
+    invocation = json.loads(capture.read_text())
+    historical = evaluator.role_records("historical")
+    archived = next(r for r in historical if r["role"] == "qa" and r["variant"] == "candidate")
+    assert evaluator.sha256(invocation["prompt"].encode()) == archived["prompt_sha256"]
+    actual_command = ["codex", *invocation["args"]]
+
+    def restrictions(command):
+        command = command.copy()
+        for flag in ("--cd", "--output-last-message"):
+            command[command.index(flag) + 1] = "PATH"
+        return command
+
+    assert restrictions(actual_command) == restrictions(archived["command"])
+    completion = json.loads((destination / "candidate-qa-completion.json").read_text())
+    assert completion["exit_code"] == provider_exit
+    assert completion["turn_completed"] is terminal
+    assert completion["final_output_present"] is True
+    assert completion["tool_use_observed"] is False
+
+
+@pytest.mark.parametrize(
+    "packet,round_",
+    [
+        ("historical", "initial"),
+        ("historical", "final"),
+        ("scope", "initial"),
+        ("scope", "final"),
+        ("preliminary", "final"),
+    ],
+)
+def test_evidence_assessor_cli_materializes_exact_archived_blind_input(tmp_path, packet, round_):
+    destination = tmp_path / "assessor"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(EVIDENCE_EVAL_ROOT / "run_eval.py"),
+            "--packet",
+            packet,
+            "--assessment",
+            round_,
+        ],
+        cwd=tmp_path,
+        env={**os.environ, "CAFE_QA_EVAL_DIR": str(destination)},
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    evaluator = _evidence_evaluator()
+    kind = "preliminary" if packet == "preliminary" else "original"
+    _, metadata, _ = evaluator.load_archive(kind)
+    records = (
+        metadata["original-observations/completion.json"]
+        if kind == "original"
+        else [metadata["observations/assessment-completion.json"]]
+    )
+    recorded = next(
+        r
+        for r in records
+        if r["role"] == "assessment"
+        and (kind == "preliminary" or (r["group"] == packet and r["round"] == round_))
+    )
+    assert (
+        evaluator.sha256((destination / "assessor-prompt.txt").read_bytes())
+        == recorded["prompt_sha256"]
+    )
+    assert json.loads(result.stdout)["model_invoked"] is False
+    assert not list(destination.glob("*-completion.json"))

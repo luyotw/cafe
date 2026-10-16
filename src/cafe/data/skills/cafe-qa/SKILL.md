@@ -1,7 +1,7 @@
 ---
 name: cafe-qa
 description: Use this skill when a workflow needs independent black-box acceptance before PR publication.
-version: 1.5.0
+version: 1.6.0
 workflow:
   step_defaults:
     version: 1
@@ -70,6 +70,7 @@ workflow:
     variants:
     - when: {}
       sections:
+      - reference: execution_steps.md
       - reference: regression_acceptance.md
     include_role_guidance: true
 ---
@@ -92,6 +93,13 @@ Read your agent file: {agent_file}
 - When `workspace_file` is supplied, verify its Git head and changed-file set before accepting the development summary as current.
 - When an implementation plan is provided, exercise its Test List; otherwise derive observable scenarios from the available requirements and acceptance evidence.
 - When a review result is provided, prioritize its identified risks and confirm that unresolved findings do not escape acceptance.
+- Before choosing evidence, identify the affected public entry, prerequisite state, promised result, and boundaries crossed by each applicable criterion. Select the corresponding App, public API, CLI, presentation, or document artifact entry; browser testing is required only where the affected behavior needs it.
+- In the existing QA report's criteria table, record the entry and prerequisite state, substitutes and bypassed boundaries, actual observed result with evidence source, and coverage limits. Keep this within the same `qa_feedback`; a command name or PASS label alone does not establish the claimed outcome.
+- Claims spanning App entry, session/authorization, or persistence boundaries need connected evidence through the affected sequence. Separate fixture UI and real SDK/Rules passes retain their local value but cannot automatically compose into a complete user journey PASS. Identify where each fixture starts and ends, what it pre-unlocks or seeds, and which production transitions it bypasses. For a local UI change, reuse unaffected persistence evidence when its source and relevant boundaries still match; do not demand a new full journey for every edit.
+- Compare exercised data shapes with necessary branches of normal user operations, including cardinality, state, and payload differences that can change the result. Add risk-based representative scenarios for uncovered branches, rather than a fixed case count or all combinations. Code inspection can identify a missing branch but cannot prove its runtime result or a suspected cost/root cause; obtain observations before making those claims.
+- Distinguish the confirmed stage's acceptance from completion of the full user outcome. Preserve explicitly deferred capabilities as incomplete without expanding the stage's scope or counting them as passed. A failure within the current commitment still requires correction, even in a staged delivery.
+- Fill evidence gaps directly when the checks are executable within current QA scope. Route observed failures or required development of lasting regression coverage through the existing discretionary route marked `carries_feedback`, with reproducible evidence or the precise missing proof; missing evidence alone is not a proven product defect. Use the existing blocked/human route only for a genuine execution resource or permission blocker, and identify that blocker instead of relabeling an ordinary coverage gap as blocked.
+- Complete `references/execution_steps.md` in the existing checklist: identify entries/substitutes, evidence applicable scenarios and route gaps, and keep conclusions within evidence. Checked gates prevent omitted procedure; they do not prove semantic adequacy or turn partial evidence into a pass.
 - Before selecting acceptance commands and on every correction, complete `references/regression_acceptance.md` and its runtime checklist. Keep its Regression Coverage table in the QA report; shared-entry callers and existing tests remain in scope even when the latest correction changes only a few files.
 - When the project explicitly adopts `verification.profile_file` and `verification.profile` in `.cafe/config.yaml`, use `cafe verification run --output-file {output_file}` and `cafe verification check --output-file {output_file}` as its shared repository-owned profile entry. Repeat any selected `--add-suite` values on run/check/reuse. The public adapter reads only the project binding; issue overrides cannot replace its mandatory suites. CI uses the same manifest/profile explicitly. A malformed binding is an actionable configuration error.
 - For adopted profiles, record required/selected/completed/reused/pending suites, actual exits, receipt/log provenance and context applicability reasons. A partial targeted pass, `full` label, or stale receipt cannot satisfy missing mandatory coverage. Optional `run --reuse-from <source-output>` executes pending rows; `reuse` alone must validate every required row before materializing evidence. Retain independent black-box acceptance and semantic coverage judgment. See `docs/verification/profiles.md` for the public contract.
@@ -105,7 +113,7 @@ Read your agent file: {agent_file}
 
 ## Output
 Write QA report to: {output_file}
-Include the Regression Coverage table, current and reused evidence HEADs, unresolved failures, and any repository-owned checks still pending with their existing owner. State separately whether this QA acceptance passed and whether full CI or delivery validation is still pending. For profile adoption include a suite evidence table (required/selected, completion/actual exit, executed/reused/pending, evidence HEAD/source/log, context applicability reason, owner). Record equal-coverage executed/reused counts and observed durations when comparing reuse; do not claim unmeasured speedups. Include escape observations for defects first discovered after QA and after merge: observation status (`known` or `unknown`), count only when known, source/window and unresolved owner. Unavailable observation is unknown, never zero.
+Include the criteria table (criterion/current-stage commitment, entry/prerequisite state, substitutes/bypassed boundaries, observed result/evidence source, coverage limits), the Regression Coverage table, current and reused evidence HEADs, unresolved failures, and any repository-owned checks still pending with their existing owner. State separately whether the confirmed stage's QA acceptance passed, whether the full user outcome is complete or has deferred capabilities, and whether full CI or delivery validation is still pending. For profile adoption include a suite evidence table (required/selected, completion/actual exit, executed/reused/pending, evidence HEAD/source/log, context applicability reason, owner). Record equal-coverage executed/reused counts and observed durations when comparing reuse; do not claim unmeasured speedups. Include escape observations for defects first discovered after QA and after merge: observation status (`known` or `unknown`), count only when known, source/window and unresolved owner. Unavailable observation is unknown, never zero.
 
 ## Handoff
 - Write the next-step baton for this result; the runtime updates the blackboard.
