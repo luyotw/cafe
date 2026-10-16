@@ -309,6 +309,7 @@ def _runtime_progress(
     latest_starts: dict[str, str] = {}
     latest_forward_evidence: dict[str, str] = {}
     latest_stop_evidence: dict[str, str] = {}
+    phase_metadata: dict[str, Mapping[str, Any]] = {}
 
     def record_stop(step, timestamp):
         previous = latest_stop_evidence.get(step)
@@ -500,6 +501,7 @@ def _runtime_progress(
             continue
         if iteration < iterations.get(step, 0):
             continue
+        phase_metadata[step] = metadata
         marker = metadata.get("agent_interruption") or metadata.get("restart_preparation_failure")
         stale_stop = isinstance(marker, Mapping) and _after(latest_forward_evidence.get(step), marker.get("id"))
         code = str(metadata.get("status_code", "")).upper()
@@ -535,6 +537,57 @@ def _runtime_progress(
         ):
             statuses[step] = "returned"
             terminal_evidence.add(step)
+        # Task completion can finish an automatic phase without an agent
+        # completion event. It can also explicitly abandon an uninvoked retry.
+        # Neither case makes historical interruptions or mere answers successful.
+        workflow_id = blackboard.get("workflow_id")
+        if (
+            not isinstance(payload, Mapping)
+            or task.get("workflow_id") != workflow_id
+            or result.get("workflow_id") != workflow_id
+            or not isinstance(completed_at, str)
+            or (latest_forward_evidence.get(step) is not None
+                and not _after(completed_at, latest_forward_evidence[step]))
+            or (latest_stop_evidence.get(step) is not None
+                and not _after(completed_at, latest_stop_evidence[step]))
+            or iterations.get(step, 0) != _iteration_number(task.get("iteration"))
+        ):
+            continue
+        if (
+            outcome is not None
+            and outcome[0].get("correction") is not True
+            and outcome[1] in {"done", "_done"}
+            and task.get("trigger") == "confirm_output"
+            and blackboard.get("current_step") == "done"
+            and isinstance(handoff, Mapping)
+            and handoff.get("from_step") == step
+            and handoff.get("to_owner") == "done"
+            and handoff.get("to_step") == "done"
+            and handoff.get("intent") == "workflow_complete"
+        ):
+            statuses[step] = "completed"
+            continue
+        target = payload.get("supervisor_handoff_to")
+        declared = payload.get("declared_continuation")
+        redirected_outcome = _declared_task_outcome(task, {**payload, "continuation": declared})
+        metadata = phase_metadata.get(step, {})
+        interruption = metadata.get("agent_interruption")
+        if (
+            task.get("trigger") == "agent_execution_interrupted"
+            and redirected_outcome is not None
+            and redirected_outcome[0].get("correction") is not True
+            and redirected_outcome[1] == declared == step
+            and isinstance(target, str) and target in statuses and target != step
+            and payload.get("continuation") == target
+            and metadata.get("agent_invoked") is False
+            and metadata.get("workflow_completion_trusted") is False
+            and isinstance(interruption, Mapping)
+            and interruption.get("workflow_id") == workflow_id
+            and interruption.get("step") == step
+            and _iteration_number(interruption.get("iteration")) == iterations[step]
+            and _after(completed_at, interruption.get("id"))
+        ):
+            statuses[step] = "skipped"
     if workflow_finished:
         statuses = {
             step: "skipped" if status == "pending" else status for step, status in statuses.items()
@@ -815,7 +868,7 @@ def render_progress(
                 # execution alone must never make its one progress node green.
                 status = phase_statuses[step]
                 if status == "completed" or (
-                    status in {"pending", "awaiting_input"}
+                    status in {"pending", "in_progress", "awaiting_input"}
                     and confirmation_statuses[step] == "awaiting_confirmation"
                 ):
                     status = confirmation_statuses[step]
