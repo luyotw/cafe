@@ -222,8 +222,6 @@ def assemble(request, *, discovery):
         if inputs.get("newly_selected_effort"):
             if any(entry.get("reasoning_effort") is None for entry in phase["chain"]):
                 missing.append({"owner": "user", "requirement": "explicit_effort:" + phase["name"]})
-            if not phase.get("rationale"):
-                missing.append({"owner": "user", "requirement": "model_effort_rationale:" + phase["name"]})
         for entry in phase["chain"]:
             if not any(
                 m["status"] == "hit"
@@ -281,7 +279,11 @@ def assemble(request, *, discovery):
                     "graph_digest": discovery["graph_digest"],
                     "review_policy": review_policy,
                 }),
-                "phases": inputs["phases"],
+                # Existing confirmations retain their original policy and digest.
+                "phases": (inputs["phases"] if confirmed else [
+                    {key: value for key, value in phase.items() if key != "rationale"}
+                    for phase in inputs["phases"]
+                ]),
                 "review_configuration": inputs.get("review_configuration"),
                 "delivery_contract": (inputs["delivery_contract"] if confirmed else
                     prepare_compact_delivery(root, inputs["delivery_contract"],
@@ -341,9 +343,13 @@ def render(values):
     if values.get("status") != "ready" or not values.get("proposal"):
         return {"status": "incomplete", "diagnostics": ["compact_proposal_incomplete"]}
     proposal = values["proposal"]
+    visible_phases = [
+        {key: value for key, value in phase.items() if key != "rationale"}
+        for phase in proposal["phases"]
+    ]
     groups = {
         "files": proposal["file_scope"]["paths"],
-        "execution": {"phases": proposal["phases"], "review": proposal["review_configuration"],
+        "execution": {"phases": visible_phases, "review": proposal["review_configuration"],
                       "manager": proposal["manager"]},
         "delivery": {k: v for k, v in proposal["delivery_contract"].items()
                      if k != "remote_identity"},

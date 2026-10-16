@@ -11,6 +11,45 @@ from _kickoff_test_support import load_kickoff_module
 from test_reasoning_effort_adapters import provider_clients
 
 
+@pytest.mark.parametrize("legacy_rationale", [False, True])
+def test_new_full_contract_omits_model_rationale_from_render_and_activation(
+    tmp_path, provider_clients, legacy_rationale
+):
+    from datetime import datetime, timezone
+
+    from cafe.manager import ActivateConfirmedContract, activate_confirmed_contract
+    from test_use_cafe_workflow_skill import _kickoff_formatter_command
+
+    owner = load_kickoff_module("format_kickoff_contract")
+    chain = [
+        {"cli": "codex", "model": "gpt-5.5", "reasoning_effort": "high"},
+        {"cli": "claude", "model": "claude-opus-4-6", "reasoning_effort": "low"},
+    ]
+    extra = ["--project-root", str(tmp_path), "--phase-chain", "develop=" + json.dumps(chain)]
+    if legacy_rationale:
+        extra += ["--phase-rationale", "develop=" + json.dumps({
+            "band": "frontier", "model": "INTERNAL_MODEL_ASSESSMENT",
+            "effort": "INTERNAL_EFFORT_ASSESSMENT",
+        })]
+    command = _kickoff_formatter_command(tmp_path / "context.yaml", *extra)
+    args = owner._parser().parse_args(command[2:])
+    proposal = owner.build_confirmed_proposal(args)
+    selected = next(p for p in proposal["phases"] if p["name"] == "develop")
+    assert selected == {"name": "develop", "chain": chain}
+    rendered = owner.render(args, confirmed_proposal=proposal)
+    assert "rationale" not in rendered
+    assert "INTERNAL_" not in rendered
+    assert "codex:gpt-5.5 (effort=high)" in rendered
+    assert "claude:claude-opus-4-6 (effort=low)" in rendered
+
+    issue = tmp_path / "confirmed"
+    activate_confirmed_contract(ActivateConfirmedContract(
+        issue, "issue346", "workflow", "user", datetime.now(timezone.utc), proposal
+    ))
+    stored = json.loads((issue / "manager/contract.json").read_text())
+    assert next(p for p in stored["phases"] if p["name"] == "develop") == selected
+
+
 def test_phase_selection_accepts_lossless_json_and_rejects_new_default_only_chain(provider_clients):
     owner = load_kickoff_module("format_kickoff_contract")
     entries = [

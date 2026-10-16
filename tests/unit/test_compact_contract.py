@@ -58,6 +58,7 @@ def test_compact_initial_confirmation_and_revision_checked_expansion(tmp_path, c
     assert contract["contract_mode"] == "compact"
     assert set(contract["file_scope"]["paths"]) == {"app.py", "tests/test_app.py"}
     assert contract["review_configuration"]["read_only_enforcement"] == "instruction_only"
+    assert all("rationale" not in phase for phase in contract["phases"])
     expanded = deepcopy(compact_proposal)
     expanded["file_scope"]["paths"].append("extra.py")
     command = ReplaceConfirmedContract(
@@ -93,6 +94,34 @@ def test_compact_initial_confirmation_and_revision_checked_expansion(tmp_path, c
                 "user_reconfirmation",
             )
         )
+
+
+def test_existing_rationale_contract_rerenders_without_rewriting_policy(
+    compact_request, compact_proposal, tmp_path
+):
+    root = Path(compact_request["project_root"])
+    issue = root / ".cafe/issues/sample"
+    historical = deepcopy(compact_proposal)
+    historical["phases"][0]["rationale"] = {
+        "band": "balanced", "model": "Original model assessment",
+        "effort": "Original effort assessment",
+    }
+    activate(issue, historical)
+    contract_path = issue / "manager/contract.json"
+    before = contract_path.read_bytes()
+    owner = load_kickoff_module("kickoff_inputs")
+    discovery = owner.discover_kickoff(
+        compact_request, config_dir=tmp_path / "config", cache_dir=tmp_path / "cache"
+    )
+    assembled = owner.assemble_kickoff(compact_request, discovery=discovery)
+    assert assembled["status"] == "ready", assembled
+    rendered = owner.render_kickoff(assembled["formatter_inputs"])
+
+    assert rendered["proposal"]["phases"] == historical["phases"]
+    assert "rationale" not in rendered["output"]
+    assert "Original model assessment" not in rendered["output"]
+    assert contract_path.read_bytes() == before
+    assert confirmed_contract_snapshot(issue)["phases"][0]["rationale"] == historical["phases"][0]["rationale"]
 
 
 @pytest.mark.parametrize(

@@ -62,7 +62,6 @@ def test_effort_only_reconfirmation_regenerates_compact_context_and_reaches_prov
     old = execution_scope_projection(issue, root)
     changed = deepcopy(proposal)
     changed["phases"][0]["chain"][0]["reasoning_effort"] = "low"
-    changed["phases"][0]["rationale"]["effort"] = "bounded future work after uncertainty reduced"
     second = replace_confirmed_contract(
         ReplaceConfirmedContract(
             issue,
