@@ -1,0 +1,306 @@
+{
+  "reviewed_commit": "ca948f59a94129db7875a7f4dcd0d9e7db253a43",
+  "corpus": {
+    "file": "preliminary-results.md",
+    "sha256": "19b632056af5d7f391cdc0476654e3b77f0f9a3d1ebc731d9a402c7b32e877cf"
+  },
+  "texts": {
+    "cases.md": {
+      "offset": 386,
+      "bytes": 11665,
+      "sha256": "d1f34b128dd8328a4f35ab719370d25717dae6e8a5c794281be058291aea2381"
+    },
+    "rubric.md": {
+      "offset": 12067,
+      "bytes": 3395,
+      "sha256": "37d8a173d1150adbec769e50a415faa87fd2bfe343568205ff1bb247376fb87e"
+    },
+    "observations/assessment.md": {
+      "offset": 15495,
+      "bytes": 6210,
+      "sha256": "792bedb5b52154f79be714e2786d0489008c073116c1edd664522f379b5addaf"
+    },
+    "observations/baseline-manager.md": {
+      "offset": 21744,
+      "bytes": 6146,
+      "sha256": "f92af5b8c415b93bb13361779b60e71e1e7a433d761bf2d59236ff3f34f17837"
+    },
+    "observations/baseline-qa.md": {
+      "offset": 27924,
+      "bytes": 8339,
+      "sha256": "bda1d34547fb461b2d2f437b8637ce8ef5ed430e2a85320dc4ff733db6ae966c"
+    },
+    "observations/candidate-manager.md": {
+      "offset": 36303,
+      "bytes": 6254,
+      "sha256": "51ce89f91e9b4bc84ffb130017719ea14b7630f73c53fc1231a537110821192f"
+    },
+    "observations/candidate-qa.md": {
+      "offset": 42592,
+      "bytes": 8878,
+      "sha256": "da2a86b9b213a29922f4f31df117a6ff273c7c500518d4306e3ddbc6ecc7cf82"
+    }
+  },
+  "profiles": {
+    "record": {
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "high",
+      "exit_code": 0,
+      "turn_completed": true,
+      "final_output_present": true,
+      "tool_use_observed": false,
+      "error": null,
+      "events": [
+        {
+          "type": "thread.started",
+          "item_type": null
+        },
+        {
+          "type": "item.completed",
+          "item_type": "error",
+          "diagnostic": "Code Mode is unavailable because code-mode host is disabled. Code mode will fail closed; enable `features.code_mode_host` and install `codex-code-mode-host`."
+        },
+        {
+          "type": "turn.started",
+          "item_type": null
+        },
+        {
+          "type": "item.completed",
+          "item_type": "agent_message"
+        },
+        {
+          "type": "turn.completed",
+          "item_type": null
+        }
+      ]
+    },
+    "command": [
+      "codex",
+      "--ask-for-approval",
+      "never",
+      "exec",
+      "--ignore-user-config",
+      "--ignore-rules",
+      "--ephemeral",
+      "--skip-git-repo-check",
+      "--sandbox",
+      "read-only",
+      "--model",
+      "gpt-6.1-sol",
+      "-c",
+      "model_reasoning_effort=\"high\"",
+      "-c",
+      "project_doc_max_bytes=0",
+      "-c",
+      "web_search=\"disabled\"",
+      "-c",
+      "mcp_servers={}",
+      "-c",
+      "agents.enabled=false",
+      "-c",
+      "notify=[]",
+      "--json",
+      "--cd",
+      null,
+      "--output-last-message",
+      null,
+      "-c",
+      "features.shell_tool=false",
+      "-c",
+      "features.unified_exec=false",
+      "-c",
+      "features.apps=false",
+      "-c",
+      "features.plugins=false",
+      "-c",
+      "features.hooks=false",
+      "-c",
+      "features.multi_agent=false",
+      "-c",
+      "features.multi_agent_v2=false",
+      "-c",
+      "features.memories=false",
+      "-c",
+      "features.browser_use=false",
+      "-c",
+      "features.browser_use_external=false",
+      "-c",
+      "features.in_app_browser=false",
+      "-c",
+      "features.js_repl=false",
+      "-c",
+      "features.code_mode=false",
+      "-c",
+      "features.code_mode_host=false",
+      "-c",
+      "features.image_generation=false",
+      "-c",
+      "features.remote_control=false"
+    ]
+  },
+  "metadata": {
+    "observations/assessment-completion.json": {
+      "bytes": 2294,
+      "sha256": "60b75164c1a795663a9c9750c01fe6082b1a8f41f9dd83c3516602f0b63347c3",
+      "value": {
+        "$record": {
+          "role": "assessment",
+          "variant": "blind",
+          "elapsed_seconds": 104.0,
+          "prompt_sha256": "a89b146858db0dbb3ac0945810c755bf8d372d9d0d48e5bde4c12d74abc37264",
+          "output_sha256": "792bedb5b52154f79be714e2786d0489008c073116c1edd664522f379b5addaf",
+          "command": {
+            "$command": [
+              "/tmp/issue647-eval/empty",
+              "/tmp/issue647-eval/assessment.md"
+            ]
+          }
+        }
+      }
+    },
+    "observations/completion.json": {
+      "bytes": 10367,
+      "sha256": "cb01e822d68c8cad1011adae69e761cc37ea7e4c23846243d1b7b8f6598e7764",
+      "value": [
+        {
+          "$record": {
+            "role": "qa",
+            "variant": "baseline",
+            "elapsed_seconds": 56.77,
+            "prompt_sha256": "d63830284239453cfe845994226d753788b5322690f49e2ca247ff9257adf85c",
+            "case_packet_sha256": "d1f34b128dd8328a4f35ab719370d25717dae6e8a5c794281be058291aea2381",
+            "output_sha256": "bda1d34547fb461b2d2f437b8637ce8ef5ed430e2a85320dc4ff733db6ae966c",
+            "command": {
+              "$command": [
+                "/tmp/issue647-eval/empty",
+                "/tmp/issue647-eval/baseline-qa.md"
+              ]
+            }
+          }
+        },
+        {
+          "$record": {
+            "role": "manager",
+            "variant": "baseline",
+            "elapsed_seconds": 48.54,
+            "prompt_sha256": "eb139a92850fbfe75cfe413df036f6674e025d0a89a4ec8e7d37e2bde4c10b2d",
+            "case_packet_sha256": "d1f34b128dd8328a4f35ab719370d25717dae6e8a5c794281be058291aea2381",
+            "output_sha256": "f92af5b8c415b93bb13361779b60e71e1e7a433d761bf2d59236ff3f34f17837",
+            "command": {
+              "$command": [
+                "/tmp/issue647-eval/empty",
+                "/tmp/issue647-eval/baseline-manager.md"
+              ]
+            }
+          }
+        },
+        {
+          "$record": {
+            "role": "qa",
+            "variant": "candidate",
+            "elapsed_seconds": 75.02,
+            "prompt_sha256": "64263249906ff408677346d4b50389e4edf9d4c80a638d945b8d52b74307b527",
+            "case_packet_sha256": "d1f34b128dd8328a4f35ab719370d25717dae6e8a5c794281be058291aea2381",
+            "output_sha256": "da2a86b9b213a29922f4f31df117a6ff273c7c500518d4306e3ddbc6ecc7cf82",
+            "command": {
+              "$command": [
+                "/tmp/issue647-eval/empty",
+                "/tmp/issue647-eval/candidate-qa.md"
+              ]
+            }
+          }
+        },
+        {
+          "$record": {
+            "role": "manager",
+            "variant": "candidate",
+            "elapsed_seconds": 51.67,
+            "prompt_sha256": "508e1d23efa80da6fefb168bc89aa66a452f8c5538450d485bf0c7b8705fec4f",
+            "case_packet_sha256": "d1f34b128dd8328a4f35ab719370d25717dae6e8a5c794281be058291aea2381",
+            "output_sha256": "51ce89f91e9b4bc84ffb130017719ea14b7630f73c53fc1231a537110821192f",
+            "command": {
+              "$command": [
+                "/tmp/issue647-eval/empty",
+                "/tmp/issue647-eval/candidate-manager.md"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "observations/mapping.json": {
+      "bytes": 606,
+      "sha256": "b621ebca880813aab5654b71cb7ef1c08524932757c92dc90ae500b3cff69440",
+      "value": {
+        "R1": {
+          "variant": "candidate",
+          "role": "manager",
+          "output_sha256": "51ce89f91e9b4bc84ffb130017719ea14b7630f73c53fc1231a537110821192f"
+        },
+        "R2": {
+          "variant": "baseline",
+          "role": "qa",
+          "output_sha256": "bda1d34547fb461b2d2f437b8637ce8ef5ed430e2a85320dc4ff733db6ae966c"
+        },
+        "R3": {
+          "variant": "baseline",
+          "role": "manager",
+          "output_sha256": "f92af5b8c415b93bb13361779b60e71e1e7a433d761bf2d59236ff3f34f17837"
+        },
+        "R4": {
+          "variant": "candidate",
+          "role": "qa",
+          "output_sha256": "da2a86b9b213a29922f4f31df117a6ff273c7c500518d4306e3ddbc6ecc7cf82"
+        }
+      }
+    }
+  },
+  "assessor_inputs": {
+    "preliminary-final": {
+      "sha256": "a89b146858db0dbb3ac0945810c755bf8d372d9d0d48e5bde4c12d74abc37264",
+      "bytes": 45324,
+      "parts": [
+        {
+          "literal": "請依下列評分準則，對四份匿名模型回答逐案盲評。你不知道各回答所用的指引版本；不要猜測版本或排名。逐案確認判斷、理由與路由是否符合案例事實，不要依關鍵字數量或表格格式評分。每案提供 pass/fail 及簡短實際依據，另檢查 Manager 的 not_required 情況。請用 en-US 工程文字輸出。只讀這份輸入，不呼叫工具，不讀其他檔案或網路。\n\n<rubric>\n"
+        },
+        {
+          "source": "rubric.md"
+        },
+        {
+          "literal": "\n</rubric>\n<cases>\n"
+        },
+        {
+          "source": "cases.md"
+        },
+        {
+          "literal": "\n</cases>\n<responses>\n## Response R1 — role: manager\n\n"
+        },
+        {
+          "source": "observations/candidate-manager.md"
+        },
+        {
+          "literal": "\n\n## Response R2 — role: qa\n\n"
+        },
+        {
+          "source": "observations/baseline-qa.md"
+        },
+        {
+          "literal": "\n\n## Response R3 — role: manager\n\n"
+        },
+        {
+          "source": "observations/baseline-manager.md"
+        },
+        {
+          "literal": "\n\n## Response R4 — role: qa\n\n"
+        },
+        {
+          "source": "observations/candidate-qa.md"
+        },
+        {
+          "literal": "\n</responses>\n"
+        }
+      ],
+      "availability": "Complete recipe verified against the retained temporary input and its reviewed completion hash; no unavailable assessor input."
+    }
+  }
+}

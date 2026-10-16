@@ -1,185 +1,186 @@
 # Manual QA evidence interpretation evaluation
 
 This is one-time model validation for issue #647, separate from automated skill
-loading/checklist/routing tests. It is not installed as a skill, a runtime
-validator, a repository PR gate, or a task run at every CAFE phase.
+loading/checklist/routing tests. It is not an installed skill, runtime validator,
+repository PR gate, or task run at every CAFE phase. The consolidation reuses the
+completed behavior executions; its byte/hash checks do not replace semantic
+assessment or claim a measured reliability improvement.
 
-Use the same chosen case packet, model/effort, and tool permissions with anonymous baseline
-and candidate policies. Give only that packet and the relevant policy to each test
-invocation. Keep `rubric.md` and policy-version labels out of those prompts. Assess
-anonymized responses against the rubric separately; read the responses rather
-than treating output strings or passing pytest as a behavior score.
+## Retained evidence
 
-The baseline is source commit `a5d0413f8f10e8a52690bb275ed53fcbb689cb7b`, which
-includes the two separately authorized preparation repairs. QA uses the skill
-body, its regression checklist and Quinn's unchanged role; the candidate also
-includes the newly declared execution checklist. Manager uses the bounded
-existing due-phase review excerpt, including its eligibility and snapshot
-boundary. The cases and common QA context are identical between versions. These
-inputs do not reconstruct the historical kid-todolist agent prompt.
+| Files | Contents and boundary |
+| --- | --- |
+| [originals/](originals/README.md) | Ten unchanged files: source notes plus nine supplied original reports, checklists, artifacts, provenance and historical browser/SDK sources. |
+| [historical-cases.md](historical-cases.md), [historical-rubric.md](historical-rubric.md) | Full original reports, complete fixture and historical SDK lines 155–175; separate assessor-only criteria for A1/A2/B. |
+| [scope-cases.md](scope-cases.md), [scope-rubric.md](scope-rubric.md) | Isolated sufficient-evidence and scope controls C–H; separate assessor-only criteria. |
+| [original-results.md](original-results.md) | All ten original-source tested-role answers and four assessor judgments, verbatim and directly readable; includes both initial Manager answers and both initial assessments. |
+| [original-provenance.json](original-provenance.json) | Byte ranges/hashes, all five reconstructed metadata documents, anonymous mappings, exact assessor-input recipes, shared profiles and policy/rerun linkage. |
+| [preliminary-results.md](preliminary-results.md) | Preliminary packet, rubric, four tested-role answers and assessor judgment, verbatim; explicitly not original-source acceptance. |
+| [preliminary-provenance.json](preliminary-provenance.json) | All three preliminary metadata documents, byte identities, mapping, shared profiles and exact preliminary assessor-input recipe. |
 
-The initial characterization source-code excerpts were from
-[kid-todolist tasks.tsx](https://github.com/luyotw/kid-todolist/blob/eea7a862bee6b192870f10a63713db796c288796/functions/test/browser/tasks.tsx)
-and the
-[schedule integration case](https://github.com/luyotw/kid-todolist/blob/eea7a862bee6b192870f10a63713db796c288796/functions/test/schedule-journeys.integration.vnext.ts#L156).
-A's initial report characterization came from the confirmed issue #647 input.
-The first iteration did not have the original reports; its `cases.md` and
-`observations/` remain an explicitly preliminary characterization comparison.
-The supplied originals now support the separate original-source evaluation below.
-C–H are controlled scenario facts,
-including synthetic success/failure observations, not claims that kid-todolist
-was tested in this change.
+Archive section headings and metadata keys retain the reviewed source identities.
+They identify historical Git blobs, not live paths to open. The provenance's
+`texts` entries give UTF-8 byte offsets, lengths and SHA256 in the companion
+corpus. Extract those byte ranges without stripping whitespace or final newlines.
+`metadata` retains original serialized length/hash and a factored JSON value:
+`$record` overlays its per-invocation fields on `profiles.record`; `$command`
+fills `--cd` and `--output-last-message` paths in `profiles.command`. Everything
+else is literal. `load_archive()` in [run_eval.py](run_eval.py) performs this
+lossless expansion. Original JSON formatting is identified by its original hash;
+all reconstructed JSON values equal the reviewed objects in full.
 
-Each invocation must finish with an explicit `turn.completed`, a non-empty final
-answer, and process exit 0; record tool-use observations independently. Preserve
-interruptions as incomplete, enforce a bounded timeout and child-exit cleanup,
-and forward actual structured progress to stdout. The configured model is the
-confirmed Codex `gpt-6.1-sol` with `high` reasoning. Each fresh ephemeral session
-has shell, network search, MCP, apps, plugins, hooks, memories and delegation
-disabled, uses an empty working directory, and receives no blackboard or expected
-answers. Disable repository/user document loading for the bounded packet.
+Each archive stores the repeated command/config/event data once, retaining every
+invocation's differing paths, durations, hashes, role, variant, group and round.
+The common startup diagnostic about disabled code-mode-host remains recorded; it
+was not a terminal failure, evidence of a test execution, or permission to enable
+tools. The self-contained assessor recipes retain the exact differing task
+prefaces, rubrics, packets, anonymous answer order and answer bytes, excluding
+policies and version mappings from the assessor prompt. All five original
+assessor inputs were available during consolidation and matched their committed
+completion hashes; no assessor-input gap is hidden or inferred from a final
+judgment alone.
 
-To replay the bounded review from the repository root, set `CAFE_QA_EVAL_DIR` to
-a fresh temporary directory. In it, create `baseline` and `candidate` directories
-and write `qa.md` and `manager.md` from the respective Git versions of
-`src/cafe/data/skills/cafe-qa/SKILL.md` and
-`src/cafe/data/skills/use-cafe-workflow/references/running_workflow.md`. Copy this
-directory's chosen packet into that temporary directory as `cases.md`. Use
-`historical-cases.md` and `scope-cases.md` in separate directories and fresh
-sessions so the scope/sufficient-evidence controls cannot reveal answers to the
-historical negative controls. Then run the following
-manually; the script never loads the assessor rubric:
+## Pinned inputs and replay
+
+| Input | Exact Git source |
+| --- | --- |
+| Baseline policies and unchanged Quinn/regression inputs | `a5d0413f8f10e8a52690bb275ed53fcbb689cb7b` |
+| Initial candidate Manager, including preliminary Manager | `4155ea671e28f74f5fe80763b8f86073afd1491d` |
+| Equivalent initial Manager with original packets added | `c3d7569f5636cf30b2f79b26268ee3cbbee030e7` (same Manager bytes) |
+| Final evaluated candidate, candidate QA/execution checklist and original/scope packets/rubrics | `ca948f59a94129db7875a7f4dcd0d9e7db253a43` |
+| Preliminary packet/rubric | Same reviewed commit's historical blobs, also preserved verbatim in the preliminary archive |
+
+QA receives the skill body, unchanged regression checklist and Quinn role; the
+candidate additionally receives its declared execution checklist. Manager receives
+only the existing due-phase review excerpt, including eligibility and snapshot
+boundaries. `policy_sha256` identifies the full source policy file, as in the
+original records; `effective_policy_sha256` additionally identifies the assembled
+policy/excerpt. Tested-role prompts contain no rubric, expected answers, version
+labels, complete blackboard, historical session or streaming archive. These are
+current-skill evaluations against historical evidence, not reconstructions of
+the original kid-todolist agent prompt.
+
+The replay CLI reads exact Git objects, never ambient checkout copies. It
+materializes each policy/common/packet input with its commit and hash in a fresh
+chosen directory, writes `prompt.txt` and `inputs.json`, and verifies the final
+prompt hash against the retained execution before calling any provider. Historical
+and scope packets remain isolated. From any working directory, invoke the script
+by its repository path; from the repository root, for example:
 
 ```bash
-python tests/evals/qa_evidence/run_eval.py baseline qa
-python tests/evals/qa_evidence/run_eval.py candidate qa
-python tests/evals/qa_evidence/run_eval.py baseline manager
-python tests/evals/qa_evidence/run_eval.py candidate manager
+CAFE_QA_EVAL_DIR=/tmp/issue647-historical-candidate-qa \
+  python tests/evals/qa_evidence/run_eval.py candidate qa --packet historical --prepare-only
+CAFE_QA_EVAL_DIR=/tmp/issue647-scope-initial-manager \
+  python tests/evals/qa_evidence/run_eval.py initial manager --packet scope --prepare-only
+CAFE_QA_EVAL_DIR=/tmp/issue647-preliminary-manager \
+  python tests/evals/qa_evidence/run_eval.py candidate manager --packet preliminary --prepare-only
 ```
 
-The common regression reference and Quinn role come from the checkout and must
-be unchanged between the compared policies. Anonymize the four resulting answers
-before giving the chosen packet and its matching assessor-only rubric
-(`historical-rubric.md` or `scope-rubric.md`) to a fresh, equally restricted
-model session. Check its reasoning against the actual answers and retain the
-mapping outside its prompt. Keep initial pilots and interrupted runs out of the
-scored comparison.
+Choose `baseline` or `candidate` and `qa` or `manager` for either original-source
+packet. `initial manager` replays the pre-repair Manager on either original-source
+packet; preliminary `candidate manager` already uses that initial policy.
+`--prepare-only` invokes no model. To deliberately run a new finite model review,
+use a fresh directory and omit that option. Exact input identity does not promise
+an identical stochastic answer. Do not overwrite the committed observations or
+represent new answers as those previously assessed.
 
-Finite observations support only these cases and this model configuration. Even
-if both policies pass, do not claim a measured reliability improvement or a
-proven historical root cause. The characterization alone cannot complete the
-original-report acceptance row; use the actual-source comparison below.
+The confirmed provider remains `codex`, `gpt-6.1-sol`, `high` reasoning, with the
+same explicit command restrictions as the retained invocations: ephemeral session,
+empty working directory, read-only sandbox, document loading disabled, no user
+configuration/rules, shell/search/MCP/apps/plugins/hooks/memories/delegation or
+other tool features. The existing provider loop forwards structured progress,
+requires a nonempty durable answer, explicit `turn.completed`, process exit 0 and
+no observed tool use separately. Preserve incomplete runs as incomplete. The
+optional runner's blocking partial-line deadline limitation remains the separate
+non-blocking FUP-001; the consolidation does not claim to fix or certify that
+bound. All retained runs finished normally below 240 seconds.
 
+To materialize an exact archived blinded assessor input without invoking a model:
 
-## Preliminary characterization comparison (iteration 001)
+```bash
+CAFE_QA_EVAL_DIR=/tmp/issue647-historical-assessor \
+  python tests/evals/qa_evidence/run_eval.py --packet historical --assessment final
+```
 
-The four recorded answers and their separate terminal/process evidence are in
-`observations/`. All four used the same case packet SHA-256
-`d1f34b128dd8328a4f35ab719370d25717dae6e8a5c794281be058291aea2381`,
-exited 0, emitted `turn.completed`, produced a durable final answer and showed no
-tool use. The disabled code-mode-host startup diagnostic is retained in metadata;
-it was not a terminal error, substitute execution evidence, or a reason to enable
-more tools. QA durations were 56.77/75.02 seconds (baseline/candidate); Manager
-48.54/51.67 seconds. These are observations, not a speed or reliability claim.
+Use `initial` for either original-source packet's initial assessment, or
+`--packet preliminary --assessment final` for the preliminary judgment. This
+reconstructs the previously assessed answers, not fresh outputs from a new role
+replay. A fresh evaluation needs fresh anonymous ordering/mapping outside the
+assessor input and an independent equally restricted assessor; read its reasoning
+against the actual answers instead of using keyword counts.
 
-The assessor received cases, rubric and anonymized answers only, without policies
-or the version mapping. Its answer is retained alongside the later-revealed
-mapping. It graded candidate QA (R4) and candidate Manager (R1) as passing A–H,
-plus the Manager not_required condition. It graded baseline QA (R2) A/B and
-baseline Manager (R3) A as failing. The baseline QA sent executable evidence gaps
-to need_clarification; the baseline Manager did not identify the pre-opened local
-gate. The developer checked these explanations against the actual answers rather
-than accepting keyword counts. The candidate's description of the opened local
-gate and authorization bypass is semantic gate evidence; literal use of the word
-PIN is not a scoring requirement by itself.
+For consolidation identity only (no model invocation):
 
-These are single responses to a batch of controlled cases; cross-case contrasts
-can assist judgment. They do not estimate a general failure rate. The pilots
-preceding the scored batch were excluded because the common QA context and source
-line annotations were being finalized; no pilot response was used to tune the
-skill or supplied to the tested model. All scored prompts used the corrected
-identical packet and unchanged common QA context.
+```bash
+python tests/evals/qa_evidence/run_eval.py --verify-archive
+```
 
-The missing original-source input was subsequently supplied through the existing
-clarification HumanTask. The preliminary characterization result above is retained
-for audit, and is not substituted for the actual original-report evaluation.
+This compares all 21 extracted text payloads and eight reconstructed metadata
+objects with reviewed HEAD, reconstructs all 14 tested-role prompts and five
+assessor prompts, and checks their retained hashes. Full historical Git objects
+must be available locally; missing pinned objects are errors, not permission to
+use a later checkout. The targeted public-CLI tests additionally verify pinned
+materialization and exact provider restrictions with a fake external executable.
 
-## Original-source comparison (iteration 002)
+## Observed results and repair linkage
 
-The original reports, artifact hashes, checklists, browser fixture and historical
-SDK test are retained under `originals/`, with their supplied provenance. Every
-one of the nine supplied source files was independently verified by byte count
-and SHA256, and each report hash matches its historical artifact.json. The later
-eea7a862 SDK file was checked as provenance but is not the original QA case source.
-See [the source notes](originals/README.md).
+The nine supplied originals were verified by length/SHA256; both report hashes
+match their historical artifact metadata. The fixture is identical at both QA
+HEADs and the later eea7a862 source. The historical schedule test is identical at
+QA HEADs c9d57861/416f6ace but differs from the later version; the historical input
+uses the original version. See the unchanged source notes for provenance.
 
-`historical-cases.md` embeds both complete unmodified reports, the complete
-original browser fixture and historical SDK lines 155–175, identically used at
-QA HEADs c9d57861 and 416f6ace. It contains no issue #647 diagnosis or expected
-answers. Its A1/A2/B review questions keep the reported staged scope while asking
-which claims the supplied evidence supports. `scope-cases.md` separately retains
-the sufficient App/emulator evidence, backend, presentation, documentation,
-staged-delivery and observed-failure controls C–H. These are controlled scenario
-facts, not actual kid-todolist executions in this issue.
-
-The historical packet SHA256 is
+The historical packet hash is
 `db83b88aec27a8d80f49958bccc82a1b2cc3803a249fba2ec720ce8b28463558`;
-the scope-control packet SHA256 is
+the separate scope packet hash is
 `3543aa31f8a6da83be71eeb3878ca8b890e2d1926538fcd82b19f088dffb86e5`.
-Both tested policy versions receive the exact same packet within each group.
-The pre-change baseline, confirmed model/effort, common QA context, empty working
-directory and tool restrictions remain as described above. No full blackboard,
-session or streaming archive is supplied. Historical empty effective checklist
-gates do not imply that current baseline instructions were in the historical
-prompt; this is current-skill validation against historical evidence.
+Every compared policy receives the same finite packet and permissions within its
+group. C–H contain controlled synthetic observations, not renewed product tests.
 
-The actual-source answers, assessor judgments and later-revealed anonymous
-mappings are retained in `original-observations/`. Final behavior results are:
+| Final control | Candidate QA / Manager | Supported judgment |
+| --- | --- | --- |
+| A1: original first-stage report | Pass / Pass | Retain real SDK/Rules and local fixture evidence; identify the pre-opened gate and missing connected Family/edit/save/parent-return journey. |
+| A2: original correction | Pass / Pass | Accept narrow renewal/owner-transfer success and justified local reuse; preserve inherited journey and delivery gaps. |
+| B: original reorder SDK case | Pass / Pass | Distinguish the successful single-sided move from the untested interior two-neighbor branch; request evidence without inventing a cost diagnosis. |
+| C: sufficient connected App/emulator | Pass / Pass | Accept stage results without extra OAuth/cloud/iOS/full-site gates. |
+| D–F: backend/presentation/document | Pass / Pass | Match API/rendered/artifact evidence and valid persistence reuse. |
+| G: staged delivery | Pass / Pass | Accept completed engineering while deferred capabilities remain incomplete. |
+| H: observed in-stage failure | Pass / Pass | Reject completion and use existing correction handling. |
+| Legitimate immediately advancing not_required | N/A / Pass | No proactive review, new pause, implementation intervention or blanket retesting. |
 
-| Control | Candidate QA | Candidate Manager | Evidence fit |
-| --- | --- | --- | --- |
-| A1: original first-stage report | Pass | Pass | Retains local real-SDK/Rules and fixture results; identifies the pre-opened gate and missing connected Family/edit/save/parent-return sequence. |
-| A2: original correction report | Pass | Pass | Accepts narrow renewal/owner-transfer evidence and valid local UI reuse while preserving the inherited journey gap and pending delivery. |
-| B: historical SDK reorder case | Pass | Pass | Distinguishes afterKey=null/beforeKey=a from an unobserved interior move with both neighbors; requests evidence without inventing an ordering cost/root cause. |
-| C: sufficient connected App evidence | Pass | Pass | Accepts the committed stage without OAuth/cloud/iOS or full-product gates. |
-| D–F: backend, presentation and documentation | Pass | Pass | Uses the matching API/presentation/artifact evidence and justified persistence reuse. |
-| G: explicit staged delivery | Pass | Pass | Accepts completed stage-one engineering; deferred capabilities stay incomplete. |
-| H: observed in-stage failure | Pass | Pass | Rejects the completion claim and uses existing correction handling, preserving uncertainty about cost/root cause. |
-| Legitimate immediately advancing not_required | N/A | Pass | Adds no proactive review, new pause, implementation intervention or blanket retesting. |
+Both baseline roles missed B's specific branch. The initial candidate Manager
+also missed B, focusing on task count/origin without requiring both neighbors.
+Its historical initial assessment records that failure. The scope initial
+Manager and its assessment are retained too: that assessment already passed C–H
+and not_required; it must not be relabeled a failure. The final policy at reviewed
+HEAD refined the existing due-review paragraph to compare combinations of
+populated payload fields and prerequisite states against ordinary-use branches.
+The affected candidate Manager was then rerun on **both unchanged packets**, with
+fresh blinded assessments. Final results pass all applicable controls. Exact
+unchanged QA/baseline prompts and responses were carried forward. Both anonymous
+initial/final mappings, the failed historical answer, scope initial success and
+all final judgments remain visible in the corpus/provenance.
 
-Both baseline roles missed B's specific two-neighbor gap on the original-source
-packet, while preserving other bounded evidence and scope. The initial candidate
-Manager also missed B by focusing on task count/origin. Its failed answer,
-initial blinded assessment and mapping are retained rather than discarded.
-The existing due-review paragraph was then refined to compare combinations of
-populated payload fields and prerequisite states with ordinary-use branches.
-The adjacent Manager contract check failed before this refinement and passed
-afterward; it guards instruction placement, not semantic behavior by itself.
+The 14 original-source invocations comprise ten tested-role responses and four
+assessments. All exited 0, emitted turn.completed, produced durable answers and
+showed no tool use. Final historical QA durations were 64.87/51.76 seconds and
+Manager 47.15/50.32; scope QA 42.86/48.68 and Manager 35.44/42.54
+(baseline/candidate). Complete initial/assessor durations remain in provenance.
+These finite observations establish no general failure rate, speedup, reliability
+gain or historical Rules root cause.
 
-Only the affected candidate Manager was rerun on both unchanged packets after
-that repair. Passing QA answers and baseline answers were carried forward because
-their exact prompts, policies, common context, tool permissions and packets were
-unchanged. Fresh independent assessors received the final anonymized answers
-without policy versions or mappings. Their final judgments pass the candidate
-on every applicable historical and scope control. The developer independently
-read those answers and checked the judgments, including that the local gate is
-the PIN gate named in the source report and that the missing neighbor combination
-is explicitly distinguished from the successful head move.
+## Preliminary characterization boundary
 
-`original-observations/completion.json` retains final and initial completion
-records, commands, packet/prompt/policy/output hashes, bounded startup diagnostics,
-actual durations, terminal events, process exits and tool-use observations. All
-14 retained invocations (10 tested responses, four assessor responses) exited 0,
-produced durable final answers and emitted turn.completed, without observed tool
-use. Every paired group's commands have identical tool restrictions; only output
-paths differ. Each invocation remained below the 240-second bound. The final
-historical QA durations were 64.87/51.76 seconds and Manager 47.15/50.32 seconds;
-scope QA 42.86/48.68 and Manager 35.44/42.54 (baseline/candidate). No speedup,
-failure-rate estimate, general reliability gain or historical root cause is
-claimed from these finite observations.
-
-The original-report acceptance obligation left pending in iteration 001 is now
-complete. These are model evidence-interpretation evaluations, not renewed QA or
-product fixes for kid-todolist, and no historical runtime artifacts were edited.
-They remain separate from automated skill loading, effective-checklist and
-existing-route tests and introduce no per-PR or per-phase model gate.
+The preliminary packet hash is
+`d1f34b128dd8328a4f35ab719370d25717dae6e8a5c794281be058291aea2381`.
+Its report characterization came from issue input before original reports were
+available; its source excerpts use the later eea7a862 version. Four tested-role
+responses and one independent assessment remain separately archived. The assessor
+passed candidate QA (R4) and Manager (R1), while baseline QA (R2) failed A/B and
+baseline Manager (R3) failed A. All five completed normally with no observed tool
+use; four role durations were 56.77/75.02 seconds for QA and 48.54/51.67 for
+Manager. The preliminary candidate Manager is the pre-repair policy, not final
+reviewed Manager. Cross-case contrasts could assist judgment; this preliminary
+batch does not satisfy original-report acceptance or estimate future behavior.
+Earlier pilots were excluded while common context/source annotations were being
+finalized; none was used as a scored response or supplied to the tested model.
