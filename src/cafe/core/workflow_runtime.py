@@ -94,7 +94,9 @@ from cafe.core.workflow_feedback import (
     WorkflowFeedbackError,
     WorkflowFeedbackLedger,
     feedback_todo_mappings,
+    has_causal_feedback_projection,
     supervisor_feedback_receipts,
+    validate_completed_feedback_projection,
 )
 from cafe.core.workflow_models import (
     BatonRejected,
@@ -3253,9 +3255,15 @@ class BlackboardWorkflowRuntime:
                 and sha256_bytes(artifact_bytes) != expected_artifact_sha256
             ):
                 return "the curated artifact changed after feedback delivery preparation"
-            actual_items = parse_todo_list(artifact_bytes.decode("utf-8")) if curated_identities else ()
-        except (OSError, UnicodeDecodeError, TodoContractError) as exc:
-            return f"the curated Todo List is invalid: {exc}"
+            completed_consumer = validate_completed_feedback_projection(
+                self.issue_dir, step=current_step, output=output_path,
+                source_identities=frame.pending_feedback, mappings=mappings)
+            actual_items = (
+                expected_items if completed_consumer else
+                parse_todo_list(artifact_bytes.decode("utf-8")) if curated_identities else ()
+            )
+        except (OSError, UnicodeDecodeError, ValueError, WorkflowFeedbackError) as exc:
+            return f"the feedback completion evidence is invalid: {exc}"
         expected_rows = {(item.item_id, item.source) for item in expected_items}
         actual_rows = {(item.item_id, item.source) for item in actual_items}
         if len(actual_rows) != len(actual_items) or not actual_rows.issubset(expected_rows):
@@ -3317,6 +3325,61 @@ class BlackboardWorkflowRuntime:
                 "workflow_feedback_delivered",
                 payload,
             )
+        return None
+
+    def _finalize_feedback_delivery(
+        self,
+        *,
+        current_step: str,
+        frame: StepIterationFrame,
+        contract: HandoffContract,
+        runtime: str,
+    ) -> PlaybookRunResult | None:
+        """Apply the same durable settlement at both runtime completion boundaries."""
+        if not completion_requires_checklist(baton_intent=contract.intent.value):
+            output = frame.artifacts.get(self.steps[current_step].get("output_artifact"))
+            if contract.to_owner is HandoffOwner.USER or (
+                output is not None and has_causal_feedback_projection(self.issue_dir, Path(output))
+            ):
+                return None
+        feedback_delivery = self._prepare_feedback_delivery(
+            current_step=current_step,
+            frame=frame,
+            contract=contract,
+        )
+        if (
+            feedback_delivery is None
+            and getattr(frame.execution_result, "agent_invoked", False)
+            and frame.feedback_batch_error is None
+            and frame.feedback_batch_provided
+            and frame.pending_feedback
+            and self._feedback_delivery_required(current_step=current_step)
+        ):
+            return self._reject_feedback_delivery(
+                current_step=current_step,
+                runtime=runtime,
+                reason="the curated artifact identity could not be durably recorded",
+            )
+        feedback_delivery_rejection = self._commit_delivered_feedback(
+            current_step=current_step,
+            frame=frame,
+            delivery_id=(
+                str(feedback_delivery["delivery_id"]) if feedback_delivery is not None else None
+            ),
+            expected_artifact_sha256=(
+                str(feedback_delivery["artifact"]["sha256"])
+                if feedback_delivery is not None
+                else None
+            ),
+        )
+        if feedback_delivery_rejection is not None:
+            return self._reject_feedback_delivery(
+                current_step=current_step,
+                runtime=runtime,
+                reason=feedback_delivery_rejection,
+                delivery=feedback_delivery,
+            )
+
         return None
 
     def _reject_feedback_delivery(
@@ -5478,6 +5541,8 @@ class BlackboardWorkflowRuntime:
         )
         if artifact is None or artifact.updated_by != current_step:
             return None
+        if self._has_noncompletion_feedback_handoff(contract, artifact):
+            return None
         if self._has_empty_feedback_batch(current_step=current_step):
             return None
         # The durable artifact and outbound baton remain a recovery boundary even
@@ -5536,6 +5601,42 @@ class BlackboardWorkflowRuntime:
             if validated is not None:
                 return None
         return current_step, delivery_id if isinstance(delivery_id, str) else None
+
+    def _has_noncompletion_feedback_handoff(
+        self, contract: HandoffContract, artifact: ArtifactEntry
+    ) -> bool:
+        """A committed consumer correction is not an unfinished curator delivery."""
+        if self.blackboard.current_step != contract.to_step:
+            return False
+        transition = next(
+            (
+                event
+                for event in reversed(self.blackboard.events)
+                if event.event_type == "transition"
+            ),
+            None,
+        )
+        if transition is None or (
+            transition.data.get("from") != contract.from_step
+            or transition.data.get("to") != contract.to_step
+            or transition.data.get("transition_intent") != HandoffIntent.MANUAL_HANDOFF.value
+            or transition.data.get("source_artifact") != artifact.to_dict()
+        ):
+            return False
+        output = Path(artifact.path)
+        if not output.is_absolute():
+            output = self.issue_dir.parents[2] / output
+        try:
+            context = load_restart_context(output.parent / "iteration.json")
+            return (
+                output.resolve().is_relative_to(self.issue_dir.resolve())
+                and context.get("agent_invoked") is True
+                and bool(context.get("end_time"))
+                and sha256_bytes(output.read_bytes()) == artifact.content_sha256
+                and has_causal_feedback_projection(self.issue_dir, output)
+            )
+        except (OSError, ValueError, TypeError):
+            return False
 
     def _has_empty_feedback_batch(self, *, current_step: str) -> bool:
         """Prove this artifact belongs to an invoked, feedback-free iteration.
@@ -5953,45 +6054,10 @@ class BlackboardWorkflowRuntime:
                         completed=False,
                     )
 
-            feedback_delivery = self._prepare_feedback_delivery(
-                current_step=current_step,
-                frame=frame,
-                contract=contract,
-            )
-            if (
-                feedback_delivery is None
-                and getattr(frame.execution_result, "agent_invoked", False)
-                and frame.feedback_batch_error is None
-                and frame.feedback_batch_provided
-                and frame.pending_feedback
-                and self._feedback_delivery_required(current_step=current_step)
-            ):
-                return self._reject_feedback_delivery(
-                    current_step=current_step,
-                    runtime=runtime_label,
-                    reason="the curated artifact identity could not be durably recorded",
-                )
-            feedback_delivery_rejection = self._commit_delivered_feedback(
-                current_step=current_step,
-                frame=frame,
-                delivery_id=(
-                    str(feedback_delivery["delivery_id"])
-                    if feedback_delivery is not None
-                    else None
-                ),
-                expected_artifact_sha256=(
-                    str(feedback_delivery["artifact"]["sha256"])
-                    if feedback_delivery is not None
-                    else None
-                ),
-            )
-            if feedback_delivery_rejection is not None:
-                return self._reject_feedback_delivery(
-                    current_step=current_step,
-                    runtime=runtime_label,
-                    reason=feedback_delivery_rejection,
-                    delivery=feedback_delivery,
-                )
+            feedback_rejection = self._finalize_feedback_delivery(
+                current_step=current_step, frame=frame, contract=contract, runtime=runtime_label)
+            if feedback_rejection is not None:
+                return feedback_rejection
 
             completion = self._record_step_completion(
                 event_type=completion_event_type, current_step=current_step,
@@ -6255,6 +6321,11 @@ class BlackboardWorkflowRuntime:
                     post_contract.status_code or f"BATON_{post_contract.intent.value.upper()}"
                 )
                 last_status_code = status_code
+                feedback_rejection = self._finalize_feedback_delivery(
+                    current_step=current_step, frame=frame, contract=post_contract,
+                    runtime=runtime_label)
+                if feedback_rejection is not None:
+                    return feedback_rejection
                 completion = self._record_step_completion(
                     event_type=completion_event_type,
                     current_step=current_step,
@@ -6382,6 +6453,13 @@ class BlackboardWorkflowRuntime:
                 handoff_transition_source = "terminal"
                 status_code = status_code_obj.value
                 last_status_code = status_code
+
+            if post_contract is not None:
+                feedback_rejection = self._finalize_feedback_delivery(
+                    current_step=current_step, frame=frame, contract=post_contract,
+                    runtime=runtime_label)
+                if feedback_rejection is not None:
+                    return feedback_rejection
 
             completion = self._record_step_completion(
                 event_type=completion_event_type,
