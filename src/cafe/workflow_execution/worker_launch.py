@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from cafe.core.packet_io import atomic_write_bytes
+from cafe.utils.issue_paths import issue_name_from_dir
 
 try:
     import fcntl
@@ -311,7 +312,7 @@ class FixedWorkerLauncher:
             "workflow",
             "--execute",
             "--issue",
-            self.issue_dir.name,
+            issue_name_from_dir(self.issue_dir),
             "--internal-worker-id",
             worker_id,
             "--internal-worker-token",
