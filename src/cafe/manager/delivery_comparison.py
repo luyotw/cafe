@@ -16,6 +16,7 @@ from cafe.core.task_inbox import TaskInboxError, TaskInboxService
 from cafe.skills.loader import SkillLoader
 from cafe.skills.selectors import resolve_skill_selector
 from cafe.skills.workflow_composition import resolve_step_workflow_composition
+from cafe.utils.issue_paths import issue_project_root
 
 from ._store import load_contract, select_authority_directory
 from .api import ManagerEntryRequest, Freshness, evaluate_manager_entry
@@ -262,7 +263,7 @@ def comparison_packet_from_contract(
         task_declared = False
         if isinstance(boundary["task_id"], str) and boundary["task_id"]:
             try:
-                detail = TaskInboxService(issue_dir.parent.parent).inspect_read_only(
+                detail = TaskInboxService(issue_project_root(issue_dir) / ".cafe").inspect_read_only(
                     boundary["task_id"]
                 )
             except TaskInboxError:
