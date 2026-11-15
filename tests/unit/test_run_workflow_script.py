@@ -1047,3 +1047,41 @@ def test_the_directive_matches_a_legacy_contract_snapshot_on_resume(
     assert directive["conversation_locale"] == contract["locales"]["conversation"]
     assert directive["conversation_locale"] == {"value": "en-US", "source": "fallback"}
     assert (issue_dir / "blackboard.json").read_bytes() == before
+
+
+@pytest.mark.parametrize("issue_name", ["codex/issue119", "team/codex/issue119"])
+def test_nested_issue_launch_preserves_identity(tmp_path, monkeypatch, issue_name):
+    module = _module()
+    original = _prepared(tmp_path)
+    nested = tmp_path / ".cafe/issues" / issue_name
+    nested.parent.mkdir(parents=True)
+    original.rename(nested)
+    contract = _contract("unattended", tmp_path)
+    contract["identity"]["issue_name"] = issue_name
+    _install_contract_stubs(monkeypatch, module, contract)
+    args = _args("unattended")
+    args[1] = issue_name
+    launched = []
+    assert module.run(args, cwd=tmp_path, process_factory=lambda argv, **kw:
+                      (launched.append(argv) or _Process())) == 0
+    assert launched[0][launched[0].index("--issue") + 1] == issue_name
+
+
+@pytest.mark.parametrize("issue_name", ["../escape", "/absolute", "codex//issue", "codex/../issue",
+                                         "codex/./issue", "codex/", "codex\\issue"])
+def test_unsafe_issue_never_launches(tmp_path, issue_name):
+    module = _module()
+    args = _args("unattended")
+    args[1] = issue_name
+    assert module.run(args, cwd=tmp_path, process_factory=lambda *a, **kw:
+                      pytest.fail("unsafe issue must not launch")) == 2
+
+
+def test_namespace_symlink_never_launches(tmp_path):
+    module = _module()
+    _prepared(tmp_path)
+    (tmp_path / ".cafe/issues/codex").symlink_to(tmp_path / ".cafe/issues", target_is_directory=True)
+    args = _args("unattended")
+    args[1] = "codex/issue498"
+    assert module.run(args, cwd=tmp_path, process_factory=lambda *a, **kw:
+                      pytest.fail("namespace symlink must not launch")) == 2

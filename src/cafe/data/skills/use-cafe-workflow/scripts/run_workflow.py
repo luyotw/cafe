@@ -65,6 +65,7 @@ from cafe.manager import (  # noqa: E402
     event_callback_projection,
 )
 from cafe.manager._store import load_contract  # noqa: E402
+from cafe.utils.issue_paths import validate_issue_name, validate_issue_directory  # noqa: E402
 from cafe.workflow_execution.event_callback import (  # noqa: E402
     resolve_builtin_workflow_event_callback,
 )
@@ -165,6 +166,7 @@ def _mapping_json(value: str) -> dict[str, Any]:
 
 
 def _prepared_workflow(issue_dir: Path) -> dict[str, Any]:
+    validate_issue_directory(issue_dir)
     path = issue_dir / "blackboard.json"
     for parent in (issue_dir.parent.parent, issue_dir.parent, issue_dir):
         try:
@@ -543,7 +545,7 @@ def run(
         if args.manager_mode is None and args.legacy_manager_mode is None:
             raise ValueError("--manager-mode is required")
         interpreter = _validated_host_interpreter()
-        issue_name = _validate_identifier(args.issue, "issue name")
+        issue_name = validate_issue_name(args.issue)
         playbook = _validate_identifier(args.playbook, "playbook name")
         project_root = Path(cwd or Path.cwd()).resolve()
         issue_dir = project_root / ".cafe" / "issues" / issue_name

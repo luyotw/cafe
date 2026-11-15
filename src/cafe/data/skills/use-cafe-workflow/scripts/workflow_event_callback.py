@@ -41,6 +41,9 @@ from cafe.core.task_inbox import TaskInboxError, TaskInboxService
 from cafe.core.types import AgentCLI, AgentConfig, SessionData
 from cafe.core.workflow_runtime import resolve_human_task_notification_repository_root
 from cafe.utils.yaml_utils import SafeLoader
+from cafe.utils.issue_paths import (
+    issue_name_from_dir, validate_issue_name, validate_issue_directory,
+)
 
 try:
     import fcntl
@@ -309,7 +312,7 @@ def write_config(
             api.event_callback_projection(
                 api.EventCallbackRequest(
                     issue_dir=issue_dir,
-                    issue_name=issue_dir.name,
+                    issue_name=issue_name_from_dir(issue_dir),
                     workflow_id=_prepared_workflow_id(issue_dir),
                 )
             )
@@ -1154,7 +1157,7 @@ def read_chat_session(issue_dir: Path, *, workflow_id: str) -> dict[str, Any]:
     from cafe.agents.transport_types import _validated_evidence_scalar
 
     config = _contract_callback_config(
-        issue_dir=issue_dir, issue_name=issue_dir.name, workflow_id=workflow_id,
+        issue_dir=issue_dir, issue_name=issue_name_from_dir(issue_dir), workflow_id=workflow_id,
     )
     if config is None:
         raise ValueError("unsupported_mode")
@@ -1214,7 +1217,7 @@ def read_status(issue_dir: Path) -> dict[str, Any]:
     try:
         config = _contract_callback_config(
             issue_dir=issue_dir,
-            issue_name=issue_dir.name,
+            issue_name=issue_name_from_dir(issue_dir),
             workflow_id=_prepared_workflow_id(issue_dir),
         )
     except ValueError as exc:
@@ -1497,7 +1500,7 @@ def _callback_usage_sink(manager_dir: Path, event: dict[str, Any], repository_ro
     from cafe.manager.costs import manager_usage_sink
 
     workflow_id = event.get("workflow_id") or _prepared_workflow_id(manager_dir.parent)
-    return manager_usage_sink(repository_root, manager_dir.parent.name, workflow_id,
+    return manager_usage_sink(repository_root, issue_name_from_dir(manager_dir.parent), workflow_id,
                               f"callback:{event['event_id']}")
 
 
@@ -1813,7 +1816,7 @@ def _with_current_task_authority(
         return event
     try:
         detail = TaskInboxService(repository_root / ".cafe").inspect_read_only(task_id)
-        if detail.issue != issue_dir.name or detail.status != "pending":
+        if detail.issue != issue_name_from_dir(issue_dir) or detail.status != "pending":
             return event
         facts = inspect_task_authority(issue_dir, task_id)
     except (TaskInboxError, OSError, ValueError):
@@ -2565,6 +2568,7 @@ def run_callback(event: dict[str, Any], *, repository_root: Path) -> None:
     if not isinstance(workflow_id, str) or not workflow_id:
         raise ValueError("workflow event callback has an invalid workflow ID")
     issue_dir = repository_root / ".cafe" / "issues" / issue_name
+    validate_issue_directory(issue_dir)
     manager_dir = _manager_dir(issue_dir)
     with _session_lock(manager_dir):
         config = _contract_callback_config(
@@ -2796,9 +2800,10 @@ def _callback_error_code(error: Exception) -> str:
 def _validated_issue_name(event: dict[str, Any]) -> str:
     """Return one safe issue directory name shared by execution and reporting."""
     issue = event.get("issue")
-    if not isinstance(issue, str) or not issue or Path(issue).name != issue:
-        raise InvalidWorkflowEventError("workflow event callback has an invalid issue")
-    return issue
+    try:
+        return validate_issue_name(issue)
+    except ValueError as exc:
+        raise InvalidWorkflowEventError("workflow event callback has an invalid issue") from exc
 
 
 def _callback_failure_key(event: dict[str, Any], *, error_code: str) -> str:

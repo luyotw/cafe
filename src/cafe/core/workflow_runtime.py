@@ -6,6 +6,7 @@ primary source of truth for step transitions.
 
 from __future__ import annotations
 
+from cafe.utils.issue_paths import issue_name_from_dir, issue_project_root
 from cafe.core.workflow_control import current_control, check_control, controlled_boundary, SupervisorCorrection, apply_correction
 
 import inspect
@@ -190,11 +191,8 @@ def _linked_worktree_canonical_root(active_root: Path) -> Path:
 def resolve_human_task_notification_repository_root(issue_dir: Path) -> Path:
     """Return the canonical repository identity used for HumanTask delivery."""
     resolved_issue_dir = Path(issue_dir).resolve()
-    if (
-        resolved_issue_dir.parent.name == "issues"
-        and resolved_issue_dir.parent.parent.name == ".cafe"
-    ):
-        active_root = resolved_issue_dir.parent.parent.parent
+    active_root = issue_project_root(resolved_issue_dir)
+    if active_root != resolved_issue_dir.parent:
         return _linked_worktree_canonical_root(active_root)
     return resolved_issue_dir.parent
 
@@ -289,7 +287,7 @@ class HumanTaskNotificationDispatcher:
         """Return the closed safe payload shared by receipts and capability requests."""
         return {
             "repository": sanitize_human_task_metadata(self._repository_root().resolve().name),
-            "issue": sanitize_human_task_metadata(self.issue_dir.name),
+            "issue": sanitize_human_task_metadata(issue_name_from_dir(self.issue_dir)),
             "workflow_id": sanitize_human_task_metadata(task.workflow_id),
             "task_id": sanitize_human_task_metadata(task.id),
             "step": sanitize_human_task_metadata(task.step),
@@ -957,8 +955,8 @@ class BlackboardWorkflowRuntime:
         )
         status_code = contract.status_code or f"BATON_{contract.intent.value.upper()}"
         if current_step == "done":
-            cafe_dir = self.issue_dir.parent.parent
-            clear_marker_if_matches(cafe_dir, self.issue_dir.name)
+            cafe_dir = issue_project_root(self.issue_dir) / ".cafe"
+            clear_marker_if_matches(cafe_dir, issue_name_from_dir(self.issue_dir))
         return PlaybookRunResult(
             final_step=contract.from_step,
             final_status_code=status_code,
@@ -2408,7 +2406,7 @@ class BlackboardWorkflowRuntime:
         else:
             from cafe.skills.loader import SkillLoader
             policy, binding = resolve_step_human_task(playbook_data=self.playbook, step_name=current_step,
-                trigger=result.intent, iteration=task.iteration, skill_loader=SkillLoader(project_root=self.issue_dir.parents[2]))
+                trigger=result.intent, iteration=task.iteration, skill_loader=SkillLoader(project_root=issue_project_root(self.issue_dir)))
             policy = policy.for_locale(self.blackboard.conversation_locale)
             if (task.trigger != result.intent or task.policy_id != policy.id
                     or task.expected_result != policy.model_dump(mode="json") or task.continuations != binding.outcomes):
@@ -3596,7 +3594,7 @@ class BlackboardWorkflowRuntime:
             if artifact.updated_by != current_step or not artifact.path:
                 continue
             path = Path(artifact.path)
-            if not path.is_absolute(): path = self.issue_dir.parents[2] / path
+            if not path.is_absolute(): path = issue_project_root(self.issue_dir) / path
             if path.is_symlink() or not path.is_file():
                 raise RuntimeError("Completion artifact is unavailable")
             original = path.stat()
@@ -3740,7 +3738,7 @@ class BlackboardWorkflowRuntime:
             return
         event: Dict[str, Any] = {
             "workflow_id": self.blackboard.workflow_id,
-            "issue": self.issue_dir.name,
+            "issue": issue_name_from_dir(self.issue_dir),
             "event_type": event_type,
         }
         for event_field in (
@@ -4257,8 +4255,8 @@ class BlackboardWorkflowRuntime:
             },
             baton_contract=baton_contract,
         )
-        cafe_dir = self.issue_dir.parent.parent
-        clear_marker_if_matches(cafe_dir, self.issue_dir.name)
+        cafe_dir = issue_project_root(self.issue_dir) / ".cafe"
+        clear_marker_if_matches(cafe_dir, issue_name_from_dir(self.issue_dir))
         if not self._flush_phase_terminal(event_type="workflow_completed"):
             self._dispatch_workflow_event(
                 "workflow_completed",
@@ -5625,7 +5623,7 @@ class BlackboardWorkflowRuntime:
             return False
         output = Path(artifact.path)
         if not output.is_absolute():
-            output = self.issue_dir.parents[2] / output
+            output = issue_project_root(self.issue_dir) / output
         try:
             context = load_restart_context(output.parent / "iteration.json")
             return (

@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, List, Optional
 import typer
 from rich.console import Console
 
+from cafe.utils.issue_paths import issue_name_from_dir
 from cafe.core.blackboard import (
     BlackboardStore,
     HandoffIntent,
@@ -1473,7 +1474,7 @@ def _record_execution_failure(
             "error": type(error).__name__, "reason": "startup_failed", "worker_id": worker_id,
         })
         event = store.prepare_workflow_callback_event(state, {
-            "workflow_id": state.workflow_id, "issue": issue_dir.name,
+            "workflow_id": state.workflow_id, "issue": issue_name_from_dir(issue_dir),
             "event_type": "workflow_interruption", "step": state.current_step,
             "reason": "startup_failed",
         })

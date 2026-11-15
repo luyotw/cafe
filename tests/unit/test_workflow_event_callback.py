@@ -49,7 +49,8 @@ def test_dispatch_detaches_one_opaque_durable_event(tmp_path: Path, monkeypatch)
     )
 
 
-def test_callback_event_envelope_is_one_way_and_bounded(tmp_path: Path) -> None:
+@pytest.mark.parametrize("issue_name", ["event-envelope", "codex/issue119"])
+def test_callback_event_envelope_is_one_way_and_bounded(tmp_path: Path, issue_name) -> None:
     captured: dict[str, object] = {}
 
     def callback(event: dict[str, object]) -> None:
@@ -58,7 +59,7 @@ def test_callback_event_envelope_is_one_way_and_bounded(tmp_path: Path) -> None:
     from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 
     runtime = BlackboardWorkflowRuntime(
-        issue_dir=tmp_path / ".cafe" / "issues" / "event-envelope",
+        issue_dir=tmp_path / ".cafe" / "issues" / issue_name,
         playbook={"playbook": {"id": "test"}, "steps": {"spec": {}}},
         executor=lambda *_args: None,
         workflow_event_callback=callback,
@@ -71,7 +72,7 @@ def test_callback_event_envelope_is_one_way_and_bounded(tmp_path: Path) -> None:
 
     assert captured.items() >= {
         "workflow_id": runtime.blackboard.workflow_id,
-        "issue": "event-envelope",
+        "issue": issue_name,
         "event_type": "phase_terminal",
         "step": "spec",
         "status_code": "ok",
@@ -126,3 +127,10 @@ def test_callback_event_identity_is_monotonic_and_reused_on_replay(tmp_path: Pat
 def test_only_builtin_skill_callbacks_are_trusted(tmp_path: Path) -> None:
     with pytest.raises(WorkflowEventCallbackError, match="builtin"):
         resolve_builtin_workflow_event_callback("/tmp/untrusted.py", project_root=tmp_path)
+
+
+def test_nested_issue_notification_root_is_repository(tmp_path):
+    from cafe.core.workflow_runtime import resolve_human_task_notification_repository_root
+    assert resolve_human_task_notification_repository_root(
+        tmp_path / ".cafe/issues/codex/issue119"
+    ) == tmp_path.resolve()
