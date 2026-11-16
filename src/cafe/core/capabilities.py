@@ -32,6 +32,7 @@ from pydantic import (
 from cafe.core.execution_boundary import redact
 from cafe.core.human_task_notifications import NotificationPresentation
 from cafe.utils.github import GitHubOps
+from cafe.utils.issue_paths import validate_issue_name
 from cafe.utils.yaml_utils import safe_load
 
 CAPABILITY_PR_PUBLISH_ID = "cafe.pr.publish"
@@ -295,6 +296,22 @@ def _matches_effect_boundary(requested: CapabilityEffects, allowed: CapabilityEf
     )
 
 
+def _pr_publish_issue_dir(output_path: Path) -> str:
+    parts = output_path.parts
+    if (
+        parts[:2] == (".cafe", "issues")
+        and len(parts) >= 6
+        and re.fullmatch(r"iteration_[0-9]+", parts[-2])
+    ):
+        # <issue>/<step>/<iteration>/<artifact>, including namespaced issues.
+        issue_name = validate_issue_name("/".join(parts[2:-3]))
+        return (Path(".cafe", "issues") / issue_name).as_posix()
+    if "issues" in parts:
+        # Preserve the flat boundary for legacy requests outside iteration layout.
+        return Path(*parts[: parts.index("issues") + 2]).as_posix()
+    return ""
+
+
 def _resolve_boundary_tokens(
     manifest: CapabilityManifest, request: ExecutionRequest
 ) -> tuple[CapabilityEffects, Mapping[str, Tuple[str, ...]]]:
@@ -316,12 +333,10 @@ def _resolve_boundary_tokens(
         if output_path.is_absolute() or ".." in output_path.parts:
             return CapabilityEffects(writes=(), network_destinations=(), browser_open=()), {}
         replacements["request_output"] = output
-        parts = output_path.parts
         try:
-            issue_index = parts.index("issues")
-            replacements["issue_dir"] = str(Path(*parts[: issue_index + 2]))
-        except (ValueError, IndexError):
-            replacements["issue_dir"] = ""
+            replacements["issue_dir"] = _pr_publish_issue_dir(output_path)
+        except ValueError:
+            return CapabilityEffects(writes=(), network_destinations=(), browser_open=()), {}
     elif manifest.id == CAPABILITY_ISSUE_COMMENT_ID:
         issue_id = str(request.args.get("issue_id") or "").strip()
         if issue_id:
@@ -859,11 +874,9 @@ def _normalize_legacy_pr_request(request: Mapping[str, Any]) -> Dict[str, Any]:
         raw_args = normalized.get("args")
         args = raw_args if isinstance(raw_args, Mapping) else {}
         output = str(args.get("output") or "")
-        output_parts = Path(output).parts
         try:
-            issue_index = output_parts.index("issues")
-            issue_dir = str(Path(*output_parts[: issue_index + 2]))
-        except (ValueError, IndexError):
+            issue_dir = _pr_publish_issue_dir(Path(output))
+        except ValueError:
             issue_dir = ""
         writes = [value for value in (output, ".git", issue_dir) if value]
         network = ["github.com", "api.github.com"]
