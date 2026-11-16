@@ -15,6 +15,7 @@ from cafe.core.workspace_artifact import verify_workspace_artifact
 from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 from cafe.delivery.contracts import ActionSnapshot, digest
 from cafe.delivery.operations import Commands
+from cafe.utils.issue_paths import issue_project_root
 
 
 def read_bounded(path):
@@ -70,7 +71,7 @@ def build_result(issue_dir, state, step_definition, binding, step, iteration, ou
     if not requested(output):
         raise ValueError("explicit local-only delivery request is missing")
     _require_no_actions(issue_dir, state.workflow_id, binding)
-    root = issue_dir.resolve().parents[2]
+    root = issue_project_root(issue_dir.resolve())
     commands = Commands(15)
     workspace_name = step_definition.get("workspace_input_artifact")
     required = {workspace_name, binding.publication_artifact}

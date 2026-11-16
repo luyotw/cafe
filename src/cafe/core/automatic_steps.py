@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 from pathlib import Path
 
+from cafe.utils.issue_paths import issue_project_root
+
 
 @dataclass(frozen=True)
 class AutomaticExecutionResult:
@@ -31,7 +33,7 @@ class AutomaticExecutionContext:
 
     @property
     def project_root(self) -> Path:
-        return self.issue_dir.resolve().parents[2]
+        return issue_project_root(self.issue_dir.resolve())
 
 
 class AutomaticExecutorRegistry:

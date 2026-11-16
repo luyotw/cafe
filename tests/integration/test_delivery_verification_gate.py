@@ -22,13 +22,14 @@ def configure(path, state="completed", conclusion="success", attempt=1):
     path.write_text(json.dumps(data))
 
 
-def context(local_action, tmp_path, fake_github, monkeypatch):
+def context(local_action, tmp_path, fake_github, monkeypatch, *, issue_name="journey"):
     configure(fake_github, "queued", None)
     ctx = journey.setup_action(
         local_action,
         tmp_path,
         github=True,
         verification=verification_plan(),
+        issue_name=issue_name,
     )
     assert "Post-integration verification:" in ctx[8].prompt
     journey.approve_action(ctx)
@@ -39,13 +40,15 @@ def prepare(ctx):
     return journey.hook(ctx[6], "prepare_input", "DevelopmentDeliveryExecutor", ctx[7])
 
 
+@pytest.mark.parametrize("issue_name", ["journey", "codex/ship"])
 def test_pending_checks_wait_then_complete_without_remerging(
     local_action,
     tmp_path,
     fake_github,
     monkeypatch,
+    issue_name,
 ):
-    ctx = context(local_action, tmp_path, fake_github, monkeypatch)
+    ctx = context(local_action, tmp_path, fake_github, monkeypatch, issue_name=issue_name)
     with pytest.raises(StepWaiting):
         prepare(ctx)
     report = json.loads(next((ctx[2] / "delivery").glob("*/result.json")).read_text())

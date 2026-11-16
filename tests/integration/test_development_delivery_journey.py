@@ -105,12 +105,13 @@ def setup_action(
     bundled=True,
     verification=None,
     prepare_review=True,
+    issue_name="journey",
 ):
     root, dest, _, local = local_action
     data = graph(root, renamed=renamed, playbook=playbook)
     publication, delivery = ("package", "ship") if renamed else ("pr", "deliver")
     approval = delivery
-    issue = root / ".cafe" / "issues" / "journey"
+    issue = root / ".cafe" / "issues" / issue_name
     issue.mkdir(parents=True)
     output = issue / approval / "iteration_001" / "output.md"
     output.parent.mkdir(parents=True)
