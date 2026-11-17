@@ -9382,6 +9382,13 @@ workflow:
 def test_custom_topology_generation_and_completion_pin_causal_source(
     tmp_path: Path,
 ) -> None:
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "CAFE test"], check=True)
+    (tmp_path / ".gitignore").write_text(".cafe/\nglobal/\n", encoding="utf-8")
+    (tmp_path / "product.py").write_text("fixed = True\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(tmp_path), "add", ".gitignore", "product.py"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "Fix requested behavior"], check=True)
     issue_dir = tmp_path / ".cafe" / "issues" / "custom-topology"
     ledger = WorkflowFeedbackLedger(issue_dir)
     _created, feedback = ledger.record(
@@ -9495,11 +9502,10 @@ workflow:
     evidence_commit = subprocess.check_output(
         [
             "git",
-            "log",
-            "-1",
-            "--format=%H",
-            "--",
-            "tests/unit/test_generic_workflow_step.py",
+            "-C",
+            str(tmp_path),
+            "rev-parse",
+            "HEAD",
         ],
         text=True,
     ).strip()
@@ -9512,37 +9518,26 @@ workflow:
     output.write_text(
         f"## Todo Progress\n\n### {item.item_id}\n\n- Status: completed\n"
         f"- Source fingerprint: `{item.fingerprint}`\n"
-        "- Files: `tests/unit/test_generic_workflow_step.py`\n"
+        "- Files: `product.py`\n"
         f"- Commit: `{evidence_commit}`\n"
         "- Targeted evidence: ran the unit tests\n"
         "- Remaining work: None.\n- Next action: Review.\n",
         encoding="utf-8",
     )
-    # This test validates against the CAFE worktree itself, which is dirty while
-    # the suite runs. Report only the clean-worktree probe as clean; the Files and
-    # Commit queries still hit the real repository.
-    real_git = checklist_validator._git
+    assert executor._validate_projected_todo_completion(checklist)
 
-    def clean_status_git(root, *args):
-        if args[:1] == ("status",):
-            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
-        return real_git(root, *args)
+    valid_output = output.read_text(encoding="utf-8")
+    output.write_text("## Todo Progress\n\n- malformed ledger\n", encoding="utf-8")
+    passed, detail = executor._validate_projected_todo_completion_detail(checklist)
+    assert passed is False
+    assert "Todo ledger item set does not match the authoritative set" in detail
+    assert f"### {item.item_id}" in detail
+    assert f"- Source fingerprint: `{item.fingerprint}`" in detail
+    assert "- Commit: `<full 40-character commit SHA>`" in detail
+    output.write_text(valid_output, encoding="utf-8")
 
-    with patch.object(checklist_validator, "_git", side_effect=clean_status_git):
-        assert executor._validate_projected_todo_completion(checklist)
-
-        valid_output = output.read_text(encoding="utf-8")
-        output.write_text("## Todo Progress\n\n- malformed ledger\n", encoding="utf-8")
-        passed, detail = executor._validate_projected_todo_completion_detail(checklist)
-        assert passed is False
-        assert "Todo ledger item set does not match the authoritative set" in detail
-        assert f"### {item.item_id}" in detail
-        assert f"- Source fingerprint: `{item.fingerprint}`" in detail
-        assert "- Commit: `<full 40-character commit SHA>`" in detail
-        output.write_text(valid_output, encoding="utf-8")
-
-        ledger.path.write_text('{"version": 1, "entries": []}\n', encoding="utf-8")
-        assert not executor._validate_projected_todo_completion(checklist)
+    ledger.path.write_text('{"version": 1, "entries": []}\n', encoding="utf-8")
+    assert not executor._validate_projected_todo_completion(checklist)
 
 
 @pytest.mark.parametrize("stored_locale", ["zh-TW", None])

@@ -4337,6 +4337,12 @@ class GenericWorkflowStepExecutor(Phase):
         if not artifacts:
             return artifacts
 
+        def source_path(entry: Any) -> Path:
+            path = Path(str(getattr(entry, "path", entry)))
+            if issue_dir is not None and not path.is_absolute():
+                return issue_project_root(issue_dir) / path
+            return path
+
         transition = next(
             (
                 event
@@ -4374,7 +4380,17 @@ class GenericWorkflowStepExecutor(Phase):
             and (state.handoff_contract is None or state.handoff_contract.from_step
                  in {state.current_step, inbound.step})
         )
-        if delivery_recovery:
+        inbound_feedback = (
+            inbound is not None
+            and inbound.event_type == "human_task_completed"
+            and any(
+                isinstance(binding, Mapping)
+                and binding.get("task_id") == inbound.data.get("task_id")
+                and binding.get("feedback_delivery") is not None
+                for binding in (steps.get(inbound.step, {}) or {}).get("human_tasks", ()) or ()
+            )
+        )
+        if delivery_recovery or inbound_feedback:
             from_step = inbound.step
         producer = steps.get(from_step, {})
         direct_artifact = producer.get("output_artifact") if isinstance(producer, Mapping) else None
@@ -4420,7 +4436,7 @@ class GenericWorkflowStepExecutor(Phase):
                 else None
             )
             authorized_path = (
-                Path(str(authorized_artifact.get("path"))).resolve()
+                source_path(authorized_artifact.get("path")).resolve()
                 if isinstance(authorized_artifact, Mapping)
                 and authorized_artifact.get("path")
                 else None
@@ -4444,7 +4460,7 @@ class GenericWorkflowStepExecutor(Phase):
                 raise ValueError(
                     "Persisted correction handoff does not bind a complete source artifact"
                 )
-            selected_path = Path(str(getattr(selected, "path", selected)))
+            selected_path = source_path(selected)
             candidates: list[tuple[int, Path, str]] = []
             phase_dir = selected_path.parent.parent
             iteration_dirs = (
@@ -4463,7 +4479,7 @@ class GenericWorkflowStepExecutor(Phase):
                 if (
                     record.name != route_artifact
                     or record.updated_by != from_step
-                    or Path(record.path).resolve() != output_path.resolve()
+                    or source_path(record).resolve() != output_path.resolve()
                     or not record.content_sha256
                     or not output_path.is_file()
                     or output_path.stat().st_size > 256 * 1024
@@ -4472,7 +4488,7 @@ class GenericWorkflowStepExecutor(Phase):
                 if authorized_artifact is not None and (
                     record.name != authorized_name
                     or record.version != authorized_version
-                    or Path(record.path).resolve() != authorized_path
+                    or source_path(record).resolve() != authorized_path
                     or record.content_sha256 != authorized_digest
                 ):
                     continue
@@ -4544,7 +4560,7 @@ class GenericWorkflowStepExecutor(Phase):
                     routes.append({key: str(value) for key, value in values.items()})
 
         delivered: tuple[str, ...] | None = None
-        feedback_edge = inbound if delivery_recovery else transition
+        feedback_edge = inbound if delivery_recovery or inbound_feedback else transition
         if feedback_edge is not None:
             event = next(
                 (
@@ -4617,7 +4633,7 @@ class GenericWorkflowStepExecutor(Phase):
                 try:
                     if human_task_identities is None:
                         human_task_identities = workflow_feedback_matching_identities(
-                            Path(str(getattr(workflow_entry, "path", workflow_entry))),
+                            source_path(workflow_entry),
                             target_step=state.current_step,
                             source_kind=selected_route["source_kind"],
                             identity_prefix=(
@@ -4664,7 +4680,7 @@ class GenericWorkflowStepExecutor(Phase):
                     raise ValueError("Correction Todo ID prefix mapping is ambiguous")
             try:
                 workflow_items = workflow_feedback_todo_items(
-                    Path(str(getattr(workflow_entry, "path", workflow_entry))),
+                    source_path(workflow_entry),
                     target_step=state.current_step,
                     source_by_kind=source_by_kind,
                     id_prefix_by_kind=id_prefix_by_kind,
@@ -5325,6 +5341,7 @@ class GenericWorkflowStepExecutor(Phase):
         state = BlackboardStore(self.issue_dir).load_or_create(self.phase_name)
         step_def = self.playbook["steps"][self.phase_name]
         artifacts = self._step_input_artifacts(step_def, state)
+        root = issue_project_root(self.issue_dir)
         expected = []
         for binding in materialized.projections:
             name = binding["declaration_artifact"]
@@ -5345,8 +5362,11 @@ class GenericWorkflowStepExecutor(Phase):
                     != binding["artifact"]
                 ):
                     return False, f"{label} source binding changed; rebuild the checklist."
+                source = Path(binding["path"])
+                if not source.is_absolute():
+                    source = root / source
                 if (
-                    hashlib.sha256(Path(binding["path"]).read_bytes()).hexdigest()
+                    hashlib.sha256(source.read_bytes()).hexdigest()
                     != binding["content_sha256"]
                 ):
                     return False, f"{label} source content changed; rebuild the checklist."
@@ -5365,7 +5385,7 @@ class GenericWorkflowStepExecutor(Phase):
                 return False, f"{label} is invalid: {exc}"
         output_path = self._get_versioned_file_path(self.phase_name, self.iteration, self.phase_dir)
         errors = validate_projected_todos(
-            checklist_path, output_path, tuple(expected), repo_root=get_git_toplevel()
+            checklist_path, output_path, tuple(expected), repo_root=root
         )
         return self._projected_todo_validation_detail(expected, errors)
 
