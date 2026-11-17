@@ -171,7 +171,7 @@ class TestCloseCommand:
             if linked:
                 config["worktree_path"] = str(source)
             (issue / "issue.yaml").write_text(yaml.safe_dump(config))
-            snapshot = {"source_oid": "a" * 40, "target_oid": "b" * 40}
+            snapshot = {"source_oid": "a" * 40, "target_oid": "b" * 40, "target": "main"}
             git = MagicMock(spec=GitOperations)
             git.get_current_branch.return_value = "test-issue"
             git.cleanup_snapshot.return_value = snapshot

@@ -13,6 +13,10 @@ All notable changes to this project will be documented in this file.
 - Carry delivery recovery feedback and To-dos back into development. Prepare
   the first context packet when an approved fresh-session retry follows a
   correction preparation failure.
+- Use the latest workflow handoff for correction feedback and resolve its source
+  paths from the issue's project root.
+- Resolve remote-tracking base branches correctly when `cafe close` verifies
+  integration and cleans up a worktree.
 - Avoid false Codex subagent overlap and coverage gaps caused by inherited
   turns and fork journal headers. Report missing descendant evidence accurately.
 
