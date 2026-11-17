@@ -639,8 +639,16 @@ def test_revised_selection_reconciles_earlier_unknown_before_new_effects(
     )
 
 
-def test_delivery_recovery_accepts_declared_mapping_feedback_route(local_action, tmp_path):
-    context = setup_action(local_action, tmp_path)
+@pytest.mark.parametrize("completed_before_upgrade", [False, True])
+def test_delivery_recovery_accepts_declared_mapping_feedback_route(
+    local_action, tmp_path, completed_before_upgrade
+):
+    from copy import deepcopy
+
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+    from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
+
+    context = setup_action(local_action, tmp_path, issue_name="codex/issue119")
     approve_action(context)
     root, dest, issue, state, phase, data, engine, kwargs, task, delivery = context
     phase.iteration = 1
@@ -648,9 +656,15 @@ def test_delivery_recovery_accepts_declared_mapping_feedback_route(local_action,
 
     recovery = _task(kwargs, "Recover the pending integration", trigger="need_clarification")
     pause(issue, state, delivery, HandoffIntent.NEED_CLARIFICATION)
+    task_playbook = data
+    if completed_before_upgrade:
+        task_playbook = deepcopy(data)
+        for binding in task_playbook["steps"][delivery]["human_tasks"]:
+            if binding["task_id"] == recovery.policy_id:
+                binding.pop("feedback_delivery")
     result = apply_human_task_payload(
         issue_dir=issue,
-        playbook_data=data,
+        playbook_data=task_playbook,
         blackboard=state,
         from_step=delivery,
         trigger="need_clarification",
@@ -666,6 +680,26 @@ def test_delivery_recovery_accepts_declared_mapping_feedback_route(local_action,
     assert result.target == data["steps"][delivery]["delivery"]["correction_step"], result.rejection
     assert HumanTaskRecordStore(issue).get_result(recovery.id) is not None
     assert git(dest, "rev-parse", "HEAD") == local_action[3].proposal.target_oid
+
+    ledger = WorkflowFeedbackLedger(issue)
+    if completed_before_upgrade:
+        assert not ledger.load()
+        # The destination owns the baton after a same-step interruption retry.
+        BlackboardStore(issue).update_handoff_contract(
+            state, from_step=result.target, to_step=result.target,
+            to_owner=HandoffOwner.AGENT, intent=HandoffIntent.AWAIT_AGENT, source="human_task.test",
+        )
+    for _ in range(2):
+        state = BlackboardStore(issue).load_read_only()
+        projection = GenericWorkflowStepExecutor._add_causal_todo_artifact(
+            dict(state.artifacts), state, playbook=data, issue_dir=issue,
+        )
+        assert [item.work for item in projection["causal_todo"].items] == [
+            "Retry observation without changing approved actions"
+        ]
+        entry, = ledger.load()
+        assert entry.source_identity == f"delivery:{delivery}:delivery-recovery:{recovery.iteration}"
+        assert state.artifacts["workflow_feedback"].version == 1
 
 
 @pytest.mark.parametrize("renamed", [False, True])
