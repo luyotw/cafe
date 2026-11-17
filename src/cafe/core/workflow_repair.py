@@ -94,12 +94,16 @@ def _snapshot(issue):
 
 
 def _quiescent(issue):
+    from cafe.workflow_execution.worker_launch import worker_abandoned
+
     path = issue / '.workflow-worker-launches.json'
     if not path.exists() and not path.is_symlink(): return
     raw = _json(_read(path, 1_048_576)[0])
     attempts = raw.get('attempts') if isinstance(raw, dict) else None
     if not isinstance(attempts, dict): raise ValueError('worker launch state is uncertain')
     for record in attempts.values():
+        if isinstance(record, dict) and worker_abandoned(record):
+            continue
         if not isinstance(record, dict) or record.get('status') not in {
             'stopped', 'completed', 'startup_failed', 'failed', 'exited'
         }:
