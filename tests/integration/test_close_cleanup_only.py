@@ -86,12 +86,33 @@ def test_unintegrated_close_never_merges_and_retains_source(feature):
     assert_retained(feature)
 
 
-def test_integrated_close_archives_and_removes_without_new_commits(feature, tmp_path):
+@pytest.mark.parametrize(
+    ("configured_base", "target"),
+    [
+        ("develop", "develop"),
+        ("origin/develop", "develop"),
+        ("refs/remotes/origin/develop", "develop"),
+        ("refs/heads/develop", "develop"),
+        ("origin/release/team", "release/team"),
+        ("origin/local-base", "origin/local-base"),
+    ],
+)
+def test_integrated_close_archives_and_removes_without_new_commits(
+    feature, tmp_path, configured_base, target
+):
     source = integrate(feature)
     root, worktree, issue, _, linked = feature
+    if target != "develop":
+        git(root, "branch", target, source)
+        git(root, "push", "origin", f"refs/heads/{target}")
+    config_path = issue / "issue.yaml"
+    config = yaml.safe_load(config_path.read_text())
+    config["base_branch"] = configured_base
+    config_path.write_text(yaml.safe_dump(config))
     result = CliRunner().invoke(app, ["close"])
     assert result.exit_code == 0, result.output
-    assert git(root, "rev-parse", "develop") == source
+    assert git(root, "branch", "--show-current") == target
+    assert git(root, "rev-parse", f"refs/heads/{target}") == source
     assert git(root, "branch", "--list", "feature") == ""
     assert not git(root, "ls-remote", "--heads", "origin", "refs/heads/feature")
     assert not issue.exists()
@@ -237,6 +258,23 @@ def test_offline_local_integration_can_be_cleaned_without_origin(feature):
     result = CliRunner().invoke(app, ["close"])
     assert result.exit_code == 0, result.output
     assert not git(root, "branch", "--list", "feature")
+
+
+def test_remote_tracking_cleanup_requires_the_configured_origin(feature):
+    integrate(feature)
+    root, _, issue, _, _ = feature
+    config_path = issue / "issue.yaml"
+    config = yaml.safe_load(config_path.read_text())
+    config["base_branch"] = "origin/develop"
+    config_path.write_text(yaml.safe_dump(config))
+    git(root, "remote", "rename", "origin", "unrelated")
+
+    result = CliRunner().invoke(app, ["close"])
+
+    assert result.exit_code != 0, result.output
+    assert "cleanup base refers to an unconfigured origin remote" in result.output
+    git(root, "remote", "rename", "unrelated", "origin")
+    assert_retained(feature)
 
 
 def test_different_push_endpoint_cannot_be_cleaned(feature, tmp_path):
