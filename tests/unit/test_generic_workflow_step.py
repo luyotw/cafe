@@ -875,6 +875,7 @@ def test_preparation_cannot_clear_prior_agent_invocation_marker(tmp_path):
 @pytest.mark.parametrize("legacy_workspace", [
     False, True, "native_skill", "native_skill_bad_marker", "native_skill_unknown_error",
     "native_skill_recovery_error", "correction_preparation", "correction_bad_marker",
+    "packet_preparation", "packet_already_materialized",
 ])
 def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
     tmp_path,
@@ -888,6 +889,7 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
 
     native_skill = isinstance(legacy_workspace, str) and legacy_workspace.startswith("native_skill")
     correction_preparation = legacy_workspace in {"correction_preparation", "correction_bad_marker"}
+    packet_preparation = legacy_workspace in {"packet_preparation", "packet_already_materialized"}
     monkeypatch.chdir(tmp_path)
     executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
     executor.phase_name = "spec"
@@ -898,7 +900,8 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
     path = current / "iteration.json"
     path.write_text(
         json.dumps(
-            {"effective_inputs": {}, "workflow_completion_trusted": False}
+            {"workflow_completion_trusted": False}
+            if packet_preparation else {"effective_inputs": {}, "workflow_completion_trusted": False}
             if legacy_workspace else {"agent_invoked": False}
         )
     )
@@ -917,6 +920,22 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
     )
     policy, binding = agent_execution_interrupted_human_task(step_name="spec")
     records = HumanTaskRecordStore(executor.issue_dir)
+    if packet_preparation:
+        previous = records.materialize(
+            workflow_id=state.workflow_id, step="spec", iteration=1,
+            trigger="agent_execution_interrupted", policy_id=policy.id, prompt=policy.prompt,
+            expected_result=policy.model_dump(mode="json"), continuations=binding.outcomes,
+            assignee_type="user", handoff_key="previous-interruption",
+        )
+        records.complete(workflow_id=state.workflow_id, task_id=previous.id, source="command", payload={
+            "task": policy.id, "decision": "retry_fresh_session", "continuation": "spec",
+            "session_continuation": {
+                "policy": "new", "workflow_id": state.workflow_id, "human_task_id": previous.id,
+                "step": "spec", "iteration": 1, "preparation": {"kind": "correction_preparation_failed"},
+            },
+        })
+        if legacy_workspace == "packet_already_materialized":
+            (current / "context_spec_file.json").write_text("{}")
     task = records.materialize(
         workflow_id=state.workflow_id,
         step="spec",
@@ -938,7 +957,7 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
         ),
     )
     if legacy_workspace:
-        if native_skill or correction_preparation:
+        if native_skill or correction_preparation or packet_preparation:
             marker = {
                 "id": state.handoff_contract.created_at,
                 "reason": "agent_error",
@@ -953,8 +972,10 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
             state,
             "step_interrupted",
             {
-                "step": "spec", "attempt": 12 if correction_preparation else 1, "reason": "agent_error",
+                "step": "spec", "attempt": 12 if correction_preparation or packet_preparation else 1,
+                "reason": "agent_error",
                 "detail": (
+                    "Invalid persisted context packet decision" if packet_preparation else
                     "Correction Todo provenance is missing" if correction_preparation else
                     "Skill not found: Unmanaged or changed native skill conflict: "
                     "/repo/.codex/skills/shared. Back up and relocate the entry, "
@@ -972,7 +993,7 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
                 ),
             },
         )
-        if native_skill or correction_preparation:
+        if native_skill or correction_preparation or packet_preparation:
             boards.record_event(
                 state, "agent_interruption_prepared",
                 {"step": "spec", "marker": marker},
@@ -996,11 +1017,21 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
             "--json",
         ],
     )
-    if legacy_workspace in {"native_skill_bad_marker", "native_skill_unknown_error", "correction_bad_marker"}:
+    if legacy_workspace in {
+        "native_skill_bad_marker", "native_skill_unknown_error", "correction_bad_marker", "packet_already_materialized",
+    }:
         assert completed.exit_code != 0
         assert records.get_result(task.id) is None
         return
     assert completed.exit_code == 0, completed.stdout
+    if packet_preparation:
+        assert GenericWorkflowStepExecutor._load_persisted_effective_inputs(
+            current, require_persisted_packet_decision=True, allow_preparation_recovery=True,
+        ) is None
+        with pytest.raises(ValueError, match="context packet decision"):
+            GenericWorkflowStepExecutor._load_persisted_effective_inputs(
+                current, require_persisted_packet_decision=True,
+            )
     if tampered:
         path.write_text(json.dumps({"agent_invoked": True}))
         with pytest.raises(RuntimeError, match="matching preparation evidence"):

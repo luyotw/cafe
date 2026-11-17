@@ -89,6 +89,7 @@ from cafe.core.route_catalog import (
 )
 from cafe.core.session_continuation import (
     CORRECTION_TODO_PROVENANCE_MISSING,
+    INVALID_CONTEXT_PACKET_DECISION,
     SessionContinuation,
     exact_continuation_from_context,
     pre_invocation_recovery_evidence,
@@ -2504,6 +2505,7 @@ class GenericWorkflowStepExecutor(Phase):
         packet_requested_placeholders: frozenset[str] | None = None,
         target_step: str | None = None,
         iteration: int | None = None,
+        allow_preparation_recovery: bool = False,
     ) -> dict[str, dict[str, Any]] | None:
         """Reuse pre-launch packet decisions instead of resolving them during takeover."""
         path = iteration_dir / "iteration.json"
@@ -2512,16 +2514,21 @@ class GenericWorkflowStepExecutor(Phase):
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            raise ValueError("Invalid persisted context packet decision") from exc
+            raise ValueError(INVALID_CONTEXT_PACKET_DECISION) from exc
         if not isinstance(raw, dict):
-            raise ValueError("Invalid persisted context packet decision")
+            raise ValueError(INVALID_CONTEXT_PACKET_DECISION)
         if "effective_inputs" not in raw:
             # The early preparation marker precedes the first packet decision;
             # it is not a persisted decision that can be reused or is missing.
             if raw == {"agent_invoked": False}:
                 return None
+            if (allow_preparation_recovery and raw.get("workflow_completion_trusted") is False
+                    and raw.get("agent_invoked", False) is False
+                    and set(raw) <= {"agent_invoked", "workflow_completion_trusted", "agent_interruption"}
+                    and not any(iteration_dir.glob("context_*.json"))):
+                return None
             if require_persisted_packet_decision:
-                raise ValueError("Invalid persisted context packet decision")
+                raise ValueError(INVALID_CONTEXT_PACKET_DECISION)
             return None
         persisted = raw.get("effective_inputs")
         if isinstance(persisted, dict):
@@ -2535,7 +2542,7 @@ class GenericWorkflowStepExecutor(Phase):
                 target_step=target_step,
                 iteration=iteration,
             )
-        raise ValueError("Invalid persisted context packet decision")
+        raise ValueError(INVALID_CONTEXT_PACKET_DECISION)
 
     @staticmethod
     def _packet_requested_placeholders(
@@ -3478,6 +3485,7 @@ class GenericWorkflowStepExecutor(Phase):
             packet_requested_placeholders=packet_requested_placeholders,
             target_step=step_name,
             iteration=self.iteration,
+            allow_preparation_recovery="preparation" in (getattr(self, "_session_recovery", None) or {}),
         )
         if effective_inputs is None:
             effective_inputs = resolve_effective_prompt_inputs(
