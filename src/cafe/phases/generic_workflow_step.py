@@ -88,6 +88,7 @@ from cafe.core.route_catalog import (
     select_route_label,
 )
 from cafe.core.session_continuation import (
+    CORRECTION_TODO_PROVENANCE_MISSING,
     SessionContinuation,
     exact_continuation_from_context,
     pre_invocation_recovery_evidence,
@@ -4679,7 +4680,7 @@ class GenericWorkflowStepExecutor(Phase):
         if selected is not None and getattr(selected, "updated_by", from_step) != from_step:
             raise ValueError("Correction Todo artifact ownership conflicts with provenance")
         if selected is None and isinstance(direct_artifact, str):
-            raise ValueError("Correction Todo provenance is missing")
+            raise ValueError(CORRECTION_TODO_PROVENANCE_MISSING)
         if selected is None and from_step not in {None, state.current_step}:
             raise ValueError("Correction Todo provenance is unsupported")
         if selected is None:

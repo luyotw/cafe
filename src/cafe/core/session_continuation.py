@@ -11,6 +11,8 @@ from typing import Any, Optional, Sequence
 from cafe.core.audit_events import AuditEventStore
 from cafe.core.types import AgentCLI
 
+CORRECTION_TODO_PROVENANCE_MISSING = "Correction Todo provenance is missing"
+
 
 class SessionContinuationPolicy(str, Enum):
     """How an execution may reuse a persisted CLI session."""
@@ -148,6 +150,12 @@ def pre_invocation_recovery_evidence(
                 and prepared["data"].get("marker") == marker
                 and failure["sequence"] < prepared["sequence"] < task["sequence"]
             )
+        correction_preparation = (
+            "agent_interruption" in context
+            and context.get("workflow_completion_trusted") is False
+            and failure is not None
+            and failure["data"].get("detail") == CORRECTION_TODO_PROVENANCE_MISSING
+        )
         if (
             marker_matches
             and task is not None
@@ -155,7 +163,7 @@ def pre_invocation_recovery_evidence(
             and task["data"].get("task_id") == task_id
             and task["sequence"] > failure["sequence"]
             and failure["data"].get("reason") == "agent_error"
-            and failure["data"].get("attempt") == 1
+            and (failure["data"].get("attempt") == 1 or correction_preparation)
         ):
             marker = context.get("agent_interruption")
             if marker is not None:
@@ -173,6 +181,8 @@ def pre_invocation_recovery_evidence(
                 ):
                     return None
             detail = str(failure["data"].get("detail", ""))
+            if correction_preparation:
+                return {"kind": "correction_preparation_failed", "event_id": failure["event_id"]}
             if (
                 marker is not None
                 and detail == "Fresh-session recovery has no matching preparation evidence"

@@ -874,7 +874,7 @@ def test_preparation_cannot_clear_prior_agent_invocation_marker(tmp_path):
 @pytest.mark.parametrize("tampered", [False, True])
 @pytest.mark.parametrize("legacy_workspace", [
     False, True, "native_skill", "native_skill_bad_marker", "native_skill_unknown_error",
-    "native_skill_recovery_error",
+    "native_skill_recovery_error", "correction_preparation", "correction_bad_marker",
 ])
 def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
     tmp_path,
@@ -887,6 +887,7 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
     from cafe.ui.cli import app
 
     native_skill = isinstance(legacy_workspace, str) and legacy_workspace.startswith("native_skill")
+    correction_preparation = legacy_workspace in {"correction_preparation", "correction_bad_marker"}
     monkeypatch.chdir(tmp_path)
     executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
     executor.phase_name = "spec"
@@ -937,7 +938,7 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
         ),
     )
     if legacy_workspace:
-        if native_skill:
+        if native_skill or correction_preparation:
             marker = {
                 "id": state.handoff_contract.created_at,
                 "reason": "agent_error",
@@ -952,8 +953,9 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
             state,
             "step_interrupted",
             {
-                "step": "spec", "attempt": 1, "reason": "agent_error",
+                "step": "spec", "attempt": 12 if correction_preparation else 1, "reason": "agent_error",
                 "detail": (
+                    "Correction Todo provenance is missing" if correction_preparation else
                     "Skill not found: Unmanaged or changed native skill conflict: "
                     "/repo/.codex/skills/shared. Back up and relocate the entry, "
                     "then rerun prepare or launch; legacy names or matching contents "
@@ -970,7 +972,7 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
                 ),
             },
         )
-        if native_skill:
+        if native_skill or correction_preparation:
             boards.record_event(
                 state, "agent_interruption_prepared",
                 {"step": "spec", "marker": marker},
@@ -978,7 +980,7 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
         boards.record_event(
             state, "agent_execution_task_materialized", {"step": "spec", "task_id": task.id}
         )
-        if legacy_workspace == "native_skill_bad_marker":
+        if legacy_workspace in {"native_skill_bad_marker", "correction_bad_marker"}:
             metadata = json.loads(path.read_text())
             metadata["agent_interruption"]["workflow_id"] = "another-workflow"
             path.write_text(json.dumps(metadata))
@@ -994,7 +996,7 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
             "--json",
         ],
     )
-    if legacy_workspace in {"native_skill_bad_marker", "native_skill_unknown_error"}:
+    if legacy_workspace in {"native_skill_bad_marker", "native_skill_unknown_error", "correction_bad_marker"}:
         assert completed.exit_code != 0
         assert records.get_result(task.id) is None
         return
