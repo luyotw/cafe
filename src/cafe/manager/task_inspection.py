@@ -12,6 +12,7 @@ from cafe.core.questions_schema import parse_questions_xml, validate_questions_x
 from cafe.core.task_inbox import TaskInboxService
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.loader import SkillLoader
+from cafe.utils.issue_paths import issue_name_from_dir, issue_project_root
 
 from ._store import load_contract
 from .delivery_comparison import comparison_packet_from_contract
@@ -51,7 +52,7 @@ def _sources(
     artifacts = board.get("artifacts")
     if not isinstance(artifacts, Mapping):
         artifacts = {}
-    root = issue_dir.parent.parent.parent.resolve()
+    root = issue_project_root(issue_dir).resolve()
     remaining_bytes = 2 * 1024 * 1024
     repository_sources = (
         evidence.get("repository_sources", []) if isinstance(evidence, Mapping) else []
@@ -118,8 +119,8 @@ def inspect_task_authority(
 ) -> dict[str, Any]:
     """Inspect one neutral task and return independent route, owner and evidence facts."""
     issue_dir = Path(issue_dir)
-    detail = TaskInboxService(issue_dir.parent.parent).inspect_read_only(task_id)
-    if detail.issue != issue_dir.name:
+    detail = TaskInboxService(issue_project_root(issue_dir) / ".cafe").inspect_read_only(task_id)
+    if detail.issue != issue_name_from_dir(issue_dir):
         raise ValueError("task belongs to a different issue")
     contract, digest = load_contract(
         issue_dir,
@@ -170,7 +171,7 @@ def inspect_task_authority(
         and isinstance(evidence, Mapping)
         and isinstance(evidence.get("delivery_comparison"), Mapping)
     ):
-        project_root = issue_dir.parent.parent.parent
+        project_root = issue_project_root(issue_dir)
         try:
             model = PlaybookLoader(project_root=project_root).load_model(board["playbook_id"]).model
             trusted_comparison = comparison_packet_from_contract(

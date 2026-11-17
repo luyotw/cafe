@@ -3,6 +3,7 @@
 from cafe.core.capabilities import PolicyDecision, evaluate_capability_request
 from cafe.delivery.contracts import ActionSnapshot, digest
 from cafe.delivery.selection import validate_snapshot_authority
+from cafe.utils.issue_paths import issue_project_root
 
 
 def reviewed_request(request):
@@ -34,7 +35,7 @@ def collect_review(proposal, issue_dir, registry):
         if action == "verification":
             from cafe.delivery.verification import tool_bytes, validate_tool_capability
             validate_tool_capability(evaluation.manifest)
-            tool_bytes(issue_dir.resolve().parents[2], proposal.verification.tool)
+            tool_bytes(issue_project_root(issue_dir.resolve()), proposal.verification.tool)
         reviews[action] = {
             "manifest": evaluation.manifest.model_dump(mode="json"),
             "request": reviewed_request(evaluation.request),

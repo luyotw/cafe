@@ -874,7 +874,8 @@ def test_preparation_cannot_clear_prior_agent_invocation_marker(tmp_path):
 @pytest.mark.parametrize("tampered", [False, True])
 @pytest.mark.parametrize("legacy_workspace", [
     False, True, "native_skill", "native_skill_bad_marker", "native_skill_unknown_error",
-    "native_skill_recovery_error",
+    "native_skill_recovery_error", "correction_preparation", "correction_bad_marker",
+    "packet_preparation", "packet_already_materialized",
 ])
 def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
     tmp_path,
@@ -887,6 +888,8 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
     from cafe.ui.cli import app
 
     native_skill = isinstance(legacy_workspace, str) and legacy_workspace.startswith("native_skill")
+    correction_preparation = legacy_workspace in {"correction_preparation", "correction_bad_marker"}
+    packet_preparation = legacy_workspace in {"packet_preparation", "packet_already_materialized"}
     monkeypatch.chdir(tmp_path)
     executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
     executor.phase_name = "spec"
@@ -897,7 +900,8 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
     path = current / "iteration.json"
     path.write_text(
         json.dumps(
-            {"effective_inputs": {}, "workflow_completion_trusted": False}
+            {"workflow_completion_trusted": False}
+            if packet_preparation else {"effective_inputs": {}, "workflow_completion_trusted": False}
             if legacy_workspace else {"agent_invoked": False}
         )
     )
@@ -916,6 +920,22 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
     )
     policy, binding = agent_execution_interrupted_human_task(step_name="spec")
     records = HumanTaskRecordStore(executor.issue_dir)
+    if packet_preparation:
+        previous = records.materialize(
+            workflow_id=state.workflow_id, step="spec", iteration=1,
+            trigger="agent_execution_interrupted", policy_id=policy.id, prompt=policy.prompt,
+            expected_result=policy.model_dump(mode="json"), continuations=binding.outcomes,
+            assignee_type="user", handoff_key="previous-interruption",
+        )
+        records.complete(workflow_id=state.workflow_id, task_id=previous.id, source="command", payload={
+            "task": policy.id, "decision": "retry_fresh_session", "continuation": "spec",
+            "session_continuation": {
+                "policy": "new", "workflow_id": state.workflow_id, "human_task_id": previous.id,
+                "step": "spec", "iteration": 1, "preparation": {"kind": "correction_preparation_failed"},
+            },
+        })
+        if legacy_workspace == "packet_already_materialized":
+            (current / "context_spec_file.json").write_text("{}")
     task = records.materialize(
         workflow_id=state.workflow_id,
         step="spec",
@@ -937,7 +957,7 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
         ),
     )
     if legacy_workspace:
-        if native_skill:
+        if native_skill or correction_preparation or packet_preparation:
             marker = {
                 "id": state.handoff_contract.created_at,
                 "reason": "agent_error",
@@ -952,8 +972,11 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
             state,
             "step_interrupted",
             {
-                "step": "spec", "attempt": 1, "reason": "agent_error",
+                "step": "spec", "attempt": 12 if correction_preparation or packet_preparation else 1,
+                "reason": "agent_error",
                 "detail": (
+                    "Invalid persisted context packet decision" if packet_preparation else
+                    "Correction Todo provenance is missing" if correction_preparation else
                     "Skill not found: Unmanaged or changed native skill conflict: "
                     "/repo/.codex/skills/shared. Back up and relocate the entry, "
                     "then rerun prepare or launch; legacy names or matching contents "
@@ -970,7 +993,7 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
                 ),
             },
         )
-        if native_skill:
+        if native_skill or correction_preparation or packet_preparation:
             boards.record_event(
                 state, "agent_interruption_prepared",
                 {"step": "spec", "marker": marker},
@@ -978,7 +1001,7 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
         boards.record_event(
             state, "agent_execution_task_materialized", {"step": "spec", "task_id": task.id}
         )
-        if legacy_workspace == "native_skill_bad_marker":
+        if legacy_workspace in {"native_skill_bad_marker", "correction_bad_marker"}:
             metadata = json.loads(path.read_text())
             metadata["agent_interruption"]["workflow_id"] = "another-workflow"
             path.write_text(json.dumps(metadata))
@@ -994,11 +1017,21 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
             "--json",
         ],
     )
-    if legacy_workspace in {"native_skill_bad_marker", "native_skill_unknown_error"}:
+    if legacy_workspace in {
+        "native_skill_bad_marker", "native_skill_unknown_error", "correction_bad_marker", "packet_already_materialized",
+    }:
         assert completed.exit_code != 0
         assert records.get_result(task.id) is None
         return
     assert completed.exit_code == 0, completed.stdout
+    if packet_preparation:
+        assert GenericWorkflowStepExecutor._load_persisted_effective_inputs(
+            current, require_persisted_packet_decision=True, allow_preparation_recovery=True,
+        ) is None
+        with pytest.raises(ValueError, match="context packet decision"):
+            GenericWorkflowStepExecutor._load_persisted_effective_inputs(
+                current, require_persisted_packet_decision=True,
+            )
     if tampered:
         path.write_text(json.dumps({"agent_invoked": True}))
         with pytest.raises(RuntimeError, match="matching preparation evidence"):
@@ -9349,6 +9382,13 @@ workflow:
 def test_custom_topology_generation_and_completion_pin_causal_source(
     tmp_path: Path,
 ) -> None:
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "CAFE test"], check=True)
+    (tmp_path / ".gitignore").write_text(".cafe/\nglobal/\n", encoding="utf-8")
+    (tmp_path / "product.py").write_text("fixed = True\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(tmp_path), "add", ".gitignore", "product.py"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "Fix requested behavior"], check=True)
     issue_dir = tmp_path / ".cafe" / "issues" / "custom-topology"
     ledger = WorkflowFeedbackLedger(issue_dir)
     _created, feedback = ledger.record(
@@ -9462,11 +9502,10 @@ workflow:
     evidence_commit = subprocess.check_output(
         [
             "git",
-            "log",
-            "-1",
-            "--format=%H",
-            "--",
-            "tests/unit/test_generic_workflow_step.py",
+            "-C",
+            str(tmp_path),
+            "rev-parse",
+            "HEAD",
         ],
         text=True,
     ).strip()
@@ -9479,37 +9518,26 @@ workflow:
     output.write_text(
         f"## Todo Progress\n\n### {item.item_id}\n\n- Status: completed\n"
         f"- Source fingerprint: `{item.fingerprint}`\n"
-        "- Files: `tests/unit/test_generic_workflow_step.py`\n"
+        "- Files: `product.py`\n"
         f"- Commit: `{evidence_commit}`\n"
         "- Targeted evidence: ran the unit tests\n"
         "- Remaining work: None.\n- Next action: Review.\n",
         encoding="utf-8",
     )
-    # This test validates against the CAFE worktree itself, which is dirty while
-    # the suite runs. Report only the clean-worktree probe as clean; the Files and
-    # Commit queries still hit the real repository.
-    real_git = checklist_validator._git
+    assert executor._validate_projected_todo_completion(checklist)
 
-    def clean_status_git(root, *args):
-        if args[:1] == ("status",):
-            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
-        return real_git(root, *args)
+    valid_output = output.read_text(encoding="utf-8")
+    output.write_text("## Todo Progress\n\n- malformed ledger\n", encoding="utf-8")
+    passed, detail = executor._validate_projected_todo_completion_detail(checklist)
+    assert passed is False
+    assert "Todo ledger item set does not match the authoritative set" in detail
+    assert f"### {item.item_id}" in detail
+    assert f"- Source fingerprint: `{item.fingerprint}`" in detail
+    assert "- Commit: `<full 40-character commit SHA>`" in detail
+    output.write_text(valid_output, encoding="utf-8")
 
-    with patch.object(checklist_validator, "_git", side_effect=clean_status_git):
-        assert executor._validate_projected_todo_completion(checklist)
-
-        valid_output = output.read_text(encoding="utf-8")
-        output.write_text("## Todo Progress\n\n- malformed ledger\n", encoding="utf-8")
-        passed, detail = executor._validate_projected_todo_completion_detail(checklist)
-        assert passed is False
-        assert "Todo ledger item set does not match the authoritative set" in detail
-        assert f"### {item.item_id}" in detail
-        assert f"- Source fingerprint: `{item.fingerprint}`" in detail
-        assert "- Commit: `<full 40-character commit SHA>`" in detail
-        output.write_text(valid_output, encoding="utf-8")
-
-        ledger.path.write_text('{"version": 1, "entries": []}\n', encoding="utf-8")
-        assert not executor._validate_projected_todo_completion(checklist)
+    ledger.path.write_text('{"version": 1, "entries": []}\n', encoding="utf-8")
+    assert not executor._validate_projected_todo_completion(checklist)
 
 
 @pytest.mark.parametrize("stored_locale", ["zh-TW", None])

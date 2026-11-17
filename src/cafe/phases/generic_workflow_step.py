@@ -88,6 +88,8 @@ from cafe.core.route_catalog import (
     select_route_label,
 )
 from cafe.core.session_continuation import (
+    CORRECTION_TODO_PROVENANCE_MISSING,
+    INVALID_CONTEXT_PACKET_DECISION,
     SessionContinuation,
     exact_continuation_from_context,
     pre_invocation_recovery_evidence,
@@ -156,6 +158,7 @@ from cafe.utils.checklist_validator import (
     validate_projected_todos,
 )
 from cafe.utils.git_utils import get_git_toplevel, get_repo_root, to_cwd_relative_path
+from cafe.utils.issue_paths import issue_project_root
 from cafe.utils.phase_config import load_phase_step_model
 
 
@@ -496,7 +499,8 @@ class GenericWorkflowStepExecutor(Phase):
             aliases = tuple(dict.fromkeys((*aliases, inbound.artifact)))
         for alias in aliases:
             artifacts = self._add_causal_todo_artifact(
-                artifacts, state, playbook=self.playbook, causal_artifact=alias
+                artifacts, state, playbook=self.playbook, causal_artifact=alias,
+                issue_dir=self.issue_dir,
             )
         return artifacts, any(artifacts.get(alias) for alias in aliases)
 
@@ -2501,6 +2505,7 @@ class GenericWorkflowStepExecutor(Phase):
         packet_requested_placeholders: frozenset[str] | None = None,
         target_step: str | None = None,
         iteration: int | None = None,
+        allow_preparation_recovery: bool = False,
     ) -> dict[str, dict[str, Any]] | None:
         """Reuse pre-launch packet decisions instead of resolving them during takeover."""
         path = iteration_dir / "iteration.json"
@@ -2509,16 +2514,21 @@ class GenericWorkflowStepExecutor(Phase):
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            raise ValueError("Invalid persisted context packet decision") from exc
+            raise ValueError(INVALID_CONTEXT_PACKET_DECISION) from exc
         if not isinstance(raw, dict):
-            raise ValueError("Invalid persisted context packet decision")
+            raise ValueError(INVALID_CONTEXT_PACKET_DECISION)
         if "effective_inputs" not in raw:
             # The early preparation marker precedes the first packet decision;
             # it is not a persisted decision that can be reused or is missing.
             if raw == {"agent_invoked": False}:
                 return None
+            if (allow_preparation_recovery and raw.get("workflow_completion_trusted") is False
+                    and raw.get("agent_invoked", False) is False
+                    and set(raw) <= {"agent_invoked", "workflow_completion_trusted", "agent_interruption"}
+                    and not any(iteration_dir.glob("context_*.json"))):
+                return None
             if require_persisted_packet_decision:
-                raise ValueError("Invalid persisted context packet decision")
+                raise ValueError(INVALID_CONTEXT_PACKET_DECISION)
             return None
         persisted = raw.get("effective_inputs")
         if isinstance(persisted, dict):
@@ -2532,7 +2542,7 @@ class GenericWorkflowStepExecutor(Phase):
                 target_step=target_step,
                 iteration=iteration,
             )
-        raise ValueError("Invalid persisted context packet decision")
+        raise ValueError(INVALID_CONTEXT_PACKET_DECISION)
 
     @staticmethod
     def _packet_requested_placeholders(
@@ -3475,6 +3485,7 @@ class GenericWorkflowStepExecutor(Phase):
             packet_requested_placeholders=packet_requested_placeholders,
             target_step=step_name,
             iteration=self.iteration,
+            allow_preparation_recovery="preparation" in (getattr(self, "_session_recovery", None) or {}),
         )
         if effective_inputs is None:
             effective_inputs = resolve_effective_prompt_inputs(
@@ -4260,16 +4271,77 @@ class GenericWorkflowStepExecutor(Phase):
         )
 
     @staticmethod
+    def _recover_delivery_feedback(issue_dir, state, event, route):
+        """Restore the completed recovery task's feedback for pre-binding runs."""
+        records = HumanTaskRecordStore(issue_dir)
+        completed = datetime.fromisoformat(event.timestamp)
+        tasks = {
+            task.id: task for task in records.tasks()
+            if task.workflow_id == state.workflow_id
+            and task.step == event.step
+            and task.trigger == "need_clarification"
+            and task.policy_id == event.data["task_id"]
+            and task.status is HumanTaskStatus.COMPLETED
+            and task.superseded_by_task_id is None
+            and task.capability_approval is None
+            and task.expected_result.get("input_schema") == "feedback"
+            and task.continuations.get("submit") == state.current_step
+        }
+        results = [
+            result for result in records.results()
+            if result.task_id in tasks and datetime.fromisoformat(result.completed_at) <= completed
+        ]
+        if not results:
+            raise ValueError("Completed delivery recovery task has no matching result")
+        result = max(results, key=lambda item: datetime.fromisoformat(item.completed_at))
+        result_time = datetime.fromisoformat(result.completed_at)
+        if sum(datetime.fromisoformat(item.completed_at) == result_time for item in results) != 1:
+            raise ValueError("Completed delivery recovery task is ambiguous")
+        task = tasks[result.task_id]
+        feedback = result.payload.get("feedback")
+        if (
+            result.source != event.data.get("source")
+            or result.payload.get("task") != task.policy_id
+            or result.payload.get("continuation") != state.current_step
+            or not isinstance(feedback, str) or not feedback.strip()
+        ):
+            raise ValueError("Completed delivery recovery feedback does not match the handoff")
+        ledger = WorkflowFeedbackLedger(issue_dir)
+        identity = f"{route['source_kind']}:{event.step}:{task.policy_id}:{task.iteration}"
+        previous = state.artifacts.get(route["artifact"])
+        if previous and (issue_project_root(issue_dir) / previous.path).resolve() != ledger.path.resolve():
+            raise ValueError("Delivery recovery feedback artifact has a conflicting path")
+        existing = next((entry for entry in ledger.load() if entry.source_identity == identity), None)
+        if existing and (existing.target_step != state.current_step or existing.content != feedback.strip()
+                         or existing.source_kind != route["source_kind"]):
+            raise ValueError("Delivery recovery feedback conflicts with the saved result")
+        created, _ = ledger.record(source_identity=identity, source_kind=route["source_kind"],
+                                   target_step=state.current_step, content=feedback)
+        if created or previous is None:
+            previous = ArtifactEntry(name=route["artifact"], kind=ArtifactKind.DOCUMENT,
+                                     version=previous.version + 1 if previous else 1,
+                                     updated_by="human_task", path=str(ledger.path))
+            BlackboardStore(issue_dir).put_artifact(state, previous)
+        return previous, identity
+
+    @staticmethod
     def _add_causal_todo_artifact(
         artifacts: Dict[str, Any],
         state: BlackboardState,
         *,
         playbook: Mapping[str, Any] | None = None,
         causal_artifact: str = "causal_todo",
+        issue_dir: Path | None = None,
     ) -> Dict[str, Any]:
         """Expose only the artifact selected by the persisted inbound transition."""
         if not artifacts:
             return artifacts
+
+        def source_path(entry: Any) -> Path:
+            path = Path(str(getattr(entry, "path", entry)))
+            if issue_dir is not None and not path.is_absolute():
+                return issue_project_root(issue_dir) / path
+            return path
 
         transition = next(
             (
@@ -4289,6 +4361,37 @@ class GenericWorkflowStepExecutor(Phase):
         steps = playbook_data.get("steps", {})
         if not isinstance(steps, Mapping):
             steps = {}
+        # A same-step interruption retry changes the baton sender. The latest
+        # cross-step completion still owns the correction unless a newer edge
+        # entered the consumer.
+        inbound = next((
+            event for event in reversed(state.events)
+            if (event.event_type == "transition" and event.data.get("to") == state.current_step
+                and event.data.get("from") != state.current_step)
+            or (event.event_type == "human_task_completed" and event.step != state.current_step
+                and event.data.get("to_step") == state.current_step)
+        ), None)
+        automatic = (steps.get(inbound.step, {}) or {}).get("automatic", {}) if inbound else {}
+        delivery_recovery = (
+            inbound is not None and inbound.event_type == "human_task_completed"
+            and inbound.data.get("trigger") == "need_clarification"
+            and inbound.data.get("pattern") == "revision_feedback"
+            and isinstance(automatic, Mapping) and automatic.get("executor") == "delivery"
+            and (state.handoff_contract is None or state.handoff_contract.from_step
+                 in {state.current_step, inbound.step})
+        )
+        inbound_feedback = (
+            inbound is not None
+            and inbound.event_type == "human_task_completed"
+            and any(
+                isinstance(binding, Mapping)
+                and binding.get("task_id") == inbound.data.get("task_id")
+                and binding.get("feedback_delivery") is not None
+                for binding in (steps.get(inbound.step, {}) or {}).get("human_tasks", ()) or ()
+            )
+        )
+        if delivery_recovery or inbound_feedback:
+            from_step = inbound.step
         producer = steps.get(from_step, {})
         direct_artifact = producer.get("output_artifact") if isinstance(producer, Mapping) else None
         selected = artifacts.get(direct_artifact) if isinstance(direct_artifact, str) else None
@@ -4333,7 +4436,7 @@ class GenericWorkflowStepExecutor(Phase):
                 else None
             )
             authorized_path = (
-                Path(str(authorized_artifact.get("path"))).resolve()
+                source_path(authorized_artifact.get("path")).resolve()
                 if isinstance(authorized_artifact, Mapping)
                 and authorized_artifact.get("path")
                 else None
@@ -4357,7 +4460,7 @@ class GenericWorkflowStepExecutor(Phase):
                 raise ValueError(
                     "Persisted correction handoff does not bind a complete source artifact"
                 )
-            selected_path = Path(str(getattr(selected, "path", selected)))
+            selected_path = source_path(selected)
             candidates: list[tuple[int, Path, str]] = []
             phase_dir = selected_path.parent.parent
             iteration_dirs = (
@@ -4376,7 +4479,7 @@ class GenericWorkflowStepExecutor(Phase):
                 if (
                     record.name != route_artifact
                     or record.updated_by != from_step
-                    or Path(record.path).resolve() != output_path.resolve()
+                    or source_path(record).resolve() != output_path.resolve()
                     or not record.content_sha256
                     or not output_path.is_file()
                     or output_path.stat().st_size > 256 * 1024
@@ -4385,7 +4488,7 @@ class GenericWorkflowStepExecutor(Phase):
                 if authorized_artifact is not None and (
                     record.name != authorized_name
                     or record.version != authorized_version
-                    or Path(record.path).resolve() != authorized_path
+                    or source_path(record).resolve() != authorized_path
                     or record.content_sha256 != authorized_digest
                 ):
                     continue
@@ -4457,14 +4560,15 @@ class GenericWorkflowStepExecutor(Phase):
                     routes.append({key: str(value) for key, value in values.items()})
 
         delivered: tuple[str, ...] | None = None
-        if transition is not None:
+        feedback_edge = inbound if delivery_recovery or inbound_feedback else transition
+        if feedback_edge is not None:
             event = next(
                 (
                     candidate
                     for candidate in reversed(state.events)
                     if candidate.event_type == "workflow_feedback_delivered"
                     and candidate.step == state.current_step
-                    and candidate.timestamp >= transition.timestamp
+                    and candidate.timestamp >= feedback_edge.timestamp
                 ),
                 None,
             )
@@ -4518,17 +4622,24 @@ class GenericWorkflowStepExecutor(Phase):
                     raise ValueError("Correction Todo feedback route is ambiguous")
                 selected_route = matching_routes[0]
                 workflow_entry = artifacts.get(selected_route["artifact"])
+                if delivery_recovery and human_task_event is inbound and issue_dir is not None:
+                    workflow_entry, identity = GenericWorkflowStepExecutor._recover_delivery_feedback(
+                        issue_dir, state, human_task_event, selected_route,
+                    )
+                    human_task_identities = (identity,)
+                    artifacts = {**artifacts, selected_route["artifact"]: workflow_entry}
                 if workflow_entry is None:
                     raise ValueError("Correction Todo feedback artifact is missing")
                 try:
-                    human_task_identities = workflow_feedback_matching_identities(
-                        Path(str(getattr(workflow_entry, "path", workflow_entry))),
-                        target_step=state.current_step,
-                        source_kind=selected_route["source_kind"],
-                        identity_prefix=(
-                            f"{selected_route['source_kind']}:{from_step}:{task_id}:"
-                        ),
-                    )
+                    if human_task_identities is None:
+                        human_task_identities = workflow_feedback_matching_identities(
+                            source_path(workflow_entry),
+                            target_step=state.current_step,
+                            source_kind=selected_route["source_kind"],
+                            identity_prefix=(
+                                f"{selected_route['source_kind']}:{from_step}:{task_id}:"
+                            ),
+                        )
                 except TodoContractError as exc:
                     raise ValueError(f"Correction Todo provenance is invalid: {exc}") from exc
 
@@ -4569,7 +4680,7 @@ class GenericWorkflowStepExecutor(Phase):
                     raise ValueError("Correction Todo ID prefix mapping is ambiguous")
             try:
                 workflow_items = workflow_feedback_todo_items(
-                    Path(str(getattr(workflow_entry, "path", workflow_entry))),
+                    source_path(workflow_entry),
                     target_step=state.current_step,
                     source_by_kind=source_by_kind,
                     id_prefix_by_kind=id_prefix_by_kind,
@@ -4593,7 +4704,7 @@ class GenericWorkflowStepExecutor(Phase):
         if selected is not None and getattr(selected, "updated_by", from_step) != from_step:
             raise ValueError("Correction Todo artifact ownership conflicts with provenance")
         if selected is None and isinstance(direct_artifact, str):
-            raise ValueError("Correction Todo provenance is missing")
+            raise ValueError(CORRECTION_TODO_PROVENANCE_MISSING)
         if selected is None and from_step not in {None, state.current_step}:
             raise ValueError("Correction Todo provenance is unsupported")
         if selected is None:
@@ -5230,6 +5341,7 @@ class GenericWorkflowStepExecutor(Phase):
         state = BlackboardStore(self.issue_dir).load_or_create(self.phase_name)
         step_def = self.playbook["steps"][self.phase_name]
         artifacts = self._step_input_artifacts(step_def, state)
+        root = issue_project_root(self.issue_dir)
         expected = []
         for binding in materialized.projections:
             name = binding["declaration_artifact"]
@@ -5237,7 +5349,8 @@ class GenericWorkflowStepExecutor(Phase):
             try:
                 if binding["causal"]:
                     artifacts = self._add_causal_todo_artifact(
-                        artifacts, state, playbook=self.playbook, causal_artifact=name
+                        artifacts, state, playbook=self.playbook, causal_artifact=name,
+                        issue_dir=self.issue_dir,
                     )
                 entry = artifacts.get(name)
                 if entry is None:
@@ -5249,8 +5362,11 @@ class GenericWorkflowStepExecutor(Phase):
                     != binding["artifact"]
                 ):
                     return False, f"{label} source binding changed; rebuild the checklist."
+                source = Path(binding["path"])
+                if not source.is_absolute():
+                    source = root / source
                 if (
-                    hashlib.sha256(Path(binding["path"]).read_bytes()).hexdigest()
+                    hashlib.sha256(source.read_bytes()).hexdigest()
                     != binding["content_sha256"]
                 ):
                     return False, f"{label} source content changed; rebuild the checklist."
@@ -5269,7 +5385,7 @@ class GenericWorkflowStepExecutor(Phase):
                 return False, f"{label} is invalid: {exc}"
         output_path = self._get_versioned_file_path(self.phase_name, self.iteration, self.phase_dir)
         errors = validate_projected_todos(
-            checklist_path, output_path, tuple(expected), repo_root=get_git_toplevel()
+            checklist_path, output_path, tuple(expected), repo_root=root
         )
         return self._projected_todo_validation_detail(expected, errors)
 
@@ -5326,6 +5442,7 @@ class GenericWorkflowStepExecutor(Phase):
                     state,
                     playbook=self.playbook,
                     causal_artifact=causal_artifact,
+                    issue_dir=self.issue_dir,
                 )
             except ValueError:
                 return False, "The causal Todo artifact could not be resolved."

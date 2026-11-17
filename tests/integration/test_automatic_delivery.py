@@ -19,9 +19,10 @@ local_action = journey.local_action
 fake_github = journey.fake_github
 
 
-def setup(local_action, tmp_path, *, github=False, renamed=False):
+def setup(local_action, tmp_path, *, github=False, renamed=False, issue_name="journey"):
     ctx = journey.setup_action(
-        local_action, tmp_path, github=github, renamed=renamed, prepare_review=False
+        local_action, tmp_path, github=github, renamed=renamed, prepare_review=False,
+        issue_name=issue_name,
     )
     root, dest, issue, state, phase, data, engine, kwargs, _, step = ctx
     request = json.loads((kwargs["output_file"].parent / "delivery_request.json").read_text())
@@ -95,11 +96,20 @@ def answer(ctx, runtime, decision, feedback=""):
     return task, applied
 
 
-@pytest.mark.parametrize("github,renamed", [(False, False), (True, False), (False, True)])
+@pytest.mark.parametrize(
+    "github,renamed,issue_name",
+    [
+        (False, False, "journey"),
+        (True, False, "journey"),
+        (False, True, "journey"),
+        (True, False, "codex/issue119"),
+        (False, True, "team/codex/journey"),
+    ],
+)
 def test_review_execute_outcome_and_restart_are_automatic(
-    local_action, fake_github, tmp_path, monkeypatch, github, renamed
+    local_action, fake_github, tmp_path, monkeypatch, github, renamed, issue_name
 ):
-    ctx = setup(local_action, tmp_path, github=github, renamed=renamed)
+    ctx = setup(local_action, tmp_path, github=github, renamed=renamed, issue_name=issue_name)
     runtime, result = run(ctx)
     assert result.final_status_code == "BATON_NEED_PERMISSION", result
     review, _ = answer(ctx, runtime, "integrate_only")

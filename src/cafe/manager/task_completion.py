@@ -7,6 +7,7 @@ from typing import Any, Mapping
 
 from cafe.core.task_inbox import TaskInboxService
 from cafe.ui.commands.tasks import apply_structured_task
+from cafe.utils.issue_paths import issue_project_root
 
 from .task_inspection import inspect_task_authority
 
@@ -22,7 +23,7 @@ def complete_manager_task(
 ) -> dict[str, Any]:
     """Validate Manager authority before neutral durable task completion."""
     issue_dir = Path(issue_dir).resolve()
-    project_root = issue_dir.parent.parent.parent
+    project_root = issue_project_root(issue_dir)
     facts = inspect_task_authority(issue_dir, task_id, response=response, evidence=evidence)
     if (
         not facts["allowed"]

@@ -43,6 +43,57 @@ def test_default_registry_and_sync_pr_entrypoint_ignore_project_overrides(tmp_pa
     assert "src/cafe/data/skills/cafe-pr/scripts/sync_pr.sh" in resolved.as_posix()
 
 
+@pytest.mark.parametrize("issue_name", ["demo", "codex/issue119", "team/issues/release"])
+def test_pr_publication_binds_writes_to_the_issue(issue_name: str, tmp_path: Path) -> None:
+    issue_dir = f".cafe/issues/{issue_name}"
+    output = f"{issue_dir}/custom-publish/iteration_001/pr.md"
+    network = ["github.com", "api.github.com"]
+    writes = [output, ".git", issue_dir]
+    request = {
+        "capability": CAPABILITY_PR_PUBLISH_ID,
+        "args": {"output": output},
+        "effects": {"writes": writes, "network_destinations": network, "browser_open": []},
+        "credentials": ["gh"],
+        "permissions": {"writes": writes, "network": network},
+    }
+    registry = load_capability_registry(default_capability_definition_dirs(tmp_path))
+    evaluation = evaluate_capability_request(registry, request)
+    assert evaluation.decision == PolicyDecision.ALLOW
+    assert set(evaluation.allowed_effects.writes) == set(writes)
+
+    for other_dir in [str(Path(issue_dir).parent), f"{issue_dir}-other"]:
+        other_writes = [output, ".git", other_dir]
+        denied = evaluate_capability_request(registry, {
+            **request,
+            "effects": {**request["effects"], "writes": other_writes},
+            "permissions": {**request["permissions"], "writes": other_writes},
+        })
+        assert denied.decision == PolicyDecision.DENY
+
+
+def test_legacy_pr_request_dispatches_with_the_full_issue_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import cafe.core.capabilities as cap_mod
+
+    issue_dir = ".cafe/issues/codex/issue119"
+    output = f"{issue_dir}/pr/iteration_001/output.md"
+
+    def publish(**kwargs):
+        assert kwargs["request"].effects.writes == (output, ".git", issue_dir)
+        assert kwargs["output_file"] == tmp_path / output
+        return {"pr_url": "https://github.com/owner/repo/pull/1", "pr_number": "1"}, None
+
+    monkeypatch.setitem(cap_mod.HOST_CAPABILITY_ADAPTERS, "sync_pr", publish)
+    run = run_capability_request(
+        repo_root=tmp_path,
+        registry=load_capability_registry(default_capability_definition_dirs(tmp_path)),
+        capability_request={"capability": CAPABILITY_PR_PUBLISH_ID, "args": {"output": output}},
+        output_file=tmp_path / output,
+    )
+    assert run.receipt["success"] is True
+
+
 def test_capability_receipt_redacts_secret_named_values() -> None:
     import cafe.core.capabilities as cap_mod
 

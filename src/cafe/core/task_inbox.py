@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
+from cafe.utils.issue_paths import iter_issue_directories
 from cafe.core.human_task_records import (
     Assignment,
     HumanTask,
@@ -339,16 +340,13 @@ class TaskInboxService:
         if not self.archive_root.is_dir():
             return []
         matches: list[str] = []
-        for issue_dir in sorted(
-            (path for path in self.archive_root.iterdir() if path.is_dir()),
-            key=lambda path: path.name,
-        ):
+        for issue_dir in iter_issue_directories(self.archive_root):
             store = HumanTaskRecordStore(issue_dir)
             if not store.exists:
                 continue
             try:
                 if any(task.id == task_id for task in store.tasks()):
-                    matches.append(issue_dir.name)
+                    matches.append(issue_dir.relative_to(self.archive_root).as_posix())
             except (HumanTaskRecordError, OSError):
                 continue
         return matches
@@ -358,9 +356,8 @@ class TaskInboxService:
         if not issues_dir.is_dir():
             return ()
         records: list[_Record] = []
-        for issue_dir in sorted(
-            (path for path in issues_dir.iterdir() if path.is_dir()), key=lambda path: path.name
-        ):
+        for issue_dir in iter_issue_directories(issues_dir):
+            issue_name = issue_dir.relative_to(issues_dir).as_posix()
             store = HumanTaskRecordStore(issue_dir)
             if not store.exists:
                 continue
@@ -373,22 +370,22 @@ class TaskInboxService:
             except (HumanTaskRecordError, OSError, ValueError, json.JSONDecodeError) as exc:
                 raise TaskInboxError(
                     "corrupt_store",
-                    f"Task records for issue {issue_dir.name!r} are unsafe to read: {exc}",
+                    f"Task records for issue {issue_name!r} are unsafe to read: {exc}",
                     recovery="Repair or restore this issue's durable task and blackboard records.",
-                    issue=issue_dir.name,
+                    issue=issue_name,
                 ) from exc
             workflow_ids = {task.workflow_id for task in tasks}
             if workflow_ids and workflow_ids != {metadata["workflow_id"]}:
                 raise TaskInboxError(
                     "workflow_mismatch",
-                    f"Task records and blackboard disagree for issue {issue_dir.name!r}.",
+                    f"Task records and blackboard disagree for issue {issue_name!r}.",
                     recovery="Restore matching workflow identity before using the inbox.",
-                    issue=issue_dir.name,
+                    issue=issue_name,
                     workflow_id=metadata["workflow_id"],
                 )
             records.extend(
                 _Record(
-                    issue=issue_dir.name,
+                    issue=issue_name,
                     issue_dir=issue_dir,
                     workflow_id=metadata["workflow_id"],
                     playbook_id=metadata["playbook_id"],

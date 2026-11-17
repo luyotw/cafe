@@ -4,12 +4,55 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
 from cafe.core.audit_events import AuditEventStore
 from cafe.core.types import AgentCLI
+
+CORRECTION_TODO_PROVENANCE_MISSING = "Correction Todo provenance is missing"
+INVALID_CONTEXT_PACKET_DECISION = "Invalid persisted context packet decision"
+
+
+def _has_approved_preparation_retry(issue_dir, workflow_id, step_name, marker, failed_at):
+    """Check that an approved first invocation was still preparing its context."""
+    from cafe.core.human_task_records import HumanTaskRecordError, HumanTaskRecordStore, HumanTaskStatus
+
+    iteration = marker.get("iteration")
+    if not isinstance(iteration, int) or isinstance(iteration, bool) or iteration < 1:
+        return False
+    directory = issue_dir / step_name / f"iteration_{iteration:03d}"
+    if any(directory.glob("context_*.json")):
+        return False
+    try:
+        records = HumanTaskRecordStore(issue_dir)
+        failure_time = datetime.fromisoformat(failed_at)
+        completed = [
+            task for task in records.tasks()
+            if task.workflow_id == workflow_id and task.step == step_name
+            and task.iteration == iteration and task.policy_id == "agent-execution-interrupted"
+            and task.status is HumanTaskStatus.COMPLETED and task.completed_at
+            and datetime.fromisoformat(task.completed_at) <= failure_time
+        ]
+        if not completed:
+            return False
+        task = max(completed, key=lambda item: datetime.fromisoformat(item.completed_at))
+        result = records.get_result(task.id)
+    except (HumanTaskRecordError, OSError, TypeError, ValueError):
+        return False
+    if result is None or result.payload.get("decision") != "retry_fresh_session":
+        return False
+    recovery = result.payload.get("session_continuation")
+    return (
+        isinstance(recovery, dict) and recovery.get("policy") == "new"
+        and recovery.get("workflow_id") == workflow_id and recovery.get("human_task_id") == task.id
+        and recovery.get("step") == step_name and recovery.get("iteration") == iteration
+        and isinstance(recovery.get("preparation"), dict)
+        and recovery["preparation"].get("kind") == "correction_preparation_failed"
+        and result.payload.get("continuation") == step_name
+    )
 
 
 class SessionContinuationPolicy(str, Enum):
@@ -148,6 +191,18 @@ def pre_invocation_recovery_evidence(
                 and prepared["data"].get("marker") == marker
                 and failure["sequence"] < prepared["sequence"] < task["sequence"]
             )
+        correction_preparation = (
+            "agent_interruption" in context
+            and context.get("workflow_completion_trusted") is False
+            and failure is not None
+            and failure["data"].get("detail") == CORRECTION_TODO_PROVENANCE_MISSING
+        )
+        packet_preparation = (
+            marker_matches and isinstance(marker, dict)
+            and context.get("workflow_completion_trusted") is False and failure is not None
+            and failure["data"].get("detail") == INVALID_CONTEXT_PACKET_DECISION
+            and _has_approved_preparation_retry(issue_dir, workflow_id, step_name, marker, failure["timestamp"])
+        )
         if (
             marker_matches
             and task is not None
@@ -155,7 +210,7 @@ def pre_invocation_recovery_evidence(
             and task["data"].get("task_id") == task_id
             and task["sequence"] > failure["sequence"]
             and failure["data"].get("reason") == "agent_error"
-            and failure["data"].get("attempt") == 1
+            and (failure["data"].get("attempt") == 1 or correction_preparation or packet_preparation)
         ):
             marker = context.get("agent_interruption")
             if marker is not None:
@@ -173,6 +228,10 @@ def pre_invocation_recovery_evidence(
                 ):
                     return None
             detail = str(failure["data"].get("detail", ""))
+            if correction_preparation:
+                return {"kind": "correction_preparation_failed", "event_id": failure["event_id"]}
+            if packet_preparation:
+                return {"kind": "context_packet_preparation_failed", "event_id": failure["event_id"]}
             if (
                 marker is not None
                 and detail == "Fresh-session recovery has no matching preparation evidence"

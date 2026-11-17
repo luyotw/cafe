@@ -7,6 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 from cafe.manager.delivery import CleanupCloseoutPlan
+from cafe.utils.issue_paths import issue_project_root
 
 ARCHIVE_ARGV = ["cafe", "close", "--archive-only"]
 
@@ -110,7 +111,7 @@ def accepted_delivery_result(issue_dir, workflow_id, *, archived=False, binding=
         if archived:
             raise ValueError("local delivery acceptance requires its retained workspace")
         state = BlackboardStore(issue_dir).load_read_only()
-        root = issue_dir.resolve().parents[2]
+        root = issue_project_root(issue_dir.resolve())
         step = PlaybookLoader(project_root=root, read_only=True,
                               resolve_presentation=False).load(state.playbook_id)["steps"][task.step]
         declaration = DeliveryBinding.model_validate(step["delivery"])

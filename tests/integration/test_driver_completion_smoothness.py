@@ -36,6 +36,8 @@ def _paused_task(
     tmp_path: Path,
     *,
     confirm: bool = False,
+    issue_name: str = "issue500",
+    manager: bool = False,
     required_input: bool = False,
     source_present: bool = False,
 ):
@@ -137,7 +139,7 @@ def _paused_task(
     playbook_dir = tmp_path / ".cafe/playbooks"
     playbook_dir.mkdir(parents=True)
     (playbook_dir / "custom-task.yaml").write_text(yaml.safe_dump(playbook), encoding="utf-8")
-    issue_dir = tmp_path / ".cafe/issues/issue500"
+    issue_dir = tmp_path / ".cafe/issues" / issue_name
     issue_dir.mkdir(parents=True)
     (issue_dir / "issue.yaml").write_text("playbook: custom-task\n", encoding="utf-8")
     store = BlackboardStore(issue_dir)
@@ -155,7 +157,7 @@ def _paused_task(
         kind=ArtifactKind.DOCUMENT,
         version=1,
         updated_by="spec",
-        path=".cafe/issues/issue500/spec/iteration_001/output.md",
+        path=f".cafe/issues/{issue_name}/spec/iteration_001/output.md",
         content_sha256=hashlib.sha256(spec.read_bytes()).hexdigest(),
     )
     if source_present:
@@ -169,7 +171,7 @@ def _paused_task(
             kind=ArtifactKind.DOCUMENT,
             version=1,
             updated_by="source_material",
-            path=".cafe/issues/issue500/source_material/iteration_001/output.md",
+            path=f".cafe/issues/{issue_name}/source_material/iteration_001/output.md",
             content_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
         )
     report = None
@@ -188,7 +190,7 @@ def _paused_task(
             kind=ArtifactKind.DOCUMENT,
             version=1,
             updated_by=step,
-            path=".cafe/issues/issue500/verify/iteration_001/output.md",
+            path=f".cafe/issues/{issue_name}/verify/iteration_001/output.md",
         )
     store.save(board)
     store.set_current_step(board, "user")
@@ -211,14 +213,25 @@ def _paused_task(
         "user_required": [],
         "driver_confirmable": [{"phase": step, "task_id": task_name}],
     }
-    contract = build_initial_contract(
+    build_contract, persist_contract = build_initial_contract, write_contract
+    if manager:
+        from cafe.manager._schema import build_initial_contract as build_contract
+        from cafe.manager._store import write_contract as persist_contract
+
+        proposal["manager"] = proposal.pop("driver")
+        for field in ("confirmation_contract", "task_contract"):
+            owner = proposal[field]
+            owner["manager_confirmable"] = owner.pop("driver_confirmable")
+        proposal["reactive_user_handoffs"]["alignment_checkpoint"] = "manager_resolvable_when_clear"
+        proposal["reactive_user_handoffs"]["need_clarification"] = "manager_confirmable"
+    contract = build_contract(
         proposal=proposal,
-        issue_name="issue500",
+        issue_name=issue_name,
         workflow_id=board.workflow_id,
         confirmed_by="user",
         confirmed_at="2026-09-26T12:00:00+00:00",
     )
-    digest = write_contract(issue_dir, contract, expected_predecessor_sha256=None)
+    digest = persist_contract(issue_dir, contract, expected_predecessor_sha256=None)
     resolved, binding = resolve_step_human_task(
         playbook_data=PlaybookLoader(project_root=tmp_path).load("custom-task"),
         step_name=step,

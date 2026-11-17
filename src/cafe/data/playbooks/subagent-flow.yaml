@@ -247,6 +247,7 @@ steps:
         revise: develop
     - trigger: need_clarification
       task_id: delivery-recovery
+      feedback_delivery: {artifact: workflow_feedback, source_kind: delivery, todo_source: workflow_feedback, todo_id_prefix: DLV}
       outcomes:
         submit: develop
     - trigger: need_permission

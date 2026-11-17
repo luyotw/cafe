@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
+from cafe.utils.issue_paths import issue_name_from_dir, validate_issue_name
 from cafe.core.cost import combine_cost_summaries, merge_cost_records, summarize_cost
 from cafe.core.packet_io import atomic_write_bytes, canonical_json
 from cafe.services.cost_summary import (
@@ -54,9 +55,10 @@ class CostStore:
     """Accounting has its own lock/envelope; it cannot grant closeout authority."""
 
     def __init__(self, project_root: Path, issue_name: str, workflow_id: str):
-        if not all(
-            isinstance(v, str) and _COMPONENT.fullmatch(v) for v in (issue_name, workflow_id)
-        ):
+        validate_issue_name(issue_name)
+        if any(not _COMPONENT.fullmatch(part) for part in issue_name.split("/")):
+            raise ValueError("invalid accounting identity component")
+        if not isinstance(workflow_id, str) or not _COMPONENT.fullmatch(workflow_id):
             raise ValueError("invalid accounting identity component")
         self.common = common_dir(project_root)
         self.identity = dict(
@@ -274,7 +276,7 @@ def manager_usage_sink(project_root, issue_name, workflow_id, caller):
 
 def validate_issue_identity(issue_dir, issue_name, workflow_id):
     issue_dir = Path(issue_dir)
-    if issue_dir.name != issue_name:
+    if issue_name_from_dir(issue_dir) != issue_name:
         raise ValueError("accounting issue identity differs")
     identities = []
     for path in (issue_dir / "audit_events/workflow.json", issue_dir / "blackboard.json"):
@@ -598,7 +600,7 @@ def worker_footer(issue_dir=None, *, project_root=None, locale="en-US"):
             if project_root is None:
                 project_root = next(p for p in issue_dir.parents if (p / ".git").exists())
             identity = read_accounting_file(issue_dir / "blackboard.json")["workflow_id"]
-            summary = worker_cost(project_root, issue_dir, issue_dir.name, identity)
+            summary = worker_cost(project_root, issue_dir, issue_name_from_dir(issue_dir), identity)
         except (OSError, ValueError, KeyError, StopIteration, subprocess.CalledProcessError):
             summary = summarize_cost([])
     return render_text(

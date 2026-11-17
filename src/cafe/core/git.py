@@ -409,6 +409,19 @@ class GitOperations:
             raise GitError("cleanup cannot prove original ancestry with a graft file")
         self.run_git("--no-replace-objects", "merge-base", "--is-ancestor", source, target)
 
+    def _cleanup_target_branch(self, base_ref: str, remotes: list[str]) -> str:
+        """Resolve a prepared base ref to the exact destination branch name."""
+        if base_ref.startswith("refs/heads/"):
+            return base_ref.removeprefix("refs/heads/")
+        # An existing local branch whose name starts with origin/ remains literal.
+        if base_ref.startswith("origin/") and self.branch_exists(base_ref):
+            return base_ref
+        if base_ref.startswith(("origin/", "refs/remotes/origin/")):
+            if "origin" not in remotes:
+                raise GitError("cleanup base refers to an unconfigured origin remote")
+            return base_ref.removeprefix("refs/remotes/").removeprefix("origin/")
+        return base_ref
+
     def cleanup_snapshot(self, source: str, target: str) -> dict:
         """Observe exact local and remote tips without integrating any changes.
 
@@ -417,6 +430,8 @@ class GitOperations:
         """
         from cafe.core.git_delivery import remote_configuration, pinned_remote_command
 
+        remotes = self.run_git("remote").splitlines()
+        target = self._cleanup_target_branch(target, remotes)
         for branch in (source, target):
             self.run_git("check-ref-format", "--branch", branch)
         if source == target or self.get_current_branch() != source:
@@ -430,7 +445,7 @@ class GitOperations:
         snapshot = {"source": source, "source_oid": source_oid, "target": target,
                     "local_target_oid": target_oid, "target_oid": target_oid,
                     "remote": None, "remote_source_oid": None}
-        if "origin" in self.run_git("remote").splitlines():
+        if "origin" in remotes:
             configuration = remote_configuration(self.repo_path, "origin", "pr")
             if configuration["fetch"] != configuration["push"]:
                 raise GitError("cleanup requires matching fetch and push endpoints")

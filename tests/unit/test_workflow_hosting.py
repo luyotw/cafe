@@ -26,14 +26,15 @@ def test_foreground_and_background_use_the_same_runtime_callable(tmp_path: Path)
     assert calls == ["foreground", "worker"]
 
 
-def test_fixed_worker_launch_passes_an_opaque_child_token(tmp_path: Path) -> None:
+@pytest.mark.parametrize("issue_name", ["issue432", "codex/issue119", "team/codex/issue119"])
+def test_fixed_worker_launch_passes_an_opaque_child_token(tmp_path: Path, issue_name) -> None:
     launches: list[tuple[list[str], dict]] = []
 
     def popen(command, **kwargs):
         launches.append((command, kwargs))
         return type("Process", (), {"pid": 4321})()
 
-    issue_dir = tmp_path / ".cafe" / "issues" / "issue432"
+    issue_dir = tmp_path / ".cafe" / "issues" / issue_name
     record = WorkerLaunchStore(issue_dir).start()
     pid = FixedWorkerLauncher(
         issue_dir, popen_factory=popen, python_executable="/fixed/python"
@@ -44,8 +45,11 @@ def test_fixed_worker_launch_passes_an_opaque_child_token(tmp_path: Path) -> Non
     assert command[command.index("--internal-worker-id") + 1] == record["worker_id"]
     assert command[command.index("--internal-worker-token") + 1] == record["worker_token"]
     assert kwargs["start_new_session"] is True
+    assert kwargs["cwd"] == str(tmp_path.resolve())
+    assert command[command.index("--issue") + 1] == issue_name
     assert pid == 4321
-    assert WorkerLaunchStore(issue_dir).validate_child(
+    child_issue = Path(kwargs["cwd"]) / ".cafe/issues" / command[command.index("--issue") + 1]
+    assert WorkerLaunchStore(child_issue).validate_child(
         worker_id=record["worker_id"], worker_token=record["worker_token"]
     )
 

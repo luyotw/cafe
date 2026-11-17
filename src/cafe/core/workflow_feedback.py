@@ -15,6 +15,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from cafe.utils.issue_paths import issue_project_root
+
 
 class WorkflowFeedbackError(RuntimeError):
     """Raised when the durable feedback ledger cannot be validated or stored."""
@@ -239,7 +241,7 @@ def has_causal_feedback_projection(issue_dir: Path, output: Path) -> bool:
         return False
     ledger = WorkflowFeedbackLedger(issue_dir).path.resolve()
     return any(
-        binding["causal"] and (issue_dir.parents[2] / binding["path"]).resolve() == ledger
+        binding["causal"] and (issue_project_root(issue_dir) / binding["path"]).resolve() == ledger
         for binding in materialized.projections
     )
 
@@ -266,7 +268,7 @@ def validate_completed_feedback_projection(
     materialized = load_materialization(output.parent / "iteration.json")
     if materialized is None:
         return False
-    root = issue_dir.parents[2]
+    root = issue_project_root(issue_dir)
     ledger = WorkflowFeedbackLedger(issue_dir)
 
     def path(value):

@@ -9,6 +9,7 @@ from pathlib import Path
 from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.packet_io import atomic_write_bytes, canonical_json
 from cafe.delivery.contracts import ActionProposal, ActionSnapshot, approve_selection, digest
+from cafe.utils.issue_paths import issue_project_root
 
 
 class ActionReviewRequired(ValueError):
@@ -97,7 +98,7 @@ def validate_source_identity(issue_dir, proposal):
     from cafe.delivery.operations import Commands
 
     commands = Commands(15)
-    root = issue_dir.resolve().parents[2]
+    root = issue_project_root(issue_dir.resolve())
     if (
         commands.git(root, "rev-parse", "HEAD") != proposal.source_oid
         or commands.git(root, "symbolic-ref", "--short", "HEAD") != proposal.source_branch

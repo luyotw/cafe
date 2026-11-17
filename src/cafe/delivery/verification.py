@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from cafe.core.packet_io import canonical_json
+from cafe.utils.issue_paths import issue_project_root
 
 
 # Execute verified bytes, never a mutable path reopened by the child.
@@ -153,7 +154,7 @@ def validate_verification(issue_dir, snapshot, report):
         raise ValueError("required post-integration verification is incomplete")
     current = observe_delivery(
         snapshot, report["actions"]["integration"].get("commit"),
-        root=issue_dir.resolve().parents[2], issue_dir=issue_dir,
+        root=issue_project_root(issue_dir.resolve()), issue_dir=issue_dir,
     )
     if current != shown:
         raise ValueError("post-integration verification changed or cannot be verified")

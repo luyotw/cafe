@@ -1371,6 +1371,7 @@ def close(
             if declared.resolve() != source_root:
                 raise ValueError("configured worktree differs from the current checkout")
         snapshot = git_ops.cleanup_snapshot(source, target)
+        target = snapshot["target"]
         try:
             git_ops.require_integrated(snapshot)
         except GitError:

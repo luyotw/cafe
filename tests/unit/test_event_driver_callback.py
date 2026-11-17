@@ -66,7 +66,7 @@ def _prepare_issue(issue_dir: Path):
 
 
 def _activate_event_contract(
-    issue_dir: Path, *, workflow_id: str, clis: list[tuple[str, str]]
+    issue_dir: Path, *, workflow_id: str, clis: list[tuple[str, str]], issue_name: str | None = None
 ) -> None:
     """Create the complete Driver authority required by public callback tests."""
     from cafe.driver import ActivateConfirmedContract, activate_confirmed_contract
@@ -109,7 +109,7 @@ def _activate_event_contract(
     activate_confirmed_contract(
         ActivateConfirmedContract(
             issue_dir=issue_dir,
-            issue_name=issue_dir.name,
+            issue_name=issue_name or issue_dir.name,
             workflow_id=workflow_id,
             confirmed_by="user",
             confirmed_at=datetime(2026, 9, 6, 2, tzinfo=timezone.utc),
@@ -628,19 +628,19 @@ def _contract_event_context(
     if bind_host:
         callback.activate_confirmed_contract_with_host_session(
             issue_dir=issue_dir,
-            issue_name=issue_dir.name,
+            issue_name=issue_name,
             workflow_id=blackboard.workflow_id,
             activate_contract=lambda: _activate_event_contract(
-                issue_dir, workflow_id=blackboard.workflow_id, clis=clis
+                issue_dir, workflow_id=blackboard.workflow_id, clis=clis, issue_name=issue_name
             ),
         )
     else:
-        _activate_event_contract(issue_dir, workflow_id=blackboard.workflow_id, clis=clis)
+        _activate_event_contract(issue_dir, workflow_id=blackboard.workflow_id, clis=clis, issue_name=issue_name)
     event = store.prepare_workflow_callback_event(
         blackboard,
         {
             "workflow_id": blackboard.workflow_id,
-            "issue": issue_dir.name,
+            "issue": issue_name,
             "event_type": event_type,
             "step": "develop",
             "status_code": "ok",
@@ -649,7 +649,7 @@ def _contract_event_context(
     driver_dir = issue_dir / "driver"
     config = callback._contract_callback_config(
         issue_dir=issue_dir,
-        issue_name=issue_dir.name,
+        issue_name=issue_name,
         workflow_id=blackboard.workflow_id,
     )
     state = callback._load_or_initialize_dispatch_state(
@@ -3772,3 +3772,20 @@ def retained_accounting_repository(tmp_path, monkeypatch):
     """Callback accounting now requires the real project Git identity boundary."""
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, capture_output=True)
     monkeypatch.setattr("cafe.manager.costs.common_dir", lambda root: tmp_path / ".git")
+
+
+def test_nested_issue_callback_status_chat_and_delivery_keep_full_identity(tmp_path, monkeypatch):
+    callback = _callback_module()
+    manager_dir, state, event = _contract_event_context(
+        callback, tmp_path, [("codex", "exact")], issue_name="codex/issue119"
+    )
+    assert callback.read_status(manager_dir.parent)["configured"] is True
+    state["events"] = {}
+    state["entries"][0]["session"] = {"id": "nested-session", "source": "provider",
+                                      "acquired_at": "2026-11-15T00:00:00+00:00"}
+    callback._write_dispatch_state(manager_dir, state)
+    assert callback.read_chat_session(manager_dir.parent, workflow_id=state["workflow_id"])["session_id"] == "nested-session"
+    delivered = []
+    monkeypatch.setattr(callback, "_run_v3_callback", lambda *a, **kw: (delivered.append(a[2]) or a[1]))
+    callback.run_callback(event, repository_root=tmp_path)
+    assert delivered[0]["issue"] == "codex/issue119"

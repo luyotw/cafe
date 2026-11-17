@@ -180,3 +180,13 @@ def test_archived_task_requires_explicit_restore(tmp_path: Path) -> None:
 
     assert archived.value.code == "archived_workflow"
     assert "restore" in archived.value.recovery.lower()
+
+
+def test_nested_issue_task_is_discoverable_without_namespace_aliases(tmp_path):
+    cafe_dir = tmp_path / ".cafe"
+    issue = _issue(cafe_dir, "codex/issue119", "nested-workflow")
+    task = _task(issue, "nested-workflow")
+    (cafe_dir / "issues/alias").symlink_to(issue.parent, target_is_directory=True)
+    inbox = TaskInboxService(cafe_dir)
+    assert [(item.id, item.issue) for item in inbox.list_tasks()] == [(task.id, "codex/issue119")]
+    assert inbox.inspect_read_only(task.id).issue == "codex/issue119"

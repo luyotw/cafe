@@ -358,3 +358,16 @@ def test_native_discovery_gap_keeps_caller_money_through_retention(tmp_path, cal
     summary = inclusive_report(root, "topic", "wf")["worker"]
     assert summary["known"] == Decimal("1.5")
     assert summary["incomplete"]
+
+
+def test_nested_issue_accounting_preserves_identity(tmp_path):
+    root, original = cost_journey(tmp_path)
+    issue = root / ".cafe/issues/codex/issue119"
+    issue.parent.mkdir(parents=True)
+    original.rename(issue)
+    manager_usage_sink(root, "codex/issue119", "wf", "callback-event")(
+        TokenUsage(cost_records=[record("manager", "2")]))
+    preserve_worker_cost(root, issue, "codex/issue119", "wf")
+    result = inclusive_report(root, "codex/issue119", "wf", issue_dir=issue)
+    assert result["worker"]["known"] == Decimal("1.5")
+    assert result["manager"]["known"] == Decimal("2")

@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.12.2] - 2026-11-17
+
+### Fixed
+
+- Preserve namespaced issue identifiers across Manager launch and confirmation,
+  detached workers, workflow callbacks, PR publication, and delivery worktrees.
+- Carry delivery recovery feedback and To-dos back into development. Prepare
+  the first context packet when an approved fresh-session retry follows a
+  correction preparation failure.
+- Use the latest workflow handoff for correction feedback and resolve its source
+  paths from the issue's project root.
+- Resolve remote-tracking base branches correctly when `cafe close` verifies
+  integration and cleans up a worktree.
+- Avoid false Codex subagent overlap and coverage gaps caused by inherited
+  turns and fork journal headers. Report missing descendant evidence accurately.
+
+See [the v0.12.2 release notes](docs/releases/v0.12.2.md) for the affected
+workflow and accounting paths.
+
 ## [0.12.1] - 2026-10-16
 
 ### Fixed
@@ -1068,6 +1087,7 @@ Major milestone release: deep refactor of CAFE's workflow engine from hardcoded 
 - Interactive phase management with checklist validation
 - GitHub integration for issue and PR management
 
+[0.12.2]: https://github.com/luyotw/cafe/compare/v0.12.1...v0.12.2
 [0.3.0]: https://github.com/luyotw/cafe/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/luyotw/cafe/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/luyotw/cafe/compare/v0.1.6...v0.2.0
