@@ -775,11 +775,21 @@ def test_phase_defaults_preserve_pre_change_complete_semantic_contracts(tmp_path
     for name, expected in fixture["playbooks"].items():
         model = loader.load_model(name, strict=True).model
         if name in DEVELOPMENT_PLAYBOOKS:
-            # Automatic delivery's exact changes are asserted above; retain the old
-            # baseline for all other phase defaults, tools, gates and graph edges.
+            # Normalize the verified delivery changes to compare the remaining
+            # phase defaults, tools, gates and graph edges with the old baseline.
             data = model.model_dump(mode="json")
             delivery = data["steps"]["deliver"]
             delivery.update(assignee_type="agent", automatic=None)
+            recovery = next(
+                task for task in delivery["human_tasks"] if task["task_id"] == "delivery-recovery"
+            )
+            assert recovery["feedback_delivery"] == {
+                "artifact": "workflow_feedback",
+                "source_kind": "delivery",
+                "todo_source": "workflow_feedback",
+                "todo_id_prefix": "DLV",
+            }, name
+            recovery["feedback_delivery"] = None
             for task in delivery["human_tasks"]:
                 for decision in ("fix_now", "revise", "submit"):
                     if decision in task["outcomes"]:
