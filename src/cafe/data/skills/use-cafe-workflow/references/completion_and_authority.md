@@ -367,6 +367,16 @@ one UTC `captured_at` boundary. Incomplete Manager evidence is a known subtotal,
 never a complete total. Active/unpersisted usage, including the report's response,
 is outside the cutoff. Existing records need no invocation completion timestamp.
 
+For Codex App Manager sessions, the yes report also reads the exact bound local
+journal. It prices ended turns when one accepted callback uniquely identifies the
+turn and the request counters reconcile. If you can verify that an entire direct
+conversation turn belongs to this workflow, pass its exact `--manager-turn-id
+<TURN-ID>` with `--choice yes`. Repeat the option for each verified turn. Leave
+mixed or uncertain turns out of the selection. The helper uses the existing rate
+card and reports recovered coverage as part of the known subtotal. Turn selections
+and reconstructed usage exist only in the report, with no accounting-store or
+workflow-state writes. The worker-only progress footer uses its existing sources.
+
 After interrupted preference/report presentation, reconcile the existing
 closeout/session evidence and the human answer. Re-offer a still-unanswered
 preference through the normal human conversation, never infer yes and never

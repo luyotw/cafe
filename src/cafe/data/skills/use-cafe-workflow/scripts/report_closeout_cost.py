@@ -227,6 +227,7 @@ def closeout_cost(
     archive_dir=None,
     choice=None,
     locale="en-US",
+    manager_turn_ids=(),
 ):
     archive = verify_closeout(
         project_root, issue_name, workflow_id, issue_dir, operation, archive_dir
@@ -245,10 +246,20 @@ def closeout_cost(
     if choice != "yes":
         raise ValueError("cost preference requires an explicit human yes or no")
     report = inclusive_report(project_root, issue_name, workflow_id, issue_dir=archive)
+    from host_manager_usage import add_host_manager_usage
+
+    add_host_manager_usage(report, archive, issue_name, workflow_id, manager_turn_ids)
     lines = [_text("cutoff", locale, captured_at=report["captured_at"])]
     for key in ("worker", "manager", "combined"):
         label = "combined_known" if key == "combined" and report[key]["incomplete"] else key
         lines.append(_text(label, locale, cost=format_summary(report[key], locale)))
+    host = report.get("host_manager_usage", {})
+    if "accepted_callbacks" in host:
+        lines.append(_text("host_usage", locale, **{
+            key: host[key] for key in (
+                "accepted_callbacks", "priced_callbacks", "priced_explicit_turns"
+            )
+        }))
     if "native_usage" in report["combined"]:
         from cafe.services.cost_summary import format_native_usage
         from cafe.core.runtime_locales import load_catalogs, select_text_locale
@@ -280,6 +291,8 @@ def main():
     parser.add_argument("--operation", choices=("cleanup", "archive"), default="cleanup")
     parser.add_argument("--archive-dir", type=Path)
     parser.add_argument("--choice", choices=("yes", "no"))
+    parser.add_argument("--manager-turn-id", action="append", default=[],
+                        help="Include a reviewed direct Codex App turn in this report")
     parser.add_argument("--locale", choices=("en-US", "zh-TW"), default="en-US")
     parser.add_argument("--preserve", action="store_true")
     args = parser.parse_args()
@@ -302,6 +315,7 @@ def main():
                 archive_dir=args.archive_dir,
                 choice=args.choice,
                 locale=args.locale,
+                manager_turn_ids=args.manager_turn_id,
             )
         print(json.dumps(result, ensure_ascii=False, default=str))
         return 0
