@@ -15,6 +15,21 @@ from cafe.ui.human_tasks import resolve_step_human_task
 pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
 
+class _ProjectionInterruptedError(RuntimeError):
+    """Simulated interruption after saving a result and before publishing its handoff."""
+
+
+def _interrupt_completion_projection(monkeypatch: pytest.MonkeyPatch) -> None:
+    record_event = BlackboardStore.record_event
+
+    def interrupt(self, state, event_type, payload, **kwargs):
+        if event_type == "human_task_completed":
+            raise _ProjectionInterruptedError
+        return record_event(self, state, event_type, payload, **kwargs)
+
+    monkeypatch.setattr(BlackboardStore, "record_event", interrupt)
+
+
 def test_owner_declared_manual_handoff_uses_the_declared_durable_task(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -195,12 +210,8 @@ def test_interactive_handoff_recovers_a_persisted_same_step_completion_after_int
     )
 
     with monkeypatch.context() as crashing:
-        crashing.setattr(
-            BlackboardStore,
-            "set_current_step",
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("interrupted")),
-        )
-        with pytest.raises(RuntimeError, match="interrupted"):
+        _interrupt_completion_projection(crashing)
+        with pytest.raises(_ProjectionInterruptedError):
             cli_shared._handle_declared_human_task_handoff(
                 issue_name=f"interrupted-{trigger}",
                 issue_dir=issue_dir,
@@ -211,7 +222,11 @@ def test_interactive_handoff_recovers_a_persisted_same_step_completion_after_int
                 trigger=trigger,
             )
 
+    records = HumanTaskRecordStore(issue_dir)
+    (saved_result,) = records.results()
+    assert saved_result.task_id == task.id
     restarted = store.load_or_create("develop", playbook_id="standard")
+    assert restarted.current_step == "user"
     monkeypatch.setattr(
         "cafe.ui.human_tasks.collect_human_task_payload",
         lambda *_args, **_kwargs: pytest.fail("recovery must not re-prompt the participant"),
@@ -226,9 +241,8 @@ def test_interactive_handoff_recovers_a_persisted_same_step_completion_after_int
         trigger=trigger,
     )
 
-    records = HumanTaskRecordStore(issue_dir)
     assert target == "develop"
-    assert len(records.results()) == 1
+    assert records.results() == (saved_result,)
     assert (
         issue_dir / "develop" / "iteration_002" / "user_input.md"
     ).read_text(encoding="utf-8") == response["feedback"]
@@ -281,12 +295,8 @@ def test_interactive_handoff_recovers_dynamic_answers_from_completed_iteration(
     )
 
     with monkeypatch.context() as crashing:
-        crashing.setattr(
-            BlackboardStore,
-            "set_current_step",
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("interrupted")),
-        )
-        with pytest.raises(RuntimeError, match="interrupted"):
+        _interrupt_completion_projection(crashing)
+        with pytest.raises(_ProjectionInterruptedError):
             cli_shared._handle_declared_human_task_handoff(
                 issue_name="interrupted-dynamic-answers",
                 issue_dir=issue_dir,
@@ -300,7 +310,11 @@ def test_interactive_handoff_recovers_dynamic_answers_from_completed_iteration(
     assert persisted_input.read_text(encoding="utf-8") == "scope: Small"
     assert not (persisted_input.parent / "questions.xml").exists()
 
+    records = HumanTaskRecordStore(issue_dir)
+    (saved_result,) = records.results()
+    assert saved_result.task_id == task.id
     restarted = store.load_or_create("spec", playbook_id="standard")
+    assert restarted.current_step == "user"
     monkeypatch.setattr(
         "cafe.ui.human_tasks.collect_human_task_payload",
         lambda *_args, **_kwargs: pytest.fail("recovery must not re-prompt the participant"),
@@ -315,9 +329,8 @@ def test_interactive_handoff_recovers_dynamic_answers_from_completed_iteration(
         trigger="need_clarification",
     )
 
-    records = HumanTaskRecordStore(issue_dir)
     assert target == "spec"
-    assert len(records.results()) == 1
+    assert records.results() == (saved_result,)
     assert (issue_dir / "spec" / "iteration_002" / "user_input.md").read_text(
         encoding="utf-8"
     ) == "scope: Small"
