@@ -599,6 +599,53 @@ def test_saved_result_retry_defers_to_a_cli_resume_that_owns_advancement(
     assert [result.task_id for result in HumanTaskRecordStore(issue_dir).results()] == [task.id]
 
 
+@pytest.mark.parametrize("replacement_target", ["spec", "plan"])
+@pytest.mark.parametrize("boundary", ["adapter", "runtime", "dispatch"])
+def test_saved_result_resume_leaves_a_replacement_handoff_unconsumed(
+    saved_continuation, continuation_provider, monkeypatch, boundary, replacement_target,
+):
+    issue_dir, task, command = saved_continuation
+    subprocess.run(["git", "init", "-q"], check=True, capture_output=True)
+    with Path(".git/info/exclude").open("a", encoding="utf-8") as excludes:
+        excludes.write("\n/.cafe/\n")
+    executions = []
+    continuation_provider.append(lambda: executions.append(True))
+    store = BlackboardStore(issue_dir)
+    replacements = []
+
+    def publish_replacement():
+        if replacements:
+            return
+        state = store.load_read_only()
+        replacements.append(store.update_handoff_contract(
+            state, from_step="plan", to_owner=HandoffOwner.AGENT,
+            to_step=replacement_target, intent=HandoffIntent.AWAIT_AGENT,
+            source="chat.manual_handoff",
+        ))
+
+    owner, method = {
+        "adapter": (PlaybookLoader, "load"),
+        "runtime": (BlackboardWorkflowRuntime, "run"),
+        "dispatch": (BlackboardWorkflowRuntime, "_run_from_current_step"),
+    }[boundary]
+    original = getattr(owner, method)
+
+    def publish_before_use(self, *args, **kwargs):
+        publish_replacement()
+        return original(self, *args, **kwargs)
+
+    before = store.load_read_only()
+    monkeypatch.setattr(owner, method, publish_before_use)
+    assert _continuation_status([*command, "--resume"]) == "unknown"
+    (replacement,) = replacements
+    after = store.load_read_only()
+    assert not executions
+    assert after.handoff_contract == replacement
+    assert after.current_step == before.current_step
+    assert after.events == before.events
+    assert [result.task_id for result in HumanTaskRecordStore(issue_dir).results()] == [task.id]
+
+
 def test_saved_result_retry_cannot_advance_a_replacement_workflow(
     tmp_path, saved_continuation,
 ):

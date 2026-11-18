@@ -145,8 +145,10 @@ cafe task continuation "$TASK_ID" --issue "$ISSUE" \
 ```
 
 The first command reads durable state. The second takes the same advancement
-lock as ordinary CLI and background workers, rechecks the exact identities and
-handoff, and runs the existing workflow in the foreground without prompting.
+lock as ordinary CLI and background workers and enters the existing runtime
+from the exact projected handoff in the foreground without prompting. If a
+new handoff replaces it before dispatch, the bound resume leaves the new
+handoff available for its owning workflow.
 It can also finish projecting a saved result when its original user handoff
 still owns the workflow. Use the same identifiers after a lost reply.
 
@@ -172,9 +174,10 @@ not record task, result, and handoff identity together may report `unknown`.
 The local journeys use a real workflow, task and audit store, and process lock.
 The background journey discards the launch reply, observes the worker before it
 enters the runtime, and verifies its exit status and the next HumanTask. Other
-journeys cover an overlapping ordinary CLI resume, a replaced workflow, and a
-retryable startup failure. Recovery tests stop before the projection audit
-record and after the record commits but before the workflow checkpoint.
+journeys cover an overlapping ordinary CLI resume, a replaced workflow,
+handoff replacement during runtime admission, and a retryable startup failure.
+Recovery tests stop before the projection audit record and after the record
+commits but before the workflow checkpoint.
 
 ```bash
 python -m pytest tests/integration/test_task_inbox_workflow.py -k saved_result --no-cov

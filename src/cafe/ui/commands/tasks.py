@@ -18,7 +18,12 @@ from cafe.core.capability_approvals import CapabilityApprovalError
 from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.human_task_snapshot import resolve_task_inputs, uses_special_approval
 from cafe.core.human_tasks import HumanTaskPolicy
-from cafe.core.task_continuation import ContinuationRequest, observe_continuation
+from cafe.core.task_continuation import (
+    ContinuationBinding,
+    ContinuationRequest,
+    ContinuationSupersededError,
+    observe_continuation,
+)
 from cafe.core.task_inbox import (
     CompletionPreflight,
     TaskInboxError,
@@ -338,9 +343,13 @@ def _resume_saved_continuation(request: ContinuationRequest, context: typer.Cont
             state = observation.state
             if state is None or observation.unprojected_task is not None:
                 return observation.status
-        context.obj = request
+        assert state.handoff_contract is not None
+        context.obj = ContinuationBinding(request, state.handoff_contract)
         try:
             _resume_issue_workflow(request.issue, state.playbook_id, context=context)
+        except ContinuationSupersededError:
+            after = observe_continuation(request)
+            return after.status if after.state is None else "unknown"
         except (OSError, ValueError, RuntimeError, typer.Exit):
             after = observe_continuation(request)
             if after.state is None:

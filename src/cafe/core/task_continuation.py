@@ -10,6 +10,7 @@ from cafe.core.blackboard import (
     BlackboardState,
     BlackboardStore,
     EventEntry,
+    HandoffContract,
     HandoffIntent,
     HandoffOwner,
 )
@@ -23,6 +24,7 @@ from cafe.core.human_task_records import (
 from cafe.core.human_task_snapshot import durable_task_matches_current_handoff
 from cafe.core.human_tasks import AGENT_EXECUTION_INTERRUPTED_TRIGGER
 from cafe.core.task_inbox import TaskInboxError
+from cafe.core.workflow_models import BatonRejected
 from cafe.utils.issue_paths import validate_issue_directory, validate_issue_name
 
 
@@ -63,6 +65,31 @@ class ContinuationObservation:
     result: TaskResult | None = None
 
 
+class ContinuationSupersededError(RuntimeError):
+    """The saved result no longer authorizes the current workflow handoff."""
+
+
+@dataclass(frozen=True)
+class ContinuationBinding:
+    request: ContinuationRequest
+    handoff: HandoffContract
+
+    def read_current(self, store: BlackboardStore) -> BlackboardState:
+        """Read the exact projected position while serializing with handoff writers."""
+        try:
+            with store.state_transaction():
+                state = store.load_read_only()
+                if (
+                    state.workflow_id == self.request.workflow_id
+                    and state.current_step == self.handoff.to_step
+                    and state.handoff_contract == self.handoff
+                ):
+                    return state
+        except (BatonRejected, OSError, ValueError) as exc:
+            raise ContinuationSupersededError("The saved handoff could not be verified") from exc
+        raise ContinuationSupersededError("The saved handoff has changed")
+
+
 def observe_continuation(
     request: ContinuationRequest, *, reconcile: bool = False,
 ) -> ContinuationObservation:
@@ -96,11 +123,11 @@ def observe_continuation(
             )
         try:
             state = store.load_read_only()
-        except (OSError, ValueError):
+        except (BatonRejected, OSError, ValueError):
             if not reconcile or not request.matches_workflow(store):
                 return ContinuationObservation("unknown")
             state = store.load_or_create(task.step)
-    except (OSError, ValueError):
+    except (BatonRejected, OSError, ValueError):
         return ContinuationObservation("unknown")
     if state.workflow_id != request.workflow_id:
         return ContinuationObservation("stale_workflow")

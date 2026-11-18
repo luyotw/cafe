@@ -85,6 +85,7 @@ from cafe.core.status_codes import (
     step_on_declares,
     transition_map_key,
 )
+from cafe.core.task_continuation import ContinuationBinding, ContinuationSupersededError
 from cafe.core.todo import (
     MAX_TODO_ITEMS,
     TodoContractError,
@@ -470,10 +471,12 @@ class BlackboardWorkflowRuntime:
         automatic_registry: Optional[AutomaticExecutorRegistry] = None,
         workflow_event_callback: Callable[[Mapping[str, Any]], None] | None = None,
         execution_context: Mapping[str, Any] | None = None,
+        continuation: ContinuationBinding | None = None,
     ) -> None:
         self.issue_dir = issue_dir
         self.playbook = playbook
         self.executor = executor
+        self.continuation = continuation
         self.execution_context = dict(execution_context) if execution_context is not None else None
         self.automatic_registry = automatic_registry or default_automatic_executor_registry()
 
@@ -485,11 +488,15 @@ class BlackboardWorkflowRuntime:
         self._validate_automatic_executor_declarations()
 
         self.blackboard_store = BlackboardStore(issue_dir)
-        self.blackboard = self.blackboard_store.load_or_create(
-            self.start_step,
-            playbook_id=self.playbook_id,
-            tolerate_invalid_baton=True,
-            playbook_conversation_locale=playbook_meta.get("conversation_locale"),
+        self.blackboard = (
+            continuation.read_current(self.blackboard_store)
+            if continuation is not None
+            else self.blackboard_store.load_or_create(
+                self.start_step,
+                playbook_id=self.playbook_id,
+                tolerate_invalid_baton=True,
+                playbook_conversation_locale=playbook_meta.get("conversation_locale"),
+            )
         )
         self._replaced_user_handoff: HandoffContract | None = None
         self._workflow_event_callback = workflow_event_callback
@@ -732,13 +739,17 @@ class BlackboardWorkflowRuntime:
         but an already-valid handoff contract is the authoritative routing
         signal at resume time.
         """
-        try:
-            contract = self.blackboard_store.load_handoff_contract(
-                self.blackboard,
-                allowed_steps=list(self.steps.keys()),
-            )
-        except BatonRejected:
-            return RuntimePositionResolution(current_step=self.blackboard.current_step)
+        if self.continuation is not None:
+            self.blackboard = self.continuation.read_current(self.blackboard_store)
+            contract = self.continuation.handoff
+        else:
+            try:
+                contract = self.blackboard_store.load_handoff_contract(
+                    self.blackboard,
+                    allowed_steps=list(self.steps.keys()),
+                )
+            except BatonRejected:
+                return RuntimePositionResolution(current_step=self.blackboard.current_step)
         previous = self.blackboard.current_step
         persisted_rejection = self._reject_persisted_incomplete_completion(
             previous_step=previous,
@@ -6667,6 +6678,10 @@ class BlackboardWorkflowRuntime:
         with advancement_execution_lock(self.issue_dir) as acquired:
             if acquired:
                 _quiescent(self.issue_dir)
+            if self.continuation is not None:
+                if start_step is not None or single_step:
+                    raise ValueError("A saved continuation requires its original workflow route")
+                self.blackboard = self.continuation.read_current(self.blackboard_store)
             recovered = recover_pending_interruption(self.issue_dir)
             if recovered is not None:
                 self.blackboard = self.blackboard_store.load_or_create(
@@ -6881,6 +6896,10 @@ class BlackboardWorkflowRuntime:
     def _run_from_current_step(
         self, *, current_step: str, max_transitions: int
     ) -> PlaybookRunResult:
+        if self.continuation is not None:
+            self.blackboard = self.continuation.read_current(self.blackboard_store)
+            if current_step != self.continuation.handoff.to_step:
+                raise ContinuationSupersededError("The runtime selected a different handoff")
         for hop in range(max_transitions):
             definition = self.steps[current_step]
             owned_result = self._run_non_agent_owner(
