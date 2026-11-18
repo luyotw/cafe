@@ -66,6 +66,63 @@ For an explicit supervisor override, the TaskResult and Blackboard completion
 event retain both the declared and selected continuations, and an optional work
 report is delivered to the selected phase.
 
+## Inspect and submit a task snapshot
+
+Run `cafe task inspect <task-id> --json` from the repository. `data.task`
+contains the existing task contract and identifies the workflow, source step,
+and iteration. `data.snapshot` has `schema_version: 1`, `status`, and `version`.
+Treat `version` as an opaque value and keep it alongside the data you display.
+
+| Snapshot field | Contract |
+| --- | --- |
+| `status` | `available` gives a usable version. `unavailable` gives a null version when the task is stale, terminal, or missing required data. `not_applicable` gives a null version for tasks with a separate approval protocol. |
+| `questions` | When `available`, `items` is an ordered array of `{id, title, options, multi_select}` for a task that uses XML questions. Inline questions on other tasks are in `data.task.expected_result`. |
+| `review_artifact` | When `available`, contains the issue-relative `path`, UTF-8 `text`, `sha256` of the file bytes, and `registered_version` (an integer if registered, otherwise null). It describes the producing iteration's `output.md` for output review and no-change decisions. |
+| `reason` | When the task has no inspectable context, this code describes the reason and the two component fields may be absent. |
+
+Each component reports `available`, `unavailable`, or `not_applicable`. CAFE
+reads `questions.xml` and `output.md` from the task's producing iteration.
+Each file must be a regular file with a single link and at most 1 MiB.
+A registered review artifact must match the producing step and path, along
+with its recorded content digest when present. Missing, invalid, and unsafe
+inputs make the relevant component unavailable. Capability and delivery
+approvals use their existing review contracts.
+
+To submit a versioned reply, add `snapshot_version` to the task's JSON result
+and pass it to `cafe task complete <task-id> --result` or `--result-file`.
+You can also include `workflow_id` from `data.task`. CAFE checks the snapshot
+under the durable task transaction and validates the response with the normal
+HumanTask policy. Omitting `snapshot_version` uses the existing response path.
+
+The JSON error envelope includes `error.code` and `error.recovery`. A rejected
+reply leaves the workflow paused if this is still its active handoff.
+
+| Error code | Client action |
+| --- | --- |
+| `stale_snapshot` | Inspect again and display the refreshed version before asking for a new reply. |
+| `snapshot_unavailable` | Wait for the owning workflow to restore the task data, then inspect again. Use the declared approval protocol for special approval tasks. |
+| `stale_task`, `task_not_pending` | List pending tasks and inspect the current task. A replay cannot advance the workflow again. |
+| `invalid_response` | Correct the result using the declared response contract. |
+
+For a pending spec clarification task whose question IDs are `scope` and
+`platforms`, run the following commands with its ID in `TASK_ID`. The first
+command captures the version and the displayed data in a single response.
+After reviewing the displayed questions, supply the participant's answers.
+
+```bash
+cafe task inspect "$TASK_ID" --json > task.json
+jq -e '.data.snapshot | select(.status == "available") | .questions.items' task.json
+jq -e 'select(.data.snapshot.questions.status == "available") |
+       {snapshot_version: .data.snapshot.version, workflow_id: .data.task.workflow_id,
+        answers: {scope: "Small", platforms: ["CLI", "API"]}}' task.json > reply.json
+cafe task complete "$TASK_ID" --result-file reply.json --no-resume --json
+```
+
+For an output review, display `.data.snapshot.review_artifact.text` and use the
+task's declared `decision` in place of `answers`. To reproduce the clarification,
+review, stale submission, and replay journeys with a local test workflow, run
+`python -m pytest tests/integration/test_task_inbox_workflow.py -k external --no-cov`.
+
 ## Migration and compatibility
 
 Blackboard schema 1 did not contain a workflow id. On first load, CAFE assigns

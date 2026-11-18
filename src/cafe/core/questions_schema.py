@@ -35,9 +35,10 @@ def parse_questions_xml(xml_path: Path) -> list[Question]:
     if not xml_path.exists():
         raise FileNotFoundError(f"Questions file not found: {xml_path}")
 
-    tree = ET.parse(xml_path)
-    root = tree.getroot()
+    return _parse_questions(ET.parse(xml_path).getroot())
 
+
+def _parse_questions(root: ET.Element) -> list[Question]:
     questions = []
     for q_elem in root.findall("question"):
         q_id = q_elem.get("id", "")
@@ -75,40 +76,26 @@ def validate_questions_xml(xml_path: Path) -> bool:
         True if valid, False otherwise
     """
     try:
-        if not xml_path.exists():
-            return False
-
-        tree = ET.parse(xml_path)
-        root = tree.getroot()
-
-        # Root must be <questions>
-        if root.tag != "questions":
-            return False
-
-        # Must have at least one <question>
-        question_elems = root.findall("question")
-        if not question_elems:
-            return False
-
-        for q_elem in question_elems:
-            # Each question must have a non-empty <title>
-            title_elem = q_elem.find("title")
-            if title_elem is None or not title_elem.text or not title_elem.text.strip():
-                return False
-
-            # Each question must have <options> with at least one non-empty <option>
-            options_elem = q_elem.find("options")
-            if options_elem is None:
-                return False
-
-            valid_options = [
-                opt for opt in options_elem.findall("option")
-                if opt.text and opt.text.strip()
-            ]
-            if not valid_options:
-                return False
-
-        return True
-
-    except (ET.ParseError, Exception):
+        return _valid_question_set(ET.parse(xml_path).getroot())
+    except (OSError, ET.ParseError, ValueError, LookupError):
         return False
+
+
+def parse_validated_questions_xml(content: bytes) -> list[Question]:
+    """Validate and parse one captured XML document."""
+    try:
+        root = ET.fromstring(content)
+    except (ET.ParseError, ValueError, LookupError) as exc:
+        raise ValueError("Invalid questions XML") from exc
+    if not _valid_question_set(root):
+        raise ValueError("Invalid questions XML")
+    return _parse_questions(root)
+
+
+def _valid_question_set(root: ET.Element) -> bool:
+    questions = root.findall("question")
+    return root.tag == "questions" and bool(questions) and all(
+        (question.findtext("title") or "").strip()
+        and any((option.text or "").strip() for option in question.findall("options/option"))
+        for question in questions
+    )

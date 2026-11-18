@@ -351,6 +351,10 @@ cafe task inspect 7fe1a9e8-66fa-4df2-88d4-cd6af87fae43
 cafe task inspect 7fe1a9e8-66fa-4df2-88d4-cd6af87fae43 --json
 ```
 
+The JSON inspection includes a versioned snapshot of the pending task's dynamic
+questions or reviewed output when applicable. See the
+[HumanTask snapshot contract and example](docs/human-task-runtime.md#inspect-and-submit-a-task-snapshot).
+
 Completion is interactive when no result option is supplied. Automation may
 provide the task's declared response as JSON directly or in a file:
 

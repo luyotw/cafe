@@ -15,9 +15,14 @@ from rich.table import Table
 from cafe.core.blackboard import BlackboardStore
 from cafe.core.capability_approvals import CapabilityApprovalError
 from cafe.core.human_task_records import HumanTaskRecordStore
+from cafe.core.human_task_snapshot import resolve_task_inputs, uses_special_approval
 from cafe.core.human_tasks import HumanTaskPolicy
-from cafe.core.task_inbox import CompletionPreflight, TaskInboxError, TaskInboxService
-from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
+from cafe.core.task_inbox import (
+    CompletionPreflight,
+    TaskInboxError,
+    TaskInboxService,
+    load_issue_task_playbook,
+)
 from cafe.ui.commands import workflow as workflow_commands
 from cafe.ui.human_tasks import (
     HumanTaskApplication,
@@ -30,11 +35,10 @@ from cafe.ui.human_tasks import (
 
 
 def load_task_playbook(preflight: CompletionPreflight, *, project_root: Path) -> dict[str, Any]:
-    """Load the effective playbook used by every structured task completion."""
-    playbook_data = PlaybookLoader(project_root=project_root, resolve_presentation=False).load(
-        preflight.playbook_id
+    """Load the effective playbook for a structured task completion."""
+    return load_issue_task_playbook(
+        project_root=project_root, issue_dir=preflight.issue_dir, playbook_id=preflight.playbook_id,
     )
-    return apply_issue_playbook_overrides(playbook_data, preflight.issue_dir / "issue.yaml")
 
 
 def apply_structured_task(
@@ -71,9 +75,10 @@ def apply_structured_task(
             else "The response did not select a continuation."
         )
         raise TaskInboxError(
-            "invalid_response",
+            applied.error_code or "invalid_response",
             message,
-            recovery="Inspect the expected result and submit one declared response.",
+            recovery=(applied.rejection.correction_guidance if applied.error_code and applied.rejection
+                      else "Inspect the expected result and submit one declared response."),
             task_id=task_id,
             issue=preflight.issue,
             workflow_id=preflight.workflow_id,
@@ -256,13 +261,15 @@ def inspect_task(
     json_output: bool = typer.Option(False, "--json", help="Emit one JSON result object"),
 ) -> None:
     """Inspect one task's response contract, provenance, and continuation."""
+    service = TaskInboxService(Path(".cafe"))
     try:
-        detail = TaskInboxService(Path(".cafe")).inspect(task_id)
+        if json_output:
+            detail, snapshot = service.inspect_with_snapshot(task_id)
+            _emit_json(_envelope("inspect", data={"task": detail.to_dict(), "snapshot": snapshot}))
+            return
+        detail = service.inspect(task_id)
     except TaskInboxError as exc:
         _fail("inspect", exc, json_output)
-    if json_output:
-        _emit_json(_envelope("inspect", data={"task": detail.to_dict()}))
-        return
     console.print(f"[bold]Task[/bold] {detail.id}")
     console.print(f"Issue: {detail.issue}  Workflow: {detail.workflow_id}")
     console.print(f"Origin: {detail.step} iteration {detail.iteration} ({detail.trigger})")
@@ -306,6 +313,15 @@ def complete_task(
         raw_payload = _load_result(result, result_file)
         applied: Any
         if preflight.task.capability_approval is not None:
+            if isinstance(raw_payload, dict) and "snapshot_version" in raw_payload:
+                raise TaskInboxError(
+                    "snapshot_unavailable",
+                    "This task requires the capability approval protocol.",
+                    recovery="Inspect capability_approval and use its request fingerprint.",
+                    task_id=task_id,
+                    issue=preflight.issue,
+                    workflow_id=preflight.workflow_id,
+                )
             if handoff_to is not None:
                 raise TaskInboxError(
                     "invalid_response",
@@ -360,9 +376,31 @@ def complete_task(
                     issue=preflight.issue,
                     workflow_id=preflight.workflow_id,
                 ) from exc
-            raw_payload = collect_human_task_payload(policy)
+            playbook = load_task_playbook(preflight, project_root=Path.cwd())
+            step_definition = playbook["steps"][preflight.task.step]
+            questions = None
+            if not uses_special_approval(preflight.task, step_definition):
+                inputs = resolve_task_inputs(
+                    preflight.issue_dir, step=preflight.task.step, iteration=preflight.task.iteration,
+                    policy=policy, blackboard=BlackboardStore(preflight.issue_dir).load_read_only(),
+                    step_definition=step_definition,
+                )
+                questions = inputs.questions
+                if inputs.review_artifact is not None:
+                    console.print(inputs.review_artifact.text, markup=False)
+            raw_payload = collect_human_task_payload(policy, questions=questions) or {}
         if preflight.task.capability_approval is None and isinstance(raw_payload, dict):
             raw_payload = dict(raw_payload)
+            if ("snapshot_version" in raw_payload
+                    and raw_payload.get("human_task_id", task_id) != task_id):
+                raise TaskInboxError(
+                    "stale_task",
+                    "The response identifies a different human task.",
+                    recovery="Inspect the task identified on the command line and submit its version.",
+                    task_id=task_id,
+                    issue=preflight.issue,
+                    workflow_id=preflight.workflow_id,
+                )
             raw_payload.setdefault("task", preflight.task.policy_id)
             raw_payload["human_task_id"] = task_id
         assert raw_payload is not None

@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
+from cafe.core.blackboard import BlackboardStore
 from cafe.utils.issue_paths import iter_issue_directories
 from cafe.core.human_task_records import (
     Assignment,
@@ -24,6 +25,21 @@ from cafe.core.human_tasks import (
     HumanTaskPolicy,
     agent_execution_interrupted_human_task,
 )
+from cafe.core.human_task_snapshot import (
+    durable_task_matches_current_handoff,
+    resolve_task_inputs,
+    uses_special_approval,
+)
+
+
+def load_issue_task_playbook(
+    *, project_root: Path, issue_dir: Path, playbook_id: str,
+) -> dict[str, Any]:
+    """Load the effective machine declarations for the owning issue."""
+    from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
+
+    playbook = PlaybookLoader(project_root=project_root, resolve_presentation=False).load(playbook_id)
+    return apply_issue_playbook_overrides(playbook, issue_dir / "issue.yaml")
 
 
 class TaskInboxError(RuntimeError):
@@ -221,6 +237,38 @@ class TaskInboxService:
 
     def inspect(self, task_id: str) -> TaskDetail:
         return self._detail(self._select(task_id))
+
+    def inspect_with_snapshot(self, task_id: str) -> tuple[TaskDetail, dict[str, Any]]:
+        record = self._select(task_id)
+        return self._detail(record), self._snapshot(record)
+
+    def _snapshot(self, record: _Record) -> dict[str, Any]:
+        task = record.task
+        unavailable = {"schema_version": 1, "status": "unavailable", "version": None}
+        if task.status is not HumanTaskStatus.PENDING or record.wait.released_at or record.result:
+            return {**unavailable, "reason": "task_not_pending"}
+        if task.capability_approval is not None:
+            return {**unavailable, "status": "not_applicable", "reason": "special_approval"}
+        try:
+            blackboard = BlackboardStore(record.issue_dir).load_read_only()
+            if (blackboard.workflow_id != task.workflow_id
+                    or not durable_task_matches_current_handoff(task, blackboard)):
+                return {**unavailable, "reason": "stale_task"}
+            playbook = load_issue_task_playbook(
+                project_root=self.cafe_dir.parent.resolve(),
+                issue_dir=record.issue_dir, playbook_id=record.playbook_id,
+            )
+            step_definition = playbook["steps"][task.step]
+            if uses_special_approval(task, step_definition):
+                return {**unavailable, "status": "not_applicable", "reason": "special_approval"}
+            inputs = resolve_task_inputs(
+                record.issue_dir, step=task.step, iteration=task.iteration,
+                policy=HumanTaskPolicy.model_validate(task.expected_result),
+                blackboard=blackboard, step_definition=step_definition,
+            )
+        except (OSError, LookupError, TypeError, ValueError):
+            return {**unavailable, "reason": "task_context_unavailable"}
+        return inputs.to_snapshot(task, blackboard)
 
     def inspect_read_only(self, task_id: str) -> TaskDetail:
         """Project a durable task without refreshing runtime-owned task contracts."""

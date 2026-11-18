@@ -8,11 +8,14 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
+from cafe.core.workflow_models import StepExecutionResult
+from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.ui.cli import app
 from cafe.ui.human_tasks import resolve_step_human_task
+from cafe.workflow_execution.automatic import automatic_executor_registry
 from cafe.workflow_execution.event_callback import ResolvedWorkflowEventCallback
 from cafe.workflow_execution.worker_launch import WorkerLaunchStore
 
@@ -61,6 +64,203 @@ def _pending_issue(
         assignee_type="user",
     )
     return issue_dir, task
+
+
+def _workflow_task(project: Path, name: str, intent: HandoffIntent):
+    issue_dir = project / ".cafe" / "issues" / name
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text("playbook: standard\n", encoding="utf-8")
+
+    def execute(step, _definition, state):
+        iteration = issue_dir / step / "iteration_001"
+        iteration.mkdir(parents=True, exist_ok=True)
+        (iteration / "output.md").write_text("# Reviewed spec\n", encoding="utf-8")
+        (iteration / "questions.xml").write_text(
+            '<questions><question id="scope"><title>Which scope?</title>'
+            '<options><option>Small</option></options></question>'
+            '<question id="platforms" type="checkbox"><title>Which platforms?</title>'
+            '<options><option>CLI</option><option>API</option></options></question></questions>',
+            encoding="utf-8",
+        )
+        BlackboardStore(issue_dir).update_handoff_contract(
+            state, from_step=step, to_owner=HandoffOwner.USER, to_step="user",
+            intent=intent, source="test.executor",
+        )
+        return StepExecutionResult(response="Ready for input", artifacts={})
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=PlaybookLoader().load("standard"), executor=execute,
+        automatic_registry=automatic_executor_registry(),
+    ).run(start_step="spec")
+    assert not result.completed
+    (task,) = HumanTaskRecordStore(issue_dir).tasks()
+    assert task.status is HumanTaskStatus.PENDING and task.trigger == intent.value
+    return issue_dir, task
+
+
+def _inspect_snapshot(task_id: str) -> dict:
+    result = runner.invoke(app, ["task", "inspect", task_id, "--json"])
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    return json.loads(result.stdout)["data"]["snapshot"]
+
+
+def _submit_snapshot(task, version: str, **response):
+    return runner.invoke(app, [
+        "task", "complete", task.id, "--no-resume", "--json", "--result",
+        json.dumps({"snapshot_version": version, **response}),
+    ])
+
+
+def test_external_client_answers_the_runtime_questions_bound_to_its_pending_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir, task = _workflow_task(tmp_path, "questions", HandoffIntent.NEED_CLARIFICATION)
+    newer = issue_dir / "spec" / "iteration_002"
+    newer.mkdir()
+    (newer / "questions.xml").write_text(
+        '<questions><question id="unrelated"><title>Unrelated?</title>'
+        '<options><option>No</option></options></question></questions>', encoding="utf-8",
+    )
+
+    snapshot = _inspect_snapshot(task.id)
+    assert snapshot["status"] == "available"
+    assert snapshot["questions"]["items"] == [
+        {"id": "scope", "title": "Which scope?", "options": ["Small"], "multi_select": False},
+        {"id": "platforms", "title": "Which platforms?", "options": ["CLI", "API"],
+         "multi_select": True},
+    ]
+    assert snapshot["review_artifact"]["status"] == "not_applicable"
+
+    invalid = _submit_snapshot(task, snapshot["version"], answers={"unrelated": "No"})
+    assert invalid.exit_code != 0
+    assert json.loads(invalid.stdout)["error"]["code"] == "invalid_response"
+    assert HumanTaskRecordStore(issue_dir).results() == ()
+    assert BlackboardStore(issue_dir).load_read_only().current_step == "user"
+
+    response = {"answers": {"scope": "Small", "platforms": ["CLI", "API"]}}
+    valid = _submit_snapshot(task, snapshot["version"], **response)
+    assert valid.exit_code == 0, (valid.stdout, valid.exception)
+    replay = _submit_snapshot(task, snapshot["version"], **response)
+    assert json.loads(replay.stdout)["error"]["code"] == "task_not_pending"
+    records = HumanTaskRecordStore(issue_dir)
+    assert len(records.results()) == 1
+    assert BlackboardStore(issue_dir).load_read_only().current_step == "spec"
+
+
+@pytest.mark.parametrize("component", ["questions", "review_artifact"])
+def test_external_client_must_refresh_changed_or_unavailable_task_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, component: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    is_review = component == "review_artifact"
+    intent = HandoffIntent.CONFIRM_OUTPUT if is_review else HandoffIntent.NEED_CLARIFICATION
+    issue_dir, task = _workflow_task(tmp_path, "changed", intent)
+    bound_file = issue_dir / "spec" / "iteration_001" / (
+        "output.md" if is_review else "questions.xml"
+    )
+    newer = issue_dir / "spec" / "iteration_002"
+    newer.mkdir()
+    (newer / bound_file.name).write_text("Unrelated data", encoding="utf-8")
+    response = {"decision": "confirm"} if is_review else {
+        "answers": {"scope": "Small", "platforms": ["CLI"]}
+    }
+    first = _inspect_snapshot(task.id)
+    if is_review:
+        assert first[component]["text"] == "# Reviewed spec\n"
+
+    old_text = bound_file.read_text(encoding="utf-8")
+    bound_file.write_text(
+        "# Updated spec\n" if is_review else old_text.replace("Which scope?", "Updated scope?"),
+        encoding="utf-8",
+    )
+    second = _inspect_snapshot(task.id)
+    assert second["version"] and second["version"] != first["version"]
+    stale = _submit_snapshot(task, first["version"], **response)
+    assert stale.exit_code != 0
+    assert json.loads(stale.stdout)["error"]["code"] == "stale_snapshot"
+
+    bound_file.unlink()
+    assert _inspect_snapshot(task.id)[component] == {"status": "unavailable"}
+    bound_file.symlink_to(newer / bound_file.name)
+    unavailable = _inspect_snapshot(task.id)
+    assert unavailable["version"] is None
+    assert unavailable[component] == {"status": "unavailable"}
+    missing = _submit_snapshot(task, second["version"], **response)
+    assert missing.exit_code != 0
+    assert json.loads(missing.stdout)["error"]["code"] == "snapshot_unavailable"
+    assert BlackboardStore(issue_dir).load_read_only().current_step == "user"
+    assert HumanTaskRecordStore(issue_dir).results() == ()
+
+
+def test_external_client_cannot_use_a_snapshot_from_another_workflow_or_stale_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir, stale_task = _workflow_task(tmp_path, "stale", HandoffIntent.CONFIRM_OUTPUT)
+    other_dir, other = _workflow_task(tmp_path, "other", HandoffIntent.CONFIRM_OUTPUT)
+    version = _inspect_snapshot(stale_task.id)["version"]
+
+    wrong = _submit_snapshot(other, version, decision="confirm")
+    assert wrong.exit_code != 0
+    assert json.loads(wrong.stdout)["error"]["code"] == "stale_snapshot"
+    assert BlackboardStore(other_dir).load_read_only().current_step == "user"
+    assert HumanTaskRecordStore(other_dir).results() == ()
+
+    wrong = _submit_snapshot(
+        other, _inspect_snapshot(other.id)["version"], decision="confirm",
+        workflow_id=stale_task.workflow_id,
+    )
+    assert json.loads(wrong.stdout)["error"]["code"] == "stale_task"
+
+    store = BlackboardStore(issue_dir)
+    state = store.load_read_only()
+    store.update_handoff_contract(
+        state, from_step="spec", to_owner=HandoffOwner.USER, to_step="user",
+        intent=HandoffIntent.NEED_CLARIFICATION, source="test.replaced_handoff",
+    )
+    assert _inspect_snapshot(stale_task.id)["status"] == "unavailable"
+    stale = _submit_snapshot(stale_task, version, decision="confirm")
+    assert stale.exit_code != 0
+    assert json.loads(stale.stdout)["error"]["code"] == "stale_task"
+    assert store.load_read_only().current_step == "user"
+    assert HumanTaskRecordStore(issue_dir).results() == ()
+
+
+def test_external_review_uses_the_bound_artifact_and_rejects_a_repointed_registration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir, task = _workflow_task(tmp_path, "review", HandoffIntent.CONFIRM_OUTPUT)
+    store = BlackboardStore(issue_dir)
+    older = issue_dir / "spec" / "iteration_001" / "output.md"
+    newer = issue_dir / "spec" / "iteration_002" / "output.md"
+    newer.parent.mkdir()
+    newer.write_text("# Draft outside the task\n", encoding="utf-8")
+
+    def register(path: Path, version: int) -> None:
+        store.put_artifact(store.load_read_only(), ArtifactEntry(
+            name="spec", kind=ArtifactKind.DOCUMENT, version=version,
+            updated_by="spec", path=str(path),
+        ))
+
+    register(older, 1)
+    snapshot = _inspect_snapshot(task.id)
+    assert snapshot["review_artifact"]["path"] == "spec/iteration_001/output.md"
+    assert snapshot["review_artifact"]["text"] == "# Reviewed spec\n"
+    register(newer, 2)
+    assert _inspect_snapshot(task.id)["review_artifact"] == {"status": "unavailable"}
+    stale = _submit_snapshot(task, snapshot["version"], decision="confirm")
+    assert json.loads(stale.stdout)["error"]["code"] == "snapshot_unavailable"
+    assert store.load_read_only().current_step == "user"
+    assert HumanTaskRecordStore(issue_dir).results() == ()
+
+    register(older, 3)
+    current = _inspect_snapshot(task.id)
+    assert current["version"] != snapshot["version"]
+    confirmed = _submit_snapshot(task, current["version"], decision="confirm")
+    assert confirmed.exit_code == 0, (confirmed.stdout, confirmed.exception)
+    assert store.load_read_only().current_step == "plan"
 
 
 def test_noninteractive_completion_resumes_only_bound_workflow(
@@ -391,7 +591,7 @@ def test_deferred_self_loop_completion_persists_the_decision_for_the_worker(
         assignee_type="user",
     )
     monkeypatch.setattr(
-        "cafe.ui.commands.tasks.PlaybookLoader.load",
+        "cafe.playbooks.loader.PlaybookLoader.load",
         lambda _self, _playbook_id: playbook,
     )
 
@@ -545,7 +745,7 @@ def test_interactive_completion_uses_same_durable_contract(
     issue_dir, task = _pending_issue(tmp_path / ".cafe", "interactive")
     monkeypatch.setattr(
         "cafe.ui.commands.tasks.collect_human_task_payload",
-        lambda _policy: {"task": "output-review", "decision": "confirm"},
+        lambda _policy, **_kwargs: {"task": "output-review", "decision": "confirm"},
     )
     monkeypatch.setattr("cafe.ui.commands.tasks._resume_issue_workflow", lambda *_args: None)
 
@@ -712,11 +912,19 @@ def test_capability_task_inspection_exposes_exact_approval_state(
     ).request_approval(request=request, manifest=manifest)
 
     result = runner.invoke(app, ["task", "inspect", task.id, "--json"])
-    approval = json.loads(result.stdout)["data"]["task"]["capability_approval"]
+    data = json.loads(result.stdout)["data"]
+    approval = data["task"]["capability_approval"]
 
     assert approval["state"] == "pending"
     assert approval["capability"] == manifest.id
     assert approval["request"]["capability"] == manifest.id
+    assert data["snapshot"]["status"] == "not_applicable"
+    guarded = _submit_snapshot(
+        task, "0" * 64, decision="deny", task_id=task.id, workflow_id=state.workflow_id,
+        request_fingerprint=approval["fingerprint"], correlation_id=approval["correlation_id"],
+    )
+    assert json.loads(guarded.stdout)["error"]["code"] == "snapshot_unavailable"
+    assert _inspect_snapshot(task.id)["status"] == "not_applicable"
 
     readable = runner.invoke(app, ["task", "inspect", task.id])
 

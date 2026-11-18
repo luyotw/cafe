@@ -25,6 +25,12 @@ from cafe.core.human_task_records import (
     HumanTaskStatus,
     TaskResult,
 )
+from cafe.core.human_task_snapshot import (
+    TaskInputs,
+    durable_task_matches_current_handoff,
+    resolve_task_inputs,
+    uses_special_approval,
+)
 from cafe.core.human_tasks import (
     AGENT_EXECUTION_FRESH_SESSION_DECISION,
     AGENT_EXECUTION_INTERRUPTED_TRIGGER,
@@ -201,6 +207,7 @@ class HumanTaskApplication:
     target: Optional[str]
     policy: Optional[HumanTaskPolicy]
     rejection: Optional[HumanTaskRejection] = None
+    error_code: Optional[str] = None
 
 
 _USER_HANDOFF_PAYLOAD_TYPE = "user_handoff"
@@ -607,7 +614,7 @@ def apply_human_task_payload(
     record_store = HumanTaskRecordStore(issue_dir)
     with record_store.transaction():
         submitted_id = _submitted_human_task_id(raw_payload)
-        if submitted_id is not None:
+        if submitted_id is not None and "snapshot_version" not in _structured_response(raw_payload):
             try:
                 submitted_task = record_store.get_task(submitted_id)
             except HumanTaskCorrelationError:
@@ -656,9 +663,13 @@ def apply_durable_human_task_payload_if_present(
     prevents a valid ``human_task_id`` from falling through as ordinary phase
     input when the blackboard intent is a generic or custom user handoff.
     """
-    submitted_id = _submitted_human_task_id(raw_payload)
+    response = _structured_response(raw_payload)
+    submitted_id = _submitted_human_task_id(response)
+    versioned = "snapshot_version" in response
     record_store = HumanTaskRecordStore(issue_dir)
     if not record_store.exists:
+        if versioned:
+            return _snapshot_rejection("stale_task", "There is no durable task to complete.")
         if submitted_id is None:
             return None
         return _durable_task_routing_rejection(
@@ -707,6 +718,8 @@ def apply_durable_human_task_payload_if_present(
                     task_id=submitted_id,
                     message="This response belongs to a different pending durable human task.",
                 )
+        elif versioned:
+            return _snapshot_rejection("stale_task", "A versioned response must identify its task.")
         elif not active_tasks:
             return None
         elif len(active_tasks) == 1:
@@ -739,34 +752,6 @@ def apply_durable_human_task_payload_if_present(
         )
 
 
-def durable_task_matches_current_handoff(task: HumanTask, blackboard: Any) -> bool:
-    contract = getattr(blackboard, "handoff_contract", None)
-    if (
-        getattr(blackboard, "current_step", None) != "user"
-        or contract is None
-        or contract.to_owner is not HandoffOwner.USER
-        or contract.to_step != "user"
-        or contract.from_step != task.step
-    ):
-        return False
-    current_key = ":".join(
-        (
-            "user-handoff",
-            task.workflow_id,
-            contract.from_step,
-            contract.intent.value,
-            contract.created_at,
-        )
-    )
-    if task.handoff_key.startswith("user-handoff:"):
-        # Human-owned and hybrid tasks intentionally use a generic
-        # ``manual_handoff`` contract while retaining ``initial`` or the
-        # portion ID as their executable trigger.  The structured key is the
-        # identity shared by both sides of that boundary.
-        return task.handoff_key == current_key
-    return task.status is HumanTaskStatus.PENDING and contract.intent.value == task.trigger
-
-
 def _durable_task_routing_rejection(
     *,
     issue_dir: Path,
@@ -786,6 +771,60 @@ def _durable_task_routing_rejection(
     return HumanTaskApplication(target=None, policy=None, rejection=rejection)
 
 
+def _snapshot_rejection(code: str, message: str) -> HumanTaskApplication:
+    return HumanTaskApplication(
+        target=None, policy=None, error_code=code,
+        rejection=HumanTaskRejection(
+            message=message,
+            correction_guidance=(
+                "Run `cafe task inspect <task-id> --json` and review the current data before "
+                "submitting its version. If the task is no longer pending, list pending tasks."
+            ),
+        ),
+    )
+
+
+def _check_reviewed_snapshot(
+    *,
+    issue_dir: Path,
+    blackboard: Any,
+    record_store: HumanTaskRecordStore,
+    task: HumanTask | None,
+    step_definition: Mapping[str, Any],
+    response: Mapping[str, Any],
+) -> TaskInputs | HumanTaskApplication:
+    version = response["snapshot_version"]
+    if not isinstance(version, str) or not re.fullmatch(r"[0-9a-f]{64}", version):
+        return _snapshot_rejection("invalid_response", "Supply the version from task inspection.")
+    if (task is None or blackboard.workflow_id != task.workflow_id
+            or response.get("workflow_id", task.workflow_id) != task.workflow_id):
+        return _snapshot_rejection("stale_task", "The response does not identify the owning task.")
+    if task.status is not HumanTaskStatus.PENDING:
+        return _snapshot_rejection("task_not_pending", "The reviewed task is no longer pending.")
+    if (not durable_task_matches_current_handoff(task, blackboard)
+            or record_store.get_wait_state(task.id).released_at is not None):
+        return _snapshot_rejection("stale_task", "The reviewed task no longer owns this handoff.")
+
+    try:
+        if uses_special_approval(task, step_definition):
+            return _snapshot_rejection(
+                "snapshot_unavailable", "Use the task's declared special approval protocol.",
+            )
+        inputs = resolve_task_inputs(
+            issue_dir, step=task.step, iteration=task.iteration,
+            policy=HumanTaskPolicy.model_validate(task.expected_result),
+            blackboard=blackboard, step_definition=step_definition,
+        )
+    except (TypeError, ValueError):
+        return _snapshot_rejection("snapshot_unavailable", "The task contract is unavailable.")
+    current = inputs.snapshot_version(task, blackboard)
+    if current is None:
+        return _snapshot_rejection("snapshot_unavailable", "The task's required data is unavailable.")
+    if current != version:
+        return _snapshot_rejection("stale_snapshot", "The task snapshot changed after inspection.")
+    return inputs
+
+
 def _apply_human_task_payload(
     *,
     issue_dir: Path,
@@ -801,33 +840,57 @@ def _apply_human_task_payload(
 ) -> HumanTaskApplication:
     """Apply a response while holding the matching durable-record transaction."""
     store = BlackboardStore(issue_dir)
-    try:
-        iteration = latest_step_iteration(issue_dir=issue_dir, step_name=from_step)
-        if record_store.exists:
-            # Validate the current machine declaration without depending on
-            # presentation resources that an already-saved task does not own.
-            policy, binding = resolve_step_human_task(
-                playbook_data=playbook_data,
-                step_name=from_step,
-                trigger=trigger,
-                iteration=iteration,
-                skill_loader=SkillLoader(resolve_presentation=False),
-            )
+    step_definition = playbook_data.get("steps", {}).get(from_step, {})
+    response = _structured_response(raw_payload)
+    versioned = "snapshot_version" in response
+    reviewed_inputs = None
+    if versioned:
+        try:
+            active_blackboard = store.load_read_only()
+        except (OSError, ValueError):
+            return _snapshot_rejection("snapshot_unavailable", "The current workflow is unavailable.")
+        if active_blackboard.workflow_id != blackboard.workflow_id:
+            return _snapshot_rejection("stale_task", "The owning workflow has changed.")
+        blackboard = active_blackboard
+
+    submitted_task = None
+    submitted_id = _submitted_human_task_id(response)
+    if submitted_id is not None and record_store.exists:
+        try:
+            candidate = record_store.get_task(submitted_id)
+        except HumanTaskCorrelationError:
+            pass
         else:
-            questions = _load_dynamic_questions(
-                issue_dir=issue_dir,
-                step_name=from_step,
-                playbook_data=playbook_data,
-                trigger=trigger,
-                iteration=iteration,
+            if (candidate.workflow_id == blackboard.workflow_id
+                    and candidate.step == from_step and candidate.trigger == trigger):
+                submitted_task = candidate
+    if versioned:
+        reviewed_inputs = _check_reviewed_snapshot(
+            issue_dir=issue_dir, blackboard=blackboard, record_store=record_store,
+            task=submitted_task, step_definition=step_definition, response=response,
+        )
+        if isinstance(reviewed_inputs, HumanTaskApplication):
+            return reviewed_inputs
+
+    try:
+        iteration = (
+            submitted_task.iteration if submitted_task is not None
+            else latest_step_iteration(issue_dir=issue_dir, step_name=from_step)
+        )
+        policy, binding = resolve_step_human_task(
+            playbook_data=playbook_data,
+            step_name=from_step,
+            trigger=trigger,
+            iteration=iteration,
+            skill_loader=SkillLoader(resolve_presentation=False) if record_store.exists else None,
+        )
+        if not record_store.exists:
+            inputs = resolve_task_inputs(
+                issue_dir, step=from_step, iteration=iteration, policy=policy,
+                blackboard=blackboard, step_definition=step_definition,
             )
-            policy, binding, completion = validate_step_human_task_completion(
-                playbook_data=playbook_data,
-                step_name=from_step,
-                trigger=trigger,
-                raw_payload=raw_payload,
-                questions=questions,
-                iteration=iteration,
+            completion = validate_human_task_completion(
+                policy, raw_payload, questions=inputs.answer_contract,
             )
     except (HumanTaskPolicyError, LookupError, TypeError, ValueError) as exc:
         rejection = HumanTaskRejection(
@@ -876,7 +939,7 @@ def _apply_human_task_payload(
 
         validate_task_response(
             issue_dir,
-            playbook_data.get("steps", {}).get(from_step, {}),
+            step_definition,
             policy,
             durable_task,
             raw_payload,
@@ -919,20 +982,16 @@ def _apply_human_task_payload(
                 message=f"The saved human task has an invalid response contract: {exc}",
             )
         policy = snapshot
-        questions = policy.questions
-        if policy.questions_from_xml and not questions:
-            questions = _load_dynamic_questions(
-                issue_dir=issue_dir,
-                step_name=from_step,
-                playbook_data=playbook_data,
-                trigger=trigger,
-                iteration=iteration,
-                policy=policy,
+        inputs = reviewed_inputs
+        if inputs is None and durable_result is None and policy.questions_from_xml:
+            inputs = resolve_task_inputs(
+                issue_dir, step=from_step, iteration=durable_task.iteration, policy=policy,
+                blackboard=blackboard, step_definition=step_definition,
             )
         completion = validate_human_task_completion(
             policy,
             raw_payload,
-            questions=questions,
+            questions=inputs.answer_contract if inputs is not None else None,
         )
     result_was_recovered = durable_result is not None
 
@@ -1584,16 +1643,17 @@ def _recorded_result_continuation(
     return continuation, "\n".join(lines)
 
 
-def _submitted_human_task_id(raw_payload: str | Mapping[str, Any]) -> Optional[str]:
-    """Read a durable id while preserving taskless #345 payloads."""
+def _structured_response(raw_payload: str | Mapping[str, Any]) -> Mapping[str, Any]:
     if isinstance(raw_payload, str):
         try:
             raw_payload = json.loads(raw_payload)
         except json.JSONDecodeError:
-            return None
-    if not isinstance(raw_payload, Mapping):
-        return None
-    value = raw_payload.get("human_task_id")
+            return {}
+    return raw_payload if isinstance(raw_payload, Mapping) else {}
+
+
+def _submitted_human_task_id(raw_payload: str | Mapping[str, Any]) -> Optional[str]:
+    value = _structured_response(raw_payload).get("human_task_id")
     if not isinstance(value, str) or not value.strip():
         return None
     return value.strip()
@@ -1828,47 +1888,6 @@ def _write_next_iteration_user_input(*, issue_dir: Path, step_name: str, text: s
     target = step_dir / f"iteration_{iteration:03d}"
     target.mkdir(parents=True, exist_ok=True)
     (target / "user_input.md").write_text(text, encoding="utf-8")
-
-
-def _load_dynamic_questions(
-    *,
-    issue_dir: Path,
-    step_name: str,
-    playbook_data: Mapping[str, Any],
-    trigger: str,
-    iteration: int,
-    policy: Optional[HumanTaskPolicy] = None,
-) -> Optional[tuple[HumanTaskQuestion, ...]]:
-    """Read the XML answer contract without re-resolving a saved policy's copy."""
-    if policy is None:
-        try:
-            policy, _binding = resolve_step_human_task(
-                playbook_data=playbook_data,
-                step_name=step_name,
-                trigger=trigger,
-                iteration=iteration,
-            )
-        except HumanTaskPolicyError:
-            return None
-    if not policy.questions_from_xml:
-        return None
-
-    from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
-
-    step_dir = issue_dir / step_name
-    iteration_dirs = sorted(step_dir.glob("iteration_*")) if step_dir.exists() else []
-    questions_file = iteration_dirs[-1] / "questions.xml" if iteration_dirs else None
-    if questions_file is None or not validate_questions_xml(questions_file):
-        return ()
-    return tuple(
-        HumanTaskQuestion(
-            id=question.id,
-            prompt=question.title,
-            options=tuple(question.options),
-            multiple=question.multi_select,
-        )
-        for question in parse_questions_xml(questions_file)
-    )
 
 
 def latest_step_iteration(*, issue_dir: Path, step_name: str) -> int:
