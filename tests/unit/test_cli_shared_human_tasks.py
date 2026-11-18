@@ -67,7 +67,7 @@ def test_owner_declared_manual_handoff_uses_the_declared_durable_task(
 
 
 def test_no_change_handoff_shows_implementation_output_before_decision(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, capsys
 ) -> None:
     """The participant sees the implementation evidence before deciding no-change."""
     issue_dir = tmp_path / ".cafe" / "issues" / "no-change"
@@ -76,11 +76,12 @@ def test_no_change_handoff_shows_implementation_output_before_decision(
     output_file.write_text("Implementation reasoning", encoding="utf-8")
     store = BlackboardStore(issue_dir)
     blackboard = store.load_or_create("develop", playbook_id="standard")
-    displayed: list[Path] = []
-    monkeypatch.setattr(cli_shared, "_print_output_file", displayed.append)
+    def decide(policy, **_kwargs):
+        assert "Implementation reasoning" in capsys.readouterr().out
+        return {"task": policy.id, "decision": "agree"}
+
     monkeypatch.setattr(
-        "cafe.ui.human_tasks.collect_human_task_payload",
-        lambda policy, **_kwargs: {"task": policy.id, "decision": "agree"},
+        "cafe.ui.human_tasks.collect_human_task_payload", decide,
     )
 
     target = cli_shared._handle_declared_human_task_handoff(
@@ -93,7 +94,6 @@ def test_no_change_handoff_shows_implementation_output_before_decision(
         trigger="no_changes_needed",
     )
 
-    assert displayed == [output_file]
     assert target == "pr"
 
 

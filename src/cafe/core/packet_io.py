@@ -47,7 +47,9 @@ def compact_json(value: Mapping[str, Any]) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
-def atomic_write_bytes(path: Path, content: bytes) -> None:
+def atomic_write_bytes(
+    path: Path, content: bytes, *, before_replace: Callable[[], None] | None = None,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = None
     try:
@@ -58,6 +60,8 @@ def atomic_write_bytes(path: Path, content: bytes) -> None:
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
+        if before_replace is not None:
+            before_replace()
         os.replace(temporary, path)
         if hasattr(os, "O_DIRECTORY"):
             directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)

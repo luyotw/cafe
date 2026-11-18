@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Iterator, Mapping, Optional, Sequence
+from typing import Any, Callable, Iterator, Mapping, Optional, Sequence
 from uuid import uuid4
 
 try:
@@ -692,6 +692,7 @@ class HumanTaskRecordStore:
         payload: Mapping[str, Any],
         source: str,
         completion_authority: Mapping[str, Any] | None = None,
+        before_commit: Callable[[], None] | None = None,
     ) -> TaskResult:
         if completion_authority is not None:
             authority = dict(completion_authority)
@@ -732,7 +733,7 @@ class HumanTaskRecordStore:
             if completion_authority is not None:
                 context["completion_authority"] = dict(completion_authority)
             self._append_event(envelope, "completed", task_id=task.id, context=context)
-            self._save(envelope)
+            self._save(envelope, before_commit=before_commit)
             return result
 
     def record_rejection(self, *, workflow_id: str, task_id: str, reason: str) -> None:
@@ -857,10 +858,13 @@ class HumanTaskRecordStore:
             )
         )
 
-    def _save(self, envelope: _Envelope) -> None:
+    def _save(self, envelope: _Envelope, *, before_commit: Callable[[], None] | None = None) -> None:
         envelope.validate()
         content = canonical_json(envelope.to_dict())
-        atomic_write_bytes(self.file_path, content)
+        if before_commit is None:
+            atomic_write_bytes(self.file_path, content)
+        else:
+            atomic_write_bytes(self.file_path, content, before_replace=before_commit)
 
 
 def _records_by_task_id(data: Mapping[str, Any], field_name: str, parser: Any) -> dict[str, Any]:
