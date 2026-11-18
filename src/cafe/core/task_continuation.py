@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from cafe.core.human_task_snapshot import durable_task_matches_current_handoff
 from cafe.core.human_tasks import AGENT_EXECUTION_INTERRUPTED_TRIGGER
 from cafe.core.task_inbox import TaskInboxError
 from cafe.core.workflow_models import BatonRejected
+from cafe.utils.file_lock import handoff_execution_lock
 from cafe.utils.issue_paths import validate_issue_directory, validate_issue_name
 
 
@@ -88,6 +90,13 @@ class ContinuationBinding:
         except (BatonRejected, OSError, ValueError) as exc:
             raise ContinuationSupersededError("The saved handoff could not be verified") from exc
         raise ContinuationSupersededError("The saved handoff has changed")
+
+    def claim_current(self, store: BlackboardStore, dispatch: ExitStack) -> BlackboardState:
+        """Keep the checked handoff exclusive until the admitted dispatch returns."""
+        with store.state_transaction():
+            state = self.read_current(store)
+            dispatch.enter_context(handoff_execution_lock(store.issue_dir))
+            return state
 
 
 def observe_continuation(

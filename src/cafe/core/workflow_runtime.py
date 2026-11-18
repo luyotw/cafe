@@ -12,6 +12,7 @@ from cafe.core.workflow_control import current_control, check_control, controlle
 import inspect
 import json
 import re
+from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
@@ -2776,8 +2777,14 @@ class BlackboardWorkflowRuntime:
         )
 
     def _run_non_agent_owner(
-        self, *, current_step: str, step_def: Dict, runtime: str
+        self, *, current_step: str, step_def: Dict, runtime: str,
+        continuation_dispatch: ExitStack | None = None,
     ) -> Optional[PlaybookRunResult]:
+        if continuation_dispatch is not None:
+            assert self.continuation is not None
+            self.blackboard = self.continuation.claim_current(
+                self.blackboard_store, continuation_dispatch,
+            )
         control = current_control()
         if control is not None:
             control.position(self.blackboard, self.steps)
@@ -6896,30 +6903,33 @@ class BlackboardWorkflowRuntime:
     def _run_from_current_step(
         self, *, current_step: str, max_transitions: int
     ) -> PlaybookRunResult:
-        if self.continuation is not None:
-            self.blackboard = self.continuation.read_current(self.blackboard_store)
-            if current_step != self.continuation.handoff.to_step:
-                raise ContinuationSupersededError("The runtime selected a different handoff")
-        for hop in range(max_transitions):
-            definition = self.steps[current_step]
-            owned_result = self._run_non_agent_owner(
-                current_step=current_step, step_def=definition, runtime="owner_dispatch",
-            )
-            if owned_result is None:
-                max_transitions -= hop
-                break
-            if not self._automatic_advanced(definition, owned_result):
-                return owned_result
-            current_step = self.blackboard.current_step
-        else:
-            raise RuntimeError(f"Playbook run reached max transition limit ({max_transitions})")
+        if self.continuation is not None and current_step != self.continuation.handoff.to_step:
+            raise ContinuationSupersededError("The runtime selected a different handoff")
+        with ExitStack() as dispatch:
+            for hop in range(max_transitions):
+                definition = self.steps[current_step]
+                bound_dispatch = dispatch if self.continuation is not None and hop == 0 else None
+                owned_result = self._run_non_agent_owner(
+                    current_step=current_step, step_def=definition, runtime="owner_dispatch",
+                    continuation_dispatch=bound_dispatch,
+                )
+                if owned_result is None:
+                    max_transitions -= hop
+                    break
+                if not self._automatic_advanced(definition, owned_result):
+                    return owned_result
+                current_step = self.blackboard.current_step
+            else:
+                raise RuntimeError(f"Playbook run reached max transition limit ({max_transitions})")
 
-        if not self._is_baton_driven_step(current_step):
-            return self._run_legacy_until_boundary(
-                current_step=current_step, max_transitions=max_transitions
-            )
+            if not self._is_baton_driven_step(current_step):
+                return self._run_legacy_until_boundary(
+                    current_step=current_step, max_transitions=max_transitions
+                )
 
-        return self._run_baton_driven_pr(current_step=current_step, max_transitions=max_transitions)
+            return self._run_baton_driven_pr(
+                current_step=current_step, max_transitions=max_transitions,
+            )
 
     def _automatic_advanced(self, definition: Dict, result: PlaybookRunResult) -> bool:
         return (definition.get("assignee_type") == "auto" and not result.completed

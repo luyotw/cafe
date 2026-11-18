@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,7 @@ from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.ui.cli import app
 from cafe.ui.human_tasks import apply_human_task_payload, resolve_step_human_task
+from cafe.utils.file_lock import HandoffInUseError
 from cafe.workflow_execution.automatic import automatic_executor_registry
 from cafe.workflow_execution.event_callback import ResolvedWorkflowEventCallback
 from cafe.workflow_execution.worker_launch import FixedWorkerLauncher, WorkerLaunchStore
@@ -599,8 +601,16 @@ def test_saved_result_retry_defers_to_a_cli_resume_that_owns_advancement(
     assert [result.task_id for result in HumanTaskRecordStore(issue_dir).results()] == [task.id]
 
 
+def _run_handoff_writer(publish):
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        return pool.submit(publish).result(timeout=5)
+    finally:
+        pool.shutdown(wait=False)
+
+
+@pytest.mark.parametrize("boundary", ["adapter", "runtime", "dispatch", "owner"])
 @pytest.mark.parametrize("replacement_target", ["spec", "plan"])
-@pytest.mark.parametrize("boundary", ["adapter", "runtime", "dispatch"])
 def test_saved_result_resume_leaves_a_replacement_handoff_unconsumed(
     saved_continuation, continuation_provider, monkeypatch, boundary, replacement_target,
 ):
@@ -627,11 +637,15 @@ def test_saved_result_resume_leaves_a_replacement_handoff_unconsumed(
         "adapter": (PlaybookLoader, "load"),
         "runtime": (BlackboardWorkflowRuntime, "run"),
         "dispatch": (BlackboardWorkflowRuntime, "_run_from_current_step"),
+        "owner": (BlackboardWorkflowRuntime, "_run_non_agent_owner"),
     }[boundary]
     original = getattr(owner, method)
 
     def publish_before_use(self, *args, **kwargs):
-        publish_replacement()
+        if boundary == "owner":
+            _run_handoff_writer(publish_replacement)
+        else:
+            publish_replacement()
         return original(self, *args, **kwargs)
 
     before = store.load_read_only()
@@ -644,6 +658,48 @@ def test_saved_result_resume_leaves_a_replacement_handoff_unconsumed(
     assert after.current_step == before.current_step
     assert after.events == before.events
     assert [result.task_id for result in HumanTaskRecordStore(issue_dir).results()] == [task.id]
+
+
+@pytest.mark.parametrize("publication", ["handoff", "audit", "snapshot"])
+def test_saved_result_dispatch_excludes_other_handoff_publishers(
+    saved_continuation, continuation_provider, publication,
+):
+    issue_dir, task, command = saved_continuation
+    store = BlackboardStore(issue_dir)
+    attempts = []
+
+    def publish_replacement():
+        state = store.load_read_only()
+        current = state.handoff_contract
+        assert current is not None
+        contract = store.build_handoff_contract(
+            from_step=current.from_step, to_owner=current.to_owner,
+            to_step=current.to_step, intent=current.intent, source="chat.manual_handoff",
+        )
+        if publication == "audit":
+            state.handoff_contract = contract
+            store.record_event(state, "replacement_published", {}, baton_contract=contract)
+        elif publication == "snapshot":
+            state.handoff_contract = contract
+            store.save(state)
+        else:
+            store.write_handoff_contract(state, contract)
+        return contract
+
+    def attempt_while_dispatched():
+        with pytest.raises(HandoffInUseError):
+            _run_handoff_writer(publish_replacement)
+        attempts.append(True)
+
+    continuation_provider.append(attempt_while_dispatched)
+    assert _continuation_status([*command, "--resume"]) == "advanced"
+    assert attempts == [True]
+    assert [result.task_id for result in HumanTaskRecordStore(issue_dir).results()] == [task.id]
+    assert not any(
+        event.event_type == "replacement_published" for event in store.load_read_only().events
+    )
+    replacement = _run_handoff_writer(publish_replacement)
+    assert store.load_read_only().handoff_contract == replacement
 
 
 def test_saved_result_retry_cannot_advance_a_replacement_workflow(

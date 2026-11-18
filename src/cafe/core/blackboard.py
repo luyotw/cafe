@@ -33,6 +33,7 @@ from cafe.core.conversation_locale import (
 )
 from cafe.core.packet_io import atomic_write_bytes
 from cafe.core.workflow_models import BatonRejected
+from cafe.utils.file_lock import handoff_execution_lock
 
 BLACKBOARD_FILENAME = "blackboard.json"
 BLACKBOARD_SCHEMA_VERSION = 4
@@ -1052,15 +1053,29 @@ class BlackboardStore:
                             capability_receipts_authoritative
                         ),
                     )
+                    self._guard_routing_change(persisted, merged)
                     state.__dict__.clear()
                     state.__dict__.update(merged.__dict__)
                 else:
+                    self._guard_routing_change(persisted, state)
                     state.capability_receipts = list(persisted.capability_receipts)
                     state.events = list(persisted.events)
             self._save_unlocked(state)
             self._ensure_authorities(state)
             self.refresh_capability_receipts(state)
             state._persisted_snapshot = state.to_dict()
+
+    def _guard_routing_change(self, before: BlackboardState, after: BlackboardState) -> None:
+        if (before.workflow_id, before.current_step, before.handoff_contract) != (
+            after.workflow_id, after.current_step, after.handoff_contract,
+        ):
+            self._guard_handoff_publication()
+
+    def _guard_handoff_publication(self) -> None:
+        # The state transaction serializes publishers with dispatch admission.
+        # Probe without waiting so a writer cannot hold that lock against the owner.
+        with handoff_execution_lock(self.issue_dir):
+            pass
 
     def _save_unlocked(self, state: BlackboardState) -> None:
         """Persist a state whose caller already owns the state-file lock."""
@@ -1300,6 +1315,7 @@ class BlackboardStore:
     def write_handoff_contract(self, state: BlackboardState, contract: HandoffContract) -> None:
         """Persist baton contract to next_step.txt and blackboard."""
         with self.state_transaction():
+            self._guard_handoff_publication()
             atomic_write_bytes(
                 self.next_step_path,
                 json.dumps(contract.to_next_step_dict(), ensure_ascii=False, indent=2).encode("utf-8"),
@@ -1490,6 +1506,10 @@ class BlackboardStore:
                 baseline=state._persisted_snapshot,
                 capability_receipts_authoritative=False,
             ) if state._persisted_snapshot is not None else state)
+            if baton_contract is not None:
+                self._guard_handoff_publication()
+            else:
+                self._guard_routing_change(persisted, merged)
             before = self._compact_dict(persisted)
             after = self._compact_dict(merged)
             patch = {
