@@ -380,6 +380,11 @@ estimates retain their original rates. Turn selections and reconstructed usage
 exist only in the report, with no accounting-store or workflow-state writes.
 The worker-only progress footer uses its existing sources.
 
+The same report includes verified Codex subagent usage in the Manager subtotal.
+The helper follows recorded spawns and requires child journal ancestry, a
+completed child turn linked to an attributed Manager turn, and reconciled
+per-request counters. It reports known child costs and unverified coverage.
+
 After interrupted preference/report presentation, reconcile the existing
 closeout/session evidence and the human answer. Re-offer a still-unanswered
 preference through the normal human conversation, never infer yes and never

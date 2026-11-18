@@ -1,4 +1,4 @@
-"""Recover Codex App Manager usage for the closeout report, in memory."""
+"""Recover Codex App Manager and subagent usage for the closeout report."""
 
 from __future__ import annotations
 
@@ -17,22 +17,27 @@ from cafe.agents.cli.codex_usage import (
     _open_journal,
     reconcile_request_usage,
 )
-from cafe.core.cost import account_cost, combine_cost_summaries, summarize_cost
+from cafe.core.cost import account_cost, combine_cost_summaries, normalized_counters, summarize_cost
 from cafe.core.pricing_sources import pricing_store
 from cafe.core.types import TokenUsage
 
 MAX_JOURNAL_BYTES = 64 * 1024 * 1024
 MAX_LINE_BYTES = 1024 * 1024
+MAX_SUBAGENT_JOURNALS = 32
 
 
 @dataclass
 class Turn:
     started_at: datetime
-    ended: bool = False
+    root_id: str
+    start_offset: int
+    end: tuple[datetime, int] | None = None
     models: set[str] = field(default_factory=set)
     callbacks: list[dict] = field(default_factory=list)
     other_messages: int = 0
     requests: list[tuple[dict, dict]] = field(default_factory=list)
+    children: set[str] = field(default_factory=set)
+    child_activity: set[str] = field(default_factory=set)
     legacy_mismatch: bool = False
 
 
@@ -63,7 +68,20 @@ def _user_message(turn, content):
         turn.other_messages += 1
 
 
-def _read_turns(home, session, cutoff):
+def _child_activity(payload, session):
+    if payload.get("type") == "item_completed" and payload.get("thread_id") == session:
+        item = payload.get("item")
+        if isinstance(item, dict) and item.get("type") == "SubAgentActivity":
+            return item.get("agent_thread_id"), item.get("kind") == "started"
+    if payload.get("sender_thread_id", session) == session:
+        if payload.get("type") == "collab_agent_spawn_end":
+            return payload.get("new_thread_id"), True
+        if payload.get("type") in {"collab_resume_end", "collab_agent_interaction_end"}:
+            return payload.get("receiver_thread_id"), False
+    return None, False
+
+
+def _read_turns(home, session, cutoff, *, parent=None, root_session=None, inherited=frozenset()):
     if str(uuid.UUID(session)) != session:
         raise ValueError("host_accounting_invalid_thread")
     with _open_journal(_find_journal(home, session)) as source:
@@ -90,24 +108,42 @@ def _read_turns(home, session, cutoff):
             if source.tell() == len(line):
                 if row["type"] != "session_meta" or payload["id"] != session:
                     raise ValueError("host_accounting_thread_mismatch")
+                if parent is not None:
+                    spawn = payload["source"]["subagent"]["thread_spawn"]
+                    if (spawn["parent_thread_id"] != parent
+                            or payload.get("forked_from_id") not in (None, parent)):
+                        raise ValueError("host_accounting_subagent_parent_mismatch")
             stamp = _time(row["timestamp"])
             if stamp > cutoff:
                 break
+            tid = payload.get("turn_id")
+            # A fork can copy and restamp its ancestors' turn history.
+            if tid in inherited and (
+                row["type"] != "token_usage_record" or payload.get("thread_id") != session
+            ):
+                continue
             if row["type"] == "event_msg":
                 kind = payload.get("type")
                 if kind == "task_started":
                     active = payload["turn_id"]
+                    root_id = payload.get("root_turn_id", active)
+                    if parent is not None and not all(
+                        isinstance(identity, str) and 0 < len(identity) <= 512
+                        for identity in (active, root_id)
+                    ):
+                        raise ValueError("host_accounting_invalid_subagent_turn_id")
                     if active in turns:
                         raise ValueError("host_accounting_repeated_turn")
-                    turns[active] = Turn(stamp)
-                elif kind in {"task_complete", "turn_aborted"}:
+                    turns[active] = Turn(stamp, root_id, source.tell() - len(line))
+                elif kind == "task_complete" or (kind == "turn_aborted" and parent is None):
                     tid = payload["turn_id"]
                     if tid == active:
-                        turns[tid].ended = True
+                        turns[tid].end = (stamp, source.tell())
                         active = None
                 elif kind == "model_rerouted" and payload.get("turn_id") in turns:
                     turns[payload["turn_id"]].models.add("")
-                elif kind == "token_count" and payload.get("info") is not None:
+                elif (kind == "token_count" and payload.get("info") is not None
+                      and (parent is None or active is not None)):
                     info = payload["info"]
                     if not isinstance(info, dict):
                         raise ValueError("host_accounting_invalid_token_count")
@@ -116,8 +152,12 @@ def _read_turns(home, session, cutoff):
                         previous = last_legacy or dict.fromkeys(current, 0)
                         if active is not None and (
                             current.keys() != previous.keys()
-                            or any(current[key] - previous[key] != native_since_legacy[key]
-                                   for key in current)
+                            or any(
+                                not 0 <= current[key] - previous[key] <= native_since_legacy[key]
+                                if parent is not None
+                                else current[key] - previous[key] != native_since_legacy[key]
+                                for key in current
+                            )
                         ):
                             turns[active].legacy_mismatch = True
                         native_since_legacy.clear()
@@ -127,24 +167,33 @@ def _read_turns(home, session, cutoff):
                         native_since_legacy.clear()
                     compacted_since_legacy = False
                     last_legacy = current
+                elif active is not None and tid in (None, active):
+                    child, spawned = _child_activity(payload, session)
+                    if isinstance(child, str):
+                        turn = turns[active]
+                        (turn.children if spawned else turn.child_activity).add(child)
             elif row["type"] == "compacted":
                 compacted_since_legacy = True
             elif row["type"] == "turn_context" and payload["turn_id"] in turns:
                 turns[payload["turn_id"]].models.add(payload["model"])
             elif row["type"] == "response_item" and payload.get("role") == "user":
-                if active is not None and payload.get("type") == "message":
+                if parent is None and active is not None and payload.get("type") == "message":
                     _user_message(turns[active], payload["content"])
             elif row["type"] == "token_usage_record":
                 tid = payload["turn_id"]
-                if (payload["thread_id"] != session or payload["session_id"] != session
-                        or payload.get("root_turn_id") != tid):
+                root_id = tid if parent is None else turns[tid].root_id
+                if (payload["thread_id"] != session
+                        or payload["session_id"] not in (session, root_session or session)
+                        or payload.get("root_turn_id") != root_id
+                        or (parent is not None and root_id == tid)):
                     raise ValueError("host_accounting_request_identity_mismatch")
                 response = payload["response_id"]
                 if not isinstance(response, str) or not response:
                     raise ValueError("host_accounting_request_identity_missing")
-                usage = _counters(payload["usage"])
-                total = _counters(payload["thread_token_usage"])
-                cumulative = _counters(payload["turn_token_usage"])
+                raw = (payload["usage"], payload["thread_token_usage"], payload["turn_token_usage"])
+                if parent is not None and any(normalized_counters(item)[1] for item in raw):
+                    raise ValueError("host_accounting_invalid_subagent_counters")
+                usage, total, cumulative = map(_counters, raw)
                 evidence = (tid, usage, total, cumulative)
                 if response in seen:
                     if seen[response] != evidence:
@@ -173,7 +222,7 @@ def _accepted_host_events(status, session):
 
 
 def _turn_record(turn, session, turn_id, rates):
-    if not turn.ended or turn.legacy_mismatch or not turn.requests or len(turn.models) != 1:
+    if turn.end is None or turn.legacy_mismatch or not turn.requests or len(turn.models) != 1:
         raise ValueError("host_accounting_turn_usage_unavailable")
     model = next(iter(turn.models))
     known = turn.requests[-1][0]
@@ -186,7 +235,9 @@ def _turn_record(turn, session, turn_id, rates):
         state=rates, invocation_id=f"codex-host-turn:{identity}",
         valuation_date=turn.started_at.date().isoformat(),
     )
-    return {**usage.cost_records[-1], "session_id": session, "turn_id": turn_id}
+    record = usage.cost_records[-1]
+    record["usage"]["total_tokens"] = known["input_tokens"] + known["output_tokens"]
+    return {**record, "session_id": session, "turn_id": turn_id}
 
 
 def _may_overlap(report, session):
@@ -201,6 +252,83 @@ def _may_overlap(report, session):
             )):
                 return True
     return False
+
+
+def _subagent_records(report, home, session, turns, attributed, cutoff, rates, workflow_id):
+    related, other = [], []
+
+    def queue_children(parent, parent_turns, inherited):
+        ancestors = inherited.union(parent_turns)
+        spawn_roots = defaultdict(set)
+        active_children = set()
+        for turn in parent_turns.values():
+            for child in turn.children:
+                roots = spawn_roots[child]
+                if turn.root_id in attributed:
+                    roots.add(turn.root_id)
+            if turn.root_id in attributed:
+                active_children.update(turn.child_activity)
+        for child, roots in sorted(spawn_roots.items()):
+            queue = related if roots or child in active_children else other
+            queue.append((parent, child, ancestors, roots))
+
+    records = []
+    unavailable = set()
+    visited = {session}
+    queue_children(session, turns, frozenset())
+    while related or other:
+        relevant = bool(related)
+        parent, child, ancestors, spawned_by = (related or other).pop()
+        if child in visited:
+            continue
+        if len(visited) > MAX_SUBAGENT_JOURNALS:
+            if relevant:
+                unavailable.add(child)
+                unavailable.update(edge[1] for edge in related if edge[1] not in visited)
+            break
+        visited.add(child)
+        try:
+            child_turns = _read_turns(
+                home, child, cutoff, parent=parent, root_session=session, inherited=ancestors,
+            )
+        except (OSError, ValueError, KeyError, TypeError, IndexError, RecursionError):
+            if relevant:
+                unavailable.add(child)
+            continue
+        queue_children(child, child_turns, ancestors)
+        owned = {tid: turn for tid, turn in child_turns.items() if turn.root_id in attributed}
+        if spawned_by - {turn.root_id for turn in owned.values()}:
+            unavailable.add(child)
+        if not owned:
+            continue
+        if _may_overlap(report, child):
+            unavailable.add(child)
+            continue
+        for tid, turn in owned.items():
+            try:
+                if turn.started_at < turns[turn.root_id].started_at:
+                    raise ValueError("host_accounting_subagent_before_root_turn")
+                record = _turn_record(turn, child, tid, rates)
+            except (ValueError, KeyError, TypeError):
+                unavailable.add(child)
+                continue
+            counters = record["usage"]
+            ended_at, end_offset = turn.end
+            segment = record["invocation_id"].removeprefix("codex-host-turn:")
+            record["invocation_id"] = "native:" + segment
+            record["native_usage"] = dict(
+                version=1, kind="child", status="final", inclusion="exclusive", gaps=[],
+                segment_id=segment, caller_id=turn.root_id, attempt_id=tid,
+                workflow_id=workflow_id, session_id=child, root_session_id=session,
+                parent_session_id=parent, turn_ids=[tid], known_fields=sorted(counters),
+                start=dict(at=turn.started_at.isoformat(), offset=turn.start_offset,
+                           counters=dict.fromkeys(counters, 0)),
+                end=dict(at=ended_at.isoformat(), offset=end_offset, counters=dict(counters)),
+                source=dict(kind="codex_jsonl", counter_source="token_usage_record",
+                            semantics="codex_turn_token_usage"),
+            )
+            records.append(record)
+    return records, len(unavailable)
 
 
 def add_host_manager_usage(report, archive, issue_name, workflow_id, explicit_turn_ids=()):
@@ -225,7 +353,8 @@ def add_host_manager_usage(report, archive, issue_name, workflow_id, explicit_tu
             raise ValueError("host_accounting_possible_overlap")
         accepted = _accepted_host_events(status, session)
         home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
-        turns = _read_turns(home, session, _time(report["captured_at"]))
+        cutoff = _time(report["captured_at"])
+        turns = _read_turns(home, session, cutoff)
     except (OSError, ValueError, KeyError, TypeError, IndexError, RecursionError) as exc:
         # Keep the existing report usable when optional archived evidence is unavailable.
         reason = str(exc) if isinstance(exc, ValueError) and str(exc).startswith(
@@ -297,5 +426,21 @@ def add_host_manager_usage(report, archive, issue_name, workflow_id, explicit_tu
             "error": rates.get("error"),
         }
     if records:
-        report["manager"] = combine_cost_summaries([report["manager"], summarize_cost(records)])
+        attributed = {record["turn_id"] for record in records}
+        children, unavailable = _subagent_records(
+            report, home, session, turns, attributed, cutoff, rates, workflow_id,
+        )
+        if children or unavailable:
+            child_cost = summarize_cost(children)
+            child_cost["incomplete"] |= bool(unavailable)
+            report["host_manager_usage"]["subagents"] = {
+                "threads": len({record["session_id"] for record in children}),
+                "priced_turns": child_cost["counts"]["estimated"] + child_cost["counts"]["reported"],
+                "unavailable_threads": unavailable,
+                "cost": {key: value for key, value in child_cost.items()
+                         if key not in ("_cost_records", "native_usage")},
+            }
+        supplemental = summarize_cost(records + children)
+        supplemental["incomplete"] |= bool(unavailable)
+        report["manager"] = combine_cost_summaries([report["manager"], supplemental])
         report["combined"] = combine_cost_summaries([report["worker"], report["manager"]])

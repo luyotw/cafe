@@ -260,6 +260,17 @@ def closeout_cost(
                 "accepted_callbacks", "priced_callbacks", "priced_explicit_turns"
             )
         }))
+    if "subagents" in host:
+        children = host["subagents"]
+        if children["threads"]:
+            lines.append(_text(
+                "host_subagent_usage", locale, threads=children["threads"],
+                priced_turns=children["priced_turns"], cost=format_summary(children["cost"], locale),
+            ))
+        if children["unavailable_threads"]:
+            lines.append(_text(
+                "host_subagent_unavailable", locale, count=children["unavailable_threads"],
+            ))
     if host.get("pricing", {}).get("error"):
         lines.append(_text("host_pricing_refresh_failed", locale))
     if "native_usage" in report["combined"]:

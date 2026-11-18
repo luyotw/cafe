@@ -11,6 +11,7 @@ import pytest
 from tests.unit._kickoff_test_support import SCRIPT_ROOT  # noqa: F401
 
 import host_manager_usage
+import report_closeout_cost
 import workflow_event_callback
 from cafe.core.pricing import OpenAIPricingStore
 from tests.unit.test_pricing import DOCUMENT, Response
@@ -187,6 +188,199 @@ def test_missing_last_request_with_identical_usage_is_excluded(usage_fixture):
     assert report["host_manager_usage"]["priced_callbacks"] == 0
     assert report["host_manager_usage"]["rejected_turn_ids"] == ["callback"]
     assert report["manager"]["known"] == 0
+
+
+@pytest.fixture
+def subagent_journal(usage_fixture):
+    journal, _, _, root = usage_fixture
+    child = str(uuid4())
+    timestamp = "2026-11-17T12:00:30Z"
+
+    def row(kind, **payload):
+        return {"type": kind, "timestamp": timestamp, "payload": payload}
+
+    def write(path, rows):
+        path.write_text("".join(json.dumps(record) + "\n" for record in rows))
+
+    def activity(parent, child, local_turn):
+        return row("event_msg", type="item_completed", thread_id=parent, turn_id=local_turn,
+                   item={"type": "SubAgentActivity", "kind": "started", "agent_thread_id": child})
+
+    root_rows = [json.loads(line) for line in journal.read_text().splitlines()]
+    terminal = next(i for i, record in enumerate(root_rows)
+                    if record["payload"].get("type") == "task_complete")
+    root_rows.insert(terminal, {
+        **activity(root, child, "callback"), "timestamp": root_rows[terminal]["timestamp"],
+    })
+    write(journal, root_rows)
+
+    def create_child(identity, parent, *, nested=None):
+        path = journal.with_name(f"rollout-{identity}.jsonl")
+        rows = [row("session_meta", id=identity, forked_from_id=parent,
+                    source={"subagent": {"thread_spawn": {"parent_thread_id": parent}}}),
+                *root_rows[1:terminal]]
+        total = counters(0)
+        for root_turn in ("callback", "direct"):
+            tid = f"{identity}-{root_turn}"
+            usage = counters(1_000, 500, 10)
+            total = {key: total[key] + usage[key] for key in total}
+            rows.extend([
+                row("event_msg", type="task_started", turn_id=tid, root_turn_id=root_turn),
+                row("turn_context", turn_id=tid, root_turn_id=root_turn, model="gpt-6.1-sol"),
+                row("token_usage_record", thread_id=identity, session_id=root, turn_id=tid,
+                    root_turn_id=root_turn, response_id=tid, usage=usage,
+                    turn_token_usage=usage, thread_token_usage=total),
+            ])
+            if nested and root_turn == "callback":
+                rows.append(activity(identity, nested, tid))
+            rows.append(row("event_msg", type="task_complete", turn_id=tid, root_turn_id=root_turn))
+        write(path, rows)
+        return path
+
+    return child, create_child
+
+
+def test_subagents_follow_attributed_root_turns_and_exact_child_counters(
+    usage_fixture, subagent_journal, monkeypatch,
+):
+    _, workflow, issue, root = usage_fixture
+    child, create_child = subagent_journal
+    grandchild = str(uuid4())
+    first = create_child(child, root, nested=grandchild)
+    second = create_child(grandchild, child)
+    originals = [path.read_bytes() for path in (first, second)]
+    monkeypatch.setattr(report_closeout_cost, "verify_closeout", lambda *_: Path("archive"))
+    monkeypatch.setattr(report_closeout_cost, "inclusive_report", lambda *_, **kw: empty_report())
+    result = report_closeout_cost.closeout_cost(
+        Path("."), issue, workflow, Path("archive"), choice="yes", locale="zh-TW",
+    )
+    report = result["report"]
+
+    details = report["host_manager_usage"]["subagents"]
+    assert (details["threads"], details["priced_turns"], details["unavailable_threads"]) == (2, 2, 0)
+    assert details["cost"]["known"] == Decimal("0.00230")
+    native = report["combined"]["native_usage"]
+    assert native["child_tokens"]["total_tokens"] == 2020
+    assert {r["native_usage"]["caller_id"] for r in native["children"]} == {"callback"}
+    assert all(r["session_id"] in (child, grandchild) for r in native["children"])
+    assert report["manager"]["known"] == Decimal("0.064454")
+    assert "Manager 子代理已知小計 USD $0.0023" in result["text"]
+    assert [path.read_bytes() for path in (first, second)] == originals
+
+    explicit = empty_report()
+    host_manager_usage.add_host_manager_usage(explicit, Path("archive"), issue, workflow, ["direct"])
+    assert explicit["host_manager_usage"]["subagents"]["priced_turns"] == 4
+    assert explicit["manager"]["known"] == Decimal("0.067904")
+
+
+@pytest.mark.parametrize("failure", [
+    "missing", "overlap", "after_cutoff", "misattributed", "missing_last_request", "invalid_counters",
+    "invalid_turn_id",
+])
+def test_unverified_subagent_keeps_parent_subtotal(usage_fixture, subagent_journal, failure):
+    _, workflow, issue, root = usage_fixture
+    child, create_child = subagent_journal
+    report = empty_report()
+    if failure != "missing":
+        path = create_child(child, root)
+    if failure == "overlap":
+        report["worker"] = host_manager_usage.summarize_cost([
+            {"invocation_id": "retained", "cli": "codex", "session_id": child,
+             "provenance": "estimated", "amount_usd": "1.2"},
+        ])
+    if failure == "after_cutoff":
+        report["captured_at"] = "2026-11-17T12:00:00Z"
+    if failure == "misattributed":
+        path.write_text(path.read_text().replace(
+            '"parent_thread_id": "' + root, '"parent_thread_id": "' + str(uuid4()),
+        ))
+    if failure in ("missing_last_request", "invalid_counters", "invalid_turn_id"):
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        own = next(i for i, row in enumerate(rows) if (
+            row["type"] == "token_usage_record" and row["payload"]["thread_id"] == child
+        ))
+        row = rows[own]
+        usage = row["payload"]["usage"]
+        if failure == "missing_last_request":
+            rows[own + 1:own + 1] = [
+                {"type": "event_msg", "timestamp": row["timestamp"], "payload": {
+                    "type": "token_count", "info": {
+                        "total_token_usage": {key: factor * value for key, value in usage.items()},
+                    },
+                }}
+                for factor in (1, 2)
+            ]
+        elif failure == "invalid_counters":
+            for key in ("usage", "turn_token_usage", "thread_token_usage"):
+                row["payload"][key]["cached_input_tokens"] = usage["input_tokens"] + 1
+        else:
+            bad_turn = row["payload"]["turn_id"]
+            for item in rows:
+                if item["payload"].get("turn_id") == bad_turn:
+                    item["payload"]["turn_id"] = 42
+        path.write_text("".join(json.dumps(item) + "\n" for item in rows))
+
+    host_manager_usage.add_host_manager_usage(report, Path("archive"), issue, workflow)
+    details = report["host_manager_usage"]["subagents"]
+    assert (details["priced_turns"], details["unavailable_threads"]) == (0, 1)
+    assert report["manager"]["known"] == Decimal("0.062154")
+    assert report["manager"]["incomplete"]
+
+
+@pytest.mark.parametrize("limit", [1, 32])
+def test_unreadable_unrelated_child_does_not_block_owned_child(
+    usage_fixture, subagent_journal, monkeypatch, limit,
+):
+    journal, workflow, issue, root = usage_fixture
+    child, create_child = subagent_journal
+    create_child(child, root)
+    rows = [json.loads(line) for line in journal.read_text().splitlines()]
+    marker = next(i for i, row in enumerate(rows) if (
+        row["payload"].get("type") == "task_complete" and row["payload"]["turn_id"] == "mixed"
+    ))
+    rows.insert(marker, {
+        "type": "event_msg", "timestamp": rows[marker]["timestamp"],
+        "payload": {"type": "collab_agent_spawn_end", "sender_thread_id": root,
+                    "new_thread_id": "00000000-0000-4000-8000-000000000001"},
+    })
+    journal.write_text("".join(json.dumps(item) + "\n" for item in rows))
+    monkeypatch.setattr(host_manager_usage, "MAX_SUBAGENT_JOURNALS", limit)
+    report = empty_report()
+
+    host_manager_usage.add_host_manager_usage(report, Path("archive"), issue, workflow)
+
+    details = report["host_manager_usage"]["subagents"]
+    assert (details["priced_turns"], details["unavailable_threads"]) == (1, 0)
+    assert report["manager"]["known"] == Decimal("0.063304")
+
+
+def test_subagent_limit_reports_all_known_remaining_children(
+    usage_fixture, subagent_journal, monkeypatch,
+):
+    journal, workflow, issue, root = usage_fixture
+    child, create_child = subagent_journal
+    create_child(child, root)
+    rows = [json.loads(line) for line in journal.read_text().splitlines()]
+    marker = next(i for i, row in enumerate(rows) if row["payload"].get("item", {}).get(
+        "agent_thread_id"
+    ) == child)
+    original = rows[marker]
+    for identity in (
+        "00000000-0000-4000-8000-000000000001",
+        "00000000-0000-4000-8000-000000000002",
+    ):
+        payload = {**original["payload"], "item": {
+            **original["payload"]["item"], "agent_thread_id": identity,
+        }}
+        rows.insert(marker, {**original, "payload": payload})
+    journal.write_text("".join(json.dumps(item) + "\n" for item in rows))
+    monkeypatch.setattr(host_manager_usage, "MAX_SUBAGENT_JOURNALS", 1)
+    report = empty_report()
+
+    host_manager_usage.add_host_manager_usage(report, Path("archive"), issue, workflow)
+
+    details = report["host_manager_usage"]["subagents"]
+    assert (details["priced_turns"], details["unavailable_threads"]) == (1, 2)
 
 
 @pytest.mark.parametrize("refresh", ["success", "failure", "disabled"])
