@@ -24,6 +24,7 @@ from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.issue_resolution import ActiveIssueResolutionError, resolve_active_issue
 from cafe.core.phase_state_mixin import next_runnable_iteration_number
 from cafe.core.playbook import resolve_step_behavior
+from cafe.core.task_continuation import ContinuationRequest
 from cafe.core.types import CriticalPhaseError
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
@@ -672,8 +673,12 @@ def workflow(
             "requires --conversation-locale-source"
         ),
     ),
+    context: typer.Context = None,
 ) -> None:
     """Run playbook workflow using the new generic runner."""
+    saved_continuation = context.obj if context is not None and isinstance(
+        context.obj, ContinuationRequest
+    ) else None
     user_input = _normalize_cli_user_input(user_input)
     execution_context_file = execution_context_file if isinstance(execution_context_file, Path) else None
     execution_context = None
@@ -729,6 +734,11 @@ def workflow(
             raise typer.Exit(1)
         issue_name = resolved.issue_name
         issue_dir = cafe_dir / "issues" / issue_name
+        if saved_continuation is not None and (
+            saved_continuation.issue != issue_name
+            or not saved_continuation.matches_workflow(BlackboardStore(issue_dir))
+        ):
+            raise ValueError("The continuation's workflow has changed")
         if not dry_run:
             launch_store = WorkerLaunchStore(issue_dir)
             has_internal_worker_context = bool(internal_worker_id or internal_worker_token)
@@ -845,7 +855,9 @@ def workflow(
                 raise typer.Exit(1)
             console.print(f"[green]Workflow background worker started[/green] pid={pid}")
 
-        tty_interactive = sys.stdin.isatty() or os.getenv("CAFE_FORCE_INTERACTIVE") == "1"
+        tty_interactive = saved_continuation is None and (
+            sys.stdin.isatty() or os.getenv("CAFE_FORCE_INTERACTIVE") == "1"
+        )
         generic_phase = GenericPhase(SkillLoader())
 
         entry_point = str(
@@ -1275,33 +1287,41 @@ def workflow(
             )
 
             from cafe.workflow_execution.automatic import automatic_executor_registry
-            runner = BlackboardWorkflowRuntime(
-                issue_dir=issue_dir,
-                automatic_registry=automatic_executor_registry(),
-                playbook=playbook_data,
-                executor=wrapped_executor,
-                execution_context=execution_context,
-                workflow_event_callback=(
-                    (
-                        lambda event: dispatch_workflow_event_callback(
-                            callback_binding,
-                            event,
-                            cwd=Path.cwd(),
-                        )
-                    )
-                    if callback_binding is not None
-                    else None
-                ),
-            )
+            runner = None
 
             def run_composed_workflow():
-                nonlocal pending_start_step
+                nonlocal pending_start_step, runner
+                if runner is None:
+                    if saved_continuation is not None and not saved_continuation.matches_workflow(
+                        BlackboardStore(issue_dir)
+                    ):
+                        raise ValueError("The continuation's workflow has changed")
+                    runner = BlackboardWorkflowRuntime(
+                        issue_dir=issue_dir,
+                        automatic_registry=automatic_executor_registry(),
+                        playbook=playbook_data,
+                        executor=wrapped_executor,
+                        execution_context=execution_context,
+                        workflow_event_callback=(
+                            lambda event: dispatch_workflow_event_callback(
+                                callback_binding, event, cwd=Path.cwd(),
+                            )
+                        ) if callback_binding is not None else None,
+                    )
+                    if (
+                        saved_continuation is not None
+                        and runner.blackboard.workflow_id != saved_continuation.workflow_id
+                    ):
+                        raise ValueError("The continuation's workflow has changed")
                 requested_start = pending_start_step
                 pending_start_step = None
                 return runner.run(start_step=requested_start, single_step=single_step)
 
             host = WorkflowHost(issue_dir)
-            if validated_worker_id is not None:
+            if saved_continuation is not None:
+                # The task command owns the host, including intervention cleanup.
+                result = run_composed_workflow()
+            elif validated_worker_id is not None:
                 result = host.run_worker(
                     run_composed_workflow,
                     worker_id=validated_worker_id,
@@ -1320,7 +1340,10 @@ def workflow(
                 console.print(
                     f"[yellow]Workflow waiting for external verification[/yellow] step={result.final_step}"
                 )
-                if not single_step and validated_worker_id is None and not add_dir_values:
+                if (
+                    saved_continuation is None and not single_step
+                    and validated_worker_id is None and not add_dir_values
+                ):
                     # Foreground ownership was released before the child can acquire it.
                     launch_background_worker()
                 else:

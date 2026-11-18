@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -17,12 +18,14 @@ from cafe.core.capability_approvals import CapabilityApprovalError
 from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.human_task_snapshot import resolve_task_inputs, uses_special_approval
 from cafe.core.human_tasks import HumanTaskPolicy
+from cafe.core.task_continuation import ContinuationRequest, observe_continuation
 from cafe.core.task_inbox import (
     CompletionPreflight,
     TaskInboxError,
     TaskInboxService,
     load_issue_task_playbook,
 )
+from cafe.core.workflow_repair import _quiescent
 from cafe.ui.commands import workflow as workflow_commands
 from cafe.ui.human_tasks import (
     HumanTaskApplication,
@@ -32,6 +35,9 @@ from cafe.ui.human_tasks import (
     collect_human_task_payload,
     durable_task_matches_current_handoff,
 )
+from cafe.utils.file_lock import WorkerAlreadyRunningError
+from cafe.utils.issue_paths import validate_issue_directory
+from cafe.workflow_execution.workflow_hosting import WorkflowHost
 
 
 def load_task_playbook(preflight: CompletionPreflight, *, project_root: Path) -> dict[str, Any]:
@@ -139,7 +145,9 @@ def _fail(operation: str, error: TaskInboxError, json_output: bool) -> None:
     raise typer.Exit(1)
 
 
-def _resume_issue_workflow(issue: str, playbook: str) -> None:
+def _resume_issue_workflow(
+    issue: str, playbook: str, *, context: typer.Context | None = None,
+) -> None:
     """Run the exact owning issue without consulting or changing the active marker."""
     workflow_commands.workflow(
         playbook=playbook,
@@ -153,6 +161,7 @@ def _resume_issue_workflow(issue: str, playbook: str) -> None:
         dry_run=False,
         user_input=None,
         add_dir=[],
+        **({"context": context, "mute_agent_output": True} if context is not None else {}),
     )
 
 
@@ -285,6 +294,109 @@ def inspect_task(
     if detail.result is not None:
         console.print("Result:")
         console.print_json(data=detail.result)
+
+
+def _resume_saved_continuation(request: ContinuationRequest, context: typer.Context) -> str:
+    issue_dir = request.issue_dir
+    validate_issue_directory(issue_dir)
+
+    def preflight() -> None:
+        try:
+            if not request.matches_workflow(BlackboardStore(issue_dir)):
+                raise ValueError("The continuation's workflow has changed")
+            _quiescent(issue_dir)
+        except (OSError, ValueError) as exc:
+            raise WorkerAlreadyRunningError("Workflow ownership is unavailable") from exc
+
+    def run() -> str:
+        observation = observe_continuation(request, reconcile=True)
+        state = observation.state
+        if state is None:
+            return observation.status
+        if observation.unprojected_task is not None:
+            task = observation.unprojected_task
+            result = observation.result
+            assert result is not None
+            playbook = load_issue_task_playbook(
+                project_root=Path.cwd(), issue_dir=issue_dir, playbook_id=state.playbook_id,
+            )
+            if uses_special_approval(task, playbook["steps"].get(task.step, {})):
+                raise TaskInboxError(
+                    "unsupported_continuation", "This result uses a special approval protocol.",
+                    recovery="Follow the workflow's existing approval protocol.",
+                    task_id=request.task_id, issue=request.issue, workflow_id=request.workflow_id,
+                )
+            applied = apply_human_task_payload(
+                issue_dir=issue_dir, playbook_data=playbook, blackboard=state,
+                from_step=task.step, trigger=task.trigger,
+                raw_payload={"human_task_id": task.id}, source=result.source,
+                saved_result=result,
+            )
+            if applied.rejection is not None or applied.target is None:
+                return "unknown"
+            observation = observe_continuation(request)
+            state = observation.state
+            if state is None or observation.unprojected_task is not None:
+                return observation.status
+        context.obj = request
+        try:
+            _resume_issue_workflow(request.issue, state.playbook_id, context=context)
+        except (OSError, ValueError, RuntimeError, typer.Exit):
+            after = observe_continuation(request)
+            if after.state is None:
+                return after.status
+            BlackboardStore(issue_dir).record_event(
+                after.state, "human_task_continuation_failed",
+                {"human_task_id": request.task_id, "result_id": request.result_id},
+            )
+            return "retryable_failure"
+        return observe_continuation(request).status
+
+    try:
+        return WorkflowHost(issue_dir).run(run, hosting="foreground", preflight=preflight).result
+    except WorkerAlreadyRunningError:
+        observed = observe_continuation(request)
+        return observed.status if observed.state is None else "unknown"
+
+
+@task_app.command("continuation")
+def task_continuation(
+    context: typer.Context,
+    task_id: str = typer.Argument(..., help="Completed HumanTask identifier"),
+    issue: str = typer.Option(..., "--issue", help="Owning issue directory name"),
+    workflow_id: str = typer.Option(..., "--workflow-id", help="Owning workflow identifier"),
+    result_id: str = typer.Option(..., "--result-id", help="Saved result identifier"),
+    resume: bool = typer.Option(
+        False, "--resume", help="Offer the saved continuation to the workflow",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit one JSON result object"),
+) -> None:
+    """Inspect or safely resume one saved HumanTask result."""
+    try:
+        request = ContinuationRequest(issue, workflow_id, task_id, result_id)
+        status = observe_continuation(request).status
+        if resume and status not in {"advanced", "stale_workflow"} and request.issue_dir.is_dir():
+            if json_output:
+                with open(os.devnull, "w", encoding="utf-8") as sink, redirect_stdout(sink):
+                    status = _resume_saved_continuation(request, context)
+            else:
+                status = _resume_saved_continuation(request, context)
+    except TaskInboxError as exc:
+        _fail("continuation", exc, json_output)
+    except (OSError, ValueError) as exc:
+        _fail(
+            "continuation",
+            TaskInboxError(
+                "continuation_unavailable", str(exc),
+                recovery="Check the owning issue and inspect the saved continuation again.",
+                task_id=task_id, workflow_id=workflow_id, issue=issue,
+            ),
+            json_output,
+        )
+    if json_output:
+        _emit_json(_envelope("continuation", data=request.response(status)))
+    else:
+        typer.echo(status)
 
 
 @task_app.command("complete")

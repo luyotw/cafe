@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
+from cafe.core.audit_events import AuditEventStore
 from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.workflow_models import StepExecutionResult
@@ -17,7 +19,7 @@ from cafe.ui.cli import app
 from cafe.ui.human_tasks import apply_human_task_payload, resolve_step_human_task
 from cafe.workflow_execution.automatic import automatic_executor_registry
 from cafe.workflow_execution.event_callback import ResolvedWorkflowEventCallback
-from cafe.workflow_execution.worker_launch import WorkerLaunchStore
+from cafe.workflow_execution.worker_launch import FixedWorkerLauncher, WorkerLaunchStore
 
 pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
@@ -349,11 +351,15 @@ def test_recovery_projects_a_committed_snapshot_only_for_its_owning_handoff(
     issue_dir, task = _workflow_task(tmp_path, "recover-review", HandoffIntent.CONFIRM_OUTPUT)
     version = _inspect_snapshot(task.id)["version"]
 
-    def interrupt_projection(*_args):
-        raise OSError("interrupted workflow projection")
+    record_event = BlackboardStore.record_event
+
+    def interrupt_projection(self, state, event_type, payload, **kwargs):
+        if event_type == "human_task_completed":
+            raise OSError("interrupted workflow projection")
+        return record_event(self, state, event_type, payload, **kwargs)
 
     with monkeypatch.context() as interrupted:
-        interrupted.setattr(BlackboardStore, "set_current_step", interrupt_projection)
+        interrupted.setattr(BlackboardStore, "record_event", interrupt_projection)
         completion = _submit_snapshot(task, version, decision="confirm")
         assert completion.exit_code != 0
 
@@ -369,6 +375,11 @@ def test_recovery_projects_a_committed_snapshot_only_for_its_owning_handoff(
             intent=HandoffIntent.CONFIRM_OUTPUT, source="test.replacement",
         )
     original_handoff = state.handoff_contract
+    continuation = _continuation_command(issue_dir.name, task, accepted.id)
+    if replace_handoff:
+        assert _continuation_status([*continuation, "--resume"]) == "unknown"
+    else:
+        assert _continuation_status(continuation) == "pending"
 
     recovered = apply_human_task_payload(
         issue_dir=issue_dir, playbook_data=PlaybookLoader().load("standard"), blackboard=state,
@@ -448,6 +459,221 @@ def test_noninteractive_completion_can_defer_workflow_resume(
     assert BlackboardStore(issue_dir).load_or_create("spec").current_step == "plan"
     assert resumed == []
     assert "--issue deferred --execute --background" in result.stdout
+
+
+def _continuation_command(issue: str, task, result_id: str) -> list[str]:
+    return [
+        "task", "continuation", task.id, "--issue", issue,
+        "--workflow-id", task.workflow_id, "--result-id", result_id, "--json",
+    ]
+
+
+def _continuation_status(command: list[str]) -> str:
+    response = runner.invoke(app, command)
+    assert response.exit_code == 0, (response.stdout, response.exception)
+    return json.loads(response.stdout)["data"]["status"]
+
+
+@pytest.fixture
+def saved_continuation(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    issue_dir, task = _workflow_task(tmp_path, "continuation", HandoffIntent.CONFIRM_OUTPUT)
+    completed = _submit_snapshot(task, _inspect_snapshot(task.id)["version"], decision="confirm")
+    assert completed.exit_code == 0, (completed.stdout, completed.exception)
+    result_id = json.loads(completed.stdout)["data"]["task"]["result"]["id"]
+    return issue_dir, task, _continuation_command(issue_dir.name, task, result_id)
+
+
+class _ContinuationProvider:
+    def __init__(self, calls=()):
+        self.calls = calls
+
+    def execute_step(self, step, _definition, state, *, extra_prompt=None):
+        for call in self.calls:
+            call()
+        issue_dir = Path(".cafe/issues/continuation")
+        iteration = issue_dir / step / "iteration_001"
+        iteration.mkdir(parents=True, exist_ok=True)
+        (iteration / "output.md").write_text("# Plan ready\n", encoding="utf-8")
+        BlackboardStore(issue_dir).update_handoff_contract(
+            state, from_step=step, to_owner=HandoffOwner.USER, to_step="user",
+            intent=HandoffIntent.CONFIRM_OUTPUT, source="test.provider",
+        )
+        return StepExecutionResult(response="Plan ready", artifacts={})
+
+
+@pytest.fixture
+def continuation_provider(monkeypatch):
+    calls = []
+    monkeypatch.setattr("cafe.ui.cli._check_agent_clis_available", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        "cafe.ui.cli._build_workflow_step_executor",
+        lambda *_args, **_kwargs: _ContinuationProvider(calls),
+    )
+    return calls
+
+
+def test_saved_result_survives_a_lost_resume_acknowledgement(
+    saved_continuation, continuation_provider,
+):
+    issue_dir, task, command = saved_continuation
+    executions = []
+    continuation_provider.append(lambda: executions.append("plan"))
+    assert _continuation_status(command) == "pending"
+
+    # Let the real CLI and runtime run, then discard the reply at the client boundary.
+    assert runner.invoke(app, [*command, "--resume"]).exit_code == 0
+    assert _continuation_status(command) == "advanced"
+    assert _continuation_status([*command, "--resume"]) == "advanced"
+    records = HumanTaskRecordStore(issue_dir)
+    assert executions == ["plan"]
+    assert [result.task_id for result in records.results()] == [task.id]
+    assert [item.step for item in records.tasks() if item.status is HumanTaskStatus.PENDING] == ["plan"]
+
+
+def test_saved_result_lost_background_launch_acknowledgement_uses_durable_evidence(
+    saved_continuation, monkeypatch,
+):
+    issue_dir, task, command = saved_continuation
+    children = []
+    source_root = Path(__file__).resolve().parents[2]
+    child_code = """
+import sys
+sys.path.insert(0, sys.argv.pop(1))
+assert sys.stdin.buffer.read(1) == b'1'
+from cafe.ui import cli
+from tests.integration.test_task_inbox_workflow import _ContinuationProvider
+cli._check_agent_clis_available = lambda *args, **kwargs: []
+cli._build_workflow_step_executor = lambda **kwargs: _ContinuationProvider()
+cli.app()
+"""
+
+    def launch_child(args, **options):
+        options.update(stdin=subprocess.PIPE, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+        child = subprocess.Popen([args[0], "-c", child_code, str(source_root), *args[3:]], **options)
+        children.append(child)
+        return child
+
+    monkeypatch.setattr(
+        "cafe.ui.commands.workflow.FixedWorkerLauncher",
+        lambda directory: FixedWorkerLauncher(directory, popen_factory=launch_child),
+    )
+    try:
+        # Drop the launch reply while the actual worker is alive but has not entered the CLI.
+        assert runner.invoke(
+            app, ["workflow", "--issue", issue_dir.name, "--execute", "--background"],
+        ).exit_code == 0
+        (child,) = children
+        assert _continuation_status(command) == "pending"
+        assert _continuation_status([*command, "--resume"]) == "unknown"
+        stdout, stderr = child.communicate(input=b"1", timeout=30)
+        assert child.returncode == 0, (stdout[-2000:], stderr[-2000:])
+        assert _continuation_status([*command, "--resume"]) == "advanced"
+        records = HumanTaskRecordStore(issue_dir)
+        assert [result.task_id for result in records.results()] == [task.id]
+        assert [item.step for item in records.tasks() if item.status is HumanTaskStatus.PENDING] == ["plan"]
+    finally:
+        for child in children:
+            if child.poll() is None:
+                child.kill()
+                child.communicate(timeout=5)
+
+
+def test_saved_result_retry_defers_to_a_cli_resume_that_owns_advancement(
+    saved_continuation, continuation_provider,
+):
+    issue_dir, task, command = saved_continuation
+    during_run = []
+
+    def offer_continuation_while_cli_owns_the_lock():
+        during_run.append(_continuation_status(command))
+        during_run.append(_continuation_status([*command, "--resume"]))
+
+    continuation_provider.append(offer_continuation_while_cli_owns_the_lock)
+
+    # The provider barrier runs while the ordinary CLI holds the real host lock.
+    resumed = runner.invoke(app, ["workflow", "--issue", issue_dir.name, "--execute"])
+    assert resumed.exit_code == 0, (resumed.stdout, resumed.exception)
+    assert during_run == ["pending", "unknown"]
+    assert _continuation_status([*command, "--resume"]) == "advanced"
+    assert [result.task_id for result in HumanTaskRecordStore(issue_dir).results()] == [task.id]
+
+
+def test_saved_result_retry_cannot_advance_a_replacement_workflow(
+    tmp_path, saved_continuation,
+):
+    issue_dir, task, command = saved_continuation
+    previous = issue_dir.rename(tmp_path / "previous-workflow")
+    _, replacement = _workflow_task(tmp_path, issue_dir.name, HandoffIntent.CONFIRM_OUTPUT)
+    before = BlackboardStore(issue_dir).load_read_only()
+
+    assert _continuation_status(command) == "stale_workflow"
+    assert _continuation_status([*command, "--resume"]) == "stale_workflow"
+    assert BlackboardStore(issue_dir).load_read_only().to_dict() == before.to_dict()
+    assert replacement.workflow_id != task.workflow_id
+    assert not HumanTaskRecordStore(issue_dir).results()
+    assert [result.task_id for result in HumanTaskRecordStore(previous).results()] == [task.id]
+
+
+def test_saved_result_reports_a_retryable_startup_failure(
+    saved_continuation, monkeypatch, continuation_provider,
+):
+    issue_dir, task, command = saved_continuation
+    with monkeypatch.context() as failure:
+        def missing_playbook(*_args, **_kwargs):
+            raise FileNotFoundError("simulated unavailable playbook")
+
+        failure.setattr(PlaybookLoader, "load", missing_playbook)
+        assert _continuation_status([*command, "--resume"]) == "retryable_failure"
+        assert _continuation_status(command) == "retryable_failure"
+
+    assert _continuation_status([*command, "--resume"]) == "advanced"
+    assert [result.task_id for result in HumanTaskRecordStore(issue_dir).results()] == [task.id]
+
+
+def test_saved_result_retry_requires_the_exact_result_id(saved_continuation):
+    issue_dir, task, command = saved_continuation
+    wrong_result = _continuation_command(issue_dir.name, task, "different-result")
+    response = runner.invoke(app, [*wrong_result, "--resume"])
+    assert response.exit_code == 1
+    assert json.loads(response.stdout)["error"]["code"] == "result_mismatch"
+    assert _continuation_status(command) == "pending"
+
+
+@pytest.mark.parametrize("audit_committed", [False, True])
+def test_saved_result_can_be_projected_after_an_exit_during_completion(
+    tmp_path, monkeypatch, continuation_provider, audit_committed,
+):
+    monkeypatch.chdir(tmp_path)
+    issue_dir, task = _workflow_task(tmp_path, "continuation", HandoffIntent.CONFIRM_OUTPUT)
+    record_event = BlackboardStore.record_event
+    commit_event = AuditEventStore.commit
+
+    def stop_before_projection(self, state, event_type, payload, **kwargs):
+        if event_type == "human_task_completed":
+            raise OSError("simulated exit before publishing the continuation")
+        return record_event(self, state, event_type, payload, **kwargs)
+
+    def stop_before_checkpoint(self, workflow_id, record):
+        commit_event(self, workflow_id, record)
+        if record["event_type"] == "human_task_completed":
+            raise OSError("simulated exit after committing the continuation to the audit")
+
+    with monkeypatch.context() as failure:
+        if audit_committed:
+            failure.setattr(AuditEventStore, "commit", stop_before_checkpoint)
+        else:
+            failure.setattr(BlackboardStore, "record_event", stop_before_projection)
+        response = _submit_snapshot(task, _inspect_snapshot(task.id)["version"], decision="confirm")
+        assert response.exit_code == 1
+
+    inspected = runner.invoke(app, ["task", "inspect", task.id, "--json"])
+    assert inspected.exit_code == 0, (inspected.stdout, inspected.exception)
+    result_id = json.loads(inspected.stdout)["data"]["task"]["result"]["id"]
+    command = _continuation_command(issue_dir.name, task, result_id)
+    assert _continuation_status(command) == ("unknown" if audit_committed else "pending")
+    assert _continuation_status([*command, "--resume"]) == "advanced"
+    assert [result.id for result in HumanTaskRecordStore(issue_dir).results()] == [result_id]
 
 
 def test_task_command_accepts_and_inspects_a_work_report(
@@ -782,6 +1008,9 @@ def test_deferred_terminal_completion_wakes_driver_from_callback_worker(
     assert state.handoff_contract is not None
     assert state.handoff_contract.to_owner is HandoffOwner.DONE
     assert state.handoff_contract.intent is HandoffIntent.WORKFLOW_COMPLETE
+    (result,) = HumanTaskRecordStore(issue_dir).results()
+    continuation = _continuation_command(issue_dir.name, task, result.id)
+    assert _continuation_status([*continuation, "--resume"]) == "advanced"
 
     launch_store = WorkerLaunchStore(issue_dir)
     launch = launch_store.start()
