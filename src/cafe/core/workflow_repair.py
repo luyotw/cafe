@@ -16,6 +16,7 @@ from typing import Callable
 from cafe.core.audit_events import AuditEventStore
 from cafe.core.blackboard import BlackboardState, BlackboardStore
 from cafe.core.packet_io import atomic_write_bytes, sha256_bytes
+from cafe.core.worker_liveness import worker_abandoned
 from cafe.core.workspace_lock import workspace_execution_lock, WorkspaceLeaseBusyError
 from cafe.utils.file_lock import (
     _release_advancement_process_lock,
@@ -94,8 +95,6 @@ def _snapshot(issue):
 
 
 def _quiescent(issue):
-    from cafe.workflow_execution.worker_launch import worker_abandoned
-
     path = issue / '.workflow-worker-launches.json'
     if not path.exists() and not path.is_symlink(): return
     raw = _json(_read(path, 1_048_576)[0])

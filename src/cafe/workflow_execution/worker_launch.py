@@ -9,17 +9,16 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 import sys
 import threading
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterator
 
+from cafe.core import worker_liveness
 from cafe.core.packet_io import atomic_write_bytes
 from cafe.utils.issue_paths import issue_name_from_dir
 
@@ -48,71 +47,6 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-@lru_cache(maxsize=1)
-def _host_boot():
-    """Return the current boot identity and the start time for legacy records."""
-    try:
-        if sys.platform == "darwin":
-            boot = subprocess.run(
-                ["/usr/sbin/sysctl", "-n", "kern.bootsessionuuid", "kern.boottime"],
-                check=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                text=True, timeout=2,
-            ).stdout.splitlines()
-            boot_id = str(uuid.UUID(boot[0].strip()))
-            start = re.search(r"sec\s*=\s*(\d+)", boot[1])
-            return boot_id, int(start[1]) if start else None
-        if sys.platform.startswith("linux"):
-            boot_id = str(uuid.UUID(Path("/proc/sys/kernel/random/boot_id").read_text().strip()))
-            start = next(
-                (int(line.split()[1]) for line in Path("/proc/stat").read_text().splitlines()
-                 if line.startswith("btime ")), None,
-            )
-            return boot_id, start
-    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
-        pass
-    return None, None
-
-
-def _process_absent(pid, probe):
-    if type(pid) is not int or pid <= 0:
-        return False
-    try:
-        probe(pid, 0)
-    except ProcessLookupError:
-        return True
-    except OSError:
-        pass
-    return False
-
-
-def worker_abandoned(record):
-    """Check process ownership before recovery. A stale status string is not a lock."""
-    boot_id, boot_started_at = _host_boot()
-    saved_boot = record.get("boot_id")
-    if boot_id and saved_boot:
-        if saved_boot != boot_id:
-            return True
-    elif boot_started_at is not None:
-        # Old releases did not record a boot ID. Require both the older
-        # timestamp and an absent PID to avoid retiring an unverified live worker.
-        try:
-            last_update = datetime.fromisoformat(record.get("updated_at", ""))
-            if (last_update.tzinfo is not None
-                    and last_update.timestamp() < boot_started_at
-                    and _process_absent(record.get("pid"), os.kill)):
-                return True
-        except (TypeError, ValueError, OverflowError):
-            pass
-    if not _process_absent(record.get("pid"), os.kill):
-        return False
-    provider = record.get("provider")
-    if not isinstance(provider, dict):
-        return False
-    return provider.get("state") == "stopped" or (
-        hasattr(os, "killpg") and _process_absent(provider.get("pid"), os.killpg)
-    )
-
-
 def detached_child_environment() -> dict[str, str]:
     """Return provider configuration without parent host-session controls."""
     environment = os.environ.copy()
@@ -139,7 +73,7 @@ class WorkerLaunchStore:
             "status": "starting",
             "created_at": now,
             "updated_at": now,
-            "boot_id": _host_boot()[0],
+            "boot_id": worker_liveness.host_boot()[0],
         }
         with self._locked_records() as records:
             if worker_id in records:
@@ -153,7 +87,7 @@ class WorkerLaunchStore:
             for record in records.values():
                 if record.get("pid") is None and record.get("status") not in {"starting", "started", "running"}:
                     continue
-                if not worker_abandoned(record):
+                if not worker_liveness.worker_abandoned(record):
                     continue
                 record["status"] = "exited"
                 record["last_pid"] = record.pop("pid", None)
