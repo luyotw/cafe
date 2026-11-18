@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
+from cafe.core import worker_liveness
 from cafe.core.packet_io import atomic_write_bytes
 from cafe.utils.issue_paths import issue_name_from_dir
 
@@ -72,12 +73,31 @@ class WorkerLaunchStore:
             "status": "starting",
             "created_at": now,
             "updated_at": now,
+            "boot_id": worker_liveness.host_boot()[0],
         }
         with self._locked_records() as records:
             if worker_id in records:
                 raise ValueError("worker invocation identity already exists")
             records[worker_id] = record
         return dict(record)
+
+    def reconcile_abandoned(self) -> None:
+        """Retire stopped launches under the caller's advancement lease."""
+        with self._locked_records() as records:
+            for record in records.values():
+                if record.get("pid") is None and record.get("status") not in {"starting", "started", "running"}:
+                    continue
+                if not worker_liveness.worker_abandoned(record):
+                    continue
+                record["status"] = "exited"
+                record["last_pid"] = record.pop("pid", None)
+                record["last_process_birth"] = record.pop("process_birth", None)
+                record["updated_at"] = _now()
+                record["error_code"] = "worker_exited"
+                if isinstance(record.get("provider"), dict):
+                    record["provider"]["state"] = "stopped"
+                if isinstance(record.get("active"), dict):
+                    record["active"]["accepts_interruption"] = False
 
     def get(self, worker_id: str) -> dict[str, Any] | None:
         if not worker_id:

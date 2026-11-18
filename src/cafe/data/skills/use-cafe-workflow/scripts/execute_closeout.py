@@ -20,6 +20,7 @@ from typing import Any, Iterator
 
 from cafe.core.packet_io import atomic_write_bytes, canonical_json
 from cafe.manager.delivery import MAX_CLOSEOUT_EVIDENCE_BYTES
+from cafe.utils.issue_paths import issue_project_root, validate_issue_directory, validate_issue_name
 
 MAX_EVIDENCE_BYTES = MAX_CLOSEOUT_EVIDENCE_BYTES
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
@@ -38,27 +39,29 @@ def _common_dir(checkout: Path) -> Path:
 
 
 def _paths(project_root: Path, issue_name: str, workflow_id: str) -> tuple[Path, Path]:
-    if not IDENTIFIER.fullmatch(issue_name) or not IDENTIFIER.fullmatch(workflow_id):
-        raise ValueError("issue and workflow identifiers must be simple path components")
+    validate_issue_name(issue_name)
+    if not IDENTIFIER.fullmatch(workflow_id):
+        raise ValueError("workflow identifier must be a simple path component")
     directory = _common_dir(project_root) / "cafe" / "closeout" / issue_name
     return directory / f"{workflow_id}.json", directory / f"{workflow_id}.lock"
 
 
-def _safe_directory(directory: Path) -> None:
-    for parent in (directory.parent.parent, directory.parent, directory):
+def _safe_directory(directory: Path, *, create: bool) -> None:
+    for parent in reversed((directory, *directory.parents)):
         if parent.is_symlink():
             raise ValueError("closeout evidence path must not traverse a symlink")
-        parent.mkdir(mode=0o700, exist_ok=True)
+        if create:
+            parent.mkdir(mode=0o700, exist_ok=True)
         if not parent.is_dir():
             raise ValueError("closeout evidence directory is unsafe")
 
 
 @contextmanager
-def _locked(lock_path: Path) -> Iterator[None]:
-    _safe_directory(lock_path.parent)
+def _locked(lock_path: Path, *, create: bool) -> Iterator[None]:
+    _safe_directory(lock_path.parent, create=create)
     if lock_path.is_symlink():
         raise ValueError("closeout lock is unsafe")
-    with lock_path.open("a+b") as handle:
+    with lock_path.open("a+b" if create else "r+b") as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         try:
             yield
@@ -68,18 +71,8 @@ def _locked(lock_path: Path) -> Iterator[None]:
 
 @contextmanager
 def _read_locked(lock_path: Path) -> Iterator[None]:
-    if (
-        any(
-            path.is_symlink()
-            for path in (
-                lock_path.parent.parent.parent,
-                lock_path.parent.parent,
-                lock_path.parent,
-                lock_path,
-            )
-        )
-        or not lock_path.is_file()
-    ):
+    _safe_directory(lock_path.parent, create=False)
+    if lock_path.is_symlink() or not lock_path.is_file():
         raise ValueError("closeout evidence lock is missing or unsafe")
     with lock_path.open("rb") as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
@@ -154,8 +147,9 @@ def _write(path: Path, record: dict[str, Any]) -> None:
 def _confirmed(
     issue_dir: Path, issue_name: str, workflow_id: str, common_dir: Path
 ) -> tuple[dict[str, Any], str, Path]:
+    validate_issue_directory(issue_dir.absolute())
     issue = issue_dir.resolve(strict=True)
-    worktree = issue.parent.parent.parent
+    worktree = issue_project_root(issue)
     if issue != worktree / ".cafe" / "issues" / issue_name:
         raise ValueError("issue directory does not match the named worktree issue")
     if _common_dir(worktree) != common_dir:
@@ -239,12 +233,7 @@ def main() -> int:
                     )
                 print(json.dumps(record))
                 return 0
-        if (
-            args.execute
-            and _read(path, issue_name=args.issue_name, workflow_id=args.workflow_id) is None
-        ):
-            raise ValueError("closeout evidence is missing; initialize before the first command")
-        with _locked(lock_path):
+        with _locked(lock_path, create=args.initialize):
             record = _read(path, issue_name=args.issue_name, workflow_id=args.workflow_id)
             if args.issue_dir is None:
                 raise ValueError("initialization and execution require --issue-dir")

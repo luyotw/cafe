@@ -16,6 +16,7 @@ from typing import Callable
 from cafe.core.audit_events import AuditEventStore
 from cafe.core.blackboard import BlackboardState, BlackboardStore
 from cafe.core.packet_io import atomic_write_bytes, sha256_bytes
+from cafe.core.worker_liveness import worker_abandoned
 from cafe.core.workspace_lock import workspace_execution_lock, WorkspaceLeaseBusyError
 from cafe.utils.file_lock import (
     _release_advancement_process_lock,
@@ -100,6 +101,8 @@ def _quiescent(issue):
     attempts = raw.get('attempts') if isinstance(raw, dict) else None
     if not isinstance(attempts, dict): raise ValueError('worker launch state is uncertain')
     for record in attempts.values():
+        if isinstance(record, dict) and worker_abandoned(record):
+            continue
         if not isinstance(record, dict) or record.get('status') not in {
             'stopped', 'completed', 'startup_failed', 'failed', 'exited'
         }:

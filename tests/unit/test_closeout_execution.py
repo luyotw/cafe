@@ -8,12 +8,14 @@ import signal
 import subprocess
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from cafe.driver import activate_confirmed_contract
 from cafe.driver.delivery import MAX_CLOSEOUT_EVIDENCE_BYTES, maximum_closeout_evidence_size
+from cafe.utils.issue_paths import issue_name_from_dir
 from tests.unit.test_driver_contract_application import _activation, _proposal
 
 SCRIPT = (
@@ -23,7 +25,11 @@ SCRIPT = (
 
 
 def _journey(
-    tmp_path: Path, commands: list[list[str]], *, stage: str = "deliver"
+    tmp_path: Path,
+    commands: list[list[str]],
+    *,
+    stage: str = "deliver",
+    issue_name: str = "issue474",
 ) -> tuple[Path, Path, Path]:
     root = tmp_path / "repo"
     root.mkdir()
@@ -50,14 +56,14 @@ def _journey(
         ["git", "-C", str(root), "worktree", "add", "-qb", "issue-worktree", str(worktree)],
         check=True,
     )
-    issue = worktree / ".cafe/issues/issue474"
+    issue = worktree / ".cafe/issues" / issue_name
     proposal = _proposal()
     proposal["delivery_contract"]["closeout_plan"] = {
         name: [{"argv": argv} for argv in commands] if name == stage else []
         for name in ("deliver", "cleanup")
     }
-    activate_confirmed_contract(_activation(issue, proposal))
-    return root, issue, root / ".git/cafe/closeout/issue474/workflow-474.json"
+    activate_confirmed_contract(replace(_activation(issue, proposal), issue_name=issue_name))
+    return root, issue, root / ".git/cafe/closeout" / issue_name / "workflow-474.json"
 
 
 def _run(root: Path, issue: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -68,7 +74,7 @@ def _run(root: Path, issue: Path, *args: str) -> subprocess.CompletedProcess[str
             "--project-root",
             str(root),
             "--issue-name",
-            "issue474",
+            issue_name_from_dir(issue),
             "--workflow-id",
             "workflow-474",
             "--issue-dir",
@@ -80,7 +86,8 @@ def _run(root: Path, issue: Path, *args: str) -> subprocess.CompletedProcess[str
     )
 
 
-def test_closeout_success_and_resume_never_replays(tmp_path: Path) -> None:
+@pytest.mark.parametrize("issue_name", ["issue474", "codex/team/issue474"])
+def test_closeout_success_and_resume_never_replays(tmp_path: Path, issue_name: str) -> None:
     marker = tmp_path / "executions"
     command = [
         sys.executable,
@@ -89,15 +96,40 @@ def test_closeout_success_and_resume_never_replays(tmp_path: Path) -> None:
         + str(marker)
         + "'); p.write_text(p.read_text()+'x' if p.exists() else 'x')",
     ]
-    root, issue, evidence = _journey(tmp_path, [command])
-    assert _run(root, issue, "--initialize").returncode == 0
+    root, issue, evidence = _journey(tmp_path, [command], issue_name=issue_name)
+    initialized = _run(root, issue, "--initialize")
+    assert initialized.returncode == 0, initialized.stderr
     first = _run(root, issue, "--execute", "--stage", "deliver", "--index", "0")
     assert first.returncode == 0, first.stderr
     assert evidence.is_file() and not evidence.is_relative_to(issue)
     assert json.loads(evidence.read_text())["commands"]["deliver"][0]["status"] == "succeeded"
+    inspected = _run(root, issue, "--inspect")
+    assert inspected.returncode == 0, inspected.stderr
+    assert json.loads(inspected.stdout)["issue_name"] == issue_name
     second = _run(root, issue, "--execute", "--stage", "deliver", "--index", "0")
     assert second.returncode != 0
     assert marker.read_text() == "x"
+
+
+def test_closeout_rejects_symlink_in_evidence_namespace(tmp_path: Path) -> None:
+    root, issue, evidence = _journey(
+        tmp_path, [[sys.executable, "-c", "pass"]], issue_name="codex/team/issue474"
+    )
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    namespace = evidence.parents[2]
+    namespace.parent.mkdir(parents=True)
+    namespace.symlink_to(outside, target_is_directory=True)
+
+    for args in [
+        ("--initialize",),
+        ("--inspect",),
+        ("--execute", "--stage", "deliver", "--index", "0"),
+    ]:
+        result = _run(root, issue, *args)
+        assert result.returncode != 0
+        assert "must not traverse a symlink" in result.stderr
+    assert list(outside.iterdir()) == []
 
 
 def test_closeout_failure_stops_order_and_resume(tmp_path: Path) -> None:

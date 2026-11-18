@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event
 
 import pytest
 
+from cafe.core import worker_liveness
 from cafe.workflow_execution.worker_launch import FixedWorkerLauncher, WorkerLaunchStore
 from cafe.workflow_execution.workflow_hosting import WorkerAlreadyRunningError, WorkflowHost
 
@@ -171,3 +173,71 @@ def test_host_never_releases_uncertain_provider_ownership(tmp_path, provider_sta
     assert record["pid"] == os.getpid()
     with pytest.raises(ValueError, match=expected):
         _quiescent(tmp_path)
+
+
+def test_resume_retires_legacy_worker_from_before_reboot(tmp_path, monkeypatch):
+    from cafe.core.workflow_repair import _quiescent
+
+    monkeypatch.setattr(worker_liveness, "host_boot", lambda: ("current-boot", 1767225600))
+    store = WorkerLaunchStore(tmp_path)
+    store.start(worker_id="before-reboot")
+    store.mark("before-reboot", "running", pid=7001)
+    with store._locked_records() as records:
+        old = records["before-reboot"]
+        del old["boot_id"]
+        old["updated_at"] = "2025-12-31T23:00:00+00:00"
+        old["provider"] = {"state": "starting"}
+
+    original_kill = os.kill
+
+    def kill(pid, signal):
+        if pid == 7001:
+            raise ProcessLookupError
+        return original_kill(pid, signal)
+
+    monkeypatch.setattr(os, "kill", kill)
+    _quiescent(tmp_path)
+    assert store.get("before-reboot")["status"] == "running"
+    assert WorkflowHost(tmp_path).run_worker(lambda: "resumed").result == "resumed"
+    recovered = store.get("before-reboot")
+    assert recovered["status"] == "exited"
+    assert recovered["last_pid"] == 7001
+    assert recovered["provider"]["state"] == "stopped"
+
+
+def test_previous_boot_retires_worker_even_if_pid_was_reused(tmp_path, monkeypatch):
+    monkeypatch.setattr(worker_liveness, "host_boot", lambda: ("original-boot", 1))
+    store = WorkerLaunchStore(tmp_path)
+    store.start(worker_id="previous")
+    store.mark("previous", "running", pid=os.getpid())
+    monkeypatch.setattr(worker_liveness, "host_boot", lambda: ("current-boot", 2))
+
+    assert WorkflowHost(tmp_path).run_worker(lambda: "resumed").result == "resumed"
+    assert store.get("previous")["status"] == "exited"
+
+
+@pytest.mark.skipif(not hasattr(os, "killpg"), reason="POSIX process groups")
+@pytest.mark.parametrize("provider_alive", [True, False])
+def test_dead_worker_recovers_only_after_provider_group_stops(tmp_path, monkeypatch, provider_alive):
+    monkeypatch.setattr(worker_liveness, "host_boot", lambda: ("current-boot", 1))
+    store = WorkerLaunchStore(tmp_path)
+    store.start(worker_id="old")
+    store.mark("old", "running", pid=7001)
+    with store._locked_records() as records:
+        records["old"]["provider"] = {"state": "running", "pid": 7002}
+
+    def absent(pid, signal):
+        raise ProcessLookupError
+
+    monkeypatch.setattr(os, "kill", absent)
+    monkeypatch.setattr(os, "killpg", (lambda pid, signal: None) if provider_alive else absent)
+    host = WorkflowHost(tmp_path)
+    if provider_alive:
+        calls = []
+        with pytest.raises(ValueError, match="unverified provider"):
+            host.run_worker(lambda: calls.append("duplicate"))
+        assert not calls
+        assert store.get("old")["status"] == "running"
+    else:
+        assert host.run_worker(lambda: "resumed").result == "resumed"
+        assert store.get("old")["status"] == "exited"

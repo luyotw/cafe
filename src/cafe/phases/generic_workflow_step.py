@@ -973,6 +973,7 @@ class GenericWorkflowStepExecutor(Phase):
                         **phase_specific_data,
                         "workflow_id": blackboard_state.workflow_id,
                         "accounting_workspace_locked": True,
+                        "allow_session_replacement": not same_invocation_retry,
                     },
                     backup_context_callback=lambda error: self._build_backup_takeover_context(
                         error=error,
@@ -2821,7 +2822,7 @@ class GenericWorkflowStepExecutor(Phase):
                 current_data,
                 configured_clis=configured_clis,
             )
-            return exact or SessionContinuation.new()
+            return exact or self._observed_iteration_session(agent_name, current_data, configured_clis)
 
         if same_invocation_retry:
             exact = exact_continuation_from_context(
@@ -2837,6 +2838,28 @@ class GenericWorkflowStepExecutor(Phase):
             )
             return exact or SessionContinuation.new()
 
+        return SessionContinuation.new()
+
+    def _observed_iteration_session(self, agent_name, context, configured_clis):
+        """Use the session persisted while an interrupted invocation was live."""
+        try:
+            cli = AgentCLI(context.get("cli"))
+            started = datetime.fromisoformat(context.get("timestamp", ""))
+            if cli in configured_clis:
+                observed = self.agent_manager.session_manager.load_session(
+                    agent_name, cli, self.issue_name, self.phase_name,
+                )
+                if (
+                    observed is not None
+                    and observed.session_id
+                    and observed.agent_name == agent_name
+                    and observed.cli == cli
+                    and observed.phase_name == self.phase_name
+                    and observed.last_used_at.astimezone() >= started.astimezone()
+                ):
+                    return SessionContinuation.resume_exact(cli, observed.session_id)
+        except (AttributeError, OSError, TypeError, ValueError, OverflowError):
+            pass
         return SessionContinuation.new()
 
     def _restart_diagnostics_for_invocation(

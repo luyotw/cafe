@@ -39,6 +39,22 @@ class AgentExecutionError(Exception):
         self.display_message = display_message
 
 
+def session_unavailable(error: AgentExecutionError) -> bool:
+    """Recognize a provider rejection of the selected conversation."""
+    native = getattr(error, "native_session_recoverable", None)
+    if isinstance(native, bool):
+        return native
+    message = str(error).lower()
+    return any(phrase in message for phrase in (
+        "no conversation found",
+        "session not found",
+        "conversation does not exist",
+        "thread not found",
+        "thread/resume failed",
+        "no rollout found",
+    ))
+
+
 @dataclass(frozen=True)
 class AgentExecutionControl:
     """Optional process boundary for one agent attempt."""
@@ -877,14 +893,6 @@ class AgentExecutor:
             e.accounting_usage = prior
             # Check if it's a session not found error or prompt too long error
             error_msg = str(e).lower()
-            session_error_phrases = [
-                "no conversation found",
-                "session not found",
-                "conversation does not exist",
-                "thread/resume failed",
-                "no rollout found",
-            ]
-
             # Check for prompt too long error
             is_prompt_too_long = (
                 hasattr(e, "error_type")
@@ -892,13 +900,7 @@ class AgentExecutor:
                 and "prompt is too long" in error_msg
             )
 
-            is_session_error = getattr(
-                e,
-                "native_session_recoverable",
-                any(phrase in error_msg for phrase in session_error_phrases),
-            )
-
-            if is_session_error or is_prompt_too_long:
+            if session_unavailable(e) or is_prompt_too_long:
                 if not allow_session_recovery:
                     # An exact continuation names a caller-owned conversation.
                     # Retrying cold could create a different thread and deliver
