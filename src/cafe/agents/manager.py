@@ -12,7 +12,12 @@ from cafe.agents.diagnostics import (
     is_transient_same_cli_error,
     sanitize_error_excerpt,
 )
-from cafe.agents.executor import AgentExecutionControl, AgentExecutionError, AgentExecutor
+from cafe.agents.executor import (
+    AgentExecutionControl,
+    AgentExecutionError,
+    AgentExecutor,
+    session_unavailable,
+)
 from cafe.agents.transport_types import _validated_evidence_scalar
 from cafe.constraints import Context, material_digest, replace_prompt_block, resolve
 from cafe.constraints.context import context_for_tools
@@ -470,6 +475,7 @@ class AgentManager:
         execution_control: AgentExecutionControl | None = None,
         constraint_context: Context | None = None,
         native_review_configuration: Optional[Dict[str, Any]] = None,
+        allow_session_replacement: bool = False,
     ) -> Tuple[str, TokenUsage, List, Optional[List[str]], List[str], Optional[str]]:
         """Execute prompt with specified agent.
 
@@ -480,6 +486,7 @@ class AgentManager:
             allowed_directories: List of allowed directories
             streaming_output_file: Optional file path to write streaming output line-by-line
             phase_name: Current phase name for phase-specific model lookup in backup agents
+            allow_session_replacement: Rebuild a missing workflow session on the same CLI and model
 
         Returns:
             Tuple of (agent's response, token usage, permission denials, cli_command_args, streaming_log, model)
@@ -584,6 +591,25 @@ class AgentManager:
                     attempt=primary_attempt,
                     error=e,
                 )
+                if (
+                    allow_session_replacement
+                    and effective_continuation.is_exact
+                    and session_unavailable(e)
+                    and getattr(getattr(e, "transport_result", None), "accepted", None) is not True
+                ):
+                    # The provider declined this conversation. Use the same
+                    # resolved configuration and replay the full phase prompt.
+                    executor = AgentExecutor(executor.config.model_copy(update={"session_id": None}))
+                    executor.stream_output = self.stream_agent_output
+                    effective_continuation = SessionContinuation.new()
+                    primary_attempt += 1
+                    attempt_prompt = (
+                        "[system] The previous workflow session is unavailable. "
+                        "Continue the same step using the saved artifacts, checklist and current "
+                        "worktree. Preserve existing changes and completed work.\n\n" + prompt
+                    )
+                    print("Workflow session unavailable; continuing in a new session.")
+                    continue
                 # Handle session conflict (only retry once)
                 if (
                     hasattr(e, "error_type")

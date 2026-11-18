@@ -1081,6 +1081,12 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             ):
                 execute_kwargs["backup_context_callback"] = backup_context_callback
 
+            if (
+                (phase_specific_data or {}).get("allow_session_replacement")
+                and "allow_session_replacement" in execute_signature.parameters
+            ):
+                execute_kwargs["allow_session_replacement"] = True
+
             raw_constraints = (phase_specific_data or {}).get("constraint_context")
             if raw_constraints and "constraint_context" in execute_signature.parameters:
                 execute_kwargs["constraint_context"] = Context.model_validate(raw_constraints)

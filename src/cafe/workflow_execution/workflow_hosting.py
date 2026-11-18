@@ -51,6 +51,7 @@ class WorkflowHost:
 
         store = WorkerLaunchStore(self.issue_dir)
         with advancement_execution_lock(self.issue_dir, reuse_existing=False):
+            store.reconcile_abandoned()
             control = InterventionControl(self.issue_dir, worker_id or "")
             control.ensure_no_pending()
             if worker_id and store.get(worker_id) is None:

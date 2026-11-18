@@ -547,3 +547,62 @@ def test_exact_continuation_requires_configured_complete_pair() -> None:
         is None
     )
     assert exact_continuation_from_context({"cli": "codex"}) is None
+
+
+@pytest.mark.parametrize("allow_replacement", [True, False])
+def test_phase_session_missing_can_restart_with_same_model(tmp_path, monkeypatch, allow_replacement):
+    manager = _manager(tmp_path, monkeypatch)
+    calls = []
+
+    def execute(executor, prompt, *args, **kwargs):
+        config = executor.config
+        calls.append((config.cli, config.model, config.session_id, kwargs.get("exact_session"), prompt))
+        if config.session_id:
+            raise AgentExecutionError("no rollout found for requested thread")
+        executor.on_session_observed("replacement")
+        return AgentResponse(response="finished", token_usage=TokenUsage(), session_id="replacement")
+
+    monkeypatch.setattr("cafe.agents.executor.AgentExecutor.execute", execute)
+    kwargs = {
+        "phase_name": "develop",
+        "continuation": SessionContinuation.resume_exact(AgentCLI.CODEX, "lost-session"),
+        "allow_session_replacement": allow_replacement,
+    }
+    if allow_replacement:
+        assert manager.execute("David", "full phase context", **kwargs)[0] == "finished"
+    else:
+        with pytest.raises(AgentExecutionError, match="no rollout"):
+            manager.execute("David", "full phase context", **kwargs)
+
+    assert calls[0][:4] == (AgentCLI.CODEX, "codex-model", "lost-session", True)
+    assert len(calls) == (2 if allow_replacement else 1)
+    if allow_replacement:
+        assert calls[1][:4] == (AgentCLI.CODEX, "codex-model", None, None)
+        assert calls[1][4].endswith("full phase context")
+        assert "Preserve existing changes" in calls[1][4]
+        assert manager.session_manager.load_session(
+            "David", AgentCLI.CODEX, "issue-381", "develop"
+        ).session_id == "replacement"
+
+
+@pytest.mark.parametrize("observed_during_iteration", [True, False])
+def test_interrupted_iteration_prefers_only_its_observed_session(
+    tmp_path, monkeypatch, observed_during_iteration,
+):
+    from datetime import timedelta
+    from types import SimpleNamespace
+    from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
+
+    manager = _manager(tmp_path, monkeypatch)
+    observed = manager.session_manager.load_session("David", AgentCLI.CODEX, "issue-381", "develop")
+    offset = timedelta(seconds=-1 if observed_during_iteration else 1)
+    ctx = {"cli": "codex", "timestamp": (observed.last_used_at + offset).astimezone().isoformat()}
+    owner = SimpleNamespace(agent_manager=manager, issue_name="issue-381", phase_name="develop")
+    actual = GenericWorkflowStepExecutor._observed_iteration_session(
+        owner, "David", ctx, [AgentCLI.CODEX],
+    )
+    expected = (
+        SessionContinuation.resume_exact(AgentCLI.CODEX, "persisted-codex")
+        if observed_during_iteration else SessionContinuation.new()
+    )
+    assert actual == expected
