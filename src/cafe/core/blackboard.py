@@ -816,6 +816,7 @@ class BlackboardStore:
     _thread_locks: Dict[Path, threading.RLock] = {}
     _thread_locks_guard = threading.Lock()
     _receipt_transactions = threading.local()
+    _state_transactions = threading.local()
 
     def __init__(self, issue_dir: Path) -> None:
         self.issue_dir = issue_dir
@@ -825,6 +826,24 @@ class BlackboardStore:
         self.next_step_path = issue_dir / NEXT_STEP_FILENAME
         self.audit = AuditEventStore(issue_dir)
         self.receipts_path = issue_dir / "capability_receipts.json"
+
+    @contextmanager
+    def state_transaction(self) -> Iterator[None]:
+        """Serialize workflow state and baton writes, including nested store calls."""
+        lock_path = self.state_lock_path.resolve()
+        with self._thread_lock_for(self.file_path):
+            active = getattr(self._state_transactions, "paths", set())
+            if lock_path in active:
+                yield
+                return
+            self.issue_dir.mkdir(parents=True, exist_ok=True)
+            with self.state_lock_path.open("a+", encoding="utf-8") as lock_file:
+                with _optional_process_file_lock(lock_file):
+                    self._state_transactions.paths = active | {lock_path}
+                    try:
+                        yield
+                    finally:
+                        self._state_transactions.paths = active
 
     def _in_receipt_transaction(self) -> bool:
         active = getattr(self._receipt_transactions, "paths", set())
@@ -934,7 +953,7 @@ class BlackboardStore:
         supplied_locale: Optional[SuppliedLocale] = None,
         playbook_conversation_locale: Optional[str] = None,
     ) -> BlackboardState:
-        with self._thread_lock_for(self.file_path):
+        with self.state_transaction():
             return self._load_or_create_unlocked(
                 initial_step,
                 playbook_id,
@@ -972,9 +991,7 @@ class BlackboardStore:
         playbook_conversation_locale: Optional[str] = None,
     ) -> BlackboardState:
         if self.file_path.exists():
-            with self.state_lock_path.open("a+", encoding="utf-8") as lock_file:
-                with _optional_process_file_lock(lock_file):
-                    self._reconcile_unlocked()
+            self._reconcile_unlocked()
             raw = json.loads(self.file_path.read_text(encoding="utf-8"))
             state = BlackboardState.from_dict(raw, initial_step=initial_step)
             self._ensure_authorities(state)
@@ -1019,34 +1036,31 @@ class BlackboardStore:
         capability_receipts_authoritative: bool = False,
     ) -> None:
         """Persist generic workflow fields without overwriting role-owned state."""
-        with self._thread_lock_for(self.file_path):
-            self.issue_dir.mkdir(parents=True, exist_ok=True)
-            with self.state_lock_path.open("a+", encoding="utf-8") as lock_file:
-                with _optional_process_file_lock(lock_file):
-                    if self.file_path.exists():
-                        self._reconcile_unlocked()
-                        raw = json.loads(self.file_path.read_text(encoding="utf-8"))
-                        persisted = BlackboardState.from_dict(raw, initial_step=state.current_step)
-                        self._ensure_authorities(persisted)
-                        self._hydrate_latest(persisted, state)
-                        if state._persisted_snapshot is not None:
-                            merged = _merge_generic_state(
-                                persisted=persisted,
-                                desired=state,
-                                baseline=state._persisted_snapshot,
-                                capability_receipts_authoritative=(
-                                    capability_receipts_authoritative
-                                ),
-                            )
-                            state.__dict__.clear()
-                            state.__dict__.update(merged.__dict__)
-                        else:
-                            state.capability_receipts = list(persisted.capability_receipts)
-                            state.events = list(persisted.events)
-                    self._save_unlocked(state)
-                    self._ensure_authorities(state)
-                    self.refresh_capability_receipts(state)
-                    state._persisted_snapshot = state.to_dict()
+        with self.state_transaction():
+            if self.file_path.exists():
+                self._reconcile_unlocked()
+                raw = json.loads(self.file_path.read_text(encoding="utf-8"))
+                persisted = BlackboardState.from_dict(raw, initial_step=state.current_step)
+                self._ensure_authorities(persisted)
+                self._hydrate_latest(persisted, state)
+                if state._persisted_snapshot is not None:
+                    merged = _merge_generic_state(
+                        persisted=persisted,
+                        desired=state,
+                        baseline=state._persisted_snapshot,
+                        capability_receipts_authoritative=(
+                            capability_receipts_authoritative
+                        ),
+                    )
+                    state.__dict__.clear()
+                    state.__dict__.update(merged.__dict__)
+                else:
+                    state.capability_receipts = list(persisted.capability_receipts)
+                    state.events = list(persisted.events)
+            self._save_unlocked(state)
+            self._ensure_authorities(state)
+            self.refresh_capability_receipts(state)
+            state._persisted_snapshot = state.to_dict()
 
     def _save_unlocked(self, state: BlackboardState) -> None:
         """Persist a state whose caller already owns the state-file lock."""
@@ -1285,13 +1299,13 @@ class BlackboardStore:
 
     def write_handoff_contract(self, state: BlackboardState, contract: HandoffContract) -> None:
         """Persist baton contract to next_step.txt and blackboard."""
-        self.issue_dir.mkdir(parents=True, exist_ok=True)
-        self.next_step_path.write_text(
-            json.dumps(contract.to_next_step_dict(), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        state.handoff_contract = contract
-        self.save(state)
+        with self.state_transaction():
+            atomic_write_bytes(
+                self.next_step_path,
+                json.dumps(contract.to_next_step_dict(), ensure_ascii=False, indent=2).encode("utf-8"),
+            )
+            state.handoff_contract = contract
+            self.save(state)
 
     def update_handoff_contract(
         self,
@@ -1465,63 +1479,61 @@ class BlackboardStore:
                       *, event_id: str | None = None,
                       baton_contract: HandoffContract | None = None,
                       before_commit: Callable[[dict[str, Any]], None] | None = None) -> EventEntry:
-        with self._thread_lock_for(self.file_path):
-            with self.state_lock_path.open("a+", encoding="utf-8") as lock_file:
-                with _optional_process_file_lock(lock_file):
-                    self._reconcile_unlocked()
-                    raw = json.loads(self.file_path.read_text(encoding="utf-8"))
-                    persisted = BlackboardState.from_dict(raw, initial_step=state.current_step)
-                    self._ensure_authorities(persisted)
-                    self._hydrate_latest(persisted, state)
-                    merged = (_merge_generic_state(
-                        persisted=persisted, desired=state,
-                        baseline=state._persisted_snapshot,
-                        capability_receipts_authoritative=False,
-                    ) if state._persisted_snapshot is not None else state)
-                    before = self._compact_dict(persisted)
-                    after = self._compact_dict(merged)
-                    patch = {
-                        key: {"before": before.get(key), "after": value}
-                        for key, value in after.items()
-                        if key not in {"updated_at", "applied_event_sequence"}
-                        and before.get(key) != value
-                    }
-                    sequence = self.audit.reserve(state.workflow_id)
-                    if entry.event_type == "workflow_event_callback_enqueued":
-                        entry.data["sequence"] = sequence
-                        entry.message = json.dumps(entry.data, ensure_ascii=False)
-                    record = {
-                        "workflow_id": state.workflow_id,
-                        "event_id": event_id or str(uuid.uuid4()),
-                        "sequence": sequence,
-                        **entry.to_dict(),
-                        "patch": patch,
-                    }
-                    if baton_contract is not None:
-                        record["baton"] = baton_contract.to_next_step_dict()
-                    if before_commit is not None:
-                        # Bind companion evidence to this exact reserved audit
-                        # identity before publishing its terminal record.
-                        before_commit(record)
-                        entry.data = record["data"]
-                        entry.message = json.dumps(entry.data, ensure_ascii=False)
-                        record["message"] = entry.message
-                    self.audit.commit(state.workflow_id, record)
-                    if baton_contract is not None:
-                        atomic_write_bytes(
-                            self.next_step_path,
-                            json.dumps(record["baton"], ensure_ascii=False, indent=2).encode(
-                                "utf-8"
-                            ),
-                        )
-                    merged.applied_event_sequence = sequence
-                    merged.events = list(persisted.events) + [entry]
-                    self._save_unlocked(merged)
-                    self.refresh_capability_receipts(merged)
-                    merged._persisted_snapshot = merged.to_dict()
-                    state.__dict__.clear()
-                    state.__dict__.update(merged.__dict__)
-                    return entry
+        with self.state_transaction():
+            self._reconcile_unlocked()
+            raw = json.loads(self.file_path.read_text(encoding="utf-8"))
+            persisted = BlackboardState.from_dict(raw, initial_step=state.current_step)
+            self._ensure_authorities(persisted)
+            self._hydrate_latest(persisted, state)
+            merged = (_merge_generic_state(
+                persisted=persisted, desired=state,
+                baseline=state._persisted_snapshot,
+                capability_receipts_authoritative=False,
+            ) if state._persisted_snapshot is not None else state)
+            before = self._compact_dict(persisted)
+            after = self._compact_dict(merged)
+            patch = {
+                key: {"before": before.get(key), "after": value}
+                for key, value in after.items()
+                if key not in {"updated_at", "applied_event_sequence"}
+                and before.get(key) != value
+            }
+            sequence = self.audit.reserve(state.workflow_id)
+            if entry.event_type == "workflow_event_callback_enqueued":
+                entry.data["sequence"] = sequence
+                entry.message = json.dumps(entry.data, ensure_ascii=False)
+            record = {
+                "workflow_id": state.workflow_id,
+                "event_id": event_id or str(uuid.uuid4()),
+                "sequence": sequence,
+                **entry.to_dict(),
+                "patch": patch,
+            }
+            if baton_contract is not None:
+                record["baton"] = baton_contract.to_next_step_dict()
+            if before_commit is not None:
+                # Bind companion evidence to this exact reserved audit
+                # identity before publishing its terminal record.
+                before_commit(record)
+                entry.data = record["data"]
+                entry.message = json.dumps(entry.data, ensure_ascii=False)
+                record["message"] = entry.message
+            self.audit.commit(state.workflow_id, record)
+            if baton_contract is not None:
+                atomic_write_bytes(
+                    self.next_step_path,
+                    json.dumps(record["baton"], ensure_ascii=False, indent=2).encode(
+                        "utf-8"
+                    ),
+                )
+            merged.applied_event_sequence = sequence
+            merged.events = list(persisted.events) + [entry]
+            self._save_unlocked(merged)
+            self.refresh_capability_receipts(merged)
+            merged._persisted_snapshot = merged.to_dict()
+            state.__dict__.clear()
+            state.__dict__.update(merged.__dict__)
+            return entry
 
     def record_event(
         self, state: BlackboardState, event_type: str, payload: Dict[str, Any],

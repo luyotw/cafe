@@ -24,6 +24,7 @@ from cafe.core.human_tasks import (
     AGENT_EXECUTION_RETRY_DECISION,
     HumanTaskPolicy,
     agent_execution_interrupted_human_task,
+    resolve_step_human_task,
 )
 from cafe.core.human_task_snapshot import (
     durable_task_matches_current_handoff,
@@ -261,6 +262,15 @@ class TaskInboxService:
             step_definition = playbook["steps"][task.step]
             if uses_special_approval(task, step_definition):
                 return {**unavailable, "status": "not_applicable", "reason": "special_approval"}
+            if task.trigger != AGENT_EXECUTION_INTERRUPTED_TRIGGER:
+                from cafe.skills.loader import SkillLoader
+
+                _, binding = resolve_step_human_task(
+                    playbook_data=playbook, step_name=task.step, trigger=task.trigger,
+                    iteration=task.iteration, skill_loader=SkillLoader(resolve_presentation=False),
+                )
+                if binding.task_id != task.policy_id or binding.outcomes != task.continuations:
+                    return {**unavailable, "reason": "continuation_changed"}
             inputs = resolve_task_inputs(
                 record.issue_dir, step=task.step, iteration=task.iteration,
                 policy=HumanTaskPolicy.model_validate(task.expected_result),

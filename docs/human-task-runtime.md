@@ -91,15 +91,21 @@ approvals use their existing review contracts.
 To submit a versioned reply, add `snapshot_version` to the task's JSON result
 and pass it to `cafe task complete <task-id> --result` or `--result-file`.
 You can also include `workflow_id` from `data.task`. CAFE checks the snapshot
-under the durable task transaction and validates the response with the normal
-HumanTask policy. Omitting `snapshot_version` uses the existing response path.
+under the durable task and workflow state transactions. CAFE validates the
+response with the normal HumanTask policy and rechecks the owning handoff and
+input bytes immediately before publishing the result. The result retains
+`payload.reviewed_snapshot` with its version, handoff identity, question
+digest, and the exact reviewed output when present. Later edits to the source
+file do not change those recorded bytes. The versioned route requires the
+current decision mapping to agree with the saved task. Omitting
+`snapshot_version` uses the existing response path.
 
 The JSON error envelope includes `error.code` and `error.recovery`. A rejected
 reply leaves the workflow paused if this is still its active handoff.
 
 | Error code | Client action |
 | --- | --- |
-| `stale_snapshot` | Inspect again and display the refreshed version before asking for a new reply. |
+| `stale_snapshot` | Inspect again and display the refreshed version before asking for a new reply. If the continuation contract changed, the workflow must restore it or issue a new task. |
 | `snapshot_unavailable` | Wait for the owning workflow to restore the task data, then inspect again. Use the declared approval protocol for special approval tasks. |
 | `stale_task`, `task_not_pending` | List pending tasks and inspect the current task. A replay cannot advance the workflow again. |
 | `invalid_response` | Correct the result using the declared response contract. |

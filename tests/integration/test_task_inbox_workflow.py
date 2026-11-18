@@ -14,7 +14,7 @@ from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.ui.cli import app
-from cafe.ui.human_tasks import resolve_step_human_task
+from cafe.ui.human_tasks import apply_human_task_payload, resolve_step_human_task
 from cafe.workflow_execution.automatic import automatic_executor_registry
 from cafe.workflow_execution.event_callback import ResolvedWorkflowEventCallback
 from cafe.workflow_execution.worker_launch import WorkerLaunchStore
@@ -261,6 +261,127 @@ def test_external_review_uses_the_bound_artifact_and_rejects_a_repointed_registr
     confirmed = _submit_snapshot(task, current["version"], decision="confirm")
     assert confirmed.exit_code == 0, (confirmed.stdout, confirmed.exception)
     assert store.load_read_only().current_step == "plan"
+    older.write_text("# Later edit\n", encoding="utf-8")
+    accepted = HumanTaskRecordStore(issue_dir).get_result(task.id)
+    assert accepted is not None
+    reviewed = accepted.payload["reviewed_snapshot"]
+    assert reviewed["version"] == current["version"]
+    assert reviewed["review_artifact"]["sha256"] == current["review_artifact"]["sha256"]
+    assert reviewed["review_artifact"]["text"] == "# Reviewed spec\n"
+
+
+@pytest.mark.parametrize("replacement", ["handoff", "output", "questions"])
+def test_external_reply_rechecks_replacement_at_the_durable_commit_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replacement: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    intent = (HandoffIntent.NEED_CLARIFICATION if replacement == "questions"
+              else HandoffIntent.CONFIRM_OUTPUT)
+    issue_dir, task = _workflow_task(tmp_path, "late-change", intent)
+    version = _inspect_snapshot(task.id)["version"]
+    store = BlackboardStore(issue_dir)
+    from cafe.core.human_task_records import atomic_write_bytes
+
+    def replace_before_write(path, content, **kwargs):
+        if not any(item["task_id"] == task.id for item in json.loads(content)["results"]):
+            return atomic_write_bytes(path, content, **kwargs)
+        if replacement == "handoff":
+            store.update_handoff_contract(
+                store.load_read_only(), from_step="spec", to_owner=HandoffOwner.USER,
+                to_step="user", intent=HandoffIntent.NEED_CLARIFICATION,
+                source="test.concurrent_handoff",
+            )
+        else:
+            path = issue_dir / "spec" / "iteration_001" / (
+                "questions.xml" if replacement == "questions" else "output.md"
+            )
+            changed = path.with_suffix(".replacement")
+            changed.write_text(path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+            changed.replace(path)
+        return atomic_write_bytes(path, content, **kwargs)
+
+    monkeypatch.setattr("cafe.core.human_task_records.atomic_write_bytes", replace_before_write)
+    response = ({"answers": {"scope": "Small", "platforms": ["CLI"]}}
+                if replacement == "questions" else {"decision": "confirm"})
+    submitted = _submit_snapshot(task, version, **response)
+    assert submitted.exit_code != 0, submitted.stdout
+    error = json.loads(submitted.stdout)["error"]
+    assert error["code"] == ("stale_task" if replacement == "handoff" else "stale_snapshot")
+    state = store.load_read_only()
+    assert state.current_step == "user"
+    assert state.handoff_contract.intent is (
+        HandoffIntent.NEED_CLARIFICATION if replacement == "handoff" else intent
+    )
+    assert HumanTaskRecordStore(issue_dir).results() == ()
+
+
+def test_external_reply_cannot_swap_two_declared_continuations_after_inspection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir, task = _workflow_task(tmp_path, "route-change", HandoffIntent.CONFIRM_OUTPUT)
+    version = _inspect_snapshot(task.id)["version"]
+    definition = PlaybookLoader().load("standard")
+    for step in definition["steps"].values():
+        step.get("initial_input", {}).pop("legacy_presentation", None)
+    binding = next(
+        item for item in definition["steps"]["spec"]["human_tasks"]
+        if item["trigger"] == task.trigger
+    )
+    binding["outcomes"] = {"confirm": "spec", "revise": "plan"}
+    catalog = tmp_path / ".cafe" / "playbooks"
+    catalog.mkdir()
+    (catalog / "standard.yaml").write_text(json.dumps(dict(definition)), encoding="utf-8")
+
+    submitted = _submit_snapshot(task, version, decision="confirm")
+    assert submitted.exit_code != 0, submitted.stdout
+    assert json.loads(submitted.stdout)["error"]["code"] == "stale_snapshot"
+    assert _inspect_snapshot(task.id)["status"] == "unavailable"
+    assert BlackboardStore(issue_dir).load_read_only().current_step == "user"
+    assert HumanTaskRecordStore(issue_dir).results() == ()
+
+
+@pytest.mark.parametrize("replace_handoff", [False, True])
+def test_recovery_projects_a_committed_snapshot_only_for_its_owning_handoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replace_handoff: bool,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir, task = _workflow_task(tmp_path, "recover-review", HandoffIntent.CONFIRM_OUTPUT)
+    version = _inspect_snapshot(task.id)["version"]
+
+    def interrupt_projection(*_args):
+        raise OSError("interrupted workflow projection")
+
+    with monkeypatch.context() as interrupted:
+        interrupted.setattr(BlackboardStore, "set_current_step", interrupt_projection)
+        completion = _submit_snapshot(task, version, decision="confirm")
+        assert completion.exit_code != 0
+
+    records = HumanTaskRecordStore(issue_dir)
+    (accepted,) = records.results()
+    assert accepted.payload["reviewed_snapshot"]["version"] == version
+    store = BlackboardStore(issue_dir)
+    state = store.load_read_only()
+    assert state.current_step == "user"
+    if replace_handoff:
+        store.update_handoff_contract(
+            state, from_step="spec", to_owner=HandoffOwner.USER, to_step="user",
+            intent=HandoffIntent.CONFIRM_OUTPUT, source="test.replacement",
+        )
+    original_handoff = state.handoff_contract
+
+    recovered = apply_human_task_payload(
+        issue_dir=issue_dir, playbook_data=PlaybookLoader().load("standard"), blackboard=state,
+        from_step=task.step, trigger=task.trigger,
+        raw_payload={"human_task_id": task.id, "decision": "confirm"}, source="interactive",
+    )
+    assert records.results() == (accepted,)
+    if replace_handoff:
+        assert recovered.error_code == "stale_task"
+        assert store.load_read_only().handoff_contract == original_handoff
+    else:
+        assert recovered.target == "plan"
+        assert store.load_read_only().current_step == "plan"
 
 
 def test_noninteractive_completion_resumes_only_bound_workflow(

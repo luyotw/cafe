@@ -6,7 +6,7 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
@@ -612,7 +612,7 @@ def apply_human_task_payload(
 ) -> HumanTaskApplication:
     """Validate and apply one response while retaining a pause on rejection."""
     record_store = HumanTaskRecordStore(issue_dir)
-    with record_store.transaction():
+    with record_store.transaction(), BlackboardStore(issue_dir).state_transaction():
         submitted_id = _submitted_human_task_id(raw_payload)
         if submitted_id is not None and "snapshot_version" not in _structured_response(raw_payload):
             try:
@@ -679,7 +679,7 @@ def apply_durable_human_task_payload_if_present(
             message=f"Unknown durable human task {submitted_id!r}.",
         )
 
-    with record_store.transaction():
+    with record_store.transaction(), BlackboardStore(issue_dir).state_transaction():
         active_tasks = [
             task
             for task in record_store.tasks()
@@ -782,6 +782,13 @@ def _snapshot_rejection(code: str, message: str) -> HumanTaskApplication:
             ),
         ),
     )
+
+
+class _SnapshotConflict(Exception):
+    """Abort the result write with the normal stale-snapshot response."""
+
+    def __init__(self, application: HumanTaskApplication) -> None:
+        self.application = application
 
 
 def _check_reviewed_snapshot(
@@ -981,6 +988,10 @@ def _apply_human_task_payload(
                 task_id=durable_task.id,
                 message=f"The saved human task has an invalid response contract: {exc}",
             )
+        if versioned and binding.outcomes != durable_task.continuations:
+            return _snapshot_rejection(
+                "stale_snapshot", "The task's declared continuation mapping changed.",
+            )
         policy = snapshot
         inputs = reviewed_inputs
         if inputs is None and durable_result is None and policy.questions_from_xml:
@@ -1002,6 +1013,14 @@ def _apply_human_task_payload(
         blackboard = store.load_or_create(
             from_step, playbook_id=getattr(blackboard, "playbook_id", "standard")
         )
+        evidence = durable_result.payload.get("reviewed_snapshot")
+        if isinstance(evidence, Mapping) and (
+            not durable_task_matches_current_handoff(
+                replace(durable_task, status=HumanTaskStatus.PENDING), blackboard,
+            )
+            or blackboard.handoff_contract.created_at != evidence.get("handoff_created_at")
+        ):
+            return _snapshot_rejection("stale_task", "The reviewed task no longer owns this handoff.")
         if blackboard.current_step != "user":
             rejection = HumanTaskRejection(
                 message="This human task has already completed.",
@@ -1142,58 +1161,64 @@ def _apply_human_task_payload(
         (item for item in policy.decisions if item.id == decision),
         None,
     )
-    if (
-        binding.feedback_delivery is not None
-        and isinstance(feedback, str)
-        and feedback.strip()
-        and (
-            policy.input_schema == "feedback"
-            or (delivery_decision is not None and delivery_decision.correction)
-        )
-    ):
-        ledger = WorkflowFeedbackLedger(issue_dir)
-        try:
-            ledger.record(
-                source_identity=(
-                    f"{binding.feedback_delivery.source_kind}:{from_step}:{policy.id}:{iteration}"
-                ),
-                source_kind=binding.feedback_delivery.source_kind,
-                target_step=continuation,
-                content=feedback,
+
+    def deliver_feedback() -> HumanTaskApplication | None:
+        if (
+            binding.feedback_delivery is not None
+            and isinstance(feedback, str)
+            and feedback.strip()
+            and (
+                policy.input_schema == "feedback"
+                or (delivery_decision is not None and delivery_decision.correction)
             )
-            previous = getattr(blackboard, "artifacts", {}).get(binding.feedback_delivery.artifact)
-            store.put_artifact(
-                blackboard,
-                ArtifactEntry(
-                    name=binding.feedback_delivery.artifact,
-                    kind=ArtifactKind.DOCUMENT,
-                    version=(previous.version + 1) if previous else 1,
-                    updated_by="human_task",
-                    path=str(ledger.path),
-                ),
-            )
-        except WorkflowFeedbackError as exc:
-            rejection = HumanTaskRejection(
-                message="Feedback could not be stored; the review remains paused.",
-                correction_guidance=policy.correction_guidance,
-            )
-            if durable_task is not None:
-                record_store.record_rejection(
-                    workflow_id=blackboard.workflow_id,
-                    task_id=durable_task.id,
-                    reason=rejection.message,
+        ):
+            ledger = WorkflowFeedbackLedger(issue_dir)
+            try:
+                ledger.record(
+                    source_identity=(
+                        f"{binding.feedback_delivery.source_kind}:{from_step}:{policy.id}:{iteration}"
+                    ),
+                    source_kind=binding.feedback_delivery.source_kind,
+                    target_step=continuation,
+                    content=feedback,
                 )
-            store.record_event(
-                blackboard,
-                "human_task_rejected",
-                {
-                    "step": from_step,
-                    "trigger": trigger,
-                    "task_id": policy.id,
-                    "reason": str(exc),
-                },
-            )
-            return HumanTaskApplication(target=None, policy=policy, rejection=rejection)
+                previous = getattr(blackboard, "artifacts", {}).get(binding.feedback_delivery.artifact)
+                store.put_artifact(
+                    blackboard,
+                    ArtifactEntry(
+                        name=binding.feedback_delivery.artifact,
+                        kind=ArtifactKind.DOCUMENT,
+                        version=(previous.version + 1) if previous else 1,
+                        updated_by="human_task",
+                        path=str(ledger.path),
+                    ),
+                )
+            except WorkflowFeedbackError as exc:
+                rejection = HumanTaskRejection(
+                    message="Feedback could not be stored; the review remains paused.",
+                    correction_guidance=policy.correction_guidance,
+                )
+                if durable_task is not None:
+                    record_store.record_rejection(
+                        workflow_id=blackboard.workflow_id,
+                        task_id=durable_task.id,
+                        reason=rejection.message,
+                    )
+                store.record_event(
+                    blackboard,
+                    "human_task_rejected",
+                    {
+                        "step": from_step,
+                        "trigger": trigger,
+                        "task_id": policy.id,
+                        "reason": str(exc),
+                    },
+                )
+                return HumanTaskApplication(target=None, policy=policy, rejection=rejection)
+        return None
+
+    if not versioned and (feedback_rejection := deliver_feedback()) is not None:
+        return feedback_rejection
 
     if durable_task is not None:
         permitted_continuations = set(durable_task.continuations.values())
@@ -1267,13 +1292,40 @@ def _apply_human_task_payload(
                         issue_dir=issue_dir, workflow_id=blackboard.workflow_id,
                         task_id=durable_task.id, step_name=from_step, iteration=iteration,
                     )
+                commit_options = {}
+                if reviewed_inputs is not None:
+                    assert blackboard.handoff_contract is not None
+                    completion_payload["reviewed_snapshot"] = reviewed_inputs.accepted_evidence(
+                        response["snapshot_version"], blackboard.handoff_contract.created_at,
+                    )
+
+                    def recheck_before_commit() -> None:
+                        nonlocal blackboard
+                        try:
+                            current = store.load_read_only()
+                        except (OSError, ValueError) as exc:
+                            raise _SnapshotConflict(_snapshot_rejection(
+                                "snapshot_unavailable", "The current workflow is unavailable.",
+                            )) from exc
+                        checked = _check_reviewed_snapshot(
+                            issue_dir=issue_dir, blackboard=current, record_store=record_store,
+                            task=durable_task, step_definition=step_definition, response=response,
+                        )
+                        if isinstance(checked, HumanTaskApplication):
+                            raise _SnapshotConflict(checked)
+                        blackboard = current
+
+                    commit_options["before_commit"] = recheck_before_commit
                 durable_result = record_store.complete(
                     workflow_id=blackboard.workflow_id,
                     task_id=durable_task.id,
                     payload=completion_payload,
                     source=source,
                     completion_authority=completion_authority,
+                    **commit_options,
                 )
+            except _SnapshotConflict as conflict:
+                return conflict.application
             except (HumanTaskCorrelationError, OSError, ValueError) as exc:
                 rejection = HumanTaskRejection(
                     message=str(exc), correction_guidance=policy.correction_guidance
@@ -1284,6 +1336,9 @@ def _apply_human_task_payload(
                     reason=rejection.message,
                 )
                 return HumanTaskApplication(target=None, policy=policy, rejection=rejection)
+
+    if versioned and (feedback_rejection := deliver_feedback()) is not None:
+        return feedback_rejection
 
     if binding.feedback_delivery is not None:
         agent_input = ""

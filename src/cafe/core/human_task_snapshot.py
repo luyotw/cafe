@@ -63,6 +63,15 @@ class TaskInputs:
     reviews_output: bool
     review_artifact: ReviewArtifact | None
 
+    def accepted_evidence(self, version: str, handoff_created_at: str) -> dict[str, Any]:
+        """Keep the accepted input identity and reviewed bytes with the result."""
+        return {
+            "version": version,
+            "handoff_created_at": handoff_created_at,
+            "questions_sha256": self.questions_sha256,
+            "review_artifact": asdict(self.review_artifact) if self.review_artifact else None,
+        }
+
     @property
     def questions(self) -> tuple[Question, ...] | None:
         if self.answer_contract is None:
@@ -211,8 +220,10 @@ def _read_iteration_file(issue_dir: Path, path: Path) -> bytes | None:
                         or before.st_size > _MAX_INPUT_BYTES):
                     return None
                 content = source.read(_MAX_INPUT_BYTES + 1)
-                after = os.fstat(source.fileno())
-                if len(content) <= _MAX_INPUT_BYTES and before.st_ctime_ns == after.st_ctime_ns:
+                current = os.stat(path.name, dir_fd=directory, follow_symlinks=False)
+                if len(content) <= _MAX_INPUT_BYTES and (
+                    before.st_dev, before.st_ino, before.st_ctime_ns
+                ) == (current.st_dev, current.st_ino, current.st_ctime_ns):
                     return content
         finally:
             os.close(directory)
