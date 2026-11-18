@@ -129,6 +129,63 @@ task's declared `decision` in place of `answers`. To reproduce the clarification
 review, stale submission, and replay journeys with a local test workflow, run
 `python -m pytest tests/integration/test_task_inbox_workflow.py -k external --no-cov`.
 
+## Continue a saved task result
+
+Save the response with `cafe task complete <task-id> --no-resume --json`. Keep
+`data.task.issue`, `data.task.workflow_id`, `data.task.id`, and
+`data.task.result.id` together. If the completion reply is lost, recover those
+fields with `cafe task inspect <task-id> --json` once the result is visible.
+Submitting the response and running its continuation are separate operations.
+
+```bash
+cafe task continuation "$TASK_ID" --issue "$ISSUE" \
+  --workflow-id "$WORKFLOW_ID" --result-id "$RESULT_ID" --json
+cafe task continuation "$TASK_ID" --issue "$ISSUE" \
+  --workflow-id "$WORKFLOW_ID" --result-id "$RESULT_ID" --resume --json
+```
+
+The first command reads durable state. The second takes the same advancement
+lock as ordinary CLI and background workers and enters the existing runtime
+from the exact projected handoff in the foreground without prompting. If a
+new handoff is published before dispatch acquires the handoff lease, the bound
+resume leaves the new handoff available for its owning workflow. After
+admission, a competing durable handoff update is rejected while the dispatch
+owns publication. The publisher can retry after the dispatch exits.
+It can also finish projecting a saved result when its original user handoff
+still owns the workflow. Use the same identifiers after a lost reply.
+
+The JSON envelope has `operation: "continuation"`. A successful observation
+returns the four identifiers and `data.status`. The process exit code
+indicates whether the command returned an observation or an error.
+
+| Status | Meaning and client action |
+| --- | --- |
+| `pending` | The result is saved and still owns its original or projected handoff. Use the bound `--resume` command to try to advance it. |
+| `unknown` | CAFE could not reconcile the evidence, or a worker may still own execution. Inspect again after the worker stops. If the state remains ambiguous, use the owning workflow's recovery path. |
+| `advanced` | CAFE found a terminal result projection, a downstream transition, workflow completion, or a new declared HumanTask at the continuation phase. A repeated `--resume` returns this status without running the workflow again. |
+| `retryable_failure` | The bound resume failed and CAFE verified that the saved handoff is still current. Address the cause and retry with the same identifiers. |
+| `stale_workflow` | The issue now points to a different workflow ID. Retire this request. |
+
+A launch acknowledgement, worker PID, or phase start event shows activity.
+Use the durable outcome above to confirm advancement. The command returns
+`result_mismatch` for an incorrect task or result identity on the live workflow.
+Capability approvals and interrupted delivery approval projections use their
+existing protocols. An already projected result from a CAFE version that did
+not record task, result, and handoff identity together may report `unknown`.
+
+The local journeys use a real workflow, task and audit store, and process lock.
+The background journey discards the launch reply, observes the worker before it
+enters the runtime, and verifies its exit status and the next HumanTask. Other
+journeys cover an overlapping ordinary CLI resume, a replaced workflow,
+competing handoff publication before and during dispatch, and a retryable
+startup failure.
+Recovery tests stop before the projection audit record and after the record
+commits but before the workflow checkpoint.
+
+```bash
+python -m pytest tests/integration/test_task_inbox_workflow.py -k saved_result --no-cov
+```
+
 ## Migration and compatibility
 
 Blackboard schema 1 did not contain a workflow id. On first load, CAFE assigns

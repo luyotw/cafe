@@ -609,11 +609,33 @@ def apply_human_task_payload(
     source: str,
     supervisor_handoff_to: Optional[str] = None,
     completion_authority: Mapping[str, Any] | None = None,
+    saved_result: TaskResult | None = None,
 ) -> HumanTaskApplication:
     """Validate and apply one response while retaining a pause on rejection."""
     record_store = HumanTaskRecordStore(issue_dir)
-    with record_store.transaction(), BlackboardStore(issue_dir).state_transaction():
+    store = BlackboardStore(issue_dir)
+    with record_store.transaction(), store.state_transaction():
         submitted_id = _submitted_human_task_id(raw_payload)
+        if saved_result is not None:
+            try:
+                active = store.load_read_only()
+                task = record_store.get_task(saved_result.task_id)
+                result = record_store.get_result(task.id)
+            except (OSError, ValueError):
+                return _snapshot_rejection("stale_task", "The saved result is unavailable.")
+            if (
+                task.id != submitted_id or result != saved_result
+                or task.status is not HumanTaskStatus.COMPLETED
+                or active.workflow_id != saved_result.workflow_id
+                or not task.handoff_key.startswith("user-handoff:")
+                or not durable_task_matches_current_handoff(
+                    replace(task, status=HumanTaskStatus.PENDING), active,
+                )
+            ):
+                return _snapshot_rejection(
+                    "stale_task", "The saved result no longer owns this handoff.",
+                )
+            blackboard = active
         if submitted_id is not None and "snapshot_version" not in _structured_response(raw_payload):
             try:
                 submitted_task = record_store.get_task(submitted_id)
@@ -1479,10 +1501,9 @@ def _apply_human_task_payload(
         blackboard.ownership_cursor = None
     if blackboard.host_wait and blackboard.host_wait.get("step") == from_step:
         blackboard.host_wait = None
-    store.set_current_step(blackboard, "done" if is_done else continuation)
-    store.set_handoff_summary(blackboard, f"Completed human task {policy.id} for {from_step}")
-    store.update_handoff_contract(
-        blackboard,
+    blackboard.current_step = "done" if is_done else continuation
+    blackboard.handoff_summary = f"Completed human task {policy.id} for {from_step}"
+    contract = store.build_handoff_contract(
         from_step=from_step,
         to_owner=HandoffOwner.DONE if is_done else HandoffOwner.AGENT,
         to_step="done" if is_done else continuation,
@@ -1490,6 +1511,7 @@ def _apply_human_task_payload(
         status_code="",
         source=f"human_task.{source}",
     )
+    blackboard.handoff_contract = contract
     store.record_event(
         blackboard,
         "human_task_completed",
@@ -1501,9 +1523,17 @@ def _apply_human_task_payload(
             "to_step": continuation,
             **(
                 {
+                    "human_task_id": durable_task.id,
+                    "result_id": durable_result.id,
+                    "continuation_handoff_created_at": contract.created_at,
+                }
+                if durable_task is not None and durable_result is not None
+                else {}
+            ),
+            **(
+                {
                     "checklist_continuation": checklist_continuation,
                     "decision_continuation": decision_continuation,
-                    "human_task_id": durable_task.id,
                 }
                 if checklist_continuation
                 else {}
@@ -1519,6 +1549,7 @@ def _apply_human_task_payload(
             "source": source,
             **_work_report_event_data(task=durable_task, result=durable_result),
         },
+        baton_contract=contract,
     )
     return HumanTaskApplication(target="done" if is_done else continuation, policy=policy)
 
