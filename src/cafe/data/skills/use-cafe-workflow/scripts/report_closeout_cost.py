@@ -260,6 +260,8 @@ def closeout_cost(
                 "accepted_callbacks", "priced_callbacks", "priced_explicit_turns"
             )
         }))
+    if host.get("pricing", {}).get("error"):
+        lines.append(_text("host_pricing_refresh_failed", locale))
     if "native_usage" in report["combined"]:
         from cafe.services.cost_summary import format_native_usage
         from cafe.core.runtime_locales import load_catalogs, select_text_locale

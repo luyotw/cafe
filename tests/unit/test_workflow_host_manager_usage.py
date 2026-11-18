@@ -3,6 +3,7 @@
 import json
 from decimal import Decimal
 from pathlib import Path
+from urllib.error import URLError
 from uuid import uuid4
 
 import pytest
@@ -11,6 +12,8 @@ from tests.unit._kickoff_test_support import SCRIPT_ROOT  # noqa: F401
 
 import host_manager_usage
 import workflow_event_callback
+from cafe.core.pricing import OpenAIPricingStore
+from tests.unit.test_pricing import DOCUMENT, Response
 
 
 def counters(input_tokens, cached=0, output=0):
@@ -40,6 +43,7 @@ def usage_fixture(tmp_path, monkeypatch):
     journal.parent.mkdir(parents=True)
     monkeypatch.setenv("CODEX_HOME", str(home))
     monkeypatch.setenv("CAFE_PRICING_CACHE_DIR", str(tmp_path / "empty-rates"))
+    monkeypatch.setenv("CAFE_PRICING_AUTO_UPDATE", "0")
 
     def row(kind, payload, *, at=timestamp):
         return {"type": kind, "payload": payload, "timestamp": at}
@@ -114,6 +118,7 @@ def test_recover_only_attributed_turns_and_leave_journal_unchanged(usage_fixture
         "status": "supplemented", "accepted_callbacks": 4, "priced_callbacks": 1,
         "priced_explicit_turns": 1,
         "rejected_turn_ids": ["mixed", "other-workflow", "missing", "active"],
+        "pricing": {"stale": True, "error": None},
     }
     assert report["manager"]["known"] == Decimal("0.063304")
     assert report["combined"]["known"] == report["manager"]["known"]
@@ -182,3 +187,29 @@ def test_missing_last_request_with_identical_usage_is_excluded(usage_fixture):
     assert report["host_manager_usage"]["priced_callbacks"] == 0
     assert report["host_manager_usage"]["rejected_turn_ids"] == ["callback"]
     assert report["manager"]["known"] == 0
+
+
+@pytest.mark.parametrize("refresh", ["success", "failure", "disabled"])
+def test_host_cost_refreshes_due_rates_and_falls_back(usage_fixture, tmp_path, monkeypatch, refresh):
+    _, workflow, issue, _ = usage_fixture
+    calls = []
+
+    def fetch(request, timeout):
+        calls.append(request.full_url)
+        if refresh == "failure":
+            raise URLError("offline")
+        return Response(DOCUMENT.replace("gpt-test", "gpt-6.1-sol"))
+
+    store = OpenAIPricingStore(tmp_path / "rates", opener=fetch)
+    monkeypatch.setattr(host_manager_usage, "pricing_store", lambda *_: store)
+    if refresh != "disabled":
+        monkeypatch.delenv("CAFE_PRICING_AUTO_UPDATE")
+    report = empty_report()
+    host_manager_usage.add_host_manager_usage(report, Path("archive"), issue, workflow)
+    pricing = report["host_manager_usage"]["pricing"]
+    assert len(calls) == (0 if refresh == "disabled" else 1)
+    assert pricing["stale"] == (refresh != "success")
+    assert pricing["error"] == ("URLError" if refresh == "failure" else None)
+    assert report["manager"]["known"] == Decimal(
+        "0.116154" if refresh == "success" else "0.062154"
+    )

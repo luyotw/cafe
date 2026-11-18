@@ -226,7 +226,6 @@ def add_host_manager_usage(report, archive, issue_name, workflow_id, explicit_tu
         accepted = _accepted_host_events(status, session)
         home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
         turns = _read_turns(home, session, _time(report["captured_at"]))
-        rates = pricing_store("openai", os.environ.get("CAFE_PRICING_CACHE_DIR")).status()
     except (OSError, ValueError, KeyError, TypeError, IndexError, RecursionError) as exc:
         # Keep the existing report usable when optional archived evidence is unavailable.
         reason = str(exc) if isinstance(exc, ValueError) and str(exc).startswith(
@@ -268,6 +267,11 @@ def add_host_manager_usage(report, archive, issue_name, workflow_id, explicit_tu
         else:
             selected[turn_id] = "explicit"
 
+    rates = None
+    if selected:
+        store = pricing_store("openai", os.environ.get("CAFE_PRICING_CACHE_DIR"))
+        rates = store.get(auto_update=os.environ.get("CAFE_PRICING_AUTO_UPDATE", "1") != "0")
+
     records = []
     recovered = Counter()
     for turn_id, basis in selected.items():
@@ -287,6 +291,11 @@ def add_host_manager_usage(report, archive, issue_name, workflow_id, explicit_tu
         "priced_explicit_turns": recovered["explicit"],
         "rejected_turn_ids": rejected,
     }
+    if rates is not None:
+        report["host_manager_usage"]["pricing"] = {
+            "stale": rates["stale"],
+            "error": rates.get("error"),
+        }
     if records:
         report["manager"] = combine_cost_summaries([report["manager"], summarize_cost(records)])
         report["combined"] = combine_cost_summaries([report["worker"], report["manager"]])
