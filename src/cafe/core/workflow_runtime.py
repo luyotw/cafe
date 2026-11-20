@@ -4682,9 +4682,9 @@ class BlackboardWorkflowRuntime:
     ) -> bool:
         """Bind a settled confirmation handoff to its subsequent human result.
 
-        Confirmation changes the outbound target without changing the reviewed
-        artifact or settled batch. Only the exact non-corrective durable result
-        after that settlement may authorize this target difference.
+        A saved decision changes the next execution target, not the target of
+        an already settled publication. Resolve a supervisor correction from
+        its completed result and the playbook's correction routes.
         """
         target = delivery.get("target")
         iteration = delivery.get("iteration")
@@ -4762,7 +4762,6 @@ class BlackboardWorkflowRuntime:
             or result.source != completion.data.get("source")
             or result.payload.get("task") != task.policy_id
             or result.payload.get("continuation") != contract.to_step
-            or task.continuations.get(result.payload.get("decision")) != contract.to_step
         ):
             return False
         bindings = [
@@ -4772,11 +4771,7 @@ class BlackboardWorkflowRuntime:
             and binding.get("trigger") == task.trigger
             and binding.get("task_id") == task.policy_id
         ]
-        if (
-            len(bindings) != 1
-            or bindings[0].get("outcomes", {}).get(result.payload.get("decision"))
-            != contract.to_step
-        ):
+        if len(bindings) != 1:
             return False
         decisions = task.expected_result.get("decisions")
         if not isinstance(decisions, list):
@@ -4786,7 +4781,46 @@ class BlackboardWorkflowRuntime:
             for entry in decisions
             if isinstance(entry, Mapping) and entry.get("id") == result.payload["decision"]
         ]
-        return len(selected) == 1 and selected[0].get("correction", False) is False
+        if len(selected) != 1:
+            return False
+        if selected[0].get("correction", False) is False:
+            return (
+                "supervisor_handoff_to" not in result.payload
+                and task.continuations.get(result.payload["decision"]) == contract.to_step
+                and bindings[0].get("outcomes", {}).get(result.payload["decision"])
+                == contract.to_step
+            )
+        if (
+            completion.data.get("supervisor_handoff") is not True
+            or completion.data.get("declared_to_step")
+            != result.payload.get("declared_continuation")
+            or result.payload.get("supervisor_handoff_to") != contract.to_step
+            or contract.to_step not in route_choices(
+                self.playbook, current_step=current_step, intent="manual_handoff",
+            ).authorized
+        ):
+            return False
+        feedback_delivery = bindings[0].get("feedback_delivery")
+        if not isinstance(feedback_delivery, Mapping):
+            return False
+        source_identity = (
+            f"{feedback_delivery.get('source_kind')}:{current_step}:{task.policy_id}:{task.iteration}"
+        )
+        try:
+            receipts = supervisor_feedback_receipts(
+                self.issue_dir, playbook=self.playbook,
+                workflow_id=self.blackboard.workflow_id, target_step=contract.to_step,
+                entries=[
+                    entry for entry in WorkflowFeedbackLedger(self.issue_dir).load()
+                    if entry.source_identity == source_identity and entry.target_step == contract.to_step
+                ],
+            )
+        except (WorkflowFeedbackError, OSError, ValueError):
+            return False
+        return any(
+            receipt["task_id"] == task.id and receipt["result_id"] == result.id
+            for receipt in receipts.values()
+        )
 
     def _reconcile_feedback_delivery(
         self,
@@ -5448,7 +5482,7 @@ class BlackboardWorkflowRuntime:
         )
 
     def _try_restore_rejected_interruption_redirect(self) -> bool:
-        """Recover the exact unconsumed decision rejected by the old classifier."""
+        """Recover an exact saved supervisor decision rejected by legacy routing."""
         contract = self.blackboard.handoff_contract
         if (
             contract is None
@@ -5464,7 +5498,17 @@ class BlackboardWorkflowRuntime:
             return False
         index, event = completion
         following = self.blackboard.events[index + 1:]
-        if (
+        settled_redirect = (
+            len(following) >= 2
+            and following[0].event_type == "step_reconciliation_failed"
+            and following[0].data.get("runtime") == "feedback_delivery_recovery"
+            and following[0].data.get("missing_evidence") == ["feedback_delivery_target"]
+            and following[1].event_type == "interrupted_handoff_reset"
+            and following[1].data.get("reason") == "feedback_delivery_recovery_failed"
+            and all(entry.step == event.step for entry in following[:2])
+            and event.data.get("supervisor_handoff") is True
+        )
+        if not settled_redirect and (
             len(following) < 3
             or [e.event_type for e in following[:3]] != [
                 "step_reconciliation_failed", "workflow_feedback_delivery_rejected", "interrupted_handoff_reset",
@@ -5482,7 +5526,20 @@ class BlackboardWorkflowRuntime:
             return False
         approved = replace(contract, from_step=event.step, to_step=event.data.get("to_step"),
                            source=f"human_task.{event.data.get('source')}")
-        if not self._has_completed_interruption_redirect(approved, require_current_target=False):
+        if settled_redirect:
+            delivery = self._latest_feedback_delivery_preparation(current_step=event.step)
+            if not isinstance(delivery, Mapping) or not self._has_confirmed_feedback_continuation(
+                current_step=event.step, contract=approved, delivery=delivery,
+            ):
+                return False
+            validated, missing = self._validate_feedback_delivery_recovery(
+                current_step=event.step, contract=approved,
+                iteration_dir=self._latest_iteration_dir(event.step),
+                delivery_id=delivery.get("delivery_id"),
+            )
+            if validated is None or missing:
+                return False
+        elif not self._has_completed_interruption_redirect(approved, require_current_target=False):
             return False
         if self.blackboard.current_step not in {approved.from_step, approved.to_step}:
             return False
@@ -5491,7 +5548,7 @@ class BlackboardWorkflowRuntime:
             "completion_sha256": sha256_bytes(canonical_json(event.data)),
         }
         prepared = False
-        for entry in following[3:]:
+        for entry in following[2 if settled_redirect else 3:]:
             if entry.event_type == "workflow_event_callback_enqueued":
                 continue
             if (entry.event_type != "interrupted_supervisor_handoff_prepared"
