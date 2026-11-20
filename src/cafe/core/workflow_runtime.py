@@ -100,6 +100,7 @@ from cafe.core.workflow_feedback import (
     has_causal_feedback_projection,
     supervisor_feedback_receipts,
     validate_completed_feedback_projection,
+    feedback_completion_todo_mappings,
 )
 from cafe.core.workflow_models import (
     BatonRejected,
@@ -3273,7 +3274,11 @@ class BlackboardWorkflowRuntime:
                 return "the curated artifact changed after feedback delivery preparation"
             completed_consumer = validate_completed_feedback_projection(
                 self.issue_dir, step=current_step, output=output_path,
-                source_identities=frame.pending_feedback, mappings=mappings)
+                source_identities=frame.pending_feedback,
+                mappings=feedback_completion_todo_mappings(
+                    self.issue_dir, playbook=self.playbook, workflow_id=self.blackboard.workflow_id,
+                    target_step=current_step, source_identities=frame.pending_feedback,
+                ))
             actual_items = (
                 expected_items if completed_consumer else
                 parse_todo_list(artifact_bytes.decode("utf-8")) if curated_identities else ()
@@ -5007,8 +5012,10 @@ class BlackboardWorkflowRuntime:
             or len(rejection) != 1
             or rejection[0].data.get("step") != step
             or rejection[0].data.get("source_identities") != prepared.get("source_identities")
-            or rejection[0].data.get("reason")
-            != ("the curated Todo List is invalid: workflow feedback source kind is not declared")
+            or rejection[0].data.get("reason") not in (
+                "the curated Todo List is invalid: workflow feedback source kind is not declared",
+                "the feedback completion evidence is invalid: workflow feedback source kind is not declared",
+            )
             or contract is None
             or contract.from_step != step
             or contract.to_step != step
@@ -5050,6 +5057,19 @@ class BlackboardWorkflowRuntime:
                 missing_evidence=result.missing_evidence,
             )
             return failed
+        if rejection[0].data.get("reason").startswith("the feedback completion evidence"):
+            try:
+                if prepared.get("supervisor_sources") != receipts or not validate_completed_feedback_projection(
+                    self.issue_dir, step=step, output=Path(prepared["artifact"]["path"]),
+                    source_identities=tuple(prepared["source_identities"]),
+                    mappings=feedback_completion_todo_mappings(
+                        self.issue_dir, playbook=self.playbook, workflow_id=self.blackboard.workflow_id,
+                        target_step=step, source_identities=tuple(prepared["source_identities"]),
+                    ),
+                ):
+                    return failed
+            except (OSError, ValueError, WorkflowFeedbackError):
+                return failed
         gate = self._execution_completion_gate(
             current_step=step,
             post_contract=recovered_contract,
@@ -5769,6 +5789,45 @@ class BlackboardWorkflowRuntime:
             except (OSError, ValueError, TypeError, KeyError):
                 return False
         return True
+
+    def _try_recover_rejected_consumer_completion(self) -> Optional[PlaybookRunResult]:
+        """Revalidate the exact legacy supervisor completion at ordinary owner entry."""
+        step = self.blackboard.current_step
+        contract = self.blackboard.handoff_contract
+        if (contract is None or contract.source != "workflow.feedback_delivery_validation"
+                or contract.status_code != "INVALID_FEEDBACK_DELIVERY"
+                or contract.from_step != step or contract.to_step != step
+                or contract.to_owner is not HandoffOwner.AGENT):
+            return None
+        rejected = next((event for event in reversed(self.blackboard.events)
+                         if event.event_type == "workflow_feedback_delivery_rejected"
+                         and event.step == step), None)
+        if rejected is None or rejected.data.get("reason") != (
+            "the feedback completion evidence is invalid: workflow feedback source kind is not declared"
+        ):
+            return None
+        failed = PlaybookRunResult(final_step=step, final_status_code="INVALID_FEEDBACK_DELIVERY", completed=False)
+        prepared = self._latest_feedback_delivery_preparation(current_step=step)
+        if prepared is None:
+            return failed
+        if "recovered_from_delivery_id" in prepared:
+            rejected_id = rejected.data.get("delivery_id")
+            replacement_id = prepared.get("delivery_id")
+            if (isinstance(rejected_id, str) and rejected_id
+                    and prepared["recovered_from_delivery_id"] == rejected_id
+                    and isinstance(replacement_id, str) and replacement_id and replacement_id != rejected_id
+                    and self._latest_unreconciled_feedback_delivery() is prepared):
+                return None  # Existing pending-replacement recovery owns this publication.
+            return failed
+        originals = [event for event in self.blackboard.events
+                     if event.event_type == "workflow_feedback_delivery_prepared"
+                     and event.data.get("delivery_id") == rejected.data.get("delivery_id")]
+        if len(originals) != 1 or prepared is not originals[0].data:
+            return failed
+        if any(event.event_type != "workflow_event_callback_enqueued"
+               for event in self.blackboard.events[self.blackboard.events.index(rejected) + 1:]):
+            return failed
+        return self.recover_rejected_feedback_delivery(prepared["delivery_id"])
 
     def _try_reconcile_pending_feedback_delivery(self) -> Optional[PlaybookRunResult]:
         delivery = self._latest_unreconciled_feedback_delivery()
@@ -6829,6 +6888,12 @@ class BlackboardWorkflowRuntime:
         # legacy rejection evidence, including when this invocation is interrupted.
         if start_step is None:
             self._try_restore_rejected_interruption_redirect()
+            recovered_consumer = self._try_recover_rejected_consumer_completion()
+            if recovered_consumer is not None and (
+                recovered_consumer.final_status_code == "INVALID_FEEDBACK_DELIVERY"
+                or self.blackboard.current_step not in self.steps
+            ):
+                return self._finalize_observed_result(recovered_consumer)
         if entry_checkpoint is not None:
             self.blackboard_store.record_event(self.blackboard, "execution_checkpoint", entry_checkpoint)
         if self._workflow_event_callback is not None:
