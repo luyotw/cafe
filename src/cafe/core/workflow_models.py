@@ -51,11 +51,14 @@ class StepInterrupted(Exception):
         hop: int = 0,
         reason: str = "interrupted",
         detail: Optional[str] = None,
+        *,
+        before_executor: bool = False,
     ) -> None:
         self.step = step
         self.hop = hop
         self.reason = reason
         self.detail = detail
+        self.before_executor = before_executor
         message = f"Step '{step}' {reason} at hop {hop}"
         if detail:
             message = f"{message}: {detail}"

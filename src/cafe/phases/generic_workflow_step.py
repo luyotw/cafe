@@ -660,13 +660,6 @@ class GenericWorkflowStepExecutor(Phase):
         execution_context: Optional[Mapping[str, Any]] = None,
         before_agent: Optional[Callable[[], None]] = None,
     ) -> StepExecutionResult:
-        if execution_context is not None:
-            from cafe.core.execution_checkpoints import checkpoint
-            receipt = checkpoint(execution_context, "resume", round_id=step_name, parent_id="phase-entry")
-            if not receipt["passed"]:
-                raise ValueError("execution_checkpoint_blocked: " + json.dumps(receipt["findings"]))
-            instructions = "Resolved execution checkpoint context:\n" + json.dumps(execution_context)
-            extra_prompt = (extra_prompt + "\n" if extra_prompt else "") + instructions
         self._execution_context = execution_context
         self._resolved_execution_chains = (execution_context.get("phase_chains", {})
                                            if execution_context is not None else {})
@@ -676,14 +669,6 @@ class GenericWorkflowStepExecutor(Phase):
         self.phase_name = step_name
         self.phase_dir = self.issue_dir / step_name
         self.phase_dir.mkdir(parents=True, exist_ok=True)
-
-        # A playbook rollout can introduce a workspace companion after its
-        # producer already completed. Refresh it from the one producer named
-        # by the declarations when its committed Git snapshot is stale.
-        self._refresh_declared_workspace_input(
-            step_def=step_def,
-            blackboard_state=blackboard_state,
-        )
 
         self.iteration = self._get_next_iteration_number(step_name, self.phase_dir)
         from cafe.core.workflow_control import current_control
@@ -699,13 +684,30 @@ class GenericWorkflowStepExecutor(Phase):
             self._invocation_order = None
         self._delta_packet_metadata = None
         iteration_dir = self._get_iteration_dir(self.iteration)
-        new_iteration = not iteration_dir.exists()
         iteration_dir.mkdir(parents=True, exist_ok=True)
-        if new_iteration:
+        # HumanTask continuations can stage user_input.md before execution.
+        if not self._resolve_iteration_context_file(iteration_dir).exists():
             self._persist_agent_invocation_marker(
                 iteration_dir=iteration_dir,
                 agent_invoked=False,
             )
+
+        if execution_context is not None:
+            from cafe.core.execution_checkpoints import checkpoint
+            receipt = checkpoint(execution_context, "resume", round_id=step_name, parent_id="phase-entry")
+            if not receipt["passed"]:
+                raise ValueError("execution_checkpoint_blocked: " + json.dumps(receipt["findings"]))
+            instructions = "Resolved execution checkpoint context:\n" + json.dumps(execution_context)
+            extra_prompt = (extra_prompt + "\n" if extra_prompt else "") + instructions
+
+        # A playbook rollout can introduce a workspace companion after its
+        # producer already completed. Refresh it from the one producer named
+        # by the declarations when its committed Git snapshot is stale.
+        self._refresh_declared_workspace_input(
+            step_def=step_def,
+            blackboard_state=blackboard_state,
+        )
+
         portion_baton_path = (
             iteration_dir / "hybrid_portion_baton.json" if is_hybrid_portion else None
         )
@@ -947,10 +949,6 @@ class GenericWorkflowStepExecutor(Phase):
                 if not recovery_authorized:
                     budget.consume()
                 self._save_artifact_correction(iteration_dir, budget)
-            self._persist_agent_invocation_marker(
-                iteration_dir=iteration_dir,
-                agent_invoked=True,
-            )
             if self._delta_packet_metadata is not None:
                 phase_specific_data["delta_packet"] = dict(self._delta_packet_metadata)
             resolved_user_input = self._get_resolved_iteration_user_input(step_name)
@@ -2406,8 +2404,9 @@ class GenericWorkflowStepExecutor(Phase):
         *,
         iteration_dir: Path,
         agent_invoked: bool,
+        dispatch_started: bool = False,
     ) -> None:
-        """Persist whether this iteration crossed the agent execution boundary."""
+        """Persist the monotonic invocation flag and the start of an actual call."""
         context_file = self._resolve_iteration_context_file(iteration_dir)
         context_data: object = {}
         if context_file.exists():
@@ -2422,6 +2421,11 @@ class GenericWorkflowStepExecutor(Phase):
         if context_data.get("agent_invoked") is True and not agent_invoked:
             return
         context_data["agent_invoked"] = agent_invoked
+        if dispatch_started:
+            context_data["session_invocation_started_at"] = datetime.now().astimezone().isoformat()
+            recovery = getattr(self, "_session_recovery", None)
+            if recovery is not None and context_data.get("session_recovery") == recovery:
+                context_data["session_recovery_consumed"] = recovery["human_task_id"]
         persist_iteration_metadata(context_file, context_data)
 
     def _build_backup_takeover_context(
@@ -2794,6 +2798,7 @@ class GenericWorkflowStepExecutor(Phase):
         previous_data = self._load_previous_iteration_data()
         current_data = self._load_current_iteration_data()
         configured_clis = self._configured_clis_for_agent(agent_name)
+        interrupted_continuation = None
 
         if isinstance(current_data, dict):
             self._restart_recovery = None
@@ -2805,24 +2810,32 @@ class GenericWorkflowStepExecutor(Phase):
             if recovery is not None:
                 self._restart_recovery = recovery
                 return SessionContinuation.new()
+            if is_interrupted_iteration(
+                iteration=self.iteration,
+                previous_iteration_data=previous_data,
+                current_iteration_data=current_data,
+            ):
+                interrupted_continuation = exact_continuation_from_context(
+                    current_data, configured_clis=configured_clis,
+                ) or self._observed_iteration_session(agent_name, current_data, configured_clis)
             recovery = self._selected_fresh_session_recovery(
                 workflow_id=workflow_id,
                 current_data=current_data,
                 configured_clis=configured_clis,
+                interrupted_continuation=interrupted_continuation,
             )
             if recovery is not None:
+                if (
+                    recovery.get("reason") == "retry_without_session"
+                    and recovery.get("previous", {}).get("session_unobserved") is True
+                    and interrupted_continuation is not None
+                    and interrupted_continuation.is_exact
+                ):
+                    return interrupted_continuation
                 self._session_recovery = recovery
                 return SessionContinuation.new()
-        if is_interrupted_iteration(
-            iteration=self.iteration,
-            previous_iteration_data=previous_data,
-            current_iteration_data=current_data,
-        ):
-            exact = exact_continuation_from_context(
-                current_data,
-                configured_clis=configured_clis,
-            )
-            return exact or self._observed_iteration_session(agent_name, current_data, configured_clis)
+        if interrupted_continuation is not None:
+            return interrupted_continuation
 
         if same_invocation_retry:
             exact = exact_continuation_from_context(
@@ -2844,7 +2857,12 @@ class GenericWorkflowStepExecutor(Phase):
         """Use the session persisted while an interrupted invocation was live."""
         try:
             cli = AgentCLI(context.get("cli"))
-            started = datetime.fromisoformat(context.get("timestamp", ""))
+            started = datetime.fromisoformat(
+                context.get("session_invocation_started_at", context.get("timestamp", "")),
+            )
+            recovery = context.get("session_recovery")
+            previous = recovery.get("previous") if isinstance(recovery, Mapping) else None
+            retired_session = previous.get("session_id") if isinstance(previous, Mapping) else None
             if cli in configured_clis:
                 observed = self.agent_manager.session_manager.load_session(
                     agent_name, cli, self.issue_name, self.phase_name,
@@ -2852,6 +2870,7 @@ class GenericWorkflowStepExecutor(Phase):
                 if (
                     observed is not None
                     and observed.session_id
+                    and observed.session_id != retired_session
                     and observed.agent_name == agent_name
                     and observed.cli == cli
                     and observed.phase_name == self.phase_name
@@ -2913,6 +2932,8 @@ class GenericWorkflowStepExecutor(Phase):
             "retry": "user_selected_existing_session",
             AGENT_EXECUTION_FRESH_SESSION_DECISION: "user_selected_fresh_session",
         }.get(decision)
+        if decision == "retry" and getattr(self, "_session_recovery", None):
+            override = self._session_recovery["reason"]
         if decision == RETRY_CONFIGURED_ORDER and recovery is None:
             override = "configured_order_already_consumed_or_inapplicable"
         order = getattr(self, "_invocation_order", None)
@@ -3017,6 +3038,7 @@ class GenericWorkflowStepExecutor(Phase):
         workflow_id: Optional[str],
         current_data: Optional[dict[str, Any]],
         configured_clis: list[AgentCLI],
+        interrupted_continuation: SessionContinuation | None = None,
     ) -> Optional[Dict[str, Any]]:
         """Return the latest applicable user-authorized session rotation."""
         store = HumanTaskRecordStore(self.issue_dir)
@@ -3046,8 +3068,12 @@ class GenericWorkflowStepExecutor(Phase):
             raise RuntimeError("Cannot validate fresh-session recovery result") from exc
         if result is None:
             return None
-        if result.payload.get("decision") != AGENT_EXECUTION_FRESH_SESSION_DECISION:
-            if result.payload.get("decision") == "retry" and exact_continuation_from_context(
+        decision = result.payload.get("decision")
+        recovery = result.payload.get("session_continuation")
+        if decision != AGENT_EXECUTION_FRESH_SESSION_DECISION and not (
+            decision == "retry" and isinstance(recovery, Mapping)
+        ):
+            if decision == "retry" and exact_continuation_from_context(
                 current_data,
                 configured_clis=configured_clis,
             ) is None:
@@ -3059,15 +3085,14 @@ class GenericWorkflowStepExecutor(Phase):
 
         declared_decisions = latest.expected_result.get("decisions")
         if not isinstance(declared_decisions, list) or not any(
-            isinstance(decision, Mapping)
-            and decision.get("id") == AGENT_EXECUTION_FRESH_SESSION_DECISION
-            for decision in declared_decisions
+            isinstance(option, Mapping)
+            and option.get("id") == decision
+            for option in declared_decisions
         ):
             raise RuntimeError("Fresh-session recovery was not declared by the completed task")
-        if latest.continuations.get(AGENT_EXECUTION_FRESH_SESSION_DECISION) != self.phase_name:
+        if latest.continuations.get(decision) != self.phase_name:
             raise RuntimeError("Fresh-session recovery does not target the current step")
 
-        recovery = result.payload.get("session_continuation")
         if not isinstance(recovery, Mapping):
             raise RuntimeError("Fresh-session recovery result has no durable session evidence")
         expected_binding = {
@@ -3080,8 +3105,17 @@ class GenericWorkflowStepExecutor(Phase):
         if any(recovery.get(key) != value for key, value in expected_binding.items()):
             raise RuntimeError("Fresh-session recovery result does not match this workflow run")
 
+        persisted_recovery = current_data.get("session_recovery")
+        if persisted_recovery == recovery and current_data.get("session_recovery_consumed") == latest.id:
+            exact = exact_continuation_from_context(current_data, configured_clis=configured_clis)
+            if exact is not None or (
+                interrupted_continuation is not None and interrupted_continuation.is_exact
+            ):
+                return None
+            raise RuntimeError("The attempted session identity was not saved or is invalid")
+
         if "preparation" in recovery:
-            if current_data.get("session_recovery") == dict(recovery):
+            if persisted_recovery == recovery:
                 if current_data.get("agent_invoked") is True:
                     if (
                         exact_continuation_from_context(
@@ -3126,8 +3160,7 @@ class GenericWorkflowStepExecutor(Phase):
         elif not isinstance(previous_session, str) or not previous_session.strip():
             raise RuntimeError("Fresh-session recovery prior session is invalid")
 
-        persisted_recovery = current_data.get("session_recovery")
-        if persisted_recovery == dict(recovery):
+        if persisted_recovery == recovery:
             current_session = current_data.get("session_id")
             if isinstance(current_session, str) and current_session != previous_session:
                 return None
@@ -3448,8 +3481,12 @@ class GenericWorkflowStepExecutor(Phase):
                 "the same workflow step, iteration, artifacts and authority."
             )
         elif getattr(self, "_session_recovery", None) is not None:
-            context["session_recovery"] = (
-                "The user explicitly selected a fresh provider session after an interruption. "
+            reason = (
+                "The user retried an interruption with no reusable provider session. "
+                if self._session_recovery["reason"] == "retry_without_session"
+                else "The user explicitly selected a fresh provider session after an interruption. "
+            )
+            context["session_recovery"] = reason + (
                 "Continue the same phase, iteration, model, and authority. Reconstruct the "
                 "current state only from the bounded runtime files and declared inputs in this "
                 "prompt; do not assume memory from the previous provider session."

@@ -1249,10 +1249,15 @@ class BlackboardWorkflowRuntime:
         reason: str,
         runtime: str,
         replacement: bool = False,
+        before_executor: bool = False,
     ) -> PlaybookRunResult:
         """Create one notified HumanTask instead of inferring completion from partial output."""
         records = HumanTaskRecordStore(self.issue_dir)
-        iteration = self._human_task_iteration(current_step)
+        if before_executor:
+            from cafe.core.phase_state_mixin import next_runnable_iteration_number
+            iteration = next_runnable_iteration_number(self.issue_dir / current_step)
+        else:
+            iteration = self._human_task_iteration(current_step)
         existing = self.blackboard.handoff_contract
         if (not replacement and existing is not None
                 and existing.source == "workflow.agent_execution_interrupted"
@@ -2876,6 +2881,7 @@ class BlackboardWorkflowRuntime:
                 self.blackboard.host_wait = None
                 self.blackboard_store.save(self.blackboard)
 
+        before_executor = True
         try:
             self._check_execution_resume(current_step, attempt_count)
             execute_kwargs = {
@@ -2901,6 +2907,7 @@ class BlackboardWorkflowRuntime:
                     for name, value in execute_kwargs.items()
                     if name in execute_parameters
                 }
+            before_executor = False
             execution_result = self.executor(
                 current_step,
                 step_def,
@@ -2972,9 +2979,13 @@ class BlackboardWorkflowRuntime:
                     "runtime": runtime,
                     "reason": reason,
                     "detail": detail,
+                    **({"before_executor": True} if before_executor else {}),
                 },
             )
-            raise StepInterrupted(step=current_step, hop=hop_count, reason=reason, detail=detail)
+            raise StepInterrupted(
+                step=current_step, hop=hop_count, reason=reason, detail=detail,
+                before_executor=before_executor,
+            )
         check_control()
         if self.blackboard.host_wait is not None:
             self.blackboard.host_wait = None
@@ -5853,6 +5864,7 @@ class BlackboardWorkflowRuntime:
                             current_step=current_step,
                             reason=si.reason,
                             runtime=runtime_label,
+                            before_executor=si.before_executor,
                         )
                     reconciled = self._try_reconcile_interrupted_step(
                         current_step=current_step,
@@ -6214,6 +6226,7 @@ class BlackboardWorkflowRuntime:
                             current_step=current_step,
                             reason=si.reason,
                             runtime=runtime_label,
+                            before_executor=si.before_executor,
                         )
                     reconciled = self._try_reconcile_interrupted_step(
                         current_step=current_step,

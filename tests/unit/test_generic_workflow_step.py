@@ -871,11 +871,171 @@ def test_preparation_cannot_clear_prior_agent_invocation_marker(tmp_path):
     assert json.loads(path.read_text())["agent_invoked"] is True
 
 
+@pytest.mark.parametrize("decision", ["retry", "retry_fresh_session"])
+@pytest.mark.parametrize("failure", ["configuration", "checkpoint", "input_save", "preview"])
+def test_preparation_failure_retries_preallocated_iteration(
+    tmp_path, monkeypatch, decision, failure,
+):
+    from typer.testing import CliRunner
+    from cafe.ui.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    manager = FakeAgentManager("confirmed", on_execute=_complete_current_checklist)
+    executor = _minimal_spec_executor(tmp_path, agent_manager=manager)
+    issue_dir = executor.issue_dir
+    iteration = issue_dir / "spec/iteration_001"
+    iteration.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text("playbook_id: standard\n")
+    (iteration / "user_input.md").write_text("Saved requirements from the previous phase.")
+    executor.playbook["playbook"]["id"] = "standard"
+    executor.playbook["entry_point"] = "spec"
+    phase_file = tmp_path / ".cafe/phases.yaml"
+    valid_configuration = "spec:\n  name: Roger\n  clis:\n  - cli: codex\n    model: gpt-5-test\n"
+    phase_file.write_text(
+        "spec:\n  clis: invalid\n" if failure == "configuration" else valid_configuration,
+    )
+    monkeypatch.setattr(executor, "_resolve_phase_config_paths", lambda: (phase_file, None))
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=executor.playbook, executor=executor.execute_step,
+    )
+
+    def fail_preparation(*_args, **_kwargs):
+        raise OSError("preparation interrupted")
+
+    with monkeypatch.context() as failing:
+        if failure == "checkpoint":
+            failing.setattr(runtime, "_check_execution_resume", fail_preparation)
+        elif failure == "input_save":
+            failing.setattr(executor, "_save_user_input", fail_preparation)
+        elif failure == "preview":
+            failing.setattr(manager, "preview_cli_environment", fail_preparation)
+        interrupted = runtime.run(single_step=True)
+    assert interrupted.final_status_code == "INTERRUPTED:agent_error"
+    assert manager.execute_call_count == 0
+    saved = json.loads((iteration / "iteration.json").read_text())
+    assert saved.get("agent_invoked") is (None if failure == "checkpoint" else False)
+    assert "cli" not in saved and "session_id" not in saved
+
+    phase_file.write_text(valid_configuration)
+    task, = HumanTaskRecordStore(issue_dir).tasks()
+    complete = CliRunner().invoke(
+        app, ["task", "complete", task.id, "--result", json.dumps({"decision": decision}),
+              "--no-resume", "--json"],
+    )
+    assert complete.exit_code == 0, complete.stdout
+    resumed = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=executor.playbook, executor=executor.execute_step,
+    )
+    resumed.run(single_step=True)
+    assert manager.execute_call_count == 1
+    assert executor._session_continuation.policy is SessionContinuationPolicy.NEW
+    assert list((issue_dir / "spec").glob("iteration_*")) == [iteration]
+
+
+def test_checkpoint_failure_preserves_previous_completed_iteration(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.playbook["entry_point"] = "spec"
+    issue_dir = executor.issue_dir
+    original = issue_dir / "spec/iteration_001/iteration.json"
+    original.parent.mkdir(parents=True)
+    completed = json.dumps({
+        "end_time": "2026-01-01T00:00:00+00:00", "workflow_completion_trusted": True,
+        "agent_invoked": True, "cli": "codex", "session_id": "completed-session",
+    })
+    original.write_text(completed)
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=executor.playbook, executor=executor.execute_step,
+    )
+
+    def reject_checkpoint(*_args):
+        raise ValueError("execution_checkpoint_blocked: workspace changed")
+
+    monkeypatch.setattr(runtime, "_check_execution_resume", reject_checkpoint)
+    result = runtime.run(single_step=True)
+    assert result.final_status_code == "INTERRUPTED:agent_error"
+    assert original.read_text() == completed
+    task, = HumanTaskRecordStore(issue_dir).tasks()
+    assert task.iteration == 2
+    second = issue_dir / "spec/iteration_002/iteration.json"
+    assert json.loads(second.read_text())["agent_interruption"]["iteration"] == 2
+
+
+@pytest.mark.parametrize("decision", ["retry", "retry_fresh_session"])
+def test_recovery_prefers_observed_session_only_for_normal_retry(tmp_path, monkeypatch, decision):
+    from typer.testing import CliRunner
+    from cafe.core.session import SessionManager
+    from cafe.ui.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    manager = FakeAgentManager("confirmed")
+    manager.session_manager = SessionManager()
+    executor = _minimal_spec_executor(tmp_path, agent_manager=manager)
+    issue_dir = executor.issue_dir
+    iteration = issue_dir / "spec/iteration_001"
+    iteration.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text("playbook_id: standard\n")
+    (iteration / "iteration.json").write_text(json.dumps({
+        "cli": "codex", "model": "gpt-5-test", "timestamp": "2026-01-01T00:00:00+00:00",
+        "session_continuation": {"policy": "new"}, "agent_invoked": True,
+    }))
+    state = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="standard")
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=executor.playbook, executor=executor.execute_step,
+    )
+    assert runtime.blackboard.workflow_id == state.workflow_id
+    runtime._pause_for_agent_execution_interruption(
+        current_step="spec", reason="agent_error", runtime="legacy",
+    )
+    manager.session_manager.save_session(
+        "Roger", AgentCLI.CODEX, "observed-session", executor.issue_name, "spec",
+    )
+    task, = HumanTaskRecordStore(issue_dir).tasks()
+    complete = CliRunner().invoke(
+        app, ["task", "complete", task.id, "--result", json.dumps({"decision": decision}),
+              "--no-resume", "--json"],
+    )
+    assert complete.exit_code == 0, complete.stdout
+    executor.phase_name = "spec"
+    executor.phase_dir = iteration.parent
+    executor.iteration = 1
+    continuation = executor._select_session_continuation(
+        agent_name="Roger", step_def=executor.playbook["steps"]["spec"], workflow_id=state.workflow_id,
+    )
+    if decision == "retry":
+        assert continuation == SessionContinuation.resume_exact(AgentCLI.CODEX, "observed-session")
+        manager.session_manager.delete_session("Roger", AgentCLI.CODEX, executor.issue_name, "spec")
+        continuation = executor._select_session_continuation(
+            agent_name="Roger", step_def=executor.playbook["steps"]["spec"], workflow_id=state.workflow_id,
+        )
+    assert continuation == SessionContinuation.new()
+    context_file = iteration / "iteration.json"
+    saved = json.loads(context_file.read_text())
+    saved["session_recovery"] = executor._session_recovery
+    context_file.write_text(json.dumps(saved))
+    executor._persist_agent_invocation_marker(
+        iteration_dir=iteration, agent_invoked=True, dispatch_started=True,
+    )
+    started_at = json.loads(context_file.read_text())["session_invocation_started_at"]
+    executor._persist_agent_invocation_marker(iteration_dir=iteration, agent_invoked=True)
+    assert json.loads(context_file.read_text())["session_invocation_started_at"] == started_at
+    with pytest.raises(RuntimeError, match="attempted session identity"):
+        executor._select_session_continuation(
+            agent_name="Roger", step_def=executor.playbook["steps"]["spec"], workflow_id=state.workflow_id,
+        )
+    manager.session_manager.save_session(
+        "Roger", AgentCLI.CODEX, "replacement-session", executor.issue_name, "spec",
+    )
+    assert executor._select_session_continuation(
+        agent_name="Roger", step_def=executor.playbook["steps"]["spec"], workflow_id=state.workflow_id,
+    ) == SessionContinuation.resume_exact(AgentCLI.CODEX, "replacement-session")
+
+
 @pytest.mark.parametrize("tampered", [False, True])
 @pytest.mark.parametrize("legacy_workspace", [
     False, True, "native_skill", "native_skill_bad_marker", "native_skill_unknown_error",
     "native_skill_recovery_error", "correction_preparation", "correction_bad_marker",
-    "packet_preparation", "packet_already_materialized",
+    "packet_preparation", "packet_already_materialized", "phase_configuration",
 ])
 def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
     tmp_path,
@@ -890,6 +1050,7 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
     native_skill = isinstance(legacy_workspace, str) and legacy_workspace.startswith("native_skill")
     correction_preparation = legacy_workspace in {"correction_preparation", "correction_bad_marker"}
     packet_preparation = legacy_workspace in {"packet_preparation", "packet_already_materialized"}
+    phase_configuration = legacy_workspace == "phase_configuration"
     monkeypatch.chdir(tmp_path)
     executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
     executor.phase_name = "spec"
@@ -901,7 +1062,7 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
     path.write_text(
         json.dumps(
             {"workflow_completion_trusted": False}
-            if packet_preparation else {"effective_inputs": {}, "workflow_completion_trusted": False}
+            if packet_preparation or phase_configuration else {"effective_inputs": {}, "workflow_completion_trusted": False}
             if legacy_workspace else {"agent_invoked": False}
         )
     )
@@ -957,7 +1118,7 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
         ),
     )
     if legacy_workspace:
-        if native_skill or correction_preparation or packet_preparation:
+        if native_skill or correction_preparation or packet_preparation or phase_configuration:
             marker = {
                 "id": state.handoff_contract.created_at,
                 "reason": "agent_error",
@@ -977,6 +1138,9 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
                 "detail": (
                     "Invalid persisted context packet decision" if packet_preparation else
                     "Correction Todo provenance is missing" if correction_preparation else
+                    "invalid phase config in '/repo/.cafe/phases.yaml': step='spec': "
+                    "field='spec.clis[0].reasoning_effort': reasoning_effort: unsupported tuple"
+                    if phase_configuration else
                     "Skill not found: Unmanaged or changed native skill conflict: "
                     "/repo/.codex/skills/shared. Back up and relocate the entry, "
                     "then rerun prepare or launch; legacy names or matching contents "
@@ -993,7 +1157,7 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
                 ),
             },
         )
-        if native_skill or correction_preparation or packet_preparation:
+        if native_skill or correction_preparation or packet_preparation or phase_configuration:
             boards.record_event(
                 state, "agent_interruption_prepared",
                 {"step": "spec", "marker": marker},

@@ -462,9 +462,9 @@ def agent_execution_interrupted_human_task(
         configured_outcomes[RETRY_CONFIGURED_ORDER] = normalized_step
     prompt = (
         "Agent execution was interrupted or its completion failed validation. "
-        "Review saved diagnostics and choose an existing-session or fresh-session retry."
+        "Review saved diagnostics and choose retry or explicitly start a fresh session."
     )
-    prompt_zh = "Agent 執行中斷或完成驗證失敗。請查看已保存的診斷，選擇原 session 或新 session 重試。"
+    prompt_zh = "Agent 執行中斷或完成驗證失敗。請查看已保存的診斷，選擇重試，或明確指定用新 session 重試。"
     if configured_decisions:
         prompt += (
             " Saved restart policy: recheck_priority. Configured-order recovery retries the same "
@@ -485,7 +485,7 @@ def agent_execution_interrupted_human_task(
                 HumanTaskDecision(
                     id=AGENT_EXECUTION_RETRY_DECISION,
                     label="Retry the interrupted workflow step",
-                    label_locales={"zh-TW": "以原 session 重試中斷步驟"},
+                    label_locales={"zh-TW": "重試中斷步驟（有原 session 就沿用）"},
                 ),
                 HumanTaskDecision(
                     id=AGENT_EXECUTION_FRESH_SESSION_DECISION,

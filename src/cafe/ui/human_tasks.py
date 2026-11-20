@@ -53,6 +53,7 @@ from cafe.core.session_continuation import (
     exact_continuation_from_context,
     pre_invocation_recovery_evidence,
 )
+from cafe.core.types import AgentCLI
 from cafe.core.workflow_feedback import WorkflowFeedbackError, WorkflowFeedbackLedger
 from cafe.skills.loader import SkillLoader
 
@@ -1284,29 +1285,18 @@ def _apply_human_task_payload(
                 if (
                     trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER
                     and continuation == from_step
-                    and validated_completion.decision == "retry"
+                    and validated_completion.decision in {"retry", AGENT_EXECUTION_FRESH_SESSION_DECISION}
                 ):
-                    iteration_data = _load_recovery_json(
-                        issue_dir / from_step / f"iteration_{iteration:03d}" / "iteration.json"
-                    )
-                    if exact_continuation_from_context(iteration_data) is None:
-                        raise ValueError(
-                            "The interrupted CLI/session identity was not saved or is invalid. "
-                            "An existing-session retry cannot start a fresh session; "
-                            "select fresh-session recovery explicitly."
-                        )
-                if (
-                    trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER
-                    and continuation == from_step
-                    and validated_completion.decision == AGENT_EXECUTION_FRESH_SESSION_DECISION
-                ):
-                    completion_payload["session_continuation"] = _fresh_session_recovery_payload(
+                    recovery = _session_retry_payload(
                         issue_dir=issue_dir,
                         workflow_id=blackboard.workflow_id,
                         task_id=durable_task.id,
                         step_name=from_step,
                         iteration=iteration,
+                        force_new=validated_completion.decision == AGENT_EXECUTION_FRESH_SESSION_DECISION,
                     )
+                    if recovery is not None:
+                        completion_payload["session_continuation"] = recovery
                 if (trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER
                         and continuation == from_step
                         and validated_completion.decision == "retry_configured_order"):
@@ -1857,17 +1847,21 @@ def _configured_order_recovery_payload(
     }
 
 
-def _fresh_session_recovery_payload(
+def _session_retry_payload(
     *,
     issue_dir: Path,
     workflow_id: str,
     task_id: str,
     step_name: str,
     iteration: int,
-) -> dict[str, Any]:
-    """Bind a user-owned fresh-session choice to the interrupted session evidence."""
+    force_new: bool,
+) -> dict[str, Any] | None:
+    """Resume a saved session when possible, otherwise bind a verified restart."""
     iteration_dir = issue_dir / step_name / f"iteration_{iteration:03d}"
     iteration_data = _load_recovery_json(iteration_dir / "iteration.json")
+    if not force_new and exact_continuation_from_context(iteration_data) is not None:
+        return None
+    reason = "user_selected_fresh_session" if force_new else "retry_without_session"
     prior_cli = iteration_data.get("cli")
     preparation = pre_invocation_recovery_evidence(
         iteration_data,
@@ -1880,7 +1874,7 @@ def _fresh_session_recovery_payload(
         return {
             "schema_version": 1,
             "policy": "new",
-            "reason": "user_selected_fresh_session",
+            "reason": reason,
             "next_action": "resume_same_step_same_iteration",
             "workflow_id": workflow_id,
             "human_task_id": task_id,
@@ -1889,8 +1883,8 @@ def _fresh_session_recovery_payload(
             "preparation": preparation,
         }
     prior_session_id = iteration_data.get("session_id")
-    if not isinstance(prior_cli, str) or not prior_cli.strip():
-        raise ValueError("Fresh-session recovery requires the interrupted CLI identity.")
+    if not isinstance(prior_cli, str) or prior_cli not in {cli.value for cli in AgentCLI}:
+        raise ValueError("The interrupted CLI identity was not saved or is invalid.")
     continuation = iteration_data.get("session_continuation")
     unobserved_new_session = (
         prior_session_id is None
@@ -1915,7 +1909,7 @@ def _fresh_session_recovery_payload(
     recovery: dict[str, Any] = {
         "schema_version": 1,
         "policy": "new",
-        "reason": "user_selected_fresh_session",
+        "reason": reason,
         "next_action": "resume_same_step_same_iteration",
         "workflow_id": workflow_id,
         "human_task_id": task_id,
