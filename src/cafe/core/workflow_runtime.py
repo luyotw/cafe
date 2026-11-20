@@ -6680,6 +6680,7 @@ class BlackboardWorkflowRuntime:
         self, *, max_transitions: int = 30, start_step: Optional[str] = None,
         single_step: bool = False,
     ) -> PlaybookRunResult:
+        from cafe.core.dashboard_publication import announce_workflow
         from cafe.utils.file_lock import advancement_execution_lock
         from cafe.core.workflow_repair import recover_pending_interruption, _quiescent
         with advancement_execution_lock(self.issue_dir) as acquired:
@@ -6689,6 +6690,7 @@ class BlackboardWorkflowRuntime:
                 if start_step is not None or single_step:
                     raise ValueError("A saved continuation requires its original workflow route")
                 self.blackboard = self.continuation.read_current(self.blackboard_store)
+            announce_workflow(self.issue_dir, self.blackboard.workflow_id)
             recovered = recover_pending_interruption(self.issue_dir)
             if recovered is not None:
                 self.blackboard = self.blackboard_store.load_or_create(
