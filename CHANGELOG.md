@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.13.0] - 2026-11-20
+
+### Added
+
+- Provide versioned HumanTask input snapshots to external clients, including
+  task-bound questions and reviewed output. Validate replies against the reviewed
+  snapshot and preserve accepted evidence with the saved result.
+- Inspect and resume a saved HumanTask result through `cafe task continuation`,
+  using the exact task, issue, workflow, and result identity. These interfaces
+  support CAFE Dashboard's Plan review and clarification flows.
+- Estimate Codex App Manager and subagent usage in closeout cost reports,
+  including explicitly selected conversation turns and refreshed pricing.
+
+### Fixed
+
+- Serialize saved-result continuation with handoff publication and retain the
+  original saved response across interrupted completion and recovery.
+
+See [the v0.13.0 release notes](docs/releases/v0.13.0.md) for Dashboard
+compatibility and saved-result continuation.
+
 ## [0.12.3] - 2026-11-18
 
 ### Fixed
@@ -1100,6 +1121,7 @@ Major milestone release: deep refactor of CAFE's workflow engine from hardcoded 
 - Interactive phase management with checklist validation
 - GitHub integration for issue and PR management
 
+[0.13.0]: https://github.com/luyotw/cafe/compare/v0.12.3...v0.13.0
 [0.12.3]: https://github.com/luyotw/cafe/compare/v0.12.2...v0.12.3
 [0.12.2]: https://github.com/luyotw/cafe/compare/v0.12.1...v0.12.2
 [0.3.0]: https://github.com/luyotw/cafe/compare/v0.2.1...v0.3.0
