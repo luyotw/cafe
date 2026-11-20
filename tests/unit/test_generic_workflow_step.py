@@ -875,6 +875,7 @@ def test_preparation_cannot_clear_prior_agent_invocation_marker(tmp_path):
 @pytest.mark.parametrize("legacy_workspace", [
     False, True, "native_skill", "native_skill_bad_marker", "native_skill_unknown_error",
     "native_skill_recovery_error", "correction_preparation", "correction_bad_marker",
+    "correction_route_ambiguous", "correction_route_bad_marker",
     "packet_preparation", "packet_already_materialized",
 ])
 def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
@@ -888,7 +889,7 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
     from cafe.ui.cli import app
 
     native_skill = isinstance(legacy_workspace, str) and legacy_workspace.startswith("native_skill")
-    correction_preparation = legacy_workspace in {"correction_preparation", "correction_bad_marker"}
+    correction_preparation = isinstance(legacy_workspace, str) and legacy_workspace.startswith("correction_")
     packet_preparation = legacy_workspace in {"packet_preparation", "packet_already_materialized"}
     monkeypatch.chdir(tmp_path)
     executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
@@ -976,6 +977,9 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
                 "reason": "agent_error",
                 "detail": (
                     "Invalid persisted context packet decision" if packet_preparation else
+                    "Correction Todo feedback route is ambiguous" if legacy_workspace in {
+                        "correction_route_ambiguous", "correction_route_bad_marker",
+                    } else
                     "Correction Todo provenance is missing" if correction_preparation else
                     "Skill not found: Unmanaged or changed native skill conflict: "
                     "/repo/.codex/skills/shared. Back up and relocate the entry, "
@@ -1001,7 +1005,7 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
         boards.record_event(
             state, "agent_execution_task_materialized", {"step": "spec", "task_id": task.id}
         )
-        if legacy_workspace in {"native_skill_bad_marker", "correction_bad_marker"}:
+        if legacy_workspace in {"native_skill_bad_marker", "correction_bad_marker", "correction_route_bad_marker"}:
             metadata = json.loads(path.read_text())
             metadata["agent_interruption"]["workflow_id"] = "another-workflow"
             path.write_text(json.dumps(metadata))
@@ -1018,7 +1022,7 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
         ],
     )
     if legacy_workspace in {
-        "native_skill_bad_marker", "native_skill_unknown_error", "correction_bad_marker", "packet_already_materialized",
+        "native_skill_bad_marker", "native_skill_unknown_error", "correction_bad_marker", "correction_route_bad_marker", "packet_already_materialized",
     }:
         assert completed.exit_code != 0
         assert records.get_result(task.id) is None
