@@ -853,12 +853,15 @@ def test_completed_durable_result_recovers_the_declared_continuation_after_a_res
         "human_task_id": task.id,
     }
 
+    record_event = BlackboardStore.record_event
+
+    def interrupt_projection(self, state, event_type, payload, **kwargs):
+        if event_type == "human_task_completed":
+            raise RuntimeError("interrupted workflow projection")
+        return record_event(self, state, event_type, payload, **kwargs)
+
     with monkeypatch.context() as crashing:
-        crashing.setattr(
-            BlackboardStore,
-            "set_current_step",
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("interrupted")),
-        )
+        crashing.setattr(BlackboardStore, "record_event", interrupt_projection)
         with pytest.raises(RuntimeError, match="interrupted"):
             apply_human_task_payload(
                 issue_dir=issue_dir,

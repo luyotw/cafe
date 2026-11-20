@@ -896,8 +896,8 @@ def _handle_declared_human_task_handoff(
     trigger: str,
 ) -> Optional[str]:
     """Render and apply any step-declared human task through one shared path."""
+    from cafe.core.human_task_snapshot import resolve_task_inputs
     from cafe.core.human_tasks import HumanTaskPolicyError
-    from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
     from cafe.skills.loader import SkillLoader
     from cafe.ui.human_tasks import (
         apply_human_task_payload,
@@ -907,6 +907,13 @@ def _handle_declared_human_task_handoff(
     )
 
     record_store = HumanTaskRecordStore(issue_dir)
+    durable_wait = record_store.active_wait_state(
+        blackboard.workflow_id, step=from_step, trigger=trigger,
+    )
+    iteration = (
+        record_store.get_task(durable_wait.task_id).iteration if durable_wait is not None
+        else latest_step_iteration(issue_dir=issue_dir, step_name=from_step)
+    )
     if summary:
         console.print(f"[dim]{summary}[/dim]")
     try:
@@ -914,7 +921,7 @@ def _handle_declared_human_task_handoff(
             playbook_data=playbook_data,
             step_name=from_step,
             trigger=trigger,
-            iteration=latest_step_iteration(issue_dir=issue_dir, step_name=from_step),
+            iteration=iteration,
             skill_loader=SkillLoader(resolve_presentation=not record_store.exists),
         )
     except HumanTaskPolicyError:
@@ -931,32 +938,11 @@ def _handle_declared_human_task_handoff(
         console.print(f"[red]{result.rejection.message}[/red]")
         return None
 
-    if policy.pattern in {"confirm_output", "no_changes_needed"}:
-        output_files = sorted((issue_dir / from_step).glob("iteration_*/output.md"))
-        if output_files:
-            _print_output_file(output_files[-1])
-    questions = None
-    if policy.questions_from_xml:
-        iteration_dirs = sorted((issue_dir / from_step).glob("iteration_*"))
-        questions_file = iteration_dirs[-1] / "questions.xml" if iteration_dirs else None
-        if (
-            questions_file is not None
-            and questions_file.exists()
-            and validate_questions_xml(questions_file)
-        ):
-            questions = parse_questions_xml(questions_file)
     durable_task_id = None
-    durable_wait = record_store.active_wait_state(
-        blackboard.workflow_id,
-        step=from_step,
-        trigger=trigger,
-        policy_id=policy.id,
-    )
     recovered_payload: Optional[dict[str, Any]] = None
     if durable_wait is not None:
         durable_task_id = durable_wait.task_id
     elif record_store.exists:
-        iteration = latest_step_iteration(issue_dir=issue_dir, step_name=from_step)
         latest_iteration = issue_dir / from_step / f"iteration_{iteration:03d}"
         recovery_iterations = {iteration}
         if (
@@ -1003,13 +989,19 @@ def _handle_declared_human_task_handoff(
             playbook_data=playbook_data,
             step_name=from_step,
             trigger=trigger,
-            iteration=latest_step_iteration(issue_dir=issue_dir, step_name=from_step),
+            iteration=iteration,
         )
     payload = recovered_payload
     if payload is None:
+        inputs = resolve_task_inputs(
+            issue_dir, step=from_step, iteration=iteration, policy=policy, blackboard=blackboard,
+            step_definition=playbook_data.get("steps", {}).get(from_step, {}),
+        )
+        if inputs.review_artifact is not None:
+            _print_review_output(inputs.review_artifact.text)
         payload = collect_human_task_payload(
             policy,
-            questions=questions,
+            questions=inputs.questions,
             role=_resolve_step_chat_role(playbook_data, from_step),
             issue_name=issue_name,
             agent_name=_resolve_role_agent_name(
@@ -2005,12 +1997,15 @@ def _handle_review_confirmation(
 def _print_output_file(output_file: Path) -> None:
     """Print the content of an output.md file to the console."""
     if output_file.exists():
-        content = output_file.read_text(encoding="utf-8")
-        console.print()
-        console.print(f"[bold]{'=' * 60}[/bold]")
-        console.print(content)
-        console.print(f"[bold]{'=' * 60}[/bold]")
-        console.print()
+        _print_review_output(output_file.read_text(encoding="utf-8"))
+
+
+def _print_review_output(content: str) -> None:
+    console.print()
+    console.print(f"[bold]{'=' * 60}[/bold]")
+    console.print(content)
+    console.print(f"[bold]{'=' * 60}[/bold]")
+    console.print()
 
 
 def _handle_user_phase_generic(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -15,9 +16,21 @@ from rich.table import Table
 from cafe.core.blackboard import BlackboardStore
 from cafe.core.capability_approvals import CapabilityApprovalError
 from cafe.core.human_task_records import HumanTaskRecordStore
+from cafe.core.human_task_snapshot import resolve_task_inputs, uses_special_approval
 from cafe.core.human_tasks import HumanTaskPolicy
-from cafe.core.task_inbox import CompletionPreflight, TaskInboxError, TaskInboxService
-from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
+from cafe.core.task_continuation import (
+    ContinuationBinding,
+    ContinuationRequest,
+    ContinuationSupersededError,
+    observe_continuation,
+)
+from cafe.core.task_inbox import (
+    CompletionPreflight,
+    TaskInboxError,
+    TaskInboxService,
+    load_issue_task_playbook,
+)
+from cafe.core.workflow_repair import _quiescent
 from cafe.ui.commands import workflow as workflow_commands
 from cafe.ui.human_tasks import (
     HumanTaskApplication,
@@ -27,14 +40,16 @@ from cafe.ui.human_tasks import (
     collect_human_task_payload,
     durable_task_matches_current_handoff,
 )
+from cafe.utils.file_lock import WorkerAlreadyRunningError
+from cafe.utils.issue_paths import validate_issue_directory
+from cafe.workflow_execution.workflow_hosting import WorkflowHost
 
 
 def load_task_playbook(preflight: CompletionPreflight, *, project_root: Path) -> dict[str, Any]:
-    """Load the effective playbook used by every structured task completion."""
-    playbook_data = PlaybookLoader(project_root=project_root, resolve_presentation=False).load(
-        preflight.playbook_id
+    """Load the effective playbook for a structured task completion."""
+    return load_issue_task_playbook(
+        project_root=project_root, issue_dir=preflight.issue_dir, playbook_id=preflight.playbook_id,
     )
-    return apply_issue_playbook_overrides(playbook_data, preflight.issue_dir / "issue.yaml")
 
 
 def apply_structured_task(
@@ -71,9 +86,10 @@ def apply_structured_task(
             else "The response did not select a continuation."
         )
         raise TaskInboxError(
-            "invalid_response",
+            applied.error_code or "invalid_response",
             message,
-            recovery="Inspect the expected result and submit one declared response.",
+            recovery=(applied.rejection.correction_guidance if applied.error_code and applied.rejection
+                      else "Inspect the expected result and submit one declared response."),
             task_id=task_id,
             issue=preflight.issue,
             workflow_id=preflight.workflow_id,
@@ -134,7 +150,9 @@ def _fail(operation: str, error: TaskInboxError, json_output: bool) -> None:
     raise typer.Exit(1)
 
 
-def _resume_issue_workflow(issue: str, playbook: str) -> None:
+def _resume_issue_workflow(
+    issue: str, playbook: str, *, context: typer.Context | None = None,
+) -> None:
     """Run the exact owning issue without consulting or changing the active marker."""
     workflow_commands.workflow(
         playbook=playbook,
@@ -148,6 +166,7 @@ def _resume_issue_workflow(issue: str, playbook: str) -> None:
         dry_run=False,
         user_input=None,
         add_dir=[],
+        **({"context": context, "mute_agent_output": True} if context is not None else {}),
     )
 
 
@@ -256,13 +275,15 @@ def inspect_task(
     json_output: bool = typer.Option(False, "--json", help="Emit one JSON result object"),
 ) -> None:
     """Inspect one task's response contract, provenance, and continuation."""
+    service = TaskInboxService(Path(".cafe"))
     try:
-        detail = TaskInboxService(Path(".cafe")).inspect(task_id)
+        if json_output:
+            detail, snapshot = service.inspect_with_snapshot(task_id)
+            _emit_json(_envelope("inspect", data={"task": detail.to_dict(), "snapshot": snapshot}))
+            return
+        detail = service.inspect(task_id)
     except TaskInboxError as exc:
         _fail("inspect", exc, json_output)
-    if json_output:
-        _emit_json(_envelope("inspect", data={"task": detail.to_dict()}))
-        return
     console.print(f"[bold]Task[/bold] {detail.id}")
     console.print(f"Issue: {detail.issue}  Workflow: {detail.workflow_id}")
     console.print(f"Origin: {detail.step} iteration {detail.iteration} ({detail.trigger})")
@@ -278,6 +299,113 @@ def inspect_task(
     if detail.result is not None:
         console.print("Result:")
         console.print_json(data=detail.result)
+
+
+def _resume_saved_continuation(request: ContinuationRequest, context: typer.Context) -> str:
+    issue_dir = request.issue_dir
+    validate_issue_directory(issue_dir)
+
+    def preflight() -> None:
+        try:
+            if not request.matches_workflow(BlackboardStore(issue_dir)):
+                raise ValueError("The continuation's workflow has changed")
+            _quiescent(issue_dir)
+        except (OSError, ValueError) as exc:
+            raise WorkerAlreadyRunningError("Workflow ownership is unavailable") from exc
+
+    def run() -> str:
+        observation = observe_continuation(request, reconcile=True)
+        state = observation.state
+        if state is None:
+            return observation.status
+        if observation.unprojected_task is not None:
+            task = observation.unprojected_task
+            result = observation.result
+            assert result is not None
+            playbook = load_issue_task_playbook(
+                project_root=Path.cwd(), issue_dir=issue_dir, playbook_id=state.playbook_id,
+            )
+            if uses_special_approval(task, playbook["steps"].get(task.step, {})):
+                raise TaskInboxError(
+                    "unsupported_continuation", "This result uses a special approval protocol.",
+                    recovery="Follow the workflow's existing approval protocol.",
+                    task_id=request.task_id, issue=request.issue, workflow_id=request.workflow_id,
+                )
+            applied = apply_human_task_payload(
+                issue_dir=issue_dir, playbook_data=playbook, blackboard=state,
+                from_step=task.step, trigger=task.trigger,
+                raw_payload={"human_task_id": task.id}, source=result.source,
+                saved_result=result,
+            )
+            if applied.rejection is not None or applied.target is None:
+                return "unknown"
+            observation = observe_continuation(request)
+            state = observation.state
+            if state is None or observation.unprojected_task is not None:
+                return observation.status
+        assert state.handoff_contract is not None
+        context.obj = ContinuationBinding(request, state.handoff_contract)
+        try:
+            _resume_issue_workflow(request.issue, state.playbook_id, context=context)
+        except ContinuationSupersededError:
+            after = observe_continuation(request)
+            return after.status if after.state is None else "unknown"
+        except (OSError, ValueError, RuntimeError, typer.Exit):
+            after = observe_continuation(request)
+            if after.state is None:
+                return after.status
+            BlackboardStore(issue_dir).record_event(
+                after.state, "human_task_continuation_failed",
+                {"human_task_id": request.task_id, "result_id": request.result_id},
+            )
+            return "retryable_failure"
+        return observe_continuation(request).status
+
+    try:
+        return WorkflowHost(issue_dir).run(run, hosting="foreground", preflight=preflight).result
+    except WorkerAlreadyRunningError:
+        observed = observe_continuation(request)
+        return observed.status if observed.state is None else "unknown"
+
+
+@task_app.command("continuation")
+def task_continuation(
+    context: typer.Context,
+    task_id: str = typer.Argument(..., help="Completed HumanTask identifier"),
+    issue: str = typer.Option(..., "--issue", help="Owning issue directory name"),
+    workflow_id: str = typer.Option(..., "--workflow-id", help="Owning workflow identifier"),
+    result_id: str = typer.Option(..., "--result-id", help="Saved result identifier"),
+    resume: bool = typer.Option(
+        False, "--resume", help="Offer the saved continuation to the workflow",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit one JSON result object"),
+) -> None:
+    """Inspect or safely resume one saved HumanTask result."""
+    try:
+        request = ContinuationRequest(issue, workflow_id, task_id, result_id)
+        status = observe_continuation(request).status
+        if resume and status not in {"advanced", "stale_workflow"} and request.issue_dir.is_dir():
+            if json_output:
+                with open(os.devnull, "w", encoding="utf-8") as sink, redirect_stdout(sink):
+                    status = _resume_saved_continuation(request, context)
+            else:
+                status = _resume_saved_continuation(request, context)
+    except TaskInboxError as exc:
+        _fail("continuation", exc, json_output)
+    except (OSError, ValueError) as exc:
+        _fail(
+            "continuation",
+            TaskInboxError(
+                "continuation_unavailable", str(exc),
+                recovery="Check the owning issue and inspect the saved continuation again.",
+                task_id=task_id, workflow_id=workflow_id, issue=issue,
+            ),
+            json_output,
+        )
+    if json_output:
+        _emit_json(_envelope("continuation", data=request.response(status)))
+    else:
+        typer.echo(status)
 
 
 @task_app.command("complete")
@@ -306,6 +434,15 @@ def complete_task(
         raw_payload = _load_result(result, result_file)
         applied: Any
         if preflight.task.capability_approval is not None:
+            if isinstance(raw_payload, dict) and "snapshot_version" in raw_payload:
+                raise TaskInboxError(
+                    "snapshot_unavailable",
+                    "This task requires the capability approval protocol.",
+                    recovery="Inspect capability_approval and use its request fingerprint.",
+                    task_id=task_id,
+                    issue=preflight.issue,
+                    workflow_id=preflight.workflow_id,
+                )
             if handoff_to is not None:
                 raise TaskInboxError(
                     "invalid_response",
@@ -360,9 +497,31 @@ def complete_task(
                     issue=preflight.issue,
                     workflow_id=preflight.workflow_id,
                 ) from exc
-            raw_payload = collect_human_task_payload(policy)
+            playbook = load_task_playbook(preflight, project_root=Path.cwd())
+            step_definition = playbook["steps"][preflight.task.step]
+            questions = None
+            if not uses_special_approval(preflight.task, step_definition):
+                inputs = resolve_task_inputs(
+                    preflight.issue_dir, step=preflight.task.step, iteration=preflight.task.iteration,
+                    policy=policy, blackboard=BlackboardStore(preflight.issue_dir).load_read_only(),
+                    step_definition=step_definition,
+                )
+                questions = inputs.questions
+                if inputs.review_artifact is not None:
+                    console.print(inputs.review_artifact.text, markup=False)
+            raw_payload = collect_human_task_payload(policy, questions=questions) or {}
         if preflight.task.capability_approval is None and isinstance(raw_payload, dict):
             raw_payload = dict(raw_payload)
+            if ("snapshot_version" in raw_payload
+                    and raw_payload.get("human_task_id", task_id) != task_id):
+                raise TaskInboxError(
+                    "stale_task",
+                    "The response identifies a different human task.",
+                    recovery="Inspect the task identified on the command line and submit its version.",
+                    task_id=task_id,
+                    issue=preflight.issue,
+                    workflow_id=preflight.workflow_id,
+                )
             raw_payload.setdefault("task", preflight.task.policy_id)
             raw_payload["human_task_id"] = task_id
         assert raw_payload is not None

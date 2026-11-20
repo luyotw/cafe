@@ -35,6 +35,7 @@ This inventory is executable documentation: the unit contract discovers every `s
 | `src/cafe/core/workspace_artifact.py::_git` | Internal fixed Git query family |
 | `src/cafe/core/workspace_artifact.py::build_workspace_artifact` | Internal fixed Git ancestry query |
 | `src/cafe/core/workspace_artifact.py::verify_workspace_artifact` | Internal fixed Git ancestry query |
+| `src/cafe/core/worker_liveness.py::host_boot` | Internal fixed read-only host boot identity query |
 | `src/cafe/workflow_execution/worker_launch.py::launch` | Internal fixed CAFE worker bootstrap |
 | `src/cafe/workflow_execution/event_callback.py::dispatch_workflow_event_callback` | Trusted builtin asynchronous workflow event callback |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/format_kickoff_contract.py::_reexec_with_cafe_python` | Internal fixed Python re-exec |

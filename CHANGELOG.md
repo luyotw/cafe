@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.12.3] - 2026-11-18
+
+### Fixed
+
+- Complete Manager closeout for namespaced issues and use the issue's owning
+  worktree to locate closeout evidence.
+- Recover workflow workers left behind by a restart or confirmed to have stopped.
+  Reuse an observed session when resuming. If the provider reports that the
+  session is missing, the workflow can continue the same step in a fresh session
+  with its saved artifacts and checklist.
+
+See [the v0.12.3 release notes](docs/releases/v0.12.3.md).
+
 ## [0.12.2] - 2026-11-17
 
 ### Fixed
@@ -1087,6 +1100,7 @@ Major milestone release: deep refactor of CAFE's workflow engine from hardcoded 
 - Interactive phase management with checklist validation
 - GitHub integration for issue and PR management
 
+[0.12.3]: https://github.com/luyotw/cafe/compare/v0.12.2...v0.12.3
 [0.12.2]: https://github.com/luyotw/cafe/compare/v0.12.1...v0.12.2
 [0.3.0]: https://github.com/luyotw/cafe/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/luyotw/cafe/compare/v0.2.0...v0.2.1
