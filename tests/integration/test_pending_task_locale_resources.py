@@ -129,15 +129,15 @@ def test_pending_snapshot_recovers_one_result_after_interrupted_transition(
     _project, owner, issue, playbook, task = pending_owner
     remove_or_change_copy(owner, "remove")
     payload = {"task": task.policy_id, "human_task_id": task.id, "decision": "confirm"}
-    original = BlackboardStore.set_current_step
+    original = BlackboardStore.record_event
 
-    def interrupted(store, state, step):
-        if step == "plan":
-            raise OSError("interrupted transition write")
-        return original(store, state, step)
+    def interrupted(store, state, event_type, payload, **kwargs):
+        if event_type == "human_task_completed":
+            raise OSError("interrupted completion event publication")
+        return original(store, state, event_type, payload, **kwargs)
 
-    monkeypatch.setattr(BlackboardStore, "set_current_step", interrupted)
-    with pytest.raises(OSError):
+    monkeypatch.setattr(BlackboardStore, "record_event", interrupted)
+    with pytest.raises(OSError, match="interrupted completion event publication"):
         apply_human_task_payload(
             issue_dir=issue,
             playbook_data=playbook,
@@ -148,7 +148,8 @@ def test_pending_snapshot_recovers_one_result_after_interrupted_transition(
             source="test",
         )
     result_id = HumanTaskRecordStore(issue).get_result(task.id).id
-    monkeypatch.setattr(BlackboardStore, "set_current_step", original)
+    assert BlackboardStore(issue).load_or_create("spec").current_step == "user"
+    monkeypatch.setattr(BlackboardStore, "record_event", original)
     recovered = apply_human_task_payload(
         issue_dir=issue,
         playbook_data=playbook,
@@ -162,6 +163,7 @@ def test_pending_snapshot_recovers_one_result_after_interrupted_transition(
     reopened = HumanTaskRecordStore(issue)
     assert reopened.get_result(task.id).id == result_id
     assert len(reopened.results()) == 1
+    assert BlackboardStore(issue).load_or_create("spec").current_step == "plan"
 
 
 def test_saved_answer_does_not_override_changed_machine_contract(pending_owner):
