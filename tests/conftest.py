@@ -45,6 +45,11 @@ def isolated_pricing_cache(monkeypatch, tmp_path):
     monkeypatch.setenv("CAFE_PRICING_CACHE_DIR", str(tmp_path / "pricing-cache"))
 
 
+@pytest.fixture(autouse=True)
+def isolated_dashboard_state(monkeypatch, tmp_path):
+    monkeypatch.setenv("CAFE_DASHBOARD_STATE_DIR", str(tmp_path / "dashboard-state"))
+
+
 @pytest.fixture
 def isolated_global_catalog(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Give catalog journeys their own global layer and lock, with real builtins."""
