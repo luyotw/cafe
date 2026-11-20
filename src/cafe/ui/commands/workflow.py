@@ -24,6 +24,7 @@ from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.issue_resolution import ActiveIssueResolutionError, resolve_active_issue
 from cafe.core.phase_state_mixin import next_runnable_iteration_number
 from cafe.core.playbook import resolve_step_behavior
+from cafe.core.task_continuation import ContinuationBinding, ContinuationSupersededError
 from cafe.core.types import CriticalPhaseError
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
@@ -672,8 +673,12 @@ def workflow(
             "requires --conversation-locale-source"
         ),
     ),
+    context: typer.Context = None,
 ) -> None:
     """Run playbook workflow using the new generic runner."""
+    saved_continuation = context.obj if context is not None and isinstance(
+        context.obj, ContinuationBinding
+    ) else None
     user_input = _normalize_cli_user_input(user_input)
     execution_context_file = execution_context_file if isinstance(execution_context_file, Path) else None
     execution_context = None
@@ -729,6 +734,11 @@ def workflow(
             raise typer.Exit(1)
         issue_name = resolved.issue_name
         issue_dir = cafe_dir / "issues" / issue_name
+        if saved_continuation is not None and (
+            saved_continuation.request.issue != issue_name
+            or not saved_continuation.request.matches_workflow(BlackboardStore(issue_dir))
+        ):
+            raise ContinuationSupersededError("The continuation's workflow has changed")
         if not dry_run:
             launch_store = WorkerLaunchStore(issue_dir)
             has_internal_worker_context = bool(internal_worker_id or internal_worker_token)
@@ -845,18 +855,24 @@ def workflow(
                 raise typer.Exit(1)
             console.print(f"[green]Workflow background worker started[/green] pid={pid}")
 
-        tty_interactive = sys.stdin.isatty() or os.getenv("CAFE_FORCE_INTERACTIVE") == "1"
+        tty_interactive = saved_continuation is None and (
+            sys.stdin.isatty() or os.getenv("CAFE_FORCE_INTERACTIVE") == "1"
+        )
         generic_phase = GenericPhase(SkillLoader())
 
         entry_point = str(
             playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))
         )
         resume_store = BlackboardStore(issue_dir)
-        resume_blackboard = resume_store.load_or_create(
-            entry_point,
-            playbook_id=str(playbook_data["playbook"]["id"]),
-            supplied_locale=supplied_locale,
-            playbook_conversation_locale=playbook_data["playbook"].get("conversation_locale"),
+        resume_blackboard = (
+            saved_continuation.read_current(resume_store)
+            if saved_continuation is not None
+            else resume_store.load_or_create(
+                entry_point,
+                playbook_id=str(playbook_data["playbook"]["id"]),
+                supplied_locale=supplied_locale,
+                playbook_conversation_locale=playbook_data["playbook"].get("conversation_locale"),
+            )
         )
         if requested_locale_change is not None:
             # A deliberate language change is its own operation on the owning
@@ -980,6 +996,29 @@ def workflow(
                 for event in result.events:
                     _print_workflow_event_display(event)
             return result
+
+        def make_runtime() -> BlackboardWorkflowRuntime:
+            from cafe.workflow_execution.automatic import automatic_executor_registry
+
+            return BlackboardWorkflowRuntime(
+                issue_dir=issue_dir,
+                automatic_registry=automatic_executor_registry(),
+                playbook=playbook_data,
+                executor=wrapped_executor,
+                execution_context=execution_context,
+                workflow_event_callback=(
+                    lambda event: dispatch_workflow_event_callback(
+                        callback_binding, event, cwd=Path.cwd(),
+                    )
+                ) if callback_binding is not None else None,
+                **({"continuation": saved_continuation} if saved_continuation is not None else {}),
+            )
+
+        if saved_continuation is not None:
+            # The task command owns the host and the exact entry handoff.
+            runner = make_runtime()
+            runner.run()
+            return
 
         pending_start_step = start_step
         explicit_start_step_pending = start_step is not None
@@ -1274,28 +1313,12 @@ def workflow(
                 f"[dim]Workflow context[/dim] playbook={playbook_data['playbook']['id']} step={effective_start_step}"
             )
 
-            from cafe.workflow_execution.automatic import automatic_executor_registry
-            runner = BlackboardWorkflowRuntime(
-                issue_dir=issue_dir,
-                automatic_registry=automatic_executor_registry(),
-                playbook=playbook_data,
-                executor=wrapped_executor,
-                execution_context=execution_context,
-                workflow_event_callback=(
-                    (
-                        lambda event: dispatch_workflow_event_callback(
-                            callback_binding,
-                            event,
-                            cwd=Path.cwd(),
-                        )
-                    )
-                    if callback_binding is not None
-                    else None
-                ),
-            )
+            runner = None
 
             def run_composed_workflow():
-                nonlocal pending_start_step
+                nonlocal pending_start_step, runner
+                if runner is None:
+                    runner = make_runtime()
                 requested_start = pending_start_step
                 pending_start_step = None
                 return runner.run(start_step=requested_start, single_step=single_step)
@@ -1419,6 +1442,8 @@ def workflow(
                         pending_start_step = recovery_step
                         continue
             return
+    except ContinuationSupersededError:
+        raise
     except CriticalPhaseError as e:
         worker_exit_status = "failed"
         worker_exit_error = type(e).__name__

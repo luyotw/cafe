@@ -367,6 +367,24 @@ one UTC `captured_at` boundary. Incomplete Manager evidence is a known subtotal,
 never a complete total. Active/unpersisted usage, including the report's response,
 is outside the cutoff. Existing records need no invocation completion timestamp.
 
+For Codex App Manager sessions, the yes report also reads the exact bound local
+journal. It prices ended turns when one accepted callback uniquely identifies the
+turn and the request counters reconcile. If you can verify that an entire direct
+conversation turn belongs to this workflow, pass its exact `--manager-turn-id
+<TURN-ID>` with `--choice yes`. Repeat the option for each verified turn. Leave
+mixed or uncertain turns out of the selection. Before pricing the selected
+turns, the yes report uses the existing rate store to refresh when due, honoring
+`CAFE_PRICING_AUTO_UPDATE=0` and the store's retry interval. A failed refresh
+keeps the last valid card and is shown in the report. Previously recorded
+estimates retain their original rates. Turn selections and reconstructed usage
+exist only in the report, with no accounting-store or workflow-state writes.
+The worker-only progress footer uses its existing sources.
+
+The same report includes verified Codex subagent usage in the Manager subtotal.
+The helper follows recorded spawns and requires child journal ancestry, a
+completed child turn linked to an attributed Manager turn, and reconciled
+per-request counters. It reports known child costs and unverified coverage.
+
 After interrupted preference/report presentation, reconcile the existing
 closeout/session evidence and the human answer. Re-offer a still-unanswered
 preference through the normal human conversation, never infer yes and never

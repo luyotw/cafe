@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including passive supervision, bounded recovery, and declarative repair when execution leaves its safe operating envelope.
-metadata: {version: 1.76.3}
+metadata: {version: 1.76.6}
 ---
 
 # Use CAFE Workflow
@@ -31,7 +31,7 @@ read the union once; do not preload the rest.
 | Handle a HumanTask, confirmation, clarification, permission, alignment, or scheduled proactive review | `references/handoffs_and_alignment.md` and `references/strategic_context.md`; also read the proactive-review section of `references/running_workflow.md` when a configured review is due |
 | Receive an issue split proposal from any step, or start/resume linked work | `references/issue_decomposition.md`, `references/strategic_context.md`, and `references/handoffs_and_alignment.md` |
 | Diagnose or repair a playbook, phase, Manager, or runtime defect | `references/diagnosis_and_repair.md` plus the reference for the failing boundary |
-| Consider direct closeout, verify completion, handle a Git delivery conflict, or handle follow-up work | `references/completion_and_authority.md` |
+| Consider direct closeout, verify completion, report closeout costs, handle a Git delivery conflict, or handle follow-up work | `references/completion_and_authority.md` |
 | Present the initial kickoff | Compact: `references/compact_kickoff.md`; full: `references/kickoff.md`; both: `references/workflow_progress.md` |
 | Render any other user-visible question, progress, error, or completion reply | `references/workflow_progress.md` |
 | Measure fresh-versus-resumed correction efficiency | `references/correction_ab_experiment.md` |

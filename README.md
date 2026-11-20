@@ -351,6 +351,10 @@ cafe task inspect 7fe1a9e8-66fa-4df2-88d4-cd6af87fae43
 cafe task inspect 7fe1a9e8-66fa-4df2-88d4-cd6af87fae43 --json
 ```
 
+The JSON inspection includes a versioned snapshot of the pending task's dynamic
+questions or reviewed output when applicable. See the
+[HumanTask snapshot contract and example](docs/human-task-runtime.md#inspect-and-submit-a-task-snapshot).
+
 Completion is interactive when no result option is supplied. Automation may
 provide the task's declared response as JSON directly or in a file:
 
@@ -578,7 +582,7 @@ Versioning policy, while roadmap stages describe product direction independently
 - [Roadmap](docs/roadmap.md)
 - [Versioning policy](docs/versioning.md)
 - [Changelog](CHANGELOG.md)
-- [Latest release notes](docs/releases/v0.12.3.md)
+- [Latest release notes](docs/releases/v0.13.0.md)
 - [Strategic positioning](docs/positioning.md)
 - [Known runtime constraints](docs/known-constraints.md)
 - [Cost accounting and automatic OpenAI rate updates](docs/cost-accounting.md)

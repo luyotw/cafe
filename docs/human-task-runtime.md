@@ -66,6 +66,126 @@ For an explicit supervisor override, the TaskResult and Blackboard completion
 event retain both the declared and selected continuations, and an optional work
 report is delivered to the selected phase.
 
+## Inspect and submit a task snapshot
+
+Run `cafe task inspect <task-id> --json` from the repository. `data.task`
+contains the existing task contract and identifies the workflow, source step,
+and iteration. `data.snapshot` has `schema_version: 1`, `status`, and `version`.
+Treat `version` as an opaque value and keep it alongside the data you display.
+
+| Snapshot field | Contract |
+| --- | --- |
+| `status` | `available` gives a usable version. `unavailable` gives a null version when the task is stale, terminal, or missing required data. `not_applicable` gives a null version for tasks with a separate approval protocol. |
+| `questions` | When `available`, `items` is an ordered array of `{id, title, options, multi_select}` for a task that uses XML questions. Inline questions on other tasks are in `data.task.expected_result`. |
+| `review_artifact` | When `available`, contains the issue-relative `path`, UTF-8 `text`, `sha256` of the file bytes, and `registered_version` (an integer if registered, otherwise null). It describes the producing iteration's `output.md` for output review and no-change decisions. |
+| `reason` | When the task has no inspectable context, this code describes the reason and the two component fields may be absent. |
+
+Each component reports `available`, `unavailable`, or `not_applicable`. CAFE
+reads `questions.xml` and `output.md` from the task's producing iteration.
+Each file must be a regular file with a single link and at most 1 MiB.
+A registered review artifact must match the producing step and path, along
+with its recorded content digest when present. Missing, invalid, and unsafe
+inputs make the relevant component unavailable. Capability and delivery
+approvals use their existing review contracts.
+
+To submit a versioned reply, add `snapshot_version` to the task's JSON result
+and pass it to `cafe task complete <task-id> --result` or `--result-file`.
+You can also include `workflow_id` from `data.task`. CAFE checks the snapshot
+under the durable task and workflow state transactions. CAFE validates the
+response with the normal HumanTask policy and rechecks the owning handoff and
+input bytes immediately before publishing the result. The result retains
+`payload.reviewed_snapshot` with its version, handoff identity, question
+digest, and the exact reviewed output when present. Later edits to the source
+file do not change those recorded bytes. The versioned route requires the
+current decision mapping to agree with the saved task. Omitting
+`snapshot_version` uses the existing response path.
+
+The JSON error envelope includes `error.code` and `error.recovery`. A rejected
+reply leaves the workflow paused if this is still its active handoff.
+
+| Error code | Client action |
+| --- | --- |
+| `stale_snapshot` | Inspect again and display the refreshed version before asking for a new reply. If the continuation contract changed, the workflow must restore it or issue a new task. |
+| `snapshot_unavailable` | Wait for the owning workflow to restore the task data, then inspect again. Use the declared approval protocol for special approval tasks. |
+| `stale_task`, `task_not_pending` | List pending tasks and inspect the current task. A replay cannot advance the workflow again. |
+| `invalid_response` | Correct the result using the declared response contract. |
+
+For a pending spec clarification task whose question IDs are `scope` and
+`platforms`, run the following commands with its ID in `TASK_ID`. The first
+command captures the version and the displayed data in a single response.
+After reviewing the displayed questions, supply the participant's answers.
+
+```bash
+cafe task inspect "$TASK_ID" --json > task.json
+jq -e '.data.snapshot | select(.status == "available") | .questions.items' task.json
+jq -e 'select(.data.snapshot.questions.status == "available") |
+       {snapshot_version: .data.snapshot.version, workflow_id: .data.task.workflow_id,
+        answers: {scope: "Small", platforms: ["CLI", "API"]}}' task.json > reply.json
+cafe task complete "$TASK_ID" --result-file reply.json --no-resume --json
+```
+
+For an output review, display `.data.snapshot.review_artifact.text` and use the
+task's declared `decision` in place of `answers`. To reproduce the clarification,
+review, stale submission, and replay journeys with a local test workflow, run
+`python -m pytest tests/integration/test_task_inbox_workflow.py -k external --no-cov`.
+
+## Continue a saved task result
+
+Save the response with `cafe task complete <task-id> --no-resume --json`. Keep
+`data.task.issue`, `data.task.workflow_id`, `data.task.id`, and
+`data.task.result.id` together. If the completion reply is lost, recover those
+fields with `cafe task inspect <task-id> --json` once the result is visible.
+Submitting the response and running its continuation are separate operations.
+
+```bash
+cafe task continuation "$TASK_ID" --issue "$ISSUE" \
+  --workflow-id "$WORKFLOW_ID" --result-id "$RESULT_ID" --json
+cafe task continuation "$TASK_ID" --issue "$ISSUE" \
+  --workflow-id "$WORKFLOW_ID" --result-id "$RESULT_ID" --resume --json
+```
+
+The first command reads durable state. The second takes the same advancement
+lock as ordinary CLI and background workers and enters the existing runtime
+from the exact projected handoff in the foreground without prompting. If a
+new handoff is published before dispatch acquires the handoff lease, the bound
+resume leaves the new handoff available for its owning workflow. After
+admission, a competing durable handoff update is rejected while the dispatch
+owns publication. The publisher can retry after the dispatch exits.
+It can also finish projecting a saved result when its original user handoff
+still owns the workflow. Use the same identifiers after a lost reply.
+
+The JSON envelope has `operation: "continuation"`. A successful observation
+returns the four identifiers and `data.status`. The process exit code
+indicates whether the command returned an observation or an error.
+
+| Status | Meaning and client action |
+| --- | --- |
+| `pending` | The result is saved and still owns its original or projected handoff. Use the bound `--resume` command to try to advance it. |
+| `unknown` | CAFE could not reconcile the evidence, or a worker may still own execution. Inspect again after the worker stops. If the state remains ambiguous, use the owning workflow's recovery path. |
+| `advanced` | CAFE found a terminal result projection, a downstream transition, workflow completion, or a new declared HumanTask at the continuation phase. A repeated `--resume` returns this status without running the workflow again. |
+| `retryable_failure` | The bound resume failed and CAFE verified that the saved handoff is still current. Address the cause and retry with the same identifiers. |
+| `stale_workflow` | The issue now points to a different workflow ID. Retire this request. |
+
+A launch acknowledgement, worker PID, or phase start event shows activity.
+Use the durable outcome above to confirm advancement. The command returns
+`result_mismatch` for an incorrect task or result identity on the live workflow.
+Capability approvals and interrupted delivery approval projections use their
+existing protocols. An already projected result from a CAFE version that did
+not record task, result, and handoff identity together may report `unknown`.
+
+The local journeys use a real workflow, task and audit store, and process lock.
+The background journey discards the launch reply, observes the worker before it
+enters the runtime, and verifies its exit status and the next HumanTask. Other
+journeys cover an overlapping ordinary CLI resume, a replaced workflow,
+competing handoff publication before and during dispatch, and a retryable
+startup failure.
+Recovery tests stop before the projection audit record and after the record
+commits but before the workflow checkpoint.
+
+```bash
+python -m pytest tests/integration/test_task_inbox_workflow.py -k saved_result --no-cov
+```
+
 ## Migration and compatibility
 
 Blackboard schema 1 did not contain a workflow id. On first load, CAFE assigns

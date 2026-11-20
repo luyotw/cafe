@@ -31,10 +31,13 @@ class WorkflowHost:
         self.issue_dir = Path(issue_dir)
         self.advancement_lock_path = self.issue_dir / ".workflow-advancement.lock"
 
-    def run(self, runtime: Callable[[], Any], *, hosting: str) -> HostRunResult:
+    def run(
+        self, runtime: Callable[[], Any], *, hosting: str,
+        preflight: Callable[[], None] | None = None,
+    ) -> HostRunResult:
         if hosting != "foreground":
             raise ValueError("hosting must be 'foreground'")
-        return self.run_worker(runtime, hosting=hosting)
+        return self.run_worker(runtime, hosting=hosting, preflight=preflight)
 
     def run_worker(
         self,
@@ -42,6 +45,7 @@ class WorkflowHost:
         *,
         worker_id: str | None = None,
         hosting: str = "background",
+        preflight: Callable[[], None] | None = None,
     ) -> HostRunResult:
         if hosting not in {"foreground", "background"}:
             raise ValueError("hosting must be 'foreground' or 'background'")
@@ -51,6 +55,8 @@ class WorkflowHost:
 
         store = WorkerLaunchStore(self.issue_dir)
         with advancement_execution_lock(self.issue_dir, reuse_existing=False):
+            if preflight is not None:
+                preflight()
             store.reconcile_abandoned()
             control = InterventionControl(self.issue_dir, worker_id or "")
             control.ensure_no_pending()

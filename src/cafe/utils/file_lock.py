@@ -94,22 +94,46 @@ class WorkerAlreadyRunningError(RuntimeError):
     """Another live worker owns workflow advancement."""
 
 
-_advancement_scopes = threading.local()
+class HandoffInUseError(RuntimeError):
+    """A bound workflow dispatch owns handoff publication."""
+
+
+_execution_scopes = threading.local()
+
+
+def advancement_execution_lock(issue_dir: Path, *, reuse_existing: bool = True):
+    """Own workflow advancement for this issue."""
+    path = Path(issue_dir).resolve() / ".workflow-advancement.lock"
+    return _execution_lock(
+        path, reuse_existing=reuse_existing,
+        busy=WorkerAlreadyRunningError("workflow advancement is owned by another worker"),
+    )
+
+
+def handoff_execution_lock(issue_dir: Path):
+    """Serialize use of an admitted handoff with durable handoff publication."""
+    path = Path(issue_dir).resolve() / ".workflow-handoff.lock"
+    return _execution_lock(
+        path, reuse_existing=True,
+        busy=HandoffInUseError("workflow handoff is in use by a saved-result continuation"),
+    )
 
 
 @contextmanager
-def advancement_execution_lock(issue_dir: Path, *, reuse_existing: bool = True):
-    """Reuse only this thread's actual live process-lock handle for this issue."""
-    path = Path(issue_dir).resolve() / ".workflow-advancement.lock"
-    scopes = getattr(_advancement_scopes, 'handles', {})
+def _execution_lock(path: Path, *, reuse_existing: bool, busy: RuntimeError):
+    """Reuse only this thread's actual live process-lock handle for this path."""
+    scopes = getattr(_execution_scopes, "handles", {})
     existing = scopes.get(path)
-    if reuse_existing and existing is not None and existing[0] == os.getpid() and not existing[1].closed:
+    if (
+        reuse_existing and existing is not None
+        and existing[0] == os.getpid() and not existing[1].closed
+    ):
         yield False
         return
     handle = _try_advancement_process_lock(path)
     if handle is None:
-        raise WorkerAlreadyRunningError("workflow advancement is owned by another worker")
-    _advancement_scopes.handles = scopes
+        raise busy
+    _execution_scopes.handles = scopes
     scopes[path] = (os.getpid(), handle)
     try:
         yield True
