@@ -85,6 +85,7 @@ from cafe.core.route_catalog import (
     build_route_projection,
     evaluate_route_readiness,
     normalize_route_target,
+    route_choices,
     select_route_label,
 )
 from cafe.core.session_continuation import (
@@ -117,8 +118,10 @@ from cafe.core.todo import (
 )
 from cafe.core.types import AgentCLI, AgentConfig, CliEntry
 from cafe.core.workflow_feedback import (
+    WorkflowFeedbackError,
     WorkflowFeedbackLedger,
     feedback_todo_mappings,
+    supervisor_feedback_receipts,
 )
 from cafe.core.workflow_models import BatonRejected, StepExecutionResult
 from cafe.core.workflow_tools import normalize_allowed_tools, runtime_granted_tools
@@ -4348,6 +4351,88 @@ class GenericWorkflowStepExecutor(Phase):
         return previous, identity
 
     @staticmethod
+    def _supervisor_correction_todo(issue_dir, state, event, artifacts, playbook):
+        """Read the exact saved supervisor request before producer-artifact inference."""
+        if issue_dir is None or state.current_step not in route_choices(
+            playbook, current_step=event.step, intent="manual_handoff",
+        ).authorized:
+            raise ValueError("Correction Todo supervisor route is not authorized")
+        bindings = [
+            binding for binding in playbook["steps"][event.step].get("human_tasks", ())
+            if binding.get("task_id") == event.data.get("task_id")
+            and binding.get("trigger") == event.data.get("trigger")
+        ]
+        if len(bindings) != 1 or not isinstance(bindings[0].get("feedback_delivery"), Mapping):
+            raise ValueError("Correction Todo supervisor task binding is ambiguous")
+        route = bindings[0]["feedback_delivery"]
+        if not all(isinstance(route.get(key), str) and route[key] for key in (
+            "artifact", "source_kind", "todo_source", "todo_id_prefix",
+        )):
+            raise ValueError("Correction Todo supervisor route is incomplete")
+        entry = artifacts.get(route["artifact"])
+        ledger = WorkflowFeedbackLedger(issue_dir)
+        if entry is None or (issue_project_root(issue_dir) / entry.path).resolve() != ledger.path.resolve():
+            raise ValueError("Correction Todo supervisor artifact does not bind its ledger")
+        records = HumanTaskRecordStore(issue_dir)
+        completed = datetime.fromisoformat(event.timestamp)
+        previous = next((
+            candidate for candidate in reversed(state.events[:state.events.index(event)])
+            if candidate.event_type == "human_task_completed" and candidate.step == event.step
+            and candidate.data.get("task_id") == event.data.get("task_id")
+            and candidate.data.get("trigger") == event.data.get("trigger")
+        ), None)
+        tasks = {
+            task.id: task for task in records.tasks()
+            if task.workflow_id == state.workflow_id and task.step == event.step
+            and task.trigger == event.data.get("trigger") and task.policy_id == event.data.get("task_id")
+        }
+        results = [
+            result for result in records.results()
+            if result.task_id in tasks and result.workflow_id == state.workflow_id
+            and datetime.fromisoformat(result.completed_at) <= completed
+            and (previous is None or datetime.fromisoformat(result.completed_at)
+                 > datetime.fromisoformat(previous.timestamp))
+        ]
+        if not results:
+            raise ValueError("Correction Todo supervisor result is missing")
+        result = max(results, key=lambda item: datetime.fromisoformat(item.completed_at))
+        if sum(datetime.fromisoformat(item.completed_at) == datetime.fromisoformat(result.completed_at)
+               for item in results) != 1:
+            raise ValueError("Correction Todo supervisor result is ambiguous")
+        task = tasks[result.task_id]
+        if (
+            task.status is not HumanTaskStatus.COMPLETED or task.superseded_by_task_id is not None
+            or result.source != event.data.get("source")
+            or ("human_task_id" in event.data and task.id != event.data["human_task_id"])
+            or ("result_id" in event.data and result.id != event.data["result_id"])
+            or ("declared_to_step" in event.data
+                and result.payload.get("declared_continuation") != event.data["declared_to_step"])
+        ):
+            raise ValueError("Correction Todo supervisor result does not match its completion")
+        identity = f"{route['source_kind']}:{event.step}:{task.policy_id}:{task.iteration}"
+        try:
+            receipts = supervisor_feedback_receipts(
+                issue_dir, playbook=playbook, workflow_id=state.workflow_id,
+                target_step=state.current_step,
+                entries=[item for item in ledger.load() if item.source_identity == identity],
+            )
+        except WorkflowFeedbackError as exc:
+            raise ValueError(f"Correction Todo supervisor receipt is invalid: {exc}") from exc
+        receipt = receipts.get(identity, {})
+        if receipt.get("task_id") != task.id or receipt.get("result_id") != result.id:
+            raise ValueError("Correction Todo supervisor receipt is missing")
+        items = workflow_feedback_todo_items(
+            ledger.path, target_step=state.current_step,
+            source_by_kind={route["source_kind"]: route["todo_source"]},
+            id_prefix_by_kind={route["source_kind"]: route["todo_id_prefix"]},
+            source_identities=(identity,),
+        )
+        return TodoSourceArtifact(
+            artifact=route["artifact"], source=route["todo_source"], path=ledger.path,
+            version=getattr(entry, "version", None), items=items,
+        )
+
+    @staticmethod
     def _add_causal_todo_artifact(
         artifacts: Dict[str, Any],
         state: BlackboardState,
@@ -4415,6 +4500,15 @@ class GenericWorkflowStepExecutor(Phase):
         )
         if delivery_recovery or inbound_feedback:
             from_step = inbound.step
+        if inbound_feedback and inbound.data.get("supervisor_handoff") is True and any(
+            binding.get("task_id") == inbound.data.get("task_id")
+            and binding.get("trigger") == inbound.data.get("trigger")
+            and binding.get("feedback_delivery") is not None
+            for binding in (steps.get(inbound.step, {}) or {}).get("human_tasks", ()) or ()
+        ):
+            return {**artifacts, causal_artifact: GenericWorkflowStepExecutor._supervisor_correction_todo(
+                issue_dir, state, inbound, artifacts, playbook_data,
+            )}
         producer = steps.get(from_step, {})
         direct_artifact = producer.get("output_artifact") if isinstance(producer, Mapping) else None
         selected = artifacts.get(direct_artifact) if isinstance(direct_artifact, str) else None

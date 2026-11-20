@@ -8949,7 +8949,9 @@ def test_runtime_plan_need_permission_pauses_at_user(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _settled_corrective_supervisor_redirect(issue_dir, monkeypatch, *, selected_target=False):
+def _settled_corrective_supervisor_redirect(
+    issue_dir, monkeypatch, *, selected_target=False, producer_route=False,
+):
     from cafe.core.workflow_feedback import WorkflowFeedbackLedger
     from cafe.ui.human_tasks import apply_human_task_payload
 
@@ -8968,12 +8970,17 @@ def _settled_corrective_supervisor_redirect(issue_dir, monkeypatch, *, selected_
     step["on"]["confirm_output"] = "curator"
     step["human_tasks"] = [{
         "trigger": "confirm_output", "task_id": "pr-review",
-        "outcomes": {"fix_now": "curator", "confirm": "consumer"},
+        "outcomes": {"fix_now": "curator", "confirm": "_done"},
         "feedback_delivery": {
             "artifact": "workflow_feedback", "source_kind": "local_review",
             "todo_source": "workflow_feedback", "todo_id_prefix": "WF",
         },
     }]
+    if producer_route:
+        step["behavior"]["feedback_routes"] = {"consumer": {
+            "artifact": "curated_result", "source_kind": "external_note",
+            "todo_source": "review_note", "todo_id_prefix": "REV",
+        }}
     if selected_target:
         import yaml
         from cafe.ui.human_tasks import resolve_step_human_task
@@ -9001,6 +9008,15 @@ def _settled_corrective_supervisor_redirect(issue_dir, monkeypatch, *, selected_
 
     def executor(name, declaration, state):
         if name == "consumer":
+            from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
+
+            prepared = GenericWorkflowStepExecutor._add_causal_todo_artifact(
+                dict(state.artifacts), state,
+                playbook=runtime.playbook, issue_dir=issue_dir,
+            )
+            assert [item.work for item in prepared["causal_todo"].items] == [
+                "Preserve both implementations and fix their integration."
+            ]
             received.extend(ledger.pending(target_step="consumer"))
         result = original(name, declaration, state)
         if name == "curator":
@@ -9033,11 +9049,13 @@ def _settled_corrective_supervisor_redirect(issue_dir, monkeypatch, *, selected_
 
 @pytest.mark.parametrize("legacy_reset", [False, True])
 @pytest.mark.parametrize("selected_target", [False, True])
+@pytest.mark.parametrize("producer_route", [False, True])
 def test_settled_feedback_does_not_block_a_corrective_supervisor_route(
-    tmp_path, monkeypatch, legacy_reset, selected_target,
+    tmp_path, monkeypatch, legacy_reset, selected_target, producer_route,
 ):
     runtime, calls, received, task = _settled_corrective_supervisor_redirect(
-        tmp_path / "settled-corrective-route", monkeypatch, selected_target=selected_target,
+        tmp_path / "settled-corrective-route", monkeypatch,
+        selected_target=selected_target, producer_route=producer_route,
     )
     if legacy_reset:
         runtime.blackboard_store.record_event(runtime.blackboard, "step_reconciliation_failed", {
