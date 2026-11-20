@@ -491,6 +491,7 @@ def _runtime_progress(
             (int(candidate.name.removeprefix("iteration_")), candidate)
             for candidate in step_dir.glob("iteration_*")
             if candidate.name.removeprefix("iteration_").isdigit()
+            and (candidate / "iteration.json").is_file()
         ]
         if not candidates:
             continue
