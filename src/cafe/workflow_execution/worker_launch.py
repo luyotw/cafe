@@ -33,6 +33,9 @@ except ImportError:  # pragma: no cover - unavailable on non-Windows.
     msvcrt = None  # type: ignore[assignment]
 
 
+_ATTEMPTS_HEADER = b'{"attempts":{\n'
+_OBSERVATION_BYTES = 256 * 1024
+
 LAUNCH_RECORD_FILENAME = ".workflow-worker-launches.json"
 _HOST_SESSION_ENVIRONMENT_KEYS = (
     "CODEX_REMOTE_PAYLOAD",
@@ -102,7 +105,7 @@ class WorkerLaunchStore:
     def running_positions(self, workflow_id: str) -> list[dict[str, Any]]:
         """Read recorded worker positions without changing the worker or its lease."""
         positions = []
-        for record in self._read_unlocked(max_bytes=256 * 1024).values():
+        for record in self._read_unlocked(max_bytes=_OBSERVATION_BYTES).values():
             active = record.get("active") or {}
             if (record["status"] == "running" and active.get("workflow_id") == workflow_id
                     and not worker_liveness.worker_abandoned(record)):
@@ -220,15 +223,29 @@ class WorkerLaunchStore:
                 with _file_lock(handle):
                     records = self._read_unlocked()
                     yield records
-                    atomic_write_bytes(
-                        self.path,
-                        json.dumps(
-                            {"attempts": records},
-                            ensure_ascii=False,
-                            sort_keys=True,
-                            separators=(",", ":"),
-                        ).encode("utf-8"),
-                    )
+                    # Keep the same JSON envelope, with live records at the front
+                    # and one complete member per line for bounded provider polls.
+                    ordered = sorted(records.items(), key=lambda item: item[1].get("status") != "running")
+                    rows = (json.dumps(key) + ":" + json.dumps(value, separators=(",", ":"), sort_keys=True)
+                            for key, value in ordered)
+                    atomic_write_bytes(self.path, _ATTEMPTS_HEADER + ",\n".join(rows).encode() + b"\n}}")
+
+    def observe_worker(self, worker_id: str) -> dict[str, Any] | None:
+        """Read one live position without traversing archived workers on the provider drain."""
+        data = read_regular_bytes(self.path, _OBSERVATION_BYTES, prefix=True)
+        if not data.startswith(_ATTEMPTS_HEADER):
+            # Older files have no record boundaries. Only complete bounded snapshots qualify.
+            return self._read_unlocked(max_bytes=_OBSERVATION_BYTES).get(worker_id)
+        key = json.dumps(worker_id).encode() + b":"
+        for line in data[len(_ATTEMPTS_HEADER):].split(b"\n")[:-1]:
+            if line.startswith(key):
+                record = json.loads(line[len(key):].removesuffix(b","))
+                if not isinstance(record, dict) or record.get("worker_id") != worker_id:
+                    raise ValueError("unknown provider worker identity")
+                return record
+        if len(data) == _OBSERVATION_BYTES or not data.endswith(b"\n}}"):
+            raise ValueError("worker position is outside the observation budget")
+        return None
 
     def _read_unlocked(self, *, max_bytes: int | None = None) -> dict[str, Any]:
         if not self.path.exists():

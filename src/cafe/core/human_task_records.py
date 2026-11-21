@@ -17,7 +17,7 @@ try:
 except ImportError:  # pragma: no cover - Windows falls back to the local lock.
     fcntl = None  # type: ignore[assignment]
 
-from cafe.core.packet_io import atomic_write_bytes, canonical_json
+from cafe.core.packet_io import atomic_write_bytes, canonical_json, read_regular_bytes
 
 HUMAN_TASK_RECORD_FILENAME = "human_tasks.json"
 HUMAN_TASK_RECORD_SCHEMA_VERSION = 1
@@ -333,6 +333,27 @@ class _Envelope:
                 result.task_id != task_id or result.workflow_id != self.workflow_id
             ):
                 raise HumanTaskRecordSchemaError("result does not match its task/workflow")
+
+
+def pending_task_positions(issue: Path, workflow: str) -> list[dict[str, str]]:
+    """Bound passive observations independently of the authoritative task-store reader."""
+    try:
+        envelope = json.loads(read_regular_bytes(issue / HUMAN_TASK_RECORD_FILENAME, 256 * 1024))
+    except FileNotFoundError:
+        return []
+    if (not isinstance(envelope, dict) or envelope.get("workflow_id") != workflow
+            or envelope.get("schema_version") != HUMAN_TASK_RECORD_SCHEMA_VERSION
+            or not isinstance(envelope.get("tasks"), list)):
+        raise ValueError("unknown task history")
+    tasks = []
+    for task in envelope["tasks"]:
+        if task["workflow_id"] != workflow:
+            raise ValueError("unknown task owner")
+        if HumanTaskStatus(task["status"]) == HumanTaskStatus.PENDING:
+            tasks.append({key: task[key] for key in ("id", "step", "trigger")})
+            if len(tasks) > 4:
+                raise ValueError("incomplete pending task projection")
+    return tasks
 
 
 class HumanTaskRecordStore:

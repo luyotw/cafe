@@ -1,6 +1,7 @@
 """A hosted provider can outlive its meaningful progress between handoffs."""
 
 import sys
+from pathlib import Path
 import time
 
 import pytest
@@ -12,7 +13,7 @@ from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.workflow_execution.workflow_hosting import WorkflowHost
 
 
-@pytest.mark.parametrize("activity", ["repeat", "quiet", "advance", "checklist"])
+@pytest.mark.parametrize("activity", ["repeat", "quiet", "advance", "checklist", "history", "worker_history", "pending"])
 def test_host_observes_provider_deadline_before_next_handoff(tmp_path, monkeypatch, activity):
     from cafe.agents import executor
 
@@ -45,8 +46,17 @@ for i in range(16):
     time.sleep(.1)
 print('complete', flush=True)
 """
+        if activity in {"history", "pending"}:
+            from cafe.core.human_task_records import HumanTaskRecordStore
+            records = HumanTaskRecordStore(issue)
+            task = records.materialize(workflow_id=runtime.blackboard.workflow_id, step=step,
+                iteration=1, trigger="confirm_output", policy_id="prior", prompt="Earlier decision",
+                expected_result={}, continuations={}, assignee_type="user")
+            if activity == "history":
+                records.complete(workflow_id=task.workflow_id, task_id=task.id,
+                                 payload={"feedback": "x" * (256 * 1024)}, source="interactive")
         output.write_text("## Todo Progress\n")
-        output.with_name("checklist.md").write_text("[ ] First check\n[ ] Second check\n[ ] Third check\n")
+        output.with_name("checklist.md").write_text("[ ] Verify result\n  first source\n[ ] Verify result\n  second source\n[ ] Verify result\n  third source\n")
         AgentExecutor(AgentConfig(name="fixture", cli=AgentCLI.CLAUDE))._execute_streaming_process(
             [sys.executable, "-c", script, activity, str(output)], "fixture"
         )
@@ -58,15 +68,27 @@ print('complete', flush=True)
             step: {"skill": "fixture", "on": {"await_agent": "_done"}}}},
         executor=execute, workflow_event_callback=events.append,
     )
+    if activity == "worker_history":
+        from cafe.workflow_execution.worker_launch import WorkerLaunchStore
+        store = WorkerLaunchStore(issue)
+        with store._locked_records() as records:
+            for i in range(1400):
+                key = f"prior-{i}"
+                records[key] = {"worker_id": key, "status": "exited", "error_code": "x" * 170}
+        assert store.path.stat().st_size > 256 * 1024
     start = time.monotonic()
     WorkflowHost(issue).run(runtime.run, hosting="foreground")
     diagnostics = [e for e in events if e["event_type"] == "worker_progress_overdue"]
-    assert len(diagnostics) == (0 if activity in ("advance", "checklist") else 1)
+    assert len(diagnostics) == (0 if activity in ("advance", "checklist", "pending") else 1)
     if diagnostics:
         diagnostic, = diagnostics
         assert diagnostic["step"] == step and diagnostic["worker_id"]
         assert diagnostic["elapsed_seconds"] >= diagnostic["wait_seconds"] == 1
         assert time.monotonic() - start < 8
+        if activity == "worker_history":
+            assert not diagnostic.get("reason")
+        if activity == "history":
+            assert diagnostic.get("reason") == "progress_ownership_unverified"
 
 
 def test_identical_item_cannot_renew_or_duplicate_elapsed_diagnostic(tmp_path):
@@ -114,3 +136,21 @@ def test_new_checkboxes_cannot_extend_the_declared_review_work(tmp_path):
     checklist.write_text(checklist.read_text().replace("[ ] Observe", "[x] Observe"))
     now[0] = 10
     assert watch.due(10)["progress_source"] == "worker_start"
+
+
+def test_polling_active_worker_does_not_read_archived_records(tmp_path, monkeypatch):
+    from cafe.workflow_execution.intervention import InterventionControl
+
+    control = InterventionControl(tmp_path, "active")
+    store = control.store
+    with store._locked_records() as records:
+        for i in range(1400):
+            records[str(i)] = {"worker_id": str(i), "status": "exited", "error_code": "x" * 170}
+        records["active"] = {"worker_id": "active", "status": "running"}
+
+    original = Path.read_text
+    def bounded_read(path, *args, **kwargs):
+        assert path != store.path, "unrestricted worker history read during provider poll"
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "read_text", bounded_read)
+    control.check()

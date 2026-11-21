@@ -30,6 +30,7 @@ from cafe.manager.costs import accounted_call
 from cafe.constraints import execution_context, numeric_limit
 from cafe.core.audit_events import AuditEventStore
 from cafe.core.conversation_locale import DEFAULT_CONVERSATION_LOCALE
+from cafe.core.human_task_records import pending_task_positions
 from cafe.core.human_task_notifications import (
     build_workflow_callback_failure_message,
     load_human_task_notification_settings,
@@ -1752,32 +1753,23 @@ def _callback_to_step(event: dict[str, Any], *, repository_root: Path) -> str | 
     return None
 
 
-def _recent_pending_tasks(issue, workflow):
-    from cafe.core.human_task_records import (
-        HUMAN_TASK_RECORD_FILENAME, HUMAN_TASK_RECORD_SCHEMA_VERSION, HumanTaskStatus,
-    )
+def _open_todos(issue, root, artifact):
     from cafe.core.packet_io import read_regular_bytes
+    from cafe.core.todo import parse_todo_list
 
-    try:
-        envelope = json.loads(read_regular_bytes(issue / HUMAN_TASK_RECORD_FILENAME, MAX_CALLBACK_INPUT_BYTES))
-    except FileNotFoundError:
-        return []
-    if (not isinstance(envelope, dict) or envelope.get("workflow_id") != workflow
-            or envelope.get("schema_version") != HUMAN_TASK_RECORD_SCHEMA_VERSION
-            or not isinstance(envelope.get("tasks"), list)):
-        raise ValueError("unknown task history")
-    tasks = []
-    for task in envelope["tasks"]:
-        if task["workflow_id"] != workflow:
-            raise ValueError("unknown task owner")
-        if HumanTaskStatus(task["status"]) == HumanTaskStatus.PENDING:
-            tasks.append({key: task[key] for key in ("id", "step", "trigger")})
-            if len(tasks) > 4:
-                raise ValueError("incomplete pending task projection")
-    return tasks
+    path = (root / artifact["path"]).resolve()
+    if not path.is_relative_to(issue.resolve()):
+        raise ValueError("correction evidence is outside its issue")
+    content = read_regular_bytes(path, MAX_CALLBACK_INPUT_BYTES)
+    if hashlib.sha256(content).hexdigest() != artifact["content_sha256"]:
+        raise ValueError("correction evidence changed")
+    document = content.decode()
+    if not any(line.strip() == "## Todo List" for line in document.splitlines()):
+        return frozenset()
+    return frozenset(item.fingerprint for item in parse_todo_list(document) if not item.checked)
 
 
-def _recurring_result(transitions, current):
+def _recurring_result(transitions, current, read_todos):
     if not current:
         return []
     data = current["data"]
@@ -1786,6 +1778,7 @@ def _recurring_result(transitions, current):
     if not digest:
         return []
     matches = []
+    unresolved = None
     for record in reversed(transitions):
         if record["sequence"] > current["sequence"]:
             continue
@@ -1793,9 +1786,19 @@ def _recurring_result(transitions, current):
         if (prior.get("from"), prior.get("to")) != (data.get("from"), data.get("to")):
             continue
         source = prior.get("source_artifact") or {}
-        if (source.get("name"), source.get("content_sha256")) != (artifact.get("name"), digest):
+        if source.get("name") != artifact.get("name"):
             break
+        if source.get("content_sha256") != digest:
+            if not source.get("path") or not artifact.get("path"):
+                break
+            if unresolved is None:
+                unresolved = read_todos(artifact)
+            unresolved = unresolved.intersection(read_todos(source))
+            if not unresolved:
+                break
         matches.append(record)
+        if len(matches) == 4:
+            break
     return list(reversed(matches[:4])) if len(matches) > 1 else []
 
 
@@ -1831,10 +1834,16 @@ def _supervision(event, root, event_target):
                 and r["data"].get("step") == event["step"] and event.get("reason")
                 and r["data"].get("reason") == event["reason"]]
     if event.get("event_type") == "phase_terminal":
-        failures = _recurring_result(transitions, current)
+        todo_cache = {}
+        def read_todos(artifact):
+            key = (artifact["path"], artifact["content_sha256"])
+            if key not in todo_cache:
+                todo_cache[key] = _open_todos(issue, root, artifact)
+            return todo_cache[key]
+        failures = _recurring_result(transitions, current, read_todos)
         if not failures and current != origin:
-            failures = _recurring_result(transitions, origin)
-    tasks = _recent_pending_tasks(issue, workflow)
+            failures = _recurring_result(transitions, origin, read_todos)
+    tasks = pending_task_positions(issue, workflow)
     workers = WorkerLaunchStore(issue).running_positions(workflow)
     worker = workers[0] if len(workers) == 1 else None
     decision = "inspect"

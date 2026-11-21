@@ -3857,9 +3857,17 @@ def test_dispatch_explains_current_owner_and_preserves_decisions(tmp_path, monke
             state.handoff_contract = handoff
             edge = {"from": source, "to": handoff.to_step}
             if loop:
+                result = "New unresolved work" if situation == "changed_result" and i == 2 else "Same finding"
+                content = (f"# Baseline {i}\n\n## Todo List\n"
+                           f"- [ ] `BLK-001` — Source: `review` — Work: {result}"
+                           " — Closure: Complete the check — Evidence: Observed failure\n").encode()
+                path = issue / source / f"iteration_{i + 1:03d}" / "output.md"
+                path.parent.mkdir(parents=True)
+                path.write_bytes(content)
                 edge.update(transition_intent="manual_handoff" if source == "review" else "await_agent",
                             source_artifact={"name": "verdict", "updated_by": source,
-                                "content_sha256": ("b" if situation == "changed_result" and presented else "a") * 64})
+                                "path": str(path.relative_to(tmp_path)),
+                                "content_sha256": hashlib.sha256(content).hexdigest()})
             store.record_event(state, "transition", edge, baton_contract=handoff)
             current_control().position(state, {target: {}})
             payload = {"workflow_id": state.workflow_id, "issue": issue.name,

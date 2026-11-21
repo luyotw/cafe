@@ -15,14 +15,21 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 
-def read_regular_bytes(path: Path, limit: int) -> bytes:
+def read_regular_bytes(path: Path, limit: int, *, prefix: bool = False) -> bytes:
     """Bound reads at the descriptor, including when the path changes during observation."""
     flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
     with os.fdopen(os.open(path, flags), "rb") as stream:
         before = os.fstat(stream.fileno())
-        if not stat.S_ISREG(before.st_mode) or before.st_size > limit:
+        if not stat.S_ISREG(before.st_mode) or (not prefix and before.st_size > limit):
             raise ValueError("expected a bounded regular file")
-        data = stream.read(limit + 1)
+        data = stream.read(limit if prefix else limit + 1)
+        if prefix:
+            # A publisher may atomically replace the path during a poll. The
+            # open descriptor still refers to one complete prior snapshot.
+            after = os.fstat(stream.fileno())
+            if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+                raise ValueError("file changed during bounded observation")
+            return data
         after = path.lstat()
         if (len(data) > limit or not os.path.samestat(before, after)
                 or before.st_ctime_ns != after.st_ctime_ns):

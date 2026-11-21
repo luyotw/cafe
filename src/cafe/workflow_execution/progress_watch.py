@@ -8,7 +8,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from cafe.core.checklist import _CHECKBOX_LINE
+from cafe.core.checklist import _checklist_item_blocks
 from cafe.core.packet_io import read_regular_bytes
 
 _COMPLETED = re.compile(r"^### ([A-Za-z][\w-]*)\s*\n- Status: completed\s*$", re.MULTILINE)
@@ -48,13 +48,12 @@ class ProgressWatch:
         completed = {("completed_todo", key) for key in _COMPLETED.findall(ledger.split("\n## ", 1)[0])} if section else set()
         checklist = self._changed_text(self.output.with_name("checklist.md"))
         if checklist:
-            items = [(match["body"].strip(), match["state"]) for line in checklist.splitlines()
-                     if (match := _CHECKBOX_LINE.match(line))]
+            items = _checklist_item_blocks(checklist)
             if self.checklist_items is None and items:
-                self.checklist_items = {key for key, state in items if state == " "}
+                self.checklist_items = {block for _, block, done in items if not done}
             elif self.checklist_items:
-                completed.update(("completed_checklist_item", key) for key, state in items
-                                 if state != " " and key in self.checklist_items)
+                completed.update(("completed_checklist_item", block) for _, block, done in items
+                                 if done and block in self.checklist_items)
         new = completed - self.seen
         self.seen.update(new)
         return next((source for source, _ in new), None)

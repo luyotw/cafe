@@ -6,7 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
+from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus, pending_task_positions
 from cafe.core.phase_state_mixin import next_runnable_iteration_number
 from cafe.core.workflow_control import SupervisorCorrection
 from cafe.workflow_execution.worker_launch import WorkerLaunchStore
@@ -137,7 +137,9 @@ class InterventionControl:
 
     def check(self):
         # Atomic sidecar replacement permits read-only checks during output drain.
-        record = self.store._read_unlocked()[self.worker_id]
+        record = self.store.observe_worker(self.worker_id)
+        if record is None:
+            raise ValueError("active provider worker is missing")
         if record.get("intervention", {}).get("status") == "requested":
             with self.store._locked_records() as records:
                 self._check(records[self.worker_id])
@@ -179,14 +181,18 @@ class InterventionControl:
         diagnostic = self.progress_watch.due(limit)
         if diagnostic is None:
             return
-        record = self.store._read_unlocked().get(self.worker_id, {})
-        active = record.get("active", {})
-        if (record.get("status") == "running"
-                and (active.get("workflow_id"), active.get("step"), active.get("iteration"))
-                == self.progress_identity and not _pending_tasks(self.issue, workflow)):
-            self.progress_callback("worker_progress_overdue", {
-                **diagnostic, "step": step, "worker_id": self.worker_id, "iteration": iteration,
-            })
+        try:
+            record = self.store.observe_worker(self.worker_id) or {}
+            active = record.get("active", {})
+            if (record.get("status") != "running"
+                    or (active.get("workflow_id"), active.get("step"), active.get("iteration"))
+                    != self.progress_identity or pending_task_positions(self.issue, workflow)):
+                return
+        except (KeyError, OSError, TypeError, ValueError):
+            diagnostic["reason"] = "progress_ownership_unverified"
+        self.progress_callback("worker_progress_overdue", {
+            **diagnostic, "step": step, "worker_id": self.worker_id, "iteration": iteration,
+        })
 
     def begin_boundary(self):
         with self.store._locked_records() as records:
