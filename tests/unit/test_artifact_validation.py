@@ -55,6 +55,108 @@ def test_u1_provisional_alignment_remains_exempt():
     assert validate("# Ordinary document\n").items is None
 
 
+def review_report(registry_rows, todos, *, outer_pipes=True):
+    table = [
+        "| ID | kind | root-cause identity | first-seen iteration/HEAD | impact | "
+        "confidence | current status | linked ID | evidence HEAD |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        *registry_rows,
+    ]
+    if not outer_pipes:
+        table = [line.strip("|").strip() for line in table]
+    return "\n".join([
+        "## Finding Registry",
+        "",
+        *table,
+        "",
+        "## Todo List",
+        "",
+        *todos,
+        "",
+    ])
+
+
+@pytest.mark.parametrize("outer_pipes", [True, False])
+@pytest.mark.parametrize(("original", "residual", "scenario", "link_from_residual"), [
+    ("BLK-004", "BLK-011", "A rename submits stale points after a peer refresh", True),
+    ("BLK-007", "BLK-010", "A catalog retry stalls after two unrelated peer edits", False),
+])
+def test_review_keeps_linked_residual_under_original_blocker(
+    original, residual, scenario, link_from_residual, outer_pipes,
+):
+    old_link, new_link = ("—", original) if link_from_residual else (residual, "—")
+    todo = "- [ ] `{}` — Source: `review` — Work: " + scenario + (
+        " — Closure: Preserve the original acceptance. — Evidence: candidate probe 52ec9a4f:42"
+    )
+    rejected = review_report([
+        f"| {original} | BLK | original acceptance | 1/8903e19b | Important | 95 | "
+        f"closed | {old_link} | 52ec9a4f |",
+        f"| {residual} | BLK | residual behavior | 2/52ec9a4f | Important | 95 | "
+        f"open | {new_link} | 52ec9a4f |",
+    ], [todo.format(residual)], outer_pipes=outer_pipes)
+    assert parse_todo_list(rejected)[0].item_id == residual
+
+    with pytest.raises(ArtifactFormatError) as error:
+        validate(rejected)
+    assert original in error.value.diagnostic and residual in error.value.diagnostic
+
+    corrected = review_report([
+        f"| {original} | BLK | original acceptance | 1/8903e19b | Important | 95 | "
+        "open | — | 52ec9a4f |",
+    ], [todo.format(original)], outer_pipes=outer_pipes)
+    assert validate(corrected).items == parse_todo_list(corrected, expected_source="review")
+    assert validate(corrected).items[0].item_id == original
+    assert validate(corrected).items[0].work == scenario
+    assert validate(corrected).items[0].evidence == "candidate probe 52ec9a4f:42"
+
+
+@pytest.mark.parametrize("todo", ["No actionable work.",
+    "- [x] `BLK-001` — Source: `review` — Work: Investigate — Closure: Resolve — Evidence: Probe",
+])
+def test_open_review_blocker_requires_an_unchecked_todo(todo):
+    content = review_report([
+        "| BLK-001 | BLK | missing evidence | 1/8903e19b | Important | 95 | open | — | 52ec9a4f |",
+    ], [todo])
+    with pytest.raises(ArtifactFormatError, match="BLK-001"):
+        validate(content)
+
+
+def test_review_accepts_unrelated_new_blocker_and_linked_follow_up():
+    content = review_report([
+        "| BLK-001 | BLK | fixed behavior | 1/8903e19b | Important | 95 | "
+        "closed | — | 52ec9a4f |",
+        "| BLK-002 | BLK | unrelated behavior | 2/52ec9a4f | Important | 95 | "
+        "open | FUP-001 | 52ec9a4f |",
+        "| FUP-001 | FUP | unrelated behavior | 1/8903e19b | Important | 95 | "
+        "promoted | BLK-002 | 52ec9a4f |",
+    ], ["- [ ] `BLK-002` — Source: `review` — Work: Write — Closure: Resolve — Evidence: Probe"])
+    assert [item.item_id for item in validate(content).items] == ["BLK-002"]
+
+
+@pytest.mark.parametrize("fence", ["```", "~~~"])
+def test_fenced_review_registry_example_does_not_apply_to_report(fence):
+    registry, _, _ = review_report([
+        "| BLK-001 | BLK | example | 1/8903e19b | Important | 95 | "
+        "open | — | 52ec9a4f |",
+    ], ["No actionable work."]).partition("## Todo List")
+    example = f"# Document\n\n{fence}markdown\n{registry}{fence}\n"
+    empty_todos = "\n## Todo List\n\nNo actionable work.\n"
+    assert validate(example + empty_todos).items == ()
+    actual = review_report([
+        "| BLK-002 | BLK | unresolved | 1/8903e19b | Important | 95 | "
+        "open | — | 52ec9a4f |",
+    ], ["No actionable work."])
+    with pytest.raises(ArtifactFormatError, match="BLK-002"):
+        validate(example + "\n" + actual)
+
+
+def test_review_registry_without_todos_remains_available_as_a_partial_report():
+    content, _, _ = review_report([
+        "| BLK-001 | BLK | awaiting clarification | 1/8903e19b | Important | 95 | "
+        "open | — | 52ec9a4f |",
+    ], []).partition("## Todo List")
+    assert validate(content).items is None
+
 
 def test_u3_changed_diagnostics_and_reload_do_not_replenish_budget():
     budget = ArtifactCorrectionBudget()

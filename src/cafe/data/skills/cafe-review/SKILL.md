@@ -1,7 +1,7 @@
 ---
 name: cafe-review
 description: "Review code quality, behavior, and risk"
-version: 1.15.0
+version: 1.15.1
 workflow:
   step_defaults:
     version: 1
@@ -145,6 +145,7 @@ Read your agent file: {agent_file}
 - Mark `Impact: Critical` only with a reachable production path, causal or reproducible evidence, and privilege escalation, secret exposure, irreversible data loss, destructive external mutation, or a core workflow failure without safe recovery. High confidence or unbounded theoretical input is insufficient.
 - Rounds 1–3 are discovery mode: new evidenced in-scope Critical or Important findings may block, but complete the relevant scope before handoff. From round 4, unresolved lineages, regressions caused by the current correction, and qualifying new Critical findings block; other new findings become follow-up proposals.
 - Assign stable `BLK-NNN` IDs to blockers and `FUP-NNN` IDs to follow-ups. Reuse the lineage ID across correction rounds.
+- Before closing a blocker, reconcile each newly observed failure with the original acceptance conditions. When a different ordering or input still fails the same condition, keep the original ID open and record the residual scenario, exact reproduction and current evidence HEAD in its Todo and registry row. Assign a new ID for a distinct acceptance failure. A blocker-to-blocker `linked ID` represents the same unresolved acceptance, so a closed blocker must not link to an open one in either direction.
 - Keep at most 100 canonical `## Todo List` rows. An open blocker uses ``- [ ] `BLK-NNN` — Source: `review` — Work: ... — Closure: ... — Evidence: ...``; an empty list uses only `No actionable work.`. Checkboxes outside that section and follow-up proposals are not correction work.
 - Carry the complete prior Finding Registry, including closed and handled lineages; update status and evidence HEAD from current evidence without deleting or renumbering identity.
 - This phase proposes follow-ups but does not open, comment on, or close GitHub issues. A follow-up never releases a Critical finding.
