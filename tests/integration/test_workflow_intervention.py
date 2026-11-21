@@ -409,11 +409,24 @@ def test_callback_is_durable_before_correction_unfreezes(worker):
     )
 
 
+def assert_unverified_worker_refusal(result, process, issue, identity):
+    assert result.exit_code == 2
+    response = json.loads(result.output)
+    assert response["status"] == "refused"
+    assert "unverified" in response["detail"]
+    assert process.poll() is None
+    assert WorkerLaunchStore(issue).get(identity["worker_id"]).get("intervention") is None
+
+
 @pytest.mark.parametrize("worker", ["between"], indirect=True)
 def test_request_between_steps_prevents_next_provider(worker):
     root, issue, process, identity = worker
     assert identity["step"] == "publish"
-    assert request(identity).exit_code == 0
+    result = request(identity)
+    if not os.access("/proc/self/stat", os.R_OK):
+        assert_unverified_worker_refusal(result, process, issue, identity)
+        return
+    assert result.exit_code == 0
     (root / "release").write_text("continue")
     process.wait(timeout=10)
     assert process.returncode == 0, (root.parent / "worker.stderr").read_text()
@@ -428,9 +441,13 @@ def test_request_between_steps_prevents_next_provider(worker):
 @pytest.mark.parametrize("worker", ["boundary"], indirect=True)
 def test_committed_transition_rejects_old_identity(worker):
     root, issue, process, identity = worker
+    assert identity["step"] == "build"
     result = request(identity)
-    assert result.exit_code == 2 and "transitioning" in result.output
     assert BlackboardStore(issue).load_or_create("build").current_step == "publish"
+    if not os.access("/proc/self/stat", os.R_OK):
+        assert_unverified_worker_refusal(result, process, issue, identity)
+        return
+    assert result.exit_code == 2 and "transitioning" in result.output
     assert WorkerLaunchStore(issue).get(identity["worker_id"]).get("intervention") is None
     # Test cleanup stops this worker; a refused request did not cancel or accept anything.
 
