@@ -1754,6 +1754,7 @@ def _callback_to_step(event: dict[str, Any], *, repository_root: Path) -> str | 
 
 
 def _open_todos(issue, root, artifact):
+    from cafe.core.artifact_validation import review_finding_lineages
     from cafe.core.packet_io import read_regular_bytes
     from cafe.core.todo import parse_todo_list
 
@@ -1766,7 +1767,15 @@ def _open_todos(issue, root, artifact):
     document = content.decode()
     if not any(line.strip() == "## Todo List" for line in document.splitlines()):
         return frozenset()
-    return frozenset(item.fingerprint for item in parse_todo_list(document) if not item.checked)
+    items = parse_todo_list(document)
+    lineages = review_finding_lineages(document, items)
+    # Supervision follows a problem across revisions. Handoff validation still
+    # fingerprints the full Todo, including its current evidence.
+    return frozenset(
+        (item.source, item.item_id, lineages[item.item_id]
+         if item.source == "review" and item.item_id in lineages else " ".join(item.work.split()))
+        for item in items if not item.checked
+    )
 
 
 def _recurring_result(transitions, current, read_todos):

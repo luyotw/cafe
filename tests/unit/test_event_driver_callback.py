@@ -3813,9 +3813,29 @@ def test_nested_issue_callback_status_chat_and_delivery_keep_full_identity(tmp_p
     assert delivered[0]["issue"] == "codex/issue119"
 
 
+def _correction_report(situation, i):
+    work = "Same finding"
+    if i == 2 and situation in {"changed_result", "registry", "delayed_registry", "different_lineage"}:
+        work = "Updated correction"
+    evidence = f"Observed failure at revision {i}"
+    registry = ""
+    if situation in {"registry", "delayed_registry", "different_lineage"}:
+        first_seen = "002/b" if situation == "different_lineage" and i == 2 else "001/a"
+        registry = (
+            "## Finding Registry\n"
+            "| ID | kind | root-cause identity | first-seen iteration/HEAD | impact | confidence | current status | linked ID | evidence HEAD |\n"
+            "|---|---|---|---|---|---|---|---|---|\n"
+            f"| BLK-001 | BLK | Missing receipt | {first_seen} | High | 99 | open | — | {i} |\n\n"
+        )
+    return (f"# Baseline {i}\n\n{registry}## Todo List\n"
+            f"- [ ] `BLK-001` — Source: `review` — Work: {work}"
+            f" — Closure: Complete the check — Evidence: {evidence}\n").encode()
+
+
 @pytest.mark.parametrize("situation", [
     "three_handoffs", "contradiction", "repeated", "pending",
     "correction_loop", "changed_result", "long_history", "delayed_correction",
+    "registry", "delayed_registry", "different_lineage",
 ])
 def test_dispatch_explains_current_owner_and_preserves_decisions(tmp_path, monkeypatch, situation):
     from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
@@ -3833,7 +3853,8 @@ def test_dispatch_explains_current_owner_and_preserves_decisions(tmp_path, monke
     steps = ["diagnose_custom", "repair_custom", "inspect_custom", "accept_custom"]
     presented = []
 
-    loop = situation in {"correction_loop", "changed_result", "delayed_correction"}
+    loop = situation in {"correction_loop", "changed_result", "delayed_correction",
+                         "registry", "delayed_registry", "different_lineage"}
     if loop:
         steps = ["review", "repair", "review", "repair"]
     if situation == "long_history":
@@ -3857,10 +3878,7 @@ def test_dispatch_explains_current_owner_and_preserves_decisions(tmp_path, monke
             state.handoff_contract = handoff
             edge = {"from": source, "to": handoff.to_step}
             if loop:
-                result = "New unresolved work" if situation == "changed_result" and i == 2 else "Same finding"
-                content = (f"# Baseline {i}\n\n## Todo List\n"
-                           f"- [ ] `BLK-001` — Source: `review` — Work: {result}"
-                           " — Closure: Complete the check — Evidence: Observed failure\n").encode()
+                content = _correction_report(situation, i)
                 path = issue / source / f"iteration_{i + 1:03d}" / "output.md"
                 path.parent.mkdir(parents=True)
                 path.write_bytes(content)
@@ -3884,7 +3902,7 @@ def test_dispatch_explains_current_owner_and_preserves_decisions(tmp_path, monke
                 payload.update(event_type="workflow_interruption", reason="same_boundary")
                 store.prepare_workflow_callback_event(state, payload)
             event = store.prepare_workflow_callback_event(state, payload)
-            if situation == "delayed_correction":
+            if situation in {"delayed_correction", "delayed_registry"}:
                 if i == 0:
                     delayed = event
                 if i < len(steps) - 2:
@@ -3903,7 +3921,7 @@ def test_dispatch_explains_current_owner_and_preserves_decisions(tmp_path, monke
         assert [p["assessment"] for p in presented] == ["continue"] * 3
         assert [p["current_step"] for p in presented] == steps[1:]
     elif loop:
-        expect_inspection = situation in {"correction_loop", "delayed_correction"}
+        expect_inspection = situation in {"correction_loop", "delayed_correction", "registry", "delayed_registry"}
         assert presented[-1]["assessment"] == ("inspect" if expect_inspection else "continue")
         assert bool(presented[-1]["same_problem_attempts"]) == expect_inspection
     elif situation == "pending":

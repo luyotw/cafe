@@ -75,9 +75,12 @@ def _review_registry_cells(line: str) -> tuple[str, ...]:
     return tuple(cell.strip().strip("`") for cell in cells)
 
 
-def _validate_review_registry(content: str, items: tuple[TodoItem, ...]) -> None:
+def review_finding_lineages(
+    content: str, items: tuple[TodoItem, ...],
+) -> dict[str, tuple[str, str]]:
+    """Validate the optional registry and return stable identities for its open findings."""
     if _FINDING_REGISTRY_HEADING not in content:
-        return
+        return {}
     lines = visible_markdown(content).splitlines()
     start = next(
         (i for i, line in enumerate(lines)
@@ -85,7 +88,7 @@ def _validate_review_registry(content: str, items: tuple[TodoItem, ...]) -> None
         None,
     )
     if start is None:
-        return
+        return {}
     section = []
     for line in lines[start + 1:]:
         if _MARKDOWN_SECTION.match(line):
@@ -95,15 +98,16 @@ def _validate_review_registry(content: str, items: tuple[TodoItem, ...]) -> None
     # The existing table schema opts in. Legacy and custom reports can use prose
     # or other tables in a section with the same name.
     if not section:
-        return
+        return {}
     header = tuple(cell.lower() for cell in _review_registry_cells(section[0]))
     if header != _REVIEW_REGISTRY_HEADER:
-        return
+        return {}
     divider = _review_registry_cells(section[1]) if len(section) > 1 else ()
     if len(divider) != len(header) or not all(_TABLE_DIVIDER.fullmatch(cell) for cell in divider):
         raise TodoContractError("Finding Registry has an invalid table separator")
 
     blockers: dict[str, tuple[str, str]] = {}
+    lineages = {}
     for line in section[2:]:
         cells = _review_registry_cells(line)
         if len(cells) == 1:
@@ -119,6 +123,8 @@ def _validate_review_registry(content: str, items: tuple[TodoItem, ...]) -> None
                 f"Finding Registry blocker {blocker} has a duplicate ID or invalid status"
             )
         blockers[blocker] = (status, linked)
+        if status == "open" and cells[2] and cells[3]:
+            lineages[blocker] = (cells[2], cells[3])
 
     for blocker, (status, linked) in blockers.items():
         if not _REVIEW_BLOCKER_ID.fullmatch(linked):
@@ -141,6 +147,7 @@ def _validate_review_registry(content: str, items: tuple[TodoItem, ...]) -> None
         raise TodoContractError(
             f"Finding Registry and unchecked Review Todos disagree: {difference}"
         )
+    return lineages
 
 
 def validate_artifact_syntax(
@@ -161,7 +168,7 @@ def validate_artifact_syntax(
             plan is None or plan.kind is not PlanTodoDocumentKind.PROVISIONAL_ALIGNMENT
         ):
             continuity = parse_todo_identity_continuity(content)
-            _validate_review_registry(content, items)
+            review_finding_lineages(content, items)
     except TodoContractError as exc:
         raise ArtifactFormatError(producer, artifact, path, str(exc)) from exc
     return ArtifactSyntax(plan, items, continuity)
