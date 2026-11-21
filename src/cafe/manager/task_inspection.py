@@ -7,14 +7,18 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
-from cafe.core.human_tasks import HumanTaskQuestion
-from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
+from cafe.core.blackboard import BlackboardState
+from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
+from cafe.core.human_task_snapshot import durable_task_matches_current_handoff, read_iteration_file
+from cafe.core.human_tasks import HumanTaskPolicy, HumanTaskQuestion
+from cafe.core.questions_schema import parse_validated_questions_xml
 from cafe.core.task_inbox import TaskInboxService
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.loader import SkillLoader
 from cafe.utils.issue_paths import issue_name_from_dir, issue_project_root
 
 from ._store import load_contract
+from .clarification_context import clarification_context
 from .delivery_comparison import comparison_packet_from_contract
 from .task_authority import decide_task_authority
 
@@ -26,6 +30,25 @@ def _read_json(path: Path, *, limit: int = 64 * 1024 * 1024) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"Manager inspection input must be an object: {path.name}")
     return value
+
+
+def _iteration_questions(
+    issue_dir: Path, iteration_path: Path
+) -> tuple[tuple[HumanTaskQuestion, ...] | None, str | None]:
+    content = read_iteration_file(issue_dir, iteration_path / "questions.xml")
+    if content is None or len(content) > 256 * 1024:
+        return None, None
+    try:
+        questions = tuple(
+            HumanTaskQuestion(
+                id=item.id, prompt=item.title, options=tuple(item.options),
+                multiple=item.multi_select,
+            )
+            for item in parse_validated_questions_xml(content)
+        )
+    except ValueError:
+        return None, None
+    return questions, hashlib.sha256(content).hexdigest()
 
 
 def _sources(
@@ -116,6 +139,7 @@ def inspect_task_authority(
     *,
     response: Mapping[str, Any] | None = None,
     evidence: Mapping[str, Any] | None = None,
+    include_clarification_context: bool = False,
 ) -> dict[str, Any]:
     """Inspect one neutral task and return independent route, owner and evidence facts."""
     issue_dir = Path(issue_dir)
@@ -136,26 +160,9 @@ def inspect_task_authority(
     task = detail.to_dict()
     questions = None
     questions_sha256 = None
+    iteration_path = Path(detail.step) / f"iteration_{detail.iteration:03d}"
     if detail.expected_result.get("questions_from_xml") is True:
-        questions_file = (
-            issue_dir / detail.step / f"iteration_{detail.iteration:03d}" / "questions.xml"
-        )
-        if (
-            not questions_file.is_symlink()
-            and questions_file.is_file()
-            and questions_file.stat().st_size <= 256 * 1024
-            and validate_questions_xml(questions_file)
-        ):
-            questions_sha256 = hashlib.sha256(questions_file.read_bytes()).hexdigest()
-            questions = tuple(
-                HumanTaskQuestion(
-                    id=item.id,
-                    prompt=item.title,
-                    options=tuple(item.options),
-                    multiple=item.multi_select,
-                )
-                for item in parse_questions_xml(questions_file)
-            )
+        questions, questions_sha256 = _iteration_questions(issue_dir, iteration_path)
     sources = _sources(
         issue_dir,
         contract,
@@ -221,7 +228,7 @@ def inspect_task_authority(
         "questions_sha256": questions_sha256,
     }
     # This digest binds inspection inputs, not later concurrent edits during completion.
-    return {
+    facts = {
         **result,
         "task_id": detail.id,
         "task_name": detail.policy_id,
@@ -232,3 +239,71 @@ def inspect_task_authority(
             json.dumps(decision_inputs, ensure_ascii=False, sort_keys=True).encode("utf-8")
         ).hexdigest(),
     }
+    if include_clarification_context:
+        facts["clarification_context"] = _clarification_preview(
+            issue_dir, task_id, iteration_path, board, facts, contract, sources,
+            detail.expected_result, questions,
+        )
+    return facts
+
+
+def _clarification_preview(
+    issue_dir: Path,
+    task_id: str,
+    iteration_path: Path,
+    board: dict[str, Any],
+    facts: Mapping[str, Any],
+    contract: Mapping[str, Any],
+    confirmed_sources: Mapping[str, str],
+    expected_result: Mapping[str, Any],
+    questions: tuple[HumanTaskQuestion, ...] | None,
+) -> dict[str, Any]:
+    if (
+        facts["route_status"] != "need_clarification"
+        or facts["resolution_owner"] != "manager_confirmable"
+        or facts["evidence_reason"] != "evidence_unevaluated"
+    ):
+        return {"status": "unavailable", "reason": "clarification_not_eligible"}
+    state = BlackboardState.from_dict(board, initial_step="")
+    active = [
+        task.id
+        for task in HumanTaskRecordStore(issue_dir).tasks()
+        if task.status is HumanTaskStatus.PENDING
+        and task.workflow_id == state.workflow_id
+        and durable_task_matches_current_handoff(task, state, require_exact_handoff=True)
+    ]
+    if active != [task_id]:
+        return {"status": "unavailable", "reason": "clarification_not_current"}
+    try:
+        policy = HumanTaskPolicy.model_validate(expected_result)
+    except ValueError:
+        return {"status": "unavailable", "reason": "clarification_questions_unavailable"}
+    # Feedback tasks also use questions.xml as the worker's explanation. Only
+    # declared XML answer contracts above participate in the completion digest.
+    if policy.input_schema == "feedback":
+        questions, _ = _iteration_questions(issue_dir, iteration_path)
+    elif policy.input_schema != "answers" or (policy.questions and policy.questions_from_xml):
+        return {"status": "unavailable", "reason": "clarification_question_source_ambiguous"}
+    elif not policy.questions_from_xml:
+        questions = policy.questions
+    if not questions or len(questions) != len({question.id for question in questions}):
+        return {"status": "unavailable", "reason": "clarification_questions_unavailable"}
+    sources = dict(confirmed_sources)
+    root = issue_project_root(issue_dir).resolve()
+    paths = {
+        source: (root / state.artifacts[source.removeprefix("artifact:")].path)
+        .resolve().relative_to(root).as_posix()
+        for source in sources
+        if source.startswith("artifact:")
+    }
+    checkpoint = read_iteration_file(issue_dir, iteration_path / "output.md")
+    if checkpoint is not None and len(checkpoint) <= 256 * 1024:
+        try:
+            sources["worker_checkpoint"] = checkpoint.decode("utf-8")
+        except UnicodeError:
+            pass
+        else:
+            paths["worker_checkpoint"] = (
+                issue_dir.resolve() / iteration_path / "output.md"
+            ).relative_to(root).as_posix()
+    return clarification_context(questions, contract["delivery_contract"], sources, paths)

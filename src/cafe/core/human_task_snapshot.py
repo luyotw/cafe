@@ -17,7 +17,9 @@ from cafe.core.questions_schema import Question, parse_validated_questions_xml
 _MAX_INPUT_BYTES = 1024 * 1024
 
 
-def durable_task_matches_current_handoff(task: HumanTask, blackboard: BlackboardState) -> bool:
+def durable_task_matches_current_handoff(
+    task: HumanTask, blackboard: BlackboardState, *, require_exact_handoff: bool = False
+) -> bool:
     contract = getattr(blackboard, "handoff_contract", None)
     if (
         getattr(blackboard, "current_step", None) != "user"
@@ -33,7 +35,11 @@ def durable_task_matches_current_handoff(task: HumanTask, blackboard: Blackboard
             ("user-handoff", task.workflow_id, contract.from_step, contract.intent.value,
              contract.created_at)
         )
-    return task.status is HumanTaskStatus.PENDING and contract.intent.value == task.trigger
+    return (
+        not require_exact_handoff
+        and task.status is HumanTaskStatus.PENDING
+        and contract.intent.value == task.trigger
+    )
 
 
 def uses_special_approval(task: HumanTask, step_definition: Mapping[str, Any]) -> bool:
@@ -143,7 +149,9 @@ def resolve_task_inputs(
     if policy.questions_from_xml:
         answer_contract = policy.questions
         if not answer_contract:
-            answer_contract, questions_sha256 = _read_questions(issue_dir, directory / "questions.xml")
+            answer_contract, questions_sha256 = _read_questions(
+                issue_dir, directory / "questions.xml"
+            )
     reviews_output = policy.pattern in {"confirm_output", "no_changes_needed"}
     artifact = None
     if reviews_output:
@@ -156,7 +164,7 @@ def resolve_task_inputs(
 def _read_questions(
     issue_dir: Path, path: Path,
 ) -> tuple[tuple[HumanTaskQuestion, ...], str | None]:
-    content = _read_iteration_file(issue_dir, path)
+    content = read_iteration_file(issue_dir, path)
     if content is not None:
         try:
             contract = tuple(
@@ -186,7 +194,7 @@ def _read_review_artifact(
                 or expected not in published_paths):
             return None
 
-    content = _read_iteration_file(issue_dir, path)
+    content = read_iteration_file(issue_dir, path)
     if not content:
         return None
     digest = sha256_bytes(content)
@@ -199,7 +207,7 @@ def _read_review_artifact(
     return ReviewArtifact(path.as_posix(), digest, text, entry.version if entry else None)
 
 
-def _read_iteration_file(issue_dir: Path, path: Path) -> bytes | None:
+def read_iteration_file(issue_dir: Path, path: Path) -> bytes | None:
     """Read only a bounded, single-link regular file below the selected issue."""
     if path.is_absolute() or ".." in path.parts or len(path.parts) != 3:
         return None
