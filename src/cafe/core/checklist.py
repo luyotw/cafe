@@ -11,6 +11,9 @@ from typing import TYPE_CHECKING, Any
 
 from cafe.core.todo import MAX_TODO_ITEMS, TodoItem
 
+MAX_CHECKLIST_CONTENT_BYTES = 2 * 1024 * 1024
+MAX_CHECKLIST_GATES = 10000
+
 if TYPE_CHECKING:
     from cafe.core.blackboard import BlackboardState
 
@@ -79,8 +82,8 @@ class ChecklistMaterialization:
         if self.agent_owned:
             record["agent_owned"] = True
         if (
-            len(self.content.encode()) > 2 * 1024 * 1024
-            or len(self.gates) > 10000
+            len(self.content.encode()) > MAX_CHECKLIST_CONTENT_BYTES
+            or len(self.gates) > MAX_CHECKLIST_GATES
             or len(json.dumps(record).encode()) > 8 * 1024 * 1024
         ):
             raise ValueError("Effective checklist exceeds bounded persistence limits")
@@ -161,14 +164,14 @@ def load_materialization(path: Path) -> ChecklistMaterialization | None:
         if not isinstance(record, dict) or record.get("version") != 1:
             raise ValueError("Unsupported effective checklist metadata")
         content = record["content"]
-        if not isinstance(content, str) or len(content.encode()) > 2 * 1024 * 1024:
+        if not isinstance(content, str) or len(content.encode()) > MAX_CHECKLIST_CONTENT_BYTES:
             raise ValueError("Invalid effective checklist content")
         gates = tuple(ChecklistGate(**gate) for gate in record["gates"])
         agent_owned = record.get("agent_owned", False)
         if not isinstance(agent_owned, bool):
             raise ValueError("Invalid effective checklist ownership")
         blocks = _checklist_item_blocks(content)
-        if len(gates) > 10000 or (not agent_owned and len(gates) != len(blocks)):
+        if len(gates) > MAX_CHECKLIST_GATES or (not agent_owned and len(gates) != len(blocks)):
             raise ValueError("Effective checklist gate count is inconsistent")
         if len({gate.identity for gate in gates}) != len(gates):
             raise ValueError("Effective checklist gate identities are duplicated")

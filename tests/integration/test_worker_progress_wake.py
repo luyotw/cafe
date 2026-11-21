@@ -13,7 +13,7 @@ from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.workflow_execution.workflow_hosting import WorkflowHost
 
 
-@pytest.mark.parametrize("activity", ["repeat", "quiet", "advance", "checklist", "history", "worker_history", "pending"])
+@pytest.mark.parametrize("activity", ["repeat", "quiet", "advance", "checklist", "history", "worker_history", "pending", "identical_gates", "large_checklist"])
 def test_host_observes_provider_deadline_before_next_handoff(tmp_path, monkeypatch, activity):
     from cafe.agents import executor
 
@@ -38,7 +38,7 @@ for i in range(16):
     if activity == 'advance' and i in (4, 8, 12):
         with Path(path).open('a') as out:
             out.write(f'### PLAN-00{i}\\n- Status: completed\\n')
-    if activity == 'checklist' and i in (4, 8, 12):
+    if activity in ('checklist', 'identical_gates', 'large_checklist') and i in (4, 8, 12):
         checklist = Path(path).with_name('checklist.md')
         checklist.write_text(checklist.read_text().replace('[ ]', '[x]', 1))
     if activity != 'quiet':
@@ -56,7 +56,12 @@ print('complete', flush=True)
                 records.complete(workflow_id=task.workflow_id, task_id=task.id,
                                  payload={"feedback": "x" * (256 * 1024)}, source="interactive")
         output.write_text("## Todo Progress\n")
-        output.with_name("checklist.md").write_text("[ ] Verify result\n  first source\n[ ] Verify result\n  second source\n[ ] Verify result\n  third source\n")
+        checklist = "[ ] Verify result\n  first source\n[ ] Verify result\n  second source\n[ ] Verify result\n  third source\n"
+        if activity == "identical_gates":
+            checklist = "".join(f"## {section}\n[ ] Verify result\n" for section in ("Build", "Review", "Delivery"))
+        if activity == "large_checklist":
+            checklist += "a" * (262145 - len(checklist))
+        output.with_name("checklist.md").write_text(checklist)
         AgentExecutor(AgentConfig(name="fixture", cli=AgentCLI.CLAUDE))._execute_streaming_process(
             [sys.executable, "-c", script, activity, str(output)], "fixture"
         )
@@ -79,7 +84,7 @@ print('complete', flush=True)
     start = time.monotonic()
     WorkflowHost(issue).run(runtime.run, hosting="foreground")
     diagnostics = [e for e in events if e["event_type"] == "worker_progress_overdue"]
-    assert len(diagnostics) == (0 if activity in ("advance", "checklist", "pending") else 1)
+    assert len(diagnostics) == (0 if activity in ("advance", "checklist", "pending", "identical_gates", "large_checklist") else 1)
     if diagnostics:
         diagnostic, = diagnostics
         assert diagnostic["step"] == step and diagnostic["worker_id"]
@@ -136,6 +141,69 @@ def test_new_checkboxes_cannot_extend_the_declared_review_work(tmp_path):
     checklist.write_text(checklist.read_text().replace("[ ] Observe", "[x] Observe"))
     now[0] = 10
     assert watch.due(10)["progress_source"] == "worker_start"
+
+
+@pytest.mark.parametrize("size,accepted", [(2 * 1024 * 1024, True), (2 * 1024 * 1024 + 1, False)])
+def test_progress_at_materialized_checklist_size_limit(tmp_path, size, accepted):
+    from cafe.workflow_execution.progress_watch import ProgressWatch
+
+    now = [0]
+    path = tmp_path / "checklist.md"
+    body = "[ ] Verify result\n"
+    path.write_text(body + "a" * (size - len(body)))
+    watch = ProgressWatch(tmp_path / "output.md", clock=lambda: now[0])
+    path.write_text(path.read_text().replace("[ ]", "[x]", 1))
+    now[0] = 8
+    assert watch.due(10) is None
+    now[0] = 10
+    diagnostic = watch.due(10)
+    if accepted:
+        assert diagnostic is None
+        now[0] = 18
+        assert watch.due(10)["progress_source"] == "completed_checklist_item"
+    else:
+        assert diagnostic["progress_source"] == "worker_start"
+
+
+def test_rechecking_same_gate_cannot_impersonate_next_occurrence(tmp_path):
+    from cafe.workflow_execution.progress_watch import ProgressWatch
+
+    now = [0]
+    path = tmp_path / "checklist.md"
+
+    def write(states):
+        path.write_text("".join(f"[{state}] Verify result\n" for state in states))
+
+    write("  ")
+    watch = ProgressWatch(tmp_path / "output.md", clock=lambda: now[0])
+    for mark, states in [(4, "x "), (8, "  "), (12, "x ")]:
+        now[0] = mark
+        write(states)
+        assert watch.due(10) is None
+    now[0] = 14
+    assert watch.due(10)["elapsed_seconds"] == 10
+    write(" x")
+    now[0] = 18
+    assert watch.due(10) is None
+    now[0] = 28
+    assert watch.due(10)["elapsed_seconds"] == 10
+
+
+def test_changed_nested_rule_cannot_credit_declared_parent(tmp_path):
+    from cafe.workflow_execution.progress_watch import ProgressWatch
+
+    now = [0]
+    path = tmp_path / "checklist.md"
+    path.write_text("[ ] Verify\n  [ ] Read the receipt\n")
+    watch = ProgressWatch(tmp_path / "output.md", clock=lambda: now[0])
+    path.write_text("[x] Verify\n  [ ] Observe a heartbeat\n")
+    now[0] = 10
+    assert watch.due(10)["progress_source"] == "worker_start"
+    path.write_text("[x] Verify\n  [ ] Read the receipt\n")
+    now[0] = 15
+    assert watch.due(10) is None
+    now[0] = 25
+    assert watch.due(10)["progress_source"] == "completed_checklist_item"
 
 
 def test_polling_active_worker_does_not_read_archived_records(tmp_path, monkeypatch):
