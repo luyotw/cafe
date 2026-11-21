@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional
 from uuid import uuid4
 
+from cafe.core.runtime_locales import render_text
+from cafe.core import staged_commit
 from cafe.agents.manager import AgentManager
 from cafe.constraints.context import context_for_tools
 from cafe.core.artifact_validation import (
@@ -700,6 +702,17 @@ class GenericWorkflowStepExecutor(Phase):
             instructions = "Resolved execution checkpoint context:\n" + json.dumps(execution_context)
             extra_prompt = (extra_prompt + "\n" if extra_prompt else "") + instructions
 
+        self._staged_task = (staged_commit.active_task(self.issue_dir, blackboard_state, step_name)
+                             if step_def.get("workspace_artifact") else None)
+        if self._staged_task:
+            import shlex
+            command = shlex.join(["cafe", "task", "commit-staged", self._staged_task.id,
+                                  "--issue-dir", str(self.issue_dir.resolve())])
+            extra_prompt = (extra_prompt or "") + "\n" + render_text(
+                "workspace.commit_resume", locale=blackboard_state.conversation_locale, command=command,
+            )
+            staged_commit.verify(self.issue_dir, self._staged_task)
+
         # A playbook rollout can introduce a workspace companion after its
         # producer already completed. Refresh it from the one producer named
         # by the declarations when its committed Git snapshot is stale.
@@ -1010,7 +1023,8 @@ class GenericWorkflowStepExecutor(Phase):
                     iteration_dir=iteration_dir,
                 )
             else:
-                response, _ = execute_agent()
+                with staged_commit.provider_scope(self.issue_dir, self._staged_task):
+                    response, _ = execute_agent()
             return response
 
         def transform_runtime_context(runtime_context: Dict[str, str]) -> Dict[str, str]:
@@ -3612,6 +3626,19 @@ class GenericWorkflowStepExecutor(Phase):
 
     def _validate_workspace_inputs(self, artifacts, *, step_def=None, verified_workspace=None):
         from cafe.core.workspace_inputs import validate_workspace_inputs
+        task = getattr(self, "_staged_task", None)
+        if task:
+            head = staged_commit.verify(self.issue_dir, task)
+            parent = artifacts.get((step_def or {}).get("workspace_input_artifact"))
+            if parent is not None and verified_workspace is None:
+                repo = Path(self.git_ops.repo_path).resolve()
+                path = (repo / parent.path).resolve(strict=True)
+                path.relative_to(self.issue_dir.resolve())
+                candidate = WorkspaceArtifact.from_dict(json.loads(path.read_bytes()))
+                checked = verify_workspace_artifact(candidate, repo=repo)
+                reason = "workspace head is stale" if head else "workspace worktree is dirty"
+                if candidate.head_sha == task.staged_commit["parent"] and checked.reasons == (reason,):
+                    verified_workspace = candidate
         validate_workspace_inputs(
             artifacts,
             root=getattr(getattr(self, "git_ops", None), "repo_path", Path.cwd()),
@@ -3685,6 +3712,12 @@ class GenericWorkflowStepExecutor(Phase):
                 checked = verify_workspace_artifact(previous_workspace, repo=repo)
                 if checked.valid:
                     return previous_workspace
+                task = getattr(self, "_staged_task", None)
+                if task and previous_workspace.head_sha == task.staged_commit["parent"]:
+                    committed = staged_commit.verify(self.issue_dir, task)
+                    allowed = "workspace head is stale" if committed else "workspace worktree is dirty"
+                    if checked.reasons == (allowed,):
+                        return previous_workspace
                 if checked.reasons != ("workspace head is stale",):
                     detail = "; ".join(checked.reasons)
                     raise ValueError(
@@ -4889,6 +4922,9 @@ class GenericWorkflowStepExecutor(Phase):
 
     def _inspect_completion_workspace(self, step_name, step_def, blackboard_state):
         """Construct an unregistered preflight with the full snapshot rules."""
+        task = getattr(self, "_staged_task", None)
+        if task:
+            staged_commit.verify(self.issue_dir, task, completed=True)
         workspace_name = step_def["workspace_artifact"]
         if workspace_name == str(step_def.get("output_artifact", step_name)):
             raise WorkspaceArtifactError("workspace artifact must be distinct from summary")
@@ -4943,6 +4979,9 @@ class GenericWorkflowStepExecutor(Phase):
         if workspace_name == summary_name:
             raise ValueError("workspace artifact must be distinct from the summary artifact")
         repo = Path(getattr(self.git_ops, "repo_path", Path.cwd())).resolve()
+        task = getattr(self, "_staged_task", None)
+        if task and task.step == step_name:
+            staged_commit.verify(self.issue_dir, task, completed=True)
         base_ref = self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
         if not base_ref:
             base_ref = self.git_ops.get_default_base_branch()

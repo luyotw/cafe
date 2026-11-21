@@ -408,6 +408,19 @@ def task_continuation(
         typer.echo(status)
 
 
+@task_app.command("commit-staged")
+def commit_staged(task_id: str, issue_dir: Path = typer.Option(..., "--issue-dir")) -> None:
+    """Perform the one approved commit inside the continuing agent environment."""
+    from cafe.core.staged_commit import commit
+    from cafe.core.git import GitError
+
+    try:
+        typer.echo(commit(issue_dir, task_id))
+    except (OSError, ValueError, GitError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+
+
 @task_app.command("complete")
 def complete_task(
     task_id: str = typer.Argument(..., help="Stable task identifier"),

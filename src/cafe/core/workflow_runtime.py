@@ -4010,6 +4010,21 @@ class BlackboardWorkflowRuntime:
             )
         )
 
+        staged = None
+        if (trigger == "need_permission" and step_def.get("workspace_artifact")
+                and existing_task is None and policy.input_schema == "feedback"):
+            from cafe.core.staged_commit import capture
+            from cafe.core.runtime_locales import render_text
+
+            staged = capture(self.issue_dir, current_step, iteration)
+            if staged:
+                prompt += "\n\n" + render_text(
+                    "workspace.commit_permission", locale=self.blackboard.conversation_locale,
+                    root=staged["worktree"], parent=staged["parent"], tree=staged["tree"],
+                    files=", ".join(sorted(staged["changes"])), message=staged["operation"]["message"],
+                    command="git commit --no-verify" if staged["operation"]["skip_hooks"] else "git commit",
+                )
+
         materialization = records.materialize_with_status(
             workflow_id=self.blackboard.workflow_id,
             step=current_step,
@@ -4020,6 +4035,7 @@ class BlackboardWorkflowRuntime:
             expected_result=policy.model_dump(mode="json"),
             continuations=binding.outcomes,
             assignee_type="user",
+            staged_commit=staged,
             handoff_key=handoff_key,
             superseded_task_ids=self._superseded_human_task_ids(
                 records,

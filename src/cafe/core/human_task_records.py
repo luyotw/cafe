@@ -68,6 +68,7 @@ class HumanTask:
     completed_at: Optional[str] = None
     cancelled_at: Optional[str] = None
     superseded_by_task_id: Optional[str] = None
+    staged_commit: Optional[dict[str, Any]] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -83,6 +84,7 @@ class HumanTask:
             "continuations": dict(self.continuations),
             "status": self.status.value,
             "created_at": self.created_at,
+            **({"staged_commit": self.staged_commit} if self.staged_commit else {}),
             "capability_approval": (
                 dict(self.capability_approval) if self.capability_approval is not None else None
             ),
@@ -112,6 +114,7 @@ class HumanTask:
                     if data.get("capability_approval") is not None
                     else None
                 ),
+                staged_commit=_mapping(data, "staged_commit") if "staged_commit" in data else None,
                 completed_at=_optional_text(data.get("completed_at")),
                 cancelled_at=_optional_text(data.get("cancelled_at")),
                 superseded_by_task_id=_optional_text(data.get("superseded_by_task_id")),
@@ -445,6 +448,7 @@ class HumanTaskRecordStore:
         assignee_type: str,
         assignee_id: Optional[str] = None,
         capability_approval: Optional[Mapping[str, Any]] = None,
+        staged_commit: Optional[dict[str, Any]] = None,
         handoff_key: Optional[str] = None,
         superseded_task_ids: Sequence[str] = (),
     ) -> HumanTaskMaterialization:
@@ -485,6 +489,7 @@ class HumanTaskRecordStore:
                 status=HumanTaskStatus.PENDING,
                 created_at=now,
                 capability_approval=capability_metadata,
+                staged_commit=staged_commit,
             )
             envelope.tasks[task.id] = task
             envelope.assignments[task.id] = Assignment(
