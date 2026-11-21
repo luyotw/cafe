@@ -1369,7 +1369,8 @@ def _bounded_event(event: dict[str, Any]) -> dict[str, Any]:
         "task_id",
         "route_status",
         "resolution_owner",
-        "evidence_reason",
+        "evidence_reason", "expected_step", "worker_id", "iteration", "elapsed_seconds",
+        "wait_seconds", "progress_at", "progress_source",
     }
     return {key: value for key, value in event.items() if key in allowed}
 
@@ -1716,7 +1717,9 @@ EventDriverSessionStore = EventManagerSessionStore
 def _callback_to_step(event: dict[str, Any], *, repository_root: Path) -> str | None:
     """Project the event-time baton without changing callback or workflow authority."""
     issue = event.get("issue")
-    if not isinstance(issue, str) or issue in {"", ".", ".."} or Path(issue).name != issue:
+    try:
+        issue = validate_issue_name(issue)
+    except ValueError:
         return None
     audit = AuditEventStore(repository_root / ".cafe" / "issues" / issue)
     try:
@@ -1725,7 +1728,7 @@ def _callback_to_step(event: dict[str, Any], *, repository_root: Path) -> str | 
                 or record["timestamp"] != event.get("occurred_at")
                 or record["event_type"] != "workflow_event_callback_enqueued"):
             return None
-        for sequence in range(record["sequence"] - 1, 0, -1):
+        for sequence in range(record["sequence"] - 1, max(0, record["sequence"] - 33), -1):
             prior = audit.read(event["workflow_id"], sequence, bounded=True)
             if prior is None:
                 continue
@@ -1749,19 +1752,88 @@ def _callback_to_step(event: dict[str, Any], *, repository_root: Path) -> str | 
     return None
 
 
+def _supervision(event, root, event_target):
+    """Project recent durable decisions without acquiring an advancement lease."""
+    from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
+    from cafe.workflow_execution.worker_launch import WorkerLaunchStore
+
+    issue = root / ".cafe/issues" / _validated_issue_name(event)
+    workflow = event["workflow_id"]
+    audit = AuditEventStore(issue)
+    position = json.loads(_read_bounded_text(issue / "blackboard.json", label="workflow state"))
+    high = audit.high_water(workflow)
+    if position.get("workflow_id") != workflow or position.get("applied_event_sequence") != high:
+        raise ValueError("workflow position needs reconciliation")
+    handoff = position.get("handoff_contract") or {}
+    active = position.get("current_step")
+    owner = handoff.get("to_owner")
+    records = [record for seq in range(max(1, high - 31), high + 1)
+               if (record := audit.read(workflow, seq, bounded=True))]
+    event_position = event["sequence"]
+    transitions = [r for r in records if r["event_type"] == "transition"]
+    origin = next((r for r in reversed(transitions) if r["sequence"] < event_position), None)
+    current = transitions[-1] if transitions else None
+
+    def edge(record):
+        return {k: record["data"].get(k) for k in ("from", "to")} if record else None
+
+    events = [r for r in records if r["event_type"] in {
+        "transition", "human_task_completed", "workflow_completed", "human_task_materialized"
+    }]
+    progress = events[-1] if events else None
+    failures = [r for r in records if r["event_type"] == "workflow_event_callback_enqueued"
+                and r["data"].get("step") == event["step"] and event.get("reason")
+                and r["data"].get("reason") == event["reason"]]
+    tasks = [{"id": t.id, "step": t.step, "trigger": t.trigger}
+             for t in HumanTaskRecordStore(issue).tasks()
+             if t.workflow_id == workflow and t.status == HumanTaskStatus.PENDING]
+    workers = WorkerLaunchStore(issue).running_positions(workflow)
+    worker = workers[0] if len(workers) == 1 else None
+    decision = "inspect"
+    if tasks and owner == "user":
+        decision = "pending_decision"
+    elif (event.get("event_type") == "phase_terminal" and origin and current
+          and origin["data"].get("from") == event["step"]
+          and event.get("expected_step", event_target) == event_target == origin["data"].get("to")
+          and not tasks
+          and owner == "agent" and active == handoff.get("to_step") == current["data"].get("to")
+          and worker and worker["step"] == active and not failures):
+        later = [r for r in transitions if r["sequence"] > origin["sequence"]]
+        steps = [event_target] + [r["data"].get("to") for r in later]
+        if all(r["data"].get("from") == previous for r, previous in zip(later, steps)):
+            decision = "later_handoff" if later else "continue"
+    if audit.high_water(workflow) != high:
+        raise ValueError("workflow advanced during observation")
+    return {"assessment": decision, "expected_step": event.get("expected_step"),
+            "event_transition": edge(origin),
+            "current_transition": edge(current), "current_step": active,
+            "owner": owner, "worker": worker, "pending_tasks": tasks[:4],
+            "last_progress": ({"sequence": progress["sequence"], "at": progress["timestamp"],
+                               "source": progress["event_type"]} if progress else None),
+            "same_problem_attempts": [r["sequence"] for r in failures[-4:]],
+            "observed_through": high}
+
+
 def _callback_prompt(
     event: dict[str, Any], *, repository_root: Path, include_instructions: bool = False
 ) -> str:
+    target = _callback_to_step(event, repository_root=repository_root)
+    facts = {}
+    if target is not None or event.get("event_type") == "worker_progress_overdue":
+        try:
+            facts["supervision"] = _supervision(event, repository_root, target)
+        except (KeyError, OSError, TypeError, ValueError):
+            facts["supervision"] = {"assessment": "inspect"}
     notice = json.dumps(
-        {**event, "to_step": _callback_to_step(event, repository_root=repository_root)},
+        {**event, "to_step": target, **facts},
         ensure_ascii=False, sort_keys=True,
     )
     instructions = (
         "You are the event-driven CAFE workflow manager.",
         "This is an asynchronous wake notification, not a workflow advancement gate.",
         "Read the builtin use-cafe-workflow skill and follow its current confirmed contract.",
-        "First inspect current durable state with cafe status/show before acting; "
-        "the event may be stale.",
+        "Use the supervision facts for routine and verified later handoffs. Inspect the "
+        "specific missing or conflicting fact for other wakes before acting.",
         "For the current task, run cafe task inspect <task-id> --json, then "
         "inspect_task_authority.py --issue-dir <issue-dir> --task-id <task-id> --json. "
         "Treat route_status, resolution_owner, and evidence_reason independently.",

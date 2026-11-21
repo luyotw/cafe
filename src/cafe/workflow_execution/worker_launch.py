@@ -99,6 +99,17 @@ class WorkerLaunchStore:
                 if isinstance(record.get("active"), dict):
                     record["active"]["accepts_interruption"] = False
 
+    def running_positions(self, workflow_id: str) -> list[dict[str, Any]]:
+        """Read recorded worker positions without changing the worker or its lease."""
+        positions = []
+        for record in self._read_unlocked().values():
+            active = record.get("active") or {}
+            if (record["status"] == "running" and active.get("workflow_id") == workflow_id
+                    and not worker_liveness.worker_abandoned(record)):
+                positions.append({"worker_id": record["worker_id"], "step": active.get("step"),
+                                  "iteration": active.get("iteration")})
+        return positions
+
     def get(self, worker_id: str) -> dict[str, Any] | None:
         if not worker_id:
             return None

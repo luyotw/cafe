@@ -108,6 +108,9 @@ class InterventionControl:
         self.worker_id = worker_id
         self.store = WorkerLaunchStore(issue)
         self.on_quiesced = None
+        self.progress_callback = None
+        self.progress_identity = None
+        self.progress_watch = None
         from cafe.agents.process_control import process_birth
         import os
 
@@ -157,6 +160,33 @@ class InterventionControl:
                     and not state.host_wait
                 ),
             }
+
+        identity = (state.workflow_id, step, record["active"]["iteration"])
+        if identity != self.progress_identity:
+            self.progress_watch = None
+            self.progress_identity = identity
+
+    def observe_provider_wait(self, limit):
+        if self.progress_callback is None or self.progress_identity is None or limit is None:
+            return
+        workflow, step, iteration = self.progress_identity
+        if self.progress_watch is None:
+            from cafe.workflow_execution.progress_watch import ProgressWatch
+
+            self.progress_watch = ProgressWatch(
+                self.issue / step / f"iteration_{iteration:03d}" / "output.md"
+            )
+        diagnostic = self.progress_watch.due(limit)
+        if diagnostic is None:
+            return
+        record = self.store._read_unlocked().get(self.worker_id, {})
+        active = record.get("active", {})
+        if (record.get("status") == "running"
+                and (active.get("workflow_id"), active.get("step"), active.get("iteration"))
+                == self.progress_identity and not _pending_tasks(self.issue, workflow)):
+            self.progress_callback("worker_progress_overdue", {
+                **diagnostic, "step": step, "worker_id": self.worker_id, "iteration": iteration,
+            })
 
     def begin_boundary(self):
         with self.store._locked_records() as records:

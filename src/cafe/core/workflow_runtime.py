@@ -2792,6 +2792,9 @@ class BlackboardWorkflowRuntime:
             )
         control = current_control()
         if control is not None:
+            control.progress_callback = (
+                self._dispatch_workflow_event if self._workflow_event_callback else None
+            )
             control.position(self.blackboard, self.steps)
         owner = self._owner_for_step(step_def)
         if owner == "agent":
@@ -3779,6 +3782,7 @@ class BlackboardWorkflowRuntime:
             "reason",
             "task_id",
             "request_id", "worker_id", "iteration", "correction_step", "next_action",
+            "wait_seconds", "elapsed_seconds", "progress_at", "progress_source", "expected_step",
         ):
             value = payload.get(event_field)
             if isinstance(value, (str, int)):
@@ -4366,7 +4370,7 @@ class BlackboardWorkflowRuntime:
                 "transition_intent": raw_transition_intent,
                 "transition_source": source,
             })
-        self._flush_phase_terminal()
+        self._flush_phase_terminal(extra={"expected_step": next_step})
 
     def _retire_automatic_visit(self, current_step: str) -> None:
         """Commit cursor retirement with the transition, including self-loop visits."""
