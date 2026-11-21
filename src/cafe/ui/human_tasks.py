@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -1328,23 +1329,28 @@ def _apply_human_task_payload(
                         blackboard = current
 
                     commit_options["before_commit"] = recheck_before_commit
+                settings_lock = nullcontext()
                 if step_definition.get("automatic", {}).get("executor") == "local_review":
-                    from cafe.delivery.reviewed_result import revalidate
+                    from cafe.delivery.reviewed_result import revalidate_current_selection
+                    from cafe.utils.issue_config import issue_config_lock
+
+                    settings_lock = issue_config_lock(issue_dir / "issue.yaml")
 
                     previous_check = commit_options.get("before_commit")
                     def recheck_local_review():
                         if previous_check:
                             previous_check()
-                        revalidate(issue_dir, store.load_read_only(), step_definition, durable_task)
+                        revalidate_current_selection(issue_dir, store.load_read_only(), durable_task)
                     commit_options["before_commit"] = recheck_local_review
-                durable_result = record_store.complete(
-                    workflow_id=blackboard.workflow_id,
-                    task_id=durable_task.id,
-                    payload=completion_payload,
-                    source=source,
-                    completion_authority=completion_authority,
-                    **commit_options,
-                )
+                with settings_lock:
+                    durable_result = record_store.complete(
+                        workflow_id=blackboard.workflow_id,
+                        task_id=durable_task.id,
+                        payload=completion_payload,
+                        source=source,
+                        completion_authority=completion_authority,
+                        **commit_options,
+                    )
             except _SnapshotConflict as conflict:
                 return conflict.application
             except (HumanTaskCorrelationError, OSError, ValueError) as exc:

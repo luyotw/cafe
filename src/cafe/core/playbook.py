@@ -626,6 +626,7 @@ class LocalReviewEndpoint(BaseModel):
     model_config = ConfigDict(extra="forbid")
     review_step: str
     implementation_step: str
+    presentation_task: str = "reviewed-revision"
     result_artifact: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_-]*$")
     outcomes: dict[str, str]
 

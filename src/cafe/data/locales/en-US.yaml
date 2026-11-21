@@ -62,3 +62,10 @@ manager.progress.cost.stale: 'stale rates'
 
 workspace.commit_permission: "Approve one {command} in {root} at parent {parent} for staged tree {tree}. Paths: {files}. Commit message: {message}. To grant this operation once, submit feedback “approve-staged-commit {tree}”."
 workspace.commit_resume: "Run the approved commit in this provider environment before continuing. Use {command} and retain its resulting commit identity."
+reviewed_result.title: "Local review"
+reviewed_result.workflow: "Workflow `{workflow}`"
+reviewed_result.revision: "Reviewed commit `{head}` against `{base}`"
+reviewed_result.review: "Independent review transition `{event}`"
+reviewed_result.files: "Changed files"
+reviewed_result.implementation: "Implementation checks"
+reviewed_result.limits: "Independent review and verification limits"

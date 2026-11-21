@@ -93,7 +93,8 @@ def resolve_local_review(playbook, config):
     if len(confirmations) != 1 or any(t not in {*steps, "_done"} for t in contract["outcomes"].values()):
         raise ValueError("invalid local acceptance route")
     confirmation = confirmations[0]
-    confirmation.update(outcomes=contract["outcomes"], mandatory_confirmation=True)
+    confirmation.update(outcomes=contract["outcomes"], mandatory_confirmation=True,
+                        presentation_task=contract.get("presentation_task", "reviewed-revision"))
     endpoint.update(assignee_type="auto", automatic={"executor": "local_review", "inputs": {}},
                     output_artifact=contract["result_artifact"],
                     input_artifacts=[author["output_artifact"], reviewer["output_artifact"], workspace],

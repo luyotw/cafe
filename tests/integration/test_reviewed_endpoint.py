@@ -2,6 +2,10 @@
 
 import hashlib
 import json
+from pathlib import Path
+import shutil
+
+import cafe
 
 import pytest
 from typer.testing import CliRunner
@@ -60,6 +64,9 @@ def test_prepare_local_review_without_remote_or_integration_choices(local_action
         "changed_choice",
         "changed_workspace",
         "unpassed",
+        "oversize",
+        "changed_while_answering",
+        "zh-TW",
     ],
 )
 def test_user_accepts_only_the_reviewed_custom_revision(local_action, monkeypatch, decision):
@@ -85,6 +92,23 @@ def test_user_accepts_only_the_reviewed_custom_revision(local_action, monkeypatc
             return {names.get(k, k): rename(v) for k, v in value.items()}
         return names.get(value, value) if isinstance(value, str) else value
 
+    # Install matching prompt-input declarations alongside the custom playbook so the
+    # task command can resolve the same graph from disk at the decision boundary.
+    skill_root = Path(cafe.__file__).parent / "data/skills"
+    for skill in {step["skill"] for step in graph["steps"].values() if "skill" in step}:
+        destination = root / ".cafe/skills" / skill
+        shutil.copytree(skill_root / skill, destination, dirs_exist_ok=True)
+        skill_file = destination / "SKILL.md"
+        header, body = skill_file.read_text().split("---", 2)[1:]
+        metadata = yaml.safe_load(header)
+        for item in metadata.get("workflow", {}).get("prompt_inputs", []):
+            if "artifacts" in item:
+                item["artifacts"] = rename(item["artifacts"])
+        skill_file.write_text("---\n" + yaml.safe_dump(metadata, sort_keys=False) + "---" + body)
+    raw_path = PlaybookLoader(project_root=root)._resolve_path("bug")[1]
+    local_playbook = root / ".cafe/playbooks/bug.yaml"
+    local_playbook.parent.mkdir(parents=True, exist_ok=True)
+    local_playbook.write_text(yaml.safe_dump(rename(yaml.safe_load(raw_path.read_text()))))
     graph = rename(graph)
     config = issue / "issue.yaml"
     config.write_text(yaml.safe_dump({"package_custom": {"endpoint": "local-review"}}))
@@ -101,6 +125,9 @@ def test_user_accepts_only_the_reviewed_custom_revision(local_action, monkeypatc
     verdict.write_text(
         "Independent review passed. Linux assertions inspected. Native Linux unverified."
     )
+    if decision == "oversize":
+        evidence.write_text("a" * 570_000)
+        verdict.write_text("b" * 480_000)
     calls = []
 
     def provider(step, definition, state, **kwargs):
@@ -121,6 +148,8 @@ def test_user_accepts_only_the_reviewed_custom_revision(local_action, monkeypatc
         executor=provider,
         automatic_registry=automatic_executor_registry(),
     )
+    if decision == "zh-TW":
+        runtime.blackboard.conversation_locale = "zh-TW"
     head = git(root, "rev-parse", "HEAD")
     workspace = build_workspace_artifact(
         repo=root,
@@ -155,6 +184,9 @@ def test_user_accepts_only_the_reviewed_custom_revision(local_action, monkeypatc
     if decision == "single_step":
         result = runtime.run()
     records = HumanTaskRecordStore(issue)
+    if decision == "oversize":
+        assert not records.tasks() and (result.final_status_code == "AUTOMATIC_EXECUTOR_REJECTED")
+        return
     if decision == "unpassed":
         assert not any(t.trigger == "confirm_output" for t in records.tasks())
         assert not calls
@@ -162,6 +194,11 @@ def test_user_accepts_only_the_reviewed_custom_revision(local_action, monkeypatc
     assert calls == ["verify_custom"], (result, calls)
     (task,) = records.tasks()
     assert task.trigger == "confirm_output"
+    if decision in {"confirm", "zh-TW"}:
+        labels = {item["id"]: item["label"] for item in task.expected_result["decisions"]}
+        assert ("完成" if decision == "zh-TW" else "finish") in labels["confirm"].lower()
+        assert ("修訂" if decision == "zh-TW" else "revision") in labels["fix_now"].lower()
+        assert ("提交" if decision == "zh-TW" else "commit") in task.prompt.split("\n\n", 1)[0].lower()
     for source in (head, workspace.base_sha, evidence.read_text(), verdict.read_text()):
         assert source in task.prompt
     if decision == "changed_evidence":
@@ -172,6 +209,12 @@ def test_user_accepts_only_the_reviewed_custom_revision(local_action, monkeypatc
         ws.write_text(ws.read_text() + "\n")
     if decision == "changed_choice":
         graph["steps"][task.step].pop("automatic")
+    if decision == "changed_while_answering":
+        complete = HumanTaskRecordStore.complete
+        def change_selection(store, **kwargs):
+            config.write_text(yaml.safe_dump({"package_custom": {"endpoint": "manual"}}))
+            return complete(store, **kwargs)
+        monkeypatch.setattr(HumanTaskRecordStore, "complete", change_selection)
     applied = apply_human_task_payload(
         issue_dir=issue,
         playbook_data=graph,

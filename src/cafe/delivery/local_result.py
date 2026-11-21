@@ -18,8 +18,11 @@ from cafe.delivery.operations import Commands
 from cafe.utils.issue_paths import issue_project_root
 
 
+MAX_EVIDENCE_BYTES = 1024 * 1024
+
+
 def read_bounded(path):
-    if path.stat().st_size > 1024 * 1024:
+    if path.stat().st_size > MAX_EVIDENCE_BYTES:
         raise ValueError("local delivery evidence exceeds the artifact limit")
     return path.read_bytes()
 

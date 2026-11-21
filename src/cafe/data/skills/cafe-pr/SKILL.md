@@ -56,6 +56,23 @@ workflow:
       label: {message_key: human_task.cafe_pr.pr_confirm}
       label_locales:
         zh-TW: {message_key: human_task.cafe_pr.pr_confirm}
+  - id: reviewed-revision
+    pattern: confirm_output
+    prompt: {message_key: human_task.cafe_pr.reviewed_revision}
+    prompt_locales:
+      zh-TW: {message_key: human_task.cafe_pr.reviewed_revision}
+    input_schema: decision
+    decisions:
+    - id: fix_now
+      label: {message_key: human_task.cafe_pr.reviewed_fix}
+      label_locales:
+        zh-TW: {message_key: human_task.cafe_pr.reviewed_fix}
+      requires_feedback: true
+      correction: true
+    - id: confirm
+      label: {message_key: human_task.cafe_pr.reviewed_finish}
+      label_locales:
+        zh-TW: {message_key: human_task.cafe_pr.reviewed_finish}
   - id: pr-details
     pattern: revision_feedback
     prompt: {message_key: human_task.cafe_pr.pr_details}

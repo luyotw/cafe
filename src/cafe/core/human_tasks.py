@@ -308,6 +308,7 @@ class HumanTaskBinding(BaseModel):
 
     trigger: str
     task_id: str
+    presentation_task: Optional[str] = None
     outcomes: dict[str, str] = Field(default_factory=dict)
     allowed_targets: tuple[str, ...] = ()
     prompt: Optional[str] = None
@@ -519,6 +520,14 @@ def resolve_human_task_policy(
         )
     policy = matching[0]
     changes: dict[str, Any] = {}
+    if binding.presentation_task:
+        alternate = next((p for p in defaults if p.id == binding.presentation_task), None)
+        if alternate is None or {d.id for d in alternate.decisions} != {d.id for d in policy.decisions}:
+            raise HumanTaskPolicyError("presentation policy must cover the bound decisions")
+        labels = {d.id: d for d in alternate.decisions}
+        changes.update(prompt=alternate.prompt, prompt_locales=alternate.prompt_locales,
+                       decisions=[{**d.model_dump(), "label": labels[d.id].label,
+                                   "label_locales": labels[d.id].label_locales} for d in policy.decisions])
     if binding.prompt is not None:
         changes["prompt"] = binding.prompt
     if binding.correction_guidance is not None:

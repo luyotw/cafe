@@ -11,7 +11,8 @@ from cafe.core.packet_io import atomic_write_bytes
 from cafe.core.workspace_artifact import WorkspaceArtifact, verify_workspace_artifact
 from cafe.core.workspace_lock import workspace_execution_lock
 from cafe.delivery.automatic import _presentation, validate_inputs
-from cafe.delivery.local_result import read_bounded
+from cafe.core.runtime_locales import render_text
+from cafe.delivery.local_result import MAX_EVIDENCE_BYTES, read_bounded
 from cafe.delivery.presentation import materialize_task
 from cafe.utils.issue_paths import issue_project_root
 
@@ -25,7 +26,7 @@ def _document(issue, root, entry):
     return content.decode("utf-8")
 
 
-def materials(issue, state, step, definition):
+def materials(issue, state, step, definition, *, locale=None):
     root = issue_project_root(issue.resolve())
     binding = definition["local_review"]
     reviewer = binding["review_step"]
@@ -92,21 +93,18 @@ def materials(issue, state, step, definition):
     verification = verify_workspace_artifact(workspace, repo=root)
     if not verification.valid:
         raise ValueError(", ".join(verification.reasons))
+    def copy(key, **values):
+        return render_text("reviewed_result." + key, locale=locale or state.conversation_locale, **values)
+
     lines = [
-        "# Local review",
-        "",
-        f"Workflow `{state.workflow_id}`",
-        "",
-        f"Reviewed commit `{workspace.head_sha}` against `{workspace.base_sha}`",
-        f"Independent review transition `{edge['event_id']}`",
-        "",
-        "## Changed files",
-        "",
+        "# " + copy("title"), "", copy("workflow", workflow=state.workflow_id), "",
+        copy("revision", head=workspace.head_sha, base=workspace.base_sha),
+        copy("review", event=edge["event_id"]), "", "## " + copy("files"), "",
     ]
     lines.extend("- " + json.dumps(item, ensure_ascii=False) for item in workspace.changed_files)
     for title, entry in (
-        ("Implementation checks", author),
-        ("Independent review and verification limits", review),
+        (copy("implementation"), author),
+        (copy("limits"), review),
     ):
         lines.extend(
             [
@@ -129,8 +127,11 @@ def execute(inputs, *, context):
             context.execution_guard()
         text = materials(ctx.issue_dir, ctx.state, ctx.step, ctx.step_def)
         key = f"reviewed-result:{ctx.state.workflow_id}:{ctx.step}:{ctx.iteration}"
+        content = text.encode()
+        if len(content) > MAX_EVIDENCE_BYTES:
+            raise ValueError("local review materials exceed the evidence limit; shorten the source evidence and repeat review")
         task = materialize_task(ctx, text.rstrip(), handoff_key=key)
-        atomic_write_bytes(ctx.output, text.encode())
+        atomic_write_bytes(ctx.output, content)
         return AutomaticExecutionResult(
             intent=task.trigger,
             task_id=task.id,
@@ -141,8 +142,10 @@ def execute(inputs, *, context):
 def revalidate(issue, state, definition, task):
     if task is None:
         raise ValueError("missing local acceptance task")
-    text = materials(issue, state, task.step, definition)
     output = issue / task.step / f"iteration_{task.iteration:03}" / "output.md"
+    saved = read_bounded(output)
+    locale = "en-US" if saved.startswith(b"# Local review\n") else state.conversation_locale
+    text = materials(issue, state, task.step, definition, locale=locale)
     entry = state.artifacts.get(definition["output_artifact"])
     root = issue_project_root(issue.resolve())
     if (
@@ -150,7 +153,24 @@ def revalidate(issue, state, definition, task):
         or entry.updated_by != task.step
         or (root / entry.path).resolve() != output.resolve()
         or not task.prompt.endswith("\n\n" + text.rstrip())
-        or read_bounded(output) != text.encode()
+        or saved != text.encode()
         or hashlib.sha256(text.encode()).hexdigest() != entry.content_sha256
     ):
         raise ValueError("shown local acceptance materials have changed")
+
+def revalidate_current_selection(issue, state, task):
+    from cafe.core.task_inbox import load_issue_task_playbook
+    from cafe.utils.issue_config import read_issue_config_strict
+
+    config = read_issue_config_strict(issue / "issue.yaml")
+    if config.get("playbook_id", state.playbook_id) != state.playbook_id:
+        raise ValueError("owning playbook changed")
+    graph = load_issue_task_playbook(project_root=issue_project_root(issue.resolve()), issue_dir=issue,
+                                     playbook_id=state.playbook_id)
+    definition = graph["steps"].get(task.step, {})
+    if (definition.get("automatic", {}).get("executor") != "local_review"
+            or definition.get("local_review", {}).get("outcomes") != task.continuations
+            or not any(b["trigger"] == task.trigger and b["task_id"] == task.policy_id
+                       and b["outcomes"] == task.continuations for b in definition.get("human_tasks", []))):
+        raise ValueError("local review endpoint or acceptance outcomes changed")
+    revalidate(issue, state, definition, task)

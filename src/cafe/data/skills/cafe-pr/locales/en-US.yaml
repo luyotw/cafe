@@ -50,3 +50,6 @@ human_task.cafe_pr.pr_review: Review the published PR content. Confirmation cont
 human_task.cafe_pr.pr_fix: Revise the PR content
 human_task.cafe_pr.pr_confirm: Confirm PR content and continue to delivery
 human_task.cafe_pr.pr_details: Clarify the missing PR content or publication detail.
+human_task.cafe_pr.reviewed_revision: "Accept the reviewed local commit or request a revision."
+human_task.cafe_pr.reviewed_finish: "Accept the local commit and finish"
+human_task.cafe_pr.reviewed_fix: "Return the implementation for revision"
