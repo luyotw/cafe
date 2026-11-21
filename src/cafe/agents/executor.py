@@ -320,6 +320,10 @@ class AgentExecutor:
                 )
 
             from cafe.agents.cli.effort import project_environment
+            from cafe.core.staged_commit import SCOPE_ENV, provider_environment
+
+            env.pop(SCOPE_ENV, None)
+            env.update(provider_environment())
             env = project_environment(self.config, env)
 
             # Execute with streaming

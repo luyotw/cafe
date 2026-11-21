@@ -4,11 +4,13 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 
 import pytest
 
+from cafe.core import staged_commit
 from cafe.core.blackboard import ArtifactEntry, ArtifactKind
 from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.workspace_artifact import build_workspace_artifact
@@ -17,8 +19,9 @@ from tests.integration.test_workflow_artifact_correction import CORRECTED, journ
 from tests.integration.test_workspace_completion_workflow import git
 
 
-@pytest.mark.parametrize("drift", [None, "index", "mode", "unstaged", "untracked", "HEAD", "denied", "operation"])
-def test_only_approved_staged_work_reaches_the_custom_consumer(journey, drift):
+@pytest.mark.parametrize("drift", [None, "index", "mode", "unstaged", "untracked", "HEAD", "denied", "operation",
+                                  "restored", "hook_retry", "operation_at_publish", "missing_scope", "hook_drift"])
+def test_only_approved_staged_work_reaches_the_custom_consumer(journey, drift, monkeypatch):
     calls = []
 
     def act(repo, iteration, call):
@@ -30,14 +33,64 @@ def test_only_approved_staged_work_reaches_the_custom_consumer(journey, drift):
             }))
         else:
             assert "commit-staged" in j.manager.calls[-1][1]
-            def invoke(_):
-                run = subprocess.run(
-                    [sys.executable, "-m", "cafe.ui.cli", "task", "commit-staged", task.id, "--issue-dir", str(j.issue)],
-                    cwd=repo, capture_output=True, text=True,
-                    env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2] / "src")},
+            scope = staged_commit.provider_environment()
+            cli = [sys.executable, "-m", "cafe.ui.cli", "task", "commit-staged", task.id, "--issue-dir", str(j.issue)]
+            package_path = str(Path(__file__).resolve().parents[2] / "src")
+
+            def command(env):
+                return subprocess.run(
+                    cli, cwd=repo, capture_output=True, text=True, timeout=30,
+                    env={**os.environ, **env, "PYTHONPATH": package_path},
                 )
+            def invoke(_):
+                run = command(scope)
                 assert run.returncode == 0, run.stderr
                 return run.stdout.strip()
+            if drift == "missing_scope":
+                rejected = command({})
+                assert rejected.returncode and git(repo, "rev-parse", "HEAD").decode().strip() == parent
+                # Substitute only the external provider binary. The actual executor
+                # must forward the scope into its child before that child can commit.
+                from cafe.agents.executor import AgentExecutor
+                from cafe.core.types import AgentCLI, AgentConfig
+                executor = AgentExecutor(AgentConfig(name="fixture", cli=AgentCLI.CODEX))
+                script = (
+                    "import subprocess,sys,json\n"
+                    "subprocess.run(sys.argv[1:], check=True, stdout=subprocess.PIPE)\n"
+                    "print(json.dumps({'type':'turn.completed', 'usage':{}}))"
+                )
+                monkeypatch.setattr(executor, "_build_controlled_command", lambda *args, **kwargs:
+                                    ([sys.executable, "-c", script, *cli], str(repo)))
+                executor.execute("Complete the approved operation", environment_overrides={"PYTHONPATH": package_path})
+                assert git(repo, "rev-parse", "HEAD").decode().strip() != parent
+            if call == 2 and drift in {"hook_retry", "operation_at_publish", "hook_drift"}:
+                hooks = j.issue / "hooks"
+                hooks.mkdir()
+                git(repo, "config", "core.hooksPath", str(hooks))
+                hook = hooks / "pre-commit"
+                request_path = j.issue / task.step / "iteration_001" / "staged_commit_request.json"
+                hook_body = "exit 1" if drift == "hook_retry" else (
+                    "echo " + shlex.quote(json.dumps({"message": "changed", "skip_hooks": False}))
+                    + " > " + shlex.quote(str(request_path)))
+                if drift == "hook_drift":
+                    hook_body = "touch unrelated\nexit 1"
+                hook.write_text("#!/bin/sh\n" + hook_body + "\n")
+                hook.chmod(0o755)
+                assert command(scope).returncode
+                assert git(repo, "rev-parse", "HEAD").decode().strip() == parent
+                assert git(repo, "write-tree").decode().strip() == tree
+                hook.unlink()
+                if drift == "hook_retry":
+                    raise RuntimeError("Git hook rejected the staged operation")
+                if drift == "hook_drift":
+                    unrelated = repo / "unrelated"
+                    assert unrelated.exists()
+                    unrelated.unlink()
+                    assert command(scope).returncode
+                    calls.append("reconciliation required")
+                    return
+                if drift == "operation_at_publish":
+                    request_path.write_text(json.dumps(task.staged_commit["operation"]))
             with ThreadPoolExecutor(max_workers=2) as pool:
                 calls.extend(pool.map(invoke, range(2)))
             # Simulate a stop after the atomic ref update and before its final receipt.
@@ -76,7 +129,7 @@ def test_only_approved_staged_work_reaches_the_custom_consumer(journey, drift):
     tree = git(j.repo, "write-tree").decode().strip()
     if drift == "HEAD":
         git(j.repo, "commit", "--allow-empty", "--only", "-m", "intervening")
-    if drift in ("index", "unstaged"):
+    if drift in ("index", "unstaged", "restored"):
         (j.repo / "owned.txt").write_text("other bytes\n")
         if drift == "index":
             git(j.repo, "add", "owned.txt")
@@ -93,7 +146,21 @@ def test_only_approved_staged_work_reaches_the_custom_consumer(journey, drift):
         blackboard=j.runtime.blackboard, from_step=task.step, trigger=task.trigger,
         source="interactive", raw_payload={"human_task_id": task.id, "feedback": answer})
     assert result.target == task.step
-    if drift:
+    if drift in {"restored", "hook_retry"}:
+        j.runtime.run()
+        retry, = [t for t in records.tasks() if t.status.value == "pending"]
+        assert retry.trigger == "agent_execution_interrupted"
+        if drift == "restored":
+            (j.repo / "owned.txt").write_text("reviewed repair\n")
+        apply_human_task_payload(issue_dir=j.issue, playbook_data=j.playbook,
+            blackboard=j.runtime.blackboard, from_step=retry.step, trigger=retry.trigger,
+            source="interactive", raw_payload={"human_task_id": retry.id, "task": retry.policy_id, "decision": "retry"})
+    if drift == "hook_drift":
+        j.runtime.run()
+        assert calls == ["reconciliation required"]
+        assert not j.manager.deliveries
+        assert before == (git(j.repo, "status", "--porcelain=v1"), git(j.repo, "rev-parse", "HEAD"))
+    elif drift in {"index", "mode", "unstaged", "untracked", "HEAD", "denied", "operation"}:
         try:
             j.runtime.run()
         except ValueError as exc:

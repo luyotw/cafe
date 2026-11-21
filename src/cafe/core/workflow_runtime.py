@@ -1342,6 +1342,16 @@ class BlackboardWorkflowRuntime:
             "expected_result": policy.model_dump(mode="json"),
             "continuations": binding.outcomes,
         }
+        if self.steps.get(current_step, {}).get("workspace_artifact"):
+            from cafe.core.staged_commit import active_task
+            try:
+                grant = active_task(self.issue_dir, self.blackboard, current_step)
+            except ValueError:
+                grant = None
+            if grant is not None:
+                prepared["staged_commit_permission"] = {
+                    "task_id": grant.id, "result_id": records.get_result(grant.id).id,
+                }
         superseded_ids = self._superseded_human_task_ids(
             records, step=current_step, iteration=iteration,
             trigger=AGENT_EXECUTION_INTERRUPTED_TRIGGER, policy_id=policy.id,
