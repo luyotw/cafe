@@ -10,37 +10,37 @@ from datetime import datetime, timezone
 from hashlib import sha256
 from pathlib import Path
 
-from cafe.core.checklist import MAX_CHECKLIST_CONTENT_BYTES, MAX_CHECKLIST_GATES, _CHECKBOX_LINE
+from cafe.core.checklist import MAX_CHECKLIST_CONTENT_BYTES, _CHECKBOX_LINE
 from cafe.core.packet_io import read_regular_bytes
 
 _COMPLETED = re.compile(r"^### ([A-Za-z][\w-]*)\s*\n- Status: completed\s*$", re.MULTILINE)
 
 
-def _gate_states(checklist):
+def _gate_states(lines, pending_rows):
     """Identify each occurrence without copying its descendants into every parent block."""
-    groups = defaultdict(list)
+    groups = defaultdict(bytearray)
     section = ""
     active = []
-    gate_count = 0
 
     def close_gate():
-        _, digest, checked = active.pop()
+        _, digest, checked, tracked = active.pop()
         block = digest.digest()
-        groups[section, block].append(checked)
+        if tracked:
+            groups[section, block].append(checked)
         if active:
             active[-1][1].update(b"C" + block)
 
-    for line in checklist.splitlines():
+    for line in lines:
         match = _CHECKBOX_LINE.match(line)
         if match:
-            gate_count += 1
-            if gate_count > MAX_CHECKLIST_GATES:
-                return {}
             indent = len(match["indent"].expandtabs(4))
             while active and active[-1][0] >= indent:
                 close_gate()
             normalized = line[:match.start("state")] + " " + line[match.end("state"):]
-            active.append((indent, sha256((normalized + "\n").encode()), match["state"].lower() == "x"))
+            tracked = normalized in pending_rows
+            if tracked or active:
+                digest = sha256((normalized + "\n").encode())
+                active.append((indent, digest, match["state"] != " ", tracked))
         elif line.strip() and not line.startswith((" ", "\t")):
             while active:
                 close_gate()
@@ -68,6 +68,7 @@ class ProgressWatch:
         self.seen = set()
         self.stamps = {}
         self.checklist_items = None
+        self.pending_rows = set()
         self._observe_items()
 
     def _changed_text(self, path, limit):
@@ -82,27 +83,50 @@ class ProgressWatch:
         except (OSError, ValueError):
             return ""
 
+    def _checklist_advanced(self):
+        if self.checklist_items == {}:
+            return False
+        path = self.output.with_name("checklist.md")
+        checklist = self._changed_text(path, MAX_CHECKLIST_CONTENT_BYTES)
+        if not checklist:
+            return False
+        lines = checklist.splitlines()
+        if self.checklist_items is None:
+            # A live checklist can contain arbitrarily many supplemental notes
+            # within the byte bound. Only initially outstanding rows can advance.
+            has_items = False
+            for line in lines:
+                match = _CHECKBOX_LINE.match(line)
+                if match:
+                    has_items = True
+                    if match["state"] == " ":
+                        self.pending_rows.add(line)
+            if has_items:
+                self.checklist_items = _gate_states(lines, self.pending_rows) if self.pending_rows else {}
+            return False
+
+        advanced = False
+        for group, states in _gate_states(lines, self.pending_rows).items():
+            original = self.checklist_items.get(group)
+            # An insertion or removal makes identical occurrences ambiguous.
+            if original is None or len(states) != len(original):
+                continue
+            for index, checked in enumerate(states):
+                if checked and not original[index]:
+                    original[index] = 1
+                    advanced = True
+            if 0 not in original:
+                del self.checklist_items[group]
+        return advanced
+
     def _observe_items(self):
         content = self._changed_text(self.output, 256 * 1024)
         _, section, ledger = content.partition("## Todo Progress\n")
         completed = {("completed_todo", key) for key in _COMPLETED.findall(ledger.split("\n## ", 1)[0])} if section else set()
-        checklist = self._changed_text(self.output.with_name("checklist.md"), MAX_CHECKLIST_CONTENT_BYTES)
-        if checklist:
-            groups = _gate_states(checklist)
-            if self.checklist_items is None and groups:
-                self.checklist_items = groups
-            elif self.checklist_items:
-                for group, states in groups.items():
-                    original = self.checklist_items.get(group, ())
-                    # An insertion or removal makes identical occurrences ambiguous.
-                    if len(states) == len(original):
-                        completed.update(
-                            ("completed_checklist_item", (group, index))
-                            for index, checked in enumerate(states) if checked and not original[index]
-                        )
+        advanced = self._checklist_advanced()
         new = completed - self.seen
         self.seen.update(new)
-        return next((source for source, _ in new), None)
+        return "completed_checklist_item" if advanced else next((source for source, _ in new), None)
 
     def due(self, limit: float) -> dict | None:
         now = self.clock()

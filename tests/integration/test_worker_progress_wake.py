@@ -1,5 +1,6 @@
 """A hosted provider can outlive its meaningful progress between handoffs."""
 
+import json
 import sys
 from pathlib import Path
 import time
@@ -7,14 +8,32 @@ import time
 import pytest
 
 from cafe.agents.executor import AgentExecutor
+from cafe.core.checklist import ChecklistGate, ChecklistMaterialization, checklist_digest
 from cafe.core.types import AgentCLI, AgentConfig
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
+from cafe.utils.checklist_validator import validate_checklist
 from cafe.workflow_execution.workflow_hosting import WorkflowHost
 
 
 @pytest.mark.parametrize("activity", ["repeat", "quiet", "advance", "checklist", "history", "worker_history", "pending", "identical_gates", "large_checklist"])
 def test_host_observes_provider_deadline_before_next_handoff(tmp_path, monkeypatch, activity):
+    _exercise_hosted_wait(tmp_path, monkeypatch, activity)
+
+
+@pytest.mark.parametrize("row_count", [10_000, 10_001])
+@pytest.mark.parametrize("agent_owned", [False, True], ids=["declared", "agent_owned"])
+def test_host_credits_outstanding_items_among_completed_notes(tmp_path, monkeypatch, row_count, agent_owned):
+    blocks = [f"[ ] Verify result {n}\n" for n in range(3)]
+    gates = tuple(ChecklistGate(checklist_digest(block), "policy", block) for block in blocks)
+    pinned = (ChecklistMaterialization("", (), (), False, agent_owned=True) if agent_owned
+              else ChecklistMaterialization("".join(blocks), gates, (), False))
+    notes = "".join(f"[x] Note {n}\n" for n in range(row_count - len(blocks)))
+    _exercise_hosted_wait(tmp_path, monkeypatch, "checklist", live_checklist="".join(blocks) + notes,
+                          pinned=pinned)
+
+
+def _exercise_hosted_wait(tmp_path, monkeypatch, activity, *, live_checklist=None, pinned=None):
     from cafe.agents import executor
 
     original = executor.numeric_limit
@@ -61,10 +80,18 @@ print('complete', flush=True)
             checklist = "".join(f"## {section}\n[ ] Verify result\n" for section in ("Build", "Review", "Delivery"))
         if activity == "large_checklist":
             checklist += "a" * (262145 - len(checklist))
-        output.with_name("checklist.md").write_text(checklist)
+        if pinned is not None:
+            metadata = output.with_name("iteration.json")
+            record = json.loads(metadata.read_text()) if metadata.exists() else {}
+            record["effective_checklist"] = pinned.to_dict()
+            metadata.write_text(json.dumps(record))
+        checklist_path = output.with_name("checklist.md")
+        checklist_path.write_text(live_checklist if live_checklist is not None else checklist)
         AgentExecutor(AgentConfig(name="fixture", cli=AgentCLI.CLAUDE))._execute_streaming_process(
             [sys.executable, "-c", script, activity, str(output)], "fixture"
         )
+        if pinned is not None:
+            assert validate_checklist(checklist_path, expected=pinned).is_complete
         return StepExecutionResult(response="", status_code="await_agent", artifacts={})
 
     runtime = BlackboardWorkflowRuntime(
@@ -183,6 +210,29 @@ def test_rechecking_same_gate_cannot_impersonate_next_occurrence(tmp_path):
     now[0] = 14
     assert watch.due(10)["elapsed_seconds"] == 10
     write(" x")
+    now[0] = 18
+    assert watch.due(10) is None
+    now[0] = 28
+    assert watch.due(10)["elapsed_seconds"] == 10
+
+
+def test_added_notes_cross_count_boundary_without_renewing_a_completed_item(tmp_path):
+    from cafe.workflow_execution.progress_watch import ProgressWatch
+
+    now = [0]
+    path = tmp_path / "checklist.md"
+    notes = "[x] Observation\n" * 9998
+    gates = "[ ] First\n[ ] Second\n"
+    path.write_text(gates + notes)
+    watch = ProgressWatch(tmp_path / "output.md", clock=lambda: now[0])
+    notes += "[x] Extra observation\n"
+    for tick, first in [(4, "x"), (8, " "), (12, "x")]:
+        now[0] = tick
+        path.write_text(gates.replace("[ ] First", f"[{first}] First") + notes)
+        assert watch.due(10) is None
+    now[0] = 14
+    assert watch.due(10)["elapsed_seconds"] == 10
+    path.write_text(gates.replace("[ ]", "[x]") + notes)
     now[0] = 18
     assert watch.due(10) is None
     now[0] = 28
