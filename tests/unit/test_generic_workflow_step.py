@@ -3403,9 +3403,10 @@ def test_generic_workflow_step_pr_prompt_uses_baton_wording(tmp_path: Path, monk
 
     executor.execute_step("pr", playbook["steps"]["pr"], state)
 
-    assert any("Before finishing this step" in prompt for prompt in agent_manager.prompts)
+    assert any("Before reporting completion" in prompt for prompt in agent_manager.prompts)
     assert any(
-        "Do NOT finish this step until ALL checklist items are marked as [x]." in prompt
+        "Before a successful handoff, mark all applicable primary and "
+        "overlay checklist gates as [x]" in prompt
         for prompt in agent_manager.prompts
     )
     assert not any("Before returning a status code" in prompt for prompt in agent_manager.prompts)
@@ -6191,8 +6192,8 @@ def test_correction_writes_and_inlines_delta_packet(
     assert (iteration_dir / "delta_input.md").read_text(encoding="utf-8") == "Apply correction"
     assert metadata["path"].endswith("spec/iteration_002/delta_packet.json")
     assert metadata["bytes"] == packet_path.stat().st_size
-    assert "Correction delta packet" in manager.prompts[0]
-    assert "Read previous_output" in manager.prompts[0]
+    assert "Iteration context manifest" in manager.prompts[0]
+    assert "Read previous_output and re-verify" not in manager.prompts[0]
 
 
 def test_checklist_retry_receives_exact_session_and_phase_name(
@@ -6470,6 +6471,80 @@ Prepare packet inputs.
         ]
         == persisted
     )
+
+
+@pytest.mark.parametrize("mode", ["packet", "full", "full_fallback"])
+def test_checklist_uses_effective_inputs_without_changing_todo_authority(
+    tmp_path: Path, monkeypatch, mode: str
+) -> None:
+    """Custom workflows use the prepared input in prose and the source for Todo gates."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "input-consistency"
+    source = tmp_path / "dossier.md"
+    source.write_text(
+        "# Dossier\n\n## Todo List\n"
+        "- [ ] `ITEM-1` — Source: `dossier` — Work: Resolve the current item "
+        "— Closure: Item resolved — Evidence: Targeted verification\n",
+        encoding="utf-8",
+    )
+    skill_dir = tmp_path / ".cafe" / "skills" / "cafe-synthesis"
+    (skill_dir / "references").mkdir(parents=True)
+    (skill_dir / "references" / "steps.md").write_text(
+        "[ ] Consult {dossier_file} as needed\n", encoding="utf-8"
+    )
+    policy = "" if mode == "full" else "      load_policy: [{mode: packet, contract_kind: spec}]\n"
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: cafe-synthesis\ndescription: Consume a dossier\nworkflow:\n"
+        "  prompt_inputs:\n    - artifacts: [dossier]\n      placeholder: dossier_file\n"
+        + policy
+        + "  checklist:\n    variants:\n      - when: {}\n        sections:\n"
+        "          - reference: steps.md\n"
+        "          - todo_projection: {artifact: dossier, source: dossier}\n"
+        "---\n\nSynthesize the current item.\n",
+        encoding="utf-8",
+    )
+    if mode == "full_fallback":
+
+        def fail_packet_write(*args, **kwargs):
+            raise OSError("Packet storage unavailable")
+
+        monkeypatch.setattr("cafe.core.context_packet.persist_context_packet", fail_packet_write)
+    step = {
+        "skill": "cafe-synthesis", "role": "developer", "input_artifacts": ["dossier"],
+        "output_artifact": "report", "allowed_tools": ["Read"],
+        "valid_intents": ["need_clarification", "confirmed"],
+        "on": {"await_agent": "_done", "need_clarification": "synthesis"},
+    }
+    playbook = {"playbook": {"id": "custom"}, "steps": {"synthesis": step}}
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("synthesis")
+    store.set_artifact(state, "dossier", str(source))
+
+    def request_clarification(*, streaming_output_file, **_kwargs):
+        Path(streaming_output_file).with_name("questions.xml").write_text(
+            '<questions><question id="q1"><title>Which item should proceed?</title>'
+            '<options><option>Current item</option><option>Revise scope</option></options>'
+            '</question></questions>', encoding="utf-8",
+        )
+
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir, issue_name="input-consistency", playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("need_clarification", on_execute=request_clarification),
+        git_ops=FakeGitOperations(), role_agent_map={"developer": "David"},
+    )
+    result = executor.execute_step("synthesis", step, state)
+    assert result.status_code == "need_clarification"
+    output = issue_dir / "synthesis" / "iteration_001" / "output.md"
+    binding = json.loads(output.with_name("iteration.json").read_text())["effective_inputs"][
+        "dossier_file"
+    ]
+    assert binding["mode"] == mode
+    effective_path = executor._display_path(Path(binding["path"]))
+    assert f"Consult {effective_path} as needed" in output.with_name("checklist.md").read_text()
+    binding, = executor._effective_checklist.projections
+    assert Path(binding["path"]).resolve() == source.resolve()
+    assert binding["rows"][0].startswith("[ ] `ITEM-1` — Resolve the current item")
 
 
 def test_primary_and_backup_reject_persisted_full_active_packet_binding(

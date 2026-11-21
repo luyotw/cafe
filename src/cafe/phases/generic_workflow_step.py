@@ -4206,13 +4206,14 @@ class GenericWorkflowStepExecutor(Phase):
             previous_output = self._display_path(
                 self._get_versioned_file_path(step_name, self.iteration - 1, self.phase_dir)
             )
-        context = dict(runtime_context or {})
-        context.update(
-            {
-                placeholder: self._display_path(Path(path))
-                for placeholder, path in declared_inputs.items()
-            }
-        )
+        # Use authoritative paths only as defaults. Preparation may have selected
+        # validated packets for the prompt; checklist prose must use those same
+        # effective inputs. Todo projection still reads input_artifacts below.
+        context = {
+            placeholder: self._display_path(Path(path))
+            for placeholder, path in declared_inputs.items()
+        }
+        context.update(runtime_context or {})
         context.update(
             {
                 "output_file": self._display_path(output_file),

@@ -605,8 +605,10 @@ class AgentManager:
                     primary_attempt += 1
                     attempt_prompt = (
                         "[system] The previous workflow session is unavailable. "
-                        "Continue the same step using the saved artifacts, checklist and current "
-                        "worktree. Preserve existing changes and completed work.\n\n" + prompt
+                        "Recover the current task and next action from this prompt's handoff "
+                        "and output references; do not assume earlier conversation memory. "
+                        "Preserve existing changes and reuse completed work only where current "
+                        "evidence and completion gates permit it.\n\n" + prompt
                     )
                     print("Workflow session unavailable; continuing in a new session.")
                     continue

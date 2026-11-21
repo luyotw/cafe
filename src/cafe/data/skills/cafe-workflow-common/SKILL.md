@@ -1,7 +1,7 @@
 ---
 name: cafe-workflow-common
 description: Use this skill at the start of any CAFE workflow phase to load the bounded workflow digest, identify the current baton state, and ground the phase in shared context before reading phase-specific artifacts.
-version: 1.9.0
+version: 1.9.1
 ---
 
 # Workflow Common
@@ -13,7 +13,9 @@ version: 1.9.0
 ## First Steps
 1. Read the runtime-provided **Bounded blackboard digest** and latest handoff summary.
 2. Identify the current workflow step, baton, artifact pointers, and recent event summaries from that digest.
-3. Continue into phase-specific artifacts and instructions after this bounded grounding pass.
+3. Apply this invocation's input to the active handoff. A clarification reply selects the work identified by its matching original question, even when the returned baton only names the phase. Continue that work's next authorized executable action before other independent work, respecting declared dependencies. Do not restart at the first unchecked plan item after answering a question. With no question or other specific handoff work, select remaining items in plan order.
+4. With usable context, continue directly. In a fresh session or with missing context, recover that work and next action from the current phase output, otherwise the referenced previous output and relevant declared inputs. Resolve ambiguous option answers from the matching completed task or prior question file, not this invocation's `questions_file` destination; do not guess the question or infer approval.
+5. Read only the sections needed to establish the current work, acceptance conditions, authority and evidence. Current authoritative sources override stale memory. Verify requested corrections and retain prior evidence only as the phase contract permits; an iteration number or session identity alone proves neither correction scope nor completion. If required context cannot be recovered, report the specific gap through an allowed handoff.
 
 The full `blackboard.json` is an unbounded audit history. Do **not** read or print the whole file during normal phase startup. If a concrete conflict requires older history, query only the exact field or matching event summaries needed. Read a full event payload only when the bounded summary is insufficient to resolve a specific disagreement.
 
@@ -155,6 +157,7 @@ If you write an invalid `to_owner` or `intent` value, the runtime will **reject*
 | Concern | Canonical location |
 | --- | --- |
 | Blackboard-first read, baton-first transitions, `user` / `done` | This skill (**First Steps**, **How workflow transitions work**, **Baton Schema**) |
+| Context recovery for fresh, resumed and replacement sessions | This skill (**First Steps**) |
 | Spec/plan GitHub issue sync | Trusted runtime `after_execute` + `confirmed` capability gate; `cafe-github_sync` documents compatibility wrappers |
 | PR: local artifact vs remote publish ordering | Generic runtime prompt repeats PR-only lines on purpose; `cafe-pr` skill covers PR modes and title/body structure |
 | develop ↔ review disagreements and user arbitration | This skill (**Develop and review disagreement protocol**) |

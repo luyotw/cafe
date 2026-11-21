@@ -219,7 +219,12 @@ def test_build_prompt_includes_files_and_checklist_guard(tmp_path: Path) -> None
     assert "never write blackboard_file" in prompt
     assert "valid intent values: [await_agent, confirm_output, alignment_checkpoint, need_clarification, need_permission, no_changes_needed, manual_handoff, workflow_complete]" in prompt
     assert "do not invoke external workflow-driving skills (e.g. use-cafe-workflow)" in prompt
-    assert "Do NOT finish this step until ALL checklist items are marked as [x]." in prompt
+    assert (
+        "Before a successful handoff, mark all applicable primary and "
+        "overlay checklist gates as [x]"
+        in prompt
+    )
+    assert "Leave the checklist open and skip the completion sweep." in prompt
     assert "Do NOT return a status code" not in prompt
     assert "Latest workflow handoff from blackboard:" in prompt
     assert "Implement cafe skill rm" in prompt
@@ -246,8 +251,12 @@ def test_build_prompt_uses_baton_wording_when_status_code_not_required(tmp_path:
         checklist_file=Path("checklist.md"),
     )
 
-    assert "Before finishing this step" in prompt
-    assert "Do NOT finish this step until ALL checklist items are marked as [x]." in prompt
+    assert "Before reporting completion" in prompt
+    assert (
+        "Before a successful handoff, mark all applicable primary and "
+        "overlay checklist gates as [x]"
+        in prompt
+    )
     assert "Before returning a status code" not in prompt
     assert "Do NOT return a status code" not in prompt
 
@@ -305,7 +314,7 @@ def test_build_prompt_renders_actionable_current_resume_scope(tmp_path: Path) ->
     )
 
     assert "Current resume scope (declared step inputs):" in prompt
-    assert "Read every listed current source before selecting work." in prompt
+    assert "Use these current sources to resolve the active scope" in prompt
     assert "- batch_scope: .cafe/issues/demo/batches/current.md" in prompt
     assert "Latest workflow handoff from blackboard:" in prompt
     assert "Current user input for this iteration:" in prompt
@@ -442,7 +451,11 @@ def test_build_prompt_contract_covers_shared_skills_files_context_and_gate(tmp_p
     ):
         assert line in prompt
     assert "Baton contract (single source of truth):" in prompt
-    assert "Do NOT finish this step until ALL checklist items are marked as [x]." in prompt
+    assert (
+        "Before a successful handoff, mark all applicable primary and "
+        "overlay checklist gates as [x]"
+        in prompt
+    )
     assert "Do NOT return a status code" not in prompt
     assert_runtime_handoff_guardrails_persist(prompt)
 
@@ -795,7 +808,7 @@ def test_packaged_develop_instruction_uses_repository_owned_quality_gates(
     instruction = (project_root / ".codex/skills/cafe-develop/SKILL.md").read_text(
         encoding="utf-8"
     )
-    assert "與變更直接相關的 targeted checks" in instruction
+    assert "Run bounded targeted checks for the changed behavior" in instruction
     assert "Repository-owned quality gates" in instruction
 
 
