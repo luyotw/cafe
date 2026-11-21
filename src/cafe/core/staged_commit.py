@@ -207,8 +207,9 @@ def provider_scope(issue, task):
             yield
         finally:
             _provider_scope.reset(context)
-            with receipt.with_suffix(".lock").open("a+b") as lock:
-                fcntl.flock(lock, fcntl.LOCK_EX)
+            # Serialize revocation with the final ref transaction. A provider
+            # that has exited must not lend its lifetime to queued calls or Git hooks.
+            with BlackboardStore(issue).state_transaction():
                 lease.truncate(0)
                 lease.flush()
                 fcntl.flock(lease, fcntl.LOCK_UN)

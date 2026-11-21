@@ -177,3 +177,35 @@ def test_only_approved_staged_work_reaches_the_custom_consumer(journey, drift, m
         assert records.get_result(task.id).task_id == task.id
         assert j.runtime.blackboard.artifacts["custom_snapshot"].head_sha == calls[0]
         assert j.runtime.blackboard.artifacts["parent_tree"].head_sha == parent
+
+
+def test_provider_exit_does_not_wait_for_private_candidate_preparation(tmp_path):
+    """Revocation only needs to serialize with publication, even if Git is still busy."""
+    import fcntl
+    from threading import Event
+    from types import SimpleNamespace
+
+    task = SimpleNamespace(id="fixture-grant", step="repair", iteration=1)
+    iteration = tmp_path / task.step / "iteration_001"
+    iteration.mkdir(parents=True)
+    preparing = Event()
+    finish = Event()
+
+    def prepare_candidate():
+        # Model a commit already holding the command lock during a Git hook.
+        with (iteration / "commit-fixture-grant.lock").open("a+b") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            preparing.set()
+            finish.wait(3)
+
+    def provider():
+        with staged_commit.provider_scope(tmp_path, task):
+            assert preparing.wait(3)
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        candidate = workers.submit(prepare_candidate)
+        try:
+            workers.submit(provider).result(timeout=2)
+        finally:
+            finish.set()
+        candidate.result(timeout=3)
