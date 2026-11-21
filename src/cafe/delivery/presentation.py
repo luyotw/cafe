@@ -44,7 +44,7 @@ class DeliveryPresentation:
         return self.playbook["steps"][self.step]
 
 
-def materialize_task(ctx, prompt, *, trigger="confirm_output"):
+def materialize_task(ctx, prompt, *, trigger="confirm_output", handoff_key=None):
     state = ctx.state
     step = ctx.step
     policy, binding = resolve_step_human_task(
@@ -69,6 +69,8 @@ def materialize_task(ctx, prompt, *, trigger="confirm_output"):
     shown_prompt = policy.prompt + "\n\n" + prompt
     superseded = []
     if existing:
+        if handoff_key and existing[-1].handoff_key != handoff_key:
+            raise ValueError("pending task belongs to another delivery choice")
         if existing[-1].prompt != shown_prompt:
             from cafe.delivery.closeout import read_result_contract
 
@@ -105,7 +107,7 @@ def materialize_task(ctx, prompt, *, trigger="confirm_output"):
         handoff_key=(
             f"delivery-result:{state.workflow_id}:{step}:{ctx.iteration}:{digest(shown_prompt)}"
             if superseded
-            else None
+            else handoff_key
         ),
         superseded_task_ids=superseded,
     )

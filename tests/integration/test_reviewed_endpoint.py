@@ -1,0 +1,176 @@
+"""Explicit review-only preparation ends at acceptance of the independent review."""
+
+import hashlib
+import json
+
+import pytest
+from typer.testing import CliRunner
+import yaml
+
+from cafe.core.blackboard import ArtifactEntry, ArtifactKind
+from cafe.core.human_task_records import HumanTaskRecordStore
+from cafe.core.workflow_models import StepExecutionResult
+from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
+from cafe.core.workspace_artifact import build_workspace_artifact
+from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
+from cafe.ui.cli import app
+from cafe.ui.human_tasks import apply_human_task_payload
+from cafe.workflow_execution.automatic import automatic_executor_registry
+from tests.integration.test_development_delivery_operations import local_action, git
+
+
+def test_prepare_local_review_without_remote_or_integration_choices(local_action, monkeypatch):
+    from tests.conftest import create_minimal_config
+
+    root, _, _, _ = local_action
+    create_minimal_config(root)
+    monkeypatch.chdir(root)
+    monkeypatch.setattr("cafe.ui.commands.lifecycle._offer_cli_update", lambda **kw: None)
+    result = CliRunner().invoke(
+        app,
+        [
+            "prepare",
+            "prepared",
+            "--playbook",
+            "bug",
+            "--no-interactive",
+            "--no-check",
+            "--input-method",
+            "manual",
+            "--local-review",
+        ],
+    )
+    assert result.exit_code == 0, result.output + repr(result.exception)
+    path = root / ".cafe/issues/prepared/issue.yaml"
+    playbook = PlaybookLoader(project_root=root).load("bug")
+    graph = apply_issue_playbook_overrides(playbook, path)
+    target = graph["steps"]["review"]["on"]["await_agent"]
+    assert graph["steps"][target]["assignee_type"] == "auto"
+    assert "strategy" not in yaml.safe_load(path.read_text()).get("deliver", {})
+
+
+@pytest.mark.parametrize(
+    "decision",
+    ["confirm", "fix_now", "changed_evidence", "changed_head", "changed_choice", "unpassed"],
+)
+def test_user_accepts_only_the_reviewed_custom_revision(local_action, monkeypatch, decision):
+    root, _, _, _ = local_action
+    issue = root / ".cafe/issues/local-endpoint"
+    monkeypatch.chdir(root)
+    issue.mkdir(parents=True, exist_ok=True)
+    graph = PlaybookLoader(project_root=root).load("bug")
+    names = {
+        "develop": "repair_custom",
+        "review": "verify_custom",
+        "pr": "package_custom",
+        "workspace": "checkout_material",
+        "code": "test_record",
+        "review_feedback": "verdict",
+        "pr_result": "publication_text",
+    }
+
+    def rename(value):
+        if isinstance(value, list):
+            return [rename(v) for v in value]
+        if isinstance(value, dict):
+            return {names.get(k, k): rename(v) for k, v in value.items()}
+        return names.get(value, value) if isinstance(value, str) else value
+
+    graph = rename(graph)
+    config = issue / "issue.yaml"
+    config.write_text(yaml.safe_dump({"package_custom": {"endpoint": "local-review"}}))
+    graph = apply_issue_playbook_overrides(graph, config)
+    build = issue / "repair_custom/iteration_001"
+    review = issue / "verify_custom/iteration_001"
+    build.mkdir(parents=True, exist_ok=True)
+    review.mkdir(parents=True, exist_ok=True)
+    evidence = build / "output.md"
+    evidence.write_text(
+        "Targeted checks passed on macOS. Eleven failures also occurred at the parent."
+    )
+    verdict = review / "output.md"
+    verdict.write_text(
+        "Independent review passed. Linux assertions inspected. Native Linux unverified."
+    )
+    calls = []
+
+    def provider(step, definition, state, **kwargs):
+        (review / "checklist.md").write_text("[x] Verify the exact revision.\n")
+        calls.append(step)
+        assert step == "verify_custom"
+        (issue / "next_step.txt").write_text(json.dumps({"version": 1, "intent": "await_agent"}))
+        return StepExecutionResult(
+            response="await_agent",
+            status_code="await_agent",
+            artifacts={"verdict": str(verdict)},
+            agent_invoked=True,
+        )
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue,
+        playbook=graph,
+        executor=provider,
+        automatic_registry=automatic_executor_registry(),
+    )
+    head = git(root, "rev-parse", "HEAD")
+    workspace = build_workspace_artifact(
+        repo=root,
+        name="checkout_material",
+        base_sha=git(root, "rev-parse", "HEAD^"),
+        head_sha=head,
+        version=1,
+        producer_step="repair_custom",
+    )
+    ws = build / "workspace.json"
+    ws.write_text(json.dumps(workspace.to_dict()))
+    for name, kind, path in [
+        ("test_record", ArtifactKind.DOCUMENT, evidence),
+        ("checkout_material", ArtifactKind.WORKSPACE, ws),
+    ]:
+        runtime.blackboard.artifacts[name] = ArtifactEntry(
+            name=name,
+            kind=kind,
+            path=str(path),
+            version=1,
+            updated_by="repair_custom",
+            updated_at="2026-01-01T00:00:00Z",
+            content_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+            head_sha=head,
+            base_sha=workspace.base_sha,
+        )
+    runtime.blackboard_store.save(runtime.blackboard)
+    result = runtime.run(start_step="package_custom" if decision == "unpassed" else "verify_custom")
+    records = HumanTaskRecordStore(issue)
+    if decision == "unpassed":
+        assert not any(t.trigger == "confirm_output" for t in records.tasks())
+        assert not calls
+        return
+    assert calls == ["verify_custom"], (result, calls)
+    (task,) = records.tasks()
+    assert task.trigger == "confirm_output"
+    for source in (head, workspace.base_sha, evidence.read_text(), verdict.read_text()):
+        assert source in task.prompt
+    if decision == "changed_evidence":
+        evidence.write_text("replaced")
+    if decision == "changed_head":
+        git(root, "commit", "--allow-empty", "-m", "new revision")
+    if decision == "changed_choice":
+        graph["steps"][task.step].pop("automatic")
+    applied = apply_human_task_payload(
+        issue_dir=issue,
+        playbook_data=graph,
+        blackboard=runtime.blackboard,
+        from_step=task.step,
+        trigger=task.trigger,
+        source="interactive",
+        raw_payload={
+            "human_task_id": task.id,
+            "decision": "fix_now" if decision == "fix_now" else "confirm",
+            **({"feedback": "revise the repair"} if decision == "fix_now" else {}),
+        },
+    )
+    if decision.startswith("changed"):
+        assert applied.rejection and records.get_task(task.id).status.value == "pending"
+    else:
+        assert applied.target == ("repair_custom" if decision == "fix_now" else "done")
+        assert records.get_task(task.id).status.value == "completed"

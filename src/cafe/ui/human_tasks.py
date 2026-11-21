@@ -1328,6 +1328,15 @@ def _apply_human_task_payload(
                         blackboard = current
 
                     commit_options["before_commit"] = recheck_before_commit
+                if step_definition.get("automatic", {}).get("executor") == "local_review":
+                    from cafe.delivery.reviewed_result import revalidate
+
+                    previous_check = commit_options.get("before_commit")
+                    def recheck_local_review():
+                        if previous_check:
+                            previous_check()
+                        revalidate(issue_dir, store.load_read_only(), step_definition, durable_task)
+                    commit_options["before_commit"] = recheck_local_review
                 durable_result = record_store.complete(
                     workflow_id=blackboard.workflow_id,
                     task_id=durable_task.id,

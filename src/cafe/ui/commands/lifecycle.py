@@ -447,6 +447,7 @@ def prepare(
         "--conversation-locale-source",
         help="Tier that supplied the conversation language: explicit or inferred",
     ),
+    local_review: bool = typer.Option(False, "--local-review", help="End at human acceptance of the independently reviewed local change."),
     field_values: Optional[List[str]] = typer.Option(
         None, "--set", help="Set a declared step prepare field: FIELD_ID=VALUE (repeatable).",
     ),
@@ -516,6 +517,14 @@ def prepare(
             validate_publication_answers,
         )
 
+        review_endpoint = None
+        if local_review:
+            from cafe.delivery.prepared import local_review_step
+
+            review_endpoint = local_review_step(loaded_playbook.as_dict())
+            if auto_create_pr or post_pr_todo_list:
+                raise ValueError("local review conflicts with PR publication")
+            auto_create_pr = False if profile.supports_pr_config() else None
         if profile.supports_pr_config() and not profile.is_github_repo and auto_create_pr is None:
             auto_create_pr = False
         publication_supplied = auto_create_pr is not None or post_pr_todo_list is not None
@@ -1003,6 +1012,8 @@ def prepare(
                 config_data[step_name] = step_config
 
         from cafe.delivery.prepared import validate_prepared_delivery
+        if review_endpoint:
+            config_data.setdefault(review_endpoint, {})["endpoint"] = "local-review"
         validate_prepared_delivery(config_data, loaded_playbook.as_dict())
 
         # Add worktree_path if using worktree mode

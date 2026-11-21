@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 from pathlib import Path
 from typing import Literal
@@ -60,9 +61,55 @@ def request_from_config(config: dict, step: str) -> dict | None:
     return PreparedDelivery.model_validate(selected).request()
 
 
+def local_review_step(playbook):
+    candidates = [name for name, step in playbook["steps"].items() if step.get("local_review")]
+    if len(candidates) != 1:
+        raise ValueError("the playbook must declare one local review endpoint")
+    return candidates[0]
+
+
+def resolve_local_review(playbook, config):
+    selected = [name for name in playbook["steps"] if isinstance(config.get(name), dict)
+                and config[name].get("endpoint") == "local-review"]
+    if not selected:
+        return playbook
+    name = local_review_step(playbook)
+    if selected != [name]:
+        raise ValueError("local review must select its declared endpoint")
+    result = deepcopy(playbook)
+    steps = result["steps"]
+    endpoint = steps[name]
+    contract = endpoint["local_review"]
+    reviewer = steps[contract["review_step"]]
+    author = steps[contract["implementation_step"]]
+    workspace = endpoint.get("workspace_input_artifact")
+    if (not workspace or reviewer.get("workspace_input_artifact") != workspace
+            or author.get("workspace_artifact") != workspace or not reviewer.get("role")
+            or reviewer.get("role") == author.get("role")
+            or reviewer.get("on", {}).get("await_agent") != name
+            or not reviewer.get("output_artifact") or not author.get("output_artifact")):
+        raise ValueError("local review requires an independent passing route and its declared workspace")
+    confirmations = [binding for binding in endpoint["human_tasks"] if binding["trigger"] == "confirm_output"]
+    if len(confirmations) != 1 or any(t not in {*steps, "_done"} for t in contract["outcomes"].values()):
+        raise ValueError("invalid local acceptance route")
+    confirmation = confirmations[0]
+    confirmation.update(outcomes=contract["outcomes"], mandatory_confirmation=True)
+    endpoint.update(assignee_type="auto", automatic={"executor": "local_review", "inputs": {}},
+                    output_artifact=contract["result_artifact"],
+                    input_artifacts=[author["output_artifact"], reviewer["output_artifact"], workspace],
+                    human_tasks=[confirmation], capability_requests=[], allowed_tools=[], hooks={},
+                    allowed_goto=[], behavior={}, on={"confirm_output": name})
+    return result
+
+
 def validate_prepared_delivery(config: dict, playbook: dict) -> None:
+    effective = resolve_local_review(playbook, config)
     for step, definition in playbook["steps"].items():
         if definition.get("delivery") is not None:
+            if effective is not playbook:
+                selected = local_review_step(playbook)
+                if definition["delivery"].get("publication_artifact") == playbook["steps"][selected].get("output_artifact"):
+                    continue
             request = request_from_config(config, step)
             if definition.get("assignee_type") == "auto" and request is None:
                 raise ValueError(f"automatic delivery requires prepare choices: --set {step}.mode=github|local "

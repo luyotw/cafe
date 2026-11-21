@@ -228,6 +228,11 @@ steps:
       feedback_todo_source: bug_review
       feedback_todo_id_prefix: BUGR
   pr:
+    local_review:
+      review_step: review
+      implementation_step: develop
+      result_artifact: local_review_result
+      outcomes: {confirm: _done, fix_now: develop}
     handoff_label: Refresh reviewed bug delivery actions
     type: skill
     skill: cafe-pr

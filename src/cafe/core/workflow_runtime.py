@@ -2862,6 +2862,14 @@ class BlackboardWorkflowRuntime:
         same_invocation_retry: bool = False,
     ) -> StepIterationFrame:
         if not self.blackboard.host_wait or self.blackboard.host_wait["step"] != current_step:
+            inputs = {}
+            if step_def.get("workspace_input_artifact"):
+                inputs = {
+                    name: {"version": entry.version, "producer": entry.updated_by,
+                           "digest": entry.content_sha256, "head": entry.head_sha, "base": entry.base_sha}
+                    for name in step_def.get("input_artifacts", ())
+                    if (entry := self.blackboard.artifacts.get(name)) is not None
+                }
             self.blackboard_store.record_event(
                 self.blackboard,
                 "step_started",
@@ -2869,6 +2877,7 @@ class BlackboardWorkflowRuntime:
                     "step": current_step,
                     "attempt": attempt_count,
                     "hop": hop_count,
+                    **({"consumed_inputs": inputs} if inputs else {}),
                     "runtime": runtime,
                 },
             )
@@ -3571,6 +3580,7 @@ class BlackboardWorkflowRuntime:
         runtime: str,
         attempt_count: Optional[int] = None,
         hop_count: Optional[int] = None,
+        agent_invoked: bool = False,
         post_contract: HandoffContract | None = None,
     ) -> PlaybookRunResult | None:
         contract = post_contract
@@ -3591,6 +3601,8 @@ class BlackboardWorkflowRuntime:
             "status_code": status_code,
             "runtime": runtime,
         }
+        if agent_invoked and self.steps[current_step].get("workspace_input_artifact"):
+            payload["agent_invoked"] = True
         if attempt_count is not None:
             payload["attempt"] = attempt_count
         if hop_count is not None:
@@ -6049,6 +6061,7 @@ class BlackboardWorkflowRuntime:
                 )
                 self.blackboard_store.set_current_step(self.blackboard, "user")
                 completion = self._record_step_completion(
+                    agent_invoked=getattr(frame.execution_result, "agent_invoked", False),
                     event_type=completion_event_type, current_step=current_step,
                     status_code=status_code, runtime=runtime_label,
                     attempt_count=attempt_count, hop_count=hop_count,
@@ -6108,6 +6121,7 @@ class BlackboardWorkflowRuntime:
                 return feedback_rejection
 
             completion = self._record_step_completion(
+                agent_invoked=getattr(frame.execution_result, "agent_invoked", False),
                 event_type=completion_event_type, current_step=current_step,
                 status_code=status_code, runtime=runtime_label,
                 attempt_count=attempt_count, hop_count=hop_count, post_contract=contract)
@@ -6376,6 +6390,7 @@ class BlackboardWorkflowRuntime:
                 if feedback_rejection is not None:
                     return feedback_rejection
                 completion = self._record_step_completion(
+                    agent_invoked=getattr(frame.execution_result, "agent_invoked", False),
                     event_type=completion_event_type,
                     current_step=current_step,
                     status_code=status_code,
@@ -6511,6 +6526,7 @@ class BlackboardWorkflowRuntime:
                     return feedback_rejection
 
             completion = self._record_step_completion(
+                agent_invoked=getattr(frame.execution_result, "agent_invoked", False),
                 event_type=completion_event_type,
                 current_step=current_step,
                 status_code=status_code,

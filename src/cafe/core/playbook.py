@@ -620,6 +620,16 @@ class ExecutionRequirements(BaseModel):
         return self
 
 
+class LocalReviewEndpoint(BaseModel):
+    """Roles and outcomes for a prepared local acceptance boundary."""
+
+    model_config = ConfigDict(extra="forbid")
+    review_step: str
+    implementation_step: str
+    result_artifact: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_-]*$")
+    outcomes: dict[str, str]
+
+
 class StepConfig(BaseModel):
     """One playbook step."""
 
@@ -642,6 +652,7 @@ class StepConfig(BaseModel):
     initial_input: Optional[InitialInputDeclaration] = None
     execution: ExecutionRequirements = Field(default_factory=ExecutionRequirements)
     delivery: Optional["DeliveryBinding"] = None
+    local_review: LocalReviewEndpoint | None = None
     template: Optional[str] = None
     allowed_tools: List[str] = Field(default_factory=list)
     capability_requests: List[str] = Field(default_factory=list)

@@ -136,6 +136,15 @@ def snapshot_from_args(args) -> ActionSnapshot:
 
 def validate_task_response(issue_dir, step_definition, policy, task, raw_payload):
     """The existing response entry delegates delivery rules without a generic registry."""
+    local_review = step_definition.get("automatic", {}).get("executor") == "local_review"
+    if task and task.handoff_key.startswith("reviewed-result:") != local_review:
+        raise ValueError("local review endpoint selection changed")
+    if local_review:
+        from cafe.core.blackboard import BlackboardStore
+        from cafe.delivery.reviewed_result import revalidate
+
+        revalidate(issue_dir, BlackboardStore(issue_dir).load_read_only(), step_definition, task)
+        return
     declaration = step_definition.get("delivery")
     if not declaration:
         return
