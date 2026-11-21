@@ -67,6 +67,8 @@ def test_prepare_local_review_without_remote_or_integration_choices(local_action
         "oversize",
         "owner_policy",
         "changed_while_answering",
+        "catalog_publication",
+        "changed_presentation",
         "zh-TW",
     ],
 )
@@ -225,6 +227,32 @@ def test_user_accepts_only_the_reviewed_custom_revision(local_action, monkeypatc
             config.write_text(yaml.safe_dump({"package_custom": {"endpoint": "manual"}}))
             return complete(store, **kwargs)
         monkeypatch.setattr(HumanTaskRecordStore, "complete", change_selection)
+    if decision == "changed_presentation":
+        updated = yaml.safe_load(local_playbook.read_bytes())
+        updated["steps"][task.step]["local_review"].pop("presentation_task")
+        local_playbook.write_text(yaml.safe_dump(updated))
+    if decision == "catalog_publication":
+        import fcntl
+        import os
+        from cafe.core import packet_io
+        from cafe.utils.config import get_global_cafe_dir
+
+        replace = packet_io.os.replace
+        catalog_protected = []
+        def check_replacement(source, destination):
+            if Path(destination) == records.file_path:
+                fd = os.open(get_global_cafe_dir().parent, os.O_RDONLY)
+                try:
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        catalog_protected.append(True)
+                    else:
+                        catalog_protected.append(False)
+                finally:
+                    os.close(fd)
+            return replace(source, destination)
+        monkeypatch.setattr(packet_io.os, "replace", check_replacement)
     applied = apply_human_task_payload(
         issue_dir=issue,
         playbook_data=graph,
@@ -238,6 +266,8 @@ def test_user_accepts_only_the_reviewed_custom_revision(local_action, monkeypatc
             **({"feedback": "revise the repair"} if decision == "fix_now" else {}),
         },
     )
+    if decision == "catalog_publication":
+        assert catalog_protected and catalog_protected[0]
     if decision.startswith("changed"):
         assert applied.rejection and records.get_task(task.id).status.value == "pending"
     else:

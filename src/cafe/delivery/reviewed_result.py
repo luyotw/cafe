@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import hashlib
 import json
 
@@ -158,8 +159,20 @@ def revalidate(issue, state, definition, task):
     ):
         raise ValueError("shown local acceptance materials have changed")
 
+@contextmanager
+def local_review_decision_lock(issue):
+    from cafe.catalogs.resolver import global_catalog_lock
+    from cafe.utils.config import get_global_cafe_dir
+    from cafe.utils.issue_config import issue_config_lock
+
+    with issue_config_lock(issue / "issue.yaml"), global_catalog_lock(get_global_cafe_dir()):
+        yield
+
+
 def revalidate_current_selection(issue, state, task):
+    from cafe.core.human_tasks import resolve_step_human_task
     from cafe.core.task_inbox import load_issue_task_playbook
+    from cafe.skills.loader import SkillLoader
     from cafe.utils.issue_config import read_issue_config_strict
 
     config = read_issue_config_strict(issue / "issue.yaml")
@@ -168,9 +181,14 @@ def revalidate_current_selection(issue, state, task):
     graph = load_issue_task_playbook(project_root=issue_project_root(issue.resolve()), issue_dir=issue,
                                      playbook_id=state.playbook_id)
     definition = graph["steps"].get(task.step, {})
-    if (definition.get("automatic", {}).get("executor") != "local_review"
-            or definition.get("local_review", {}).get("outcomes") != task.continuations
-            or not any(b["trigger"] == task.trigger and b["task_id"] == task.policy_id
-                       and b["outcomes"] == task.continuations for b in definition.get("human_tasks", []))):
-        raise ValueError("local review endpoint or acceptance outcomes changed")
+    if definition.get("automatic", {}).get("executor") != "local_review":
+        raise ValueError("local review endpoint changed")
+    policy, binding = resolve_step_human_task(
+        playbook_data=graph, step_name=task.step, trigger=task.trigger, iteration=task.iteration,
+        skill_loader=SkillLoader(project_root=issue_project_root(issue.resolve())),
+    )
+    if (policy.for_locale(state.conversation_locale).model_dump(mode="json") != task.expected_result
+            or binding.task_id != task.policy_id or binding.outcomes != task.continuations
+            or definition["local_review"]["outcomes"] != task.continuations):
+        raise ValueError("local acceptance policy or outcomes changed")
     revalidate(issue, state, definition, task)
