@@ -46,6 +46,11 @@ def test_only_approved_staged_work_reaches_the_custom_consumer(journey, drift):
             record["state"] = "prepared"
             receipt.write_text(json.dumps(record))
             assert invoke(None) == calls[0]
+            # A stop after saving the candidate but before moving the approved ref.
+            git(repo, "update-ref", "HEAD", parent, calls[0])
+            record["state"] = "prepared"
+            receipt.write_text(json.dumps(record))
+            assert invoke(None) == calls[0]
 
     j = journey([(CORRECTED, "need_permission"), CORRECTED], workspace=True,
                 workspace_action=act, human="need_permission")

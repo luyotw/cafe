@@ -40,7 +40,7 @@ def materials(issue, state, step, definition):
         raise ValueError("no passing independent review transition for this endpoint")
     started = audit.latest_record(state.workflow_id, {"step_started"}, step=reviewer, bounded=True)
     completed = audit.latest_record(
-        state.workflow_id, {"step_completed"}, step=reviewer, bounded=True
+        state.workflow_id, {"step_completed", "single_step_completed"}, step=reviewer, bounded=True
     )
     if (
         not started
@@ -77,10 +77,14 @@ def materials(issue, state, step, definition):
             raise ValueError(f"review input changed: {entry.name}")
     path = (root / checkout.path).resolve(strict=True)
     path.relative_to(issue.resolve())
-    workspace = WorkspaceArtifact.from_dict(json.loads(read_bounded(path)))
+    content = read_bounded(path)
+    if checkout.content_sha256 and hashlib.sha256(content).hexdigest() != checkout.content_sha256:
+        raise ValueError("published workspace evidence changed")
+    workspace = WorkspaceArtifact.from_dict(json.loads(content))
     if (
         workspace.head_sha != checkout.head_sha
         or workspace.base_sha != checkout.base_sha
+        or workspace.producer_step != checkout.updated_by
         or workspace.name != checkout.name
         or workspace.version != checkout.version
     ):

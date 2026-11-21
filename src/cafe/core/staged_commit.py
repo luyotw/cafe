@@ -120,14 +120,18 @@ def verify(issue, task, *, completed=False):
     head = _git(root, "rev-parse", "HEAD")
     if receipt.exists():
         record = json.loads(receipt.read_bytes())
-        if (record.get("commit") == head and record.get("task") == task.id
-                and record.get("state") in {"prepared", "committed"}):
-            if (_git(root, "show", "-s", "--format=%P %T", head)
-                    == expected["parent"] + " " + expected["tree"]
-                    and _git(root, "rev-parse", "--symbolic-full-name", "HEAD") == expected["ref"]):
-                inspect_workspace(root).require_clean()
-                return head
-        raise ValueError("scoped commit attempt needs reconciliation at its approved HEAD")
+        candidate = record.get("commit")
+        if (record.get("task") != task.id or record.get("state") not in {"prepared", "committed"}
+                or not isinstance(candidate, str) or len(candidate) not in {40, 64}
+                or any(char not in "0123456789abcdef" for char in candidate)
+                or _git(root, "show", "-s", "--format=%P %T", candidate)
+                != expected["parent"] + " " + expected["tree"]):
+            raise ValueError("scoped commit attempt needs reconciliation at its approved HEAD")
+        if head == candidate and _git(root, "rev-parse", "--symbolic-full-name", "HEAD") == expected["ref"]:
+            inspect_workspace(root).require_clean()
+            return head
+        if head != expected["parent"] or record["state"] != "prepared":
+            raise ValueError("scoped commit HEAD differs from the approved revision")
     if completed:
         raise ValueError("approved commit is still pending")
     current = snapshot(root)
@@ -176,6 +180,8 @@ def commit(issue, task_id):
             existing = verify(issue, task)
             if existing:
                 return existing
+            if receipt.exists():
+                return _promote_candidate(root, task, receipt, json.loads(receipt.read_bytes())["commit"])
             return _commit_tree(root, task, receipt)
 
 
@@ -204,7 +210,14 @@ def _commit_tree(root, task, receipt):
         if any(current[key] != expected[key] for key in current):
             raise ValueError("worktree or staged content changed during the commit")
         atomic_write_bytes(receipt, canonical_json({"task": task.id, "commit": oid, "state": "prepared"}))
-        git.run_git("update-ref", "-m", "commit: " + operation["message"], expected["ref"], oid, expected["parent"])
-        atomic_write_bytes(receipt, canonical_json({"task": task.id, "commit": oid, "state": "committed"}))
-    return verify(receipt.parents[2], task, completed=True)
+        return _promote_candidate(root, task, receipt, oid)
 
+
+def _promote_candidate(root, task, receipt, oid):
+    expected = task.staged_commit
+    GitOperations(str(root)).run_git(
+        "update-ref", "-m", "commit: " + expected["operation"]["message"],
+        expected["ref"], oid, expected["parent"],
+    )
+    atomic_write_bytes(receipt, canonical_json({"task": task.id, "commit": oid, "state": "committed"}))
+    return verify(receipt.parents[2], task, completed=True)

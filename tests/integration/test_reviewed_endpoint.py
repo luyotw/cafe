@@ -51,7 +51,16 @@ def test_prepare_local_review_without_remote_or_integration_choices(local_action
 
 @pytest.mark.parametrize(
     "decision",
-    ["confirm", "fix_now", "changed_evidence", "changed_head", "changed_choice", "unpassed"],
+    [
+        "confirm",
+        "single_step",
+        "fix_now",
+        "changed_evidence",
+        "changed_head",
+        "changed_choice",
+        "changed_workspace",
+        "unpassed",
+    ],
 )
 def test_user_accepts_only_the_reviewed_custom_revision(local_action, monkeypatch, decision):
     root, _, _, _ = local_action
@@ -139,7 +148,12 @@ def test_user_accepts_only_the_reviewed_custom_revision(local_action, monkeypatc
             base_sha=workspace.base_sha,
         )
     runtime.blackboard_store.save(runtime.blackboard)
-    result = runtime.run(start_step="package_custom" if decision == "unpassed" else "verify_custom")
+    result = runtime.run(
+        start_step="package_custom" if decision == "unpassed" else "verify_custom",
+        single_step=decision == "single_step",
+    )
+    if decision == "single_step":
+        result = runtime.run()
     records = HumanTaskRecordStore(issue)
     if decision == "unpassed":
         assert not any(t.trigger == "confirm_output" for t in records.tasks())
@@ -154,6 +168,8 @@ def test_user_accepts_only_the_reviewed_custom_revision(local_action, monkeypatc
         evidence.write_text("replaced")
     if decision == "changed_head":
         git(root, "commit", "--allow-empty", "-m", "new revision")
+    if decision == "changed_workspace":
+        ws.write_text(ws.read_text() + "\n")
     if decision == "changed_choice":
         graph["steps"][task.step].pop("automatic")
     applied = apply_human_task_payload(
