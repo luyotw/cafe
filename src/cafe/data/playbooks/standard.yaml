@@ -157,6 +157,7 @@ steps:
 
   pr:
     local_review:
+      presentation_task: reviewed-revision
       review_step: review
       implementation_step: develop
       result_artifact: local_review_result

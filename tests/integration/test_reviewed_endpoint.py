@@ -65,6 +65,7 @@ def test_prepare_local_review_without_remote_or_integration_choices(local_action
         "changed_workspace",
         "unpassed",
         "oversize",
+        "owner_policy",
         "changed_while_answering",
         "zh-TW",
     ],
@@ -101,6 +102,11 @@ def test_user_accepts_only_the_reviewed_custom_revision(local_action, monkeypatc
         skill_file = destination / "SKILL.md"
         header, body = skill_file.read_text().split("---", 2)[1:]
         metadata = yaml.safe_load(header)
+        if skill == "cafe-pr" and decision == "owner_policy":
+            # This custom endpoint already binds its local presentation by task ID.
+            tasks = metadata["workflow"]["human_tasks"]
+            tasks[:] = [policy for policy in tasks if policy["id"] != "pr-review"]
+            next(policy for policy in tasks if policy["id"] == "reviewed-revision")["id"] = "pr-review"
         for item in metadata.get("workflow", {}).get("prompt_inputs", []):
             if "artifacts" in item:
                 item["artifacts"] = rename(item["artifacts"])
@@ -108,7 +114,11 @@ def test_user_accepts_only_the_reviewed_custom_revision(local_action, monkeypatc
     raw_path = PlaybookLoader(project_root=root)._resolve_path("bug")[1]
     local_playbook = root / ".cafe/playbooks/bug.yaml"
     local_playbook.parent.mkdir(parents=True, exist_ok=True)
-    local_playbook.write_text(yaml.safe_dump(rename(yaml.safe_load(raw_path.read_text()))))
+    raw = yaml.safe_load(raw_path.read_text())
+    if decision == "owner_policy":
+        raw["steps"]["pr"]["local_review"].pop("presentation_task", None)
+        graph["steps"]["pr"]["local_review"].pop("presentation_task", None)
+    local_playbook.write_text(yaml.safe_dump(rename(raw)))
     graph = rename(graph)
     config = issue / "issue.yaml"
     config.write_text(yaml.safe_dump({"package_custom": {"endpoint": "local-review"}}))
@@ -194,7 +204,7 @@ def test_user_accepts_only_the_reviewed_custom_revision(local_action, monkeypatc
     assert calls == ["verify_custom"], (result, calls)
     (task,) = records.tasks()
     assert task.trigger == "confirm_output"
-    if decision in {"confirm", "zh-TW"}:
+    if decision in {"confirm", "zh-TW", "owner_policy"}:
         labels = {item["id"]: item["label"] for item in task.expected_result["decisions"]}
         assert ("完成" if decision == "zh-TW" else "finish") in labels["confirm"].lower()
         assert ("修訂" if decision == "zh-TW" else "revision") in labels["fix_now"].lower()
