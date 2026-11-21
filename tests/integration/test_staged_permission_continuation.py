@@ -20,7 +20,7 @@ from tests.integration.test_workspace_completion_workflow import git
 
 
 @pytest.mark.parametrize("drift", [None, "index", "mode", "unstaged", "untracked", "HEAD", "denied", "operation",
-                                  "restored", "hook_retry", "operation_at_publish", "missing_scope", "hook_drift"])
+                                  "restored", "hook_retry", "hook_git_error", "hook_message", "operation_at_publish", "missing_scope", "hook_drift"])
 def test_only_approved_staged_work_reaches_the_custom_consumer(journey, drift, monkeypatch):
     calls = []
 
@@ -63,7 +63,7 @@ def test_only_approved_staged_work_reaches_the_custom_consumer(journey, drift, m
                                     ([sys.executable, "-c", script, *cli], str(repo)))
                 executor.execute("Complete the approved operation", environment_overrides={"PYTHONPATH": package_path})
                 assert git(repo, "rev-parse", "HEAD").decode().strip() != parent
-            if call == 2 and drift in {"hook_retry", "operation_at_publish", "hook_drift"}:
+            if call == 2 and drift in {"hook_retry", "hook_git_error", "hook_message", "operation_at_publish", "hook_drift"}:
                 hooks = j.issue / "hooks"
                 hooks.mkdir()
                 git(repo, "config", "core.hooksPath", str(hooks))
@@ -74,13 +74,21 @@ def test_only_approved_staged_work_reaches_the_custom_consumer(journey, drift, m
                     + " > " + shlex.quote(str(request_path)))
                 if drift == "hook_drift":
                     hook_body = "touch unrelated\nexit 1"
+                if drift == "hook_git_error":
+                    hook_body = "exec git rev-parse --verify missing-fixture-revision"
+                if drift == "hook_message":
+                    hook = hooks / "commit-msg"
+                    hook_body = 'echo "Normalized subject" > "$1"'
                 hook.write_text("#!/bin/sh\n" + hook_body + "\n")
                 hook.chmod(0o755)
                 assert command(scope).returncode
                 assert git(repo, "rev-parse", "HEAD").decode().strip() == parent
                 assert git(repo, "write-tree").decode().strip() == tree
                 hook.unlink()
-                if drift == "hook_retry":
+                if drift == "hook_message":
+                    calls.append("changed message refused")
+                    return
+                if drift in {"hook_retry", "hook_git_error"}:
                     raise RuntimeError("Git hook rejected the staged operation")
                 if drift == "hook_drift":
                     unrelated = repo / "unrelated"
@@ -146,7 +154,7 @@ def test_only_approved_staged_work_reaches_the_custom_consumer(journey, drift, m
         blackboard=j.runtime.blackboard, from_step=task.step, trigger=task.trigger,
         source="interactive", raw_payload={"human_task_id": task.id, "feedback": answer})
     assert result.target == task.step
-    if drift in {"restored", "hook_retry"}:
+    if drift in {"restored", "hook_retry", "hook_git_error"}:
         j.runtime.run()
         retry, = [t for t in records.tasks() if t.status.value == "pending"]
         assert retry.trigger == "agent_execution_interrupted"
@@ -155,7 +163,11 @@ def test_only_approved_staged_work_reaches_the_custom_consumer(journey, drift, m
         apply_human_task_payload(issue_dir=j.issue, playbook_data=j.playbook,
             blackboard=j.runtime.blackboard, from_step=retry.step, trigger=retry.trigger,
             source="interactive", raw_payload={"human_task_id": retry.id, "task": retry.policy_id, "decision": "retry"})
-    if drift == "hook_drift":
+    if drift == "hook_message":
+        j.runtime.run()
+        assert calls == ["changed message refused"] and not j.manager.deliveries
+        assert before == (git(j.repo, "status", "--porcelain=v1"), git(j.repo, "rev-parse", "HEAD"))
+    elif drift == "hook_drift":
         j.runtime.run()
         assert calls == ["reconciliation required"]
         assert not j.manager.deliveries

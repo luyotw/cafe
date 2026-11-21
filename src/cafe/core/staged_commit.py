@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import signal
 import stat
 import subprocess
 import tempfile
@@ -144,6 +145,18 @@ def _receipt_path(issue, task):
     return issue / task.step / f"iteration_{task.iteration:03}" / f"commit-{task.id}.json"
 
 
+def _matches_approved_commit(root, oid, expected):
+    # Read the actual object, including the entire message and every parent.
+    obj = subprocess.run(["git", "--no-replace-objects", "cat-file", "-p", oid], cwd=root, capture_output=True)
+    if obj.returncode:
+        return False
+    header, separator, message = obj.stdout.partition(b"\n\n")
+    parents = [line[7:] for line in header.splitlines() if line.startswith(b"parent ")]
+    return (bool(separator) and header.split(b"\n", 1)[0] == b"tree " + expected["tree"].encode()
+            and parents == [expected["parent"].encode()]
+            and message == (expected["operation"]["message"] + "\n").encode())
+
+
 def verify(issue, task, *, completed=False):
     """Return the committed HEAD or verify the untouched input to a first attempt."""
     root = issue_project_root(issue.resolve())
@@ -161,8 +174,7 @@ def verify(issue, task, *, completed=False):
         if (record.get("task") != task.id or record.get("state") not in {"prepared", "committed"}
                 or not isinstance(candidate, str) or len(candidate) not in {40, 64}
                 or any(char not in "0123456789abcdef" for char in candidate)
-                or _git(root, "show", "-s", "--format=%P %T", candidate)
-                != expected["parent"] + " " + expected["tree"]):
+                or not _matches_approved_commit(root, candidate, expected)):
             raise ValueError("scoped commit attempt needs reconciliation at its approved HEAD")
         if head == candidate and _git(root, "rev-parse", "--symbolic-full-name", "HEAD") == expected["ref"]:
             inspect_workspace(root).require_clean()
@@ -267,7 +279,8 @@ def _known_hook_rejection(trace):
                  and row.get("event") == "child_start" and row.get("child_class") == "hook"
                  and row.get("hook_name") in {"pre-commit", "prepare-commit-msg", "commit-msg"}}
         return any(row.get("sid") == session and row.get("event") == "child_exit"
-                   and row.get("child_id") in hooks and 0 < row.get("code", 0) < 128 for row in records)
+                   and row.get("child_id") in hooks and 0 < row.get("code", 0) <= 255
+                   and row["code"] - 128 not in signal.valid_signals() for row in records)
     except (ValueError, OSError, KeyError, IndexError, TypeError):
         return False
 
@@ -290,7 +303,7 @@ def _commit_tree(root, task, receipt):
         operation = expected["operation"]
         options = ["--no-verify"] if operation["skip_hooks"] else []
         trace = private / "commit.trace"
-        proc = subprocess.run(["git", *candidate, "commit", *options, "-m", operation["message"]],
+        proc = subprocess.run(["git", *candidate, "commit", *options, "--cleanup=verbatim", "-m", operation["message"]],
                               cwd=root, capture_output=True, text=True,
                               env={**os.environ, "GIT_TRACE2_EVENT": str(trace)})
         if proc.returncode:
@@ -303,7 +316,7 @@ def _commit_tree(root, task, receipt):
                 receipt.unlink()
             raise ValueError("Git commit failed: " + proc.stderr.strip())
         oid = git.run_git(*candidate, "rev-parse", "HEAD")
-        if git.run_git("show", "-s", "--format=%P %T", oid) != expected["parent"] + " " + expected["tree"]:
+        if not _matches_approved_commit(root, oid, expected):
             raise ValueError("Git hooks changed the approved candidate")
         current = snapshot(root)
         if any(current[key] != expected[key] for key in current):
