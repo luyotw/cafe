@@ -99,3 +99,18 @@ def test_unsuitable_progress_file_leaves_deadline_serviceable(tmp_path):
     os.mkfifo(output)
     command = "from cafe.workflow_execution.progress_watch import ProgressWatch; from pathlib import Path; import sys; assert ProgressWatch(Path(sys.argv[1])).due(0)"
     subprocess.run([sys.executable, "-c", command, str(output)], check=True, timeout=3)
+
+
+def test_new_checkboxes_cannot_extend_the_declared_review_work(tmp_path):
+    from cafe.workflow_execution.progress_watch import ProgressWatch
+
+    now = [0]
+    checklist = tmp_path / "checklist.md"
+    checklist.write_text("[ ] Verify review evidence\n")
+    watch = ProgressWatch(tmp_path / "output.md", clock=lambda: now[0])
+    checklist.write_text(checklist.read_text() + "[ ] Observe heartbeat\n")
+    now[0] = 5
+    assert watch.due(10) is None
+    checklist.write_text(checklist.read_text().replace("[ ] Observe", "[x] Observe"))
+    now[0] = 10
+    assert watch.due(10)["progress_source"] == "worker_start"

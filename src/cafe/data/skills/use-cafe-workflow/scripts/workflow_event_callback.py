@@ -1831,7 +1831,9 @@ def _supervision(event, root, event_target):
                 and r["data"].get("step") == event["step"] and event.get("reason")
                 and r["data"].get("reason") == event["reason"]]
     if event.get("event_type") == "phase_terminal":
-        failures = _recurring_result(transitions, origin)
+        failures = _recurring_result(transitions, current)
+        if not failures and current != origin:
+            failures = _recurring_result(transitions, origin)
     tasks = _recent_pending_tasks(issue, workflow)
     workers = WorkerLaunchStore(issue).running_positions(workflow)
     worker = workers[0] if len(workers) == 1 else None

@@ -3813,7 +3813,10 @@ def test_nested_issue_callback_status_chat_and_delivery_keep_full_identity(tmp_p
     assert delivered[0]["issue"] == "codex/issue119"
 
 
-@pytest.mark.parametrize("situation", ["three_handoffs", "contradiction", "repeated", "pending", "correction_loop", "changed_result", "long_history"])
+@pytest.mark.parametrize("situation", [
+    "three_handoffs", "contradiction", "repeated", "pending",
+    "correction_loop", "changed_result", "long_history", "delayed_correction",
+])
 def test_dispatch_explains_current_owner_and_preserves_decisions(tmp_path, monkeypatch, situation):
     from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
     from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
@@ -3830,7 +3833,7 @@ def test_dispatch_explains_current_owner_and_preserves_decisions(tmp_path, monke
     steps = ["diagnose_custom", "repair_custom", "inspect_custom", "accept_custom"]
     presented = []
 
-    loop = situation in {"correction_loop", "changed_result"}
+    loop = situation in {"correction_loop", "changed_result", "delayed_correction"}
     if loop:
         steps = ["review", "repair", "review", "repair"]
     if situation == "long_history":
@@ -3842,7 +3845,8 @@ def test_dispatch_explains_current_owner_and_preserves_decisions(tmp_path, monke
             payload={"feedback": "x" * callback.MAX_CALLBACK_INPUT_BYTES}, source="interactive")
 
     def dispatch():
-        for source, target in zip(steps, steps[1:]):
+        delayed = None
+        for i, (source, target) in enumerate(zip(steps, steps[1:])):
             pending = situation == "pending"
             handoff = store.build_handoff_contract(
                 from_step=source, to_step="user" if pending else target,
@@ -3872,6 +3876,12 @@ def test_dispatch_explains_current_owner_and_preserves_decisions(tmp_path, monke
                 payload.update(event_type="workflow_interruption", reason="same_boundary")
                 store.prepare_workflow_callback_event(state, payload)
             event = store.prepare_workflow_callback_event(state, payload)
+            if situation == "delayed_correction":
+                if i == 0:
+                    delayed = event
+                if i < len(steps) - 2:
+                    continue
+                event = delayed
             daemon = _HostDaemon(status="notLoaded")
             with patch.object(callback.subprocess, "Popen", return_value=_HostProxy(daemon)):
                 callback.run_callback(event, repository_root=tmp_path)
@@ -3885,8 +3895,9 @@ def test_dispatch_explains_current_owner_and_preserves_decisions(tmp_path, monke
         assert [p["assessment"] for p in presented] == ["continue"] * 3
         assert [p["current_step"] for p in presented] == steps[1:]
     elif loop:
-        assert presented[-1]["assessment"] == ("inspect" if situation == "correction_loop" else "continue")
-        assert bool(presented[-1]["same_problem_attempts"]) == (situation == "correction_loop")
+        expect_inspection = situation in {"correction_loop", "delayed_correction"}
+        assert presented[-1]["assessment"] == ("inspect" if expect_inspection else "continue")
+        assert bool(presented[-1]["same_problem_attempts"]) == expect_inspection
     elif situation == "pending":
         task, = records.tasks()
         assert task.status == HumanTaskStatus.PENDING

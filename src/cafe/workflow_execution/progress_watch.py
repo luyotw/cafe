@@ -27,7 +27,7 @@ class ProgressWatch:
         self.reported = False
         self.seen = set()
         self.stamps = {}
-        self.checklist_items = set()
+        self.checklist_items = None
         self._observe_items()
 
     def _changed_text(self, path):
@@ -47,14 +47,14 @@ class ProgressWatch:
         _, section, ledger = content.partition("## Todo Progress\n")
         completed = {("completed_todo", key) for key in _COMPLETED.findall(ledger.split("\n## ", 1)[0])} if section else set()
         checklist = self._changed_text(self.output.with_name("checklist.md"))
-        for line in checklist.splitlines():
-            match = _CHECKBOX_LINE.match(line)
-            if match:
-                key = match["body"].strip()
-                if match["state"] == " ":
-                    self.checklist_items.add(key)
-                elif key in self.checklist_items:
-                    completed.add(("completed_checklist_item", key))
+        if checklist:
+            items = [(match["body"].strip(), match["state"]) for line in checklist.splitlines()
+                     if (match := _CHECKBOX_LINE.match(line))]
+            if self.checklist_items is None and items:
+                self.checklist_items = {key for key, state in items if state == " "}
+            elif self.checklist_items:
+                completed.update(("completed_checklist_item", key) for key, state in items
+                                 if state != " " and key in self.checklist_items)
         new = completed - self.seen
         self.seen.update(new)
         return next((source for source, _ in new), None)
