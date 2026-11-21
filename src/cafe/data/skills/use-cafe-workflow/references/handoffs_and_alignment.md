@@ -105,6 +105,33 @@ a declared multi-select field may retain all supported co-winners. Missing
 citations, unresolved scalar ties, preference or scope choices leave the task
 pending for the user. Use only sources returned by current task inspection.
 
+### Evidence for a technical clarification
+
+For an active clarification, the read-only inspection command above accepts
+`--clarification-context` to show the exact questions, delivery contract and
+bounded original passages with source IDs and line numbers. The excerpts help
+locate evidence. The `worker_checkpoint` is the worker's report, not confirmed
+authority. Inspect missing relevant source sections as needed. If the preview
+is unavailable, use the pending task and its current verified sources directly.
+Validate the resulting exact assessment through the normal `--assessment`
+invocation before completion.
+
+Start with the exact pending question, the inspected task owner and authority,
+and the part of the current handoff that explains the decision. For an eligible
+`need_clarification`, use the question to identify the accepted requirement the
+options could affect. Read that passage, the relevant permission and delivery
+constraints, and the specific repository behavior needed to compare the options.
+Keep source identifiers and exact excerpts for the assessment.
+
+Batch narrow searches and reads. Prefer matching sections, symbols or line
+ranges over printing entire artifacts or wide diffs. If the current evidence
+already establishes a fact, open its source again only when the fact could have
+changed or an exact citation is needed. Expand the reading when a specific gap
+could change the decision, its effects, or who can authorize it. Summarize the
+chosen action, its safeguards and the evidence the responsible phase must
+produce under its contract. Apply the existing review and QA requirements at
+their declared boundaries.
+
 ## Delivery comparison at an existing output gate
 
 Use `scripts/compare_delivery_contract.py` before accepting an eligible output.

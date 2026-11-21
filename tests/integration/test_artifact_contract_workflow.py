@@ -17,8 +17,9 @@ from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardStore
 from cafe.core.git import GitOperations
 from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.playbook import resolve_step_behavior
-from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
+from cafe.core.todo import parse_todo_list
 from cafe.core.types import AgentCLI, TokenUsage
+from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.core.workspace_artifact import build_workspace_artifact
 from cafe.phases.generic_phase import GenericPhase
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
@@ -32,8 +33,13 @@ DOMAIN_ROUTES = ("editorial", "research", "incident")
 
 
 @pytest.mark.parametrize("repair_succeeds", [True, False])
+@pytest.mark.parametrize("review_case", [
+    None,
+    ("BLK-004", "BLK-011", "Rename after peer refresh submits stale points"),
+    ("BLK-007", "BLK-010", "Catalog retry stalls after two unrelated edits"),
+])
 def test_runtime_returns_report_format_rejection_to_same_producer(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repair_succeeds: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repair_succeeds: bool, review_case,
 ) -> None:
     """Exercise real step execution, correction, publication and recovery routing."""
     repo = tmp_path / "report-retry"
@@ -44,7 +50,8 @@ def test_runtime_returns_report_format_rejection_to_same_producer(
     config.mkdir()
     (config / "strategic_context.yaml").write_text("version: 1\n", encoding="utf-8")
     (config / "phases.yaml").write_text(
-        "inspect:\n  name: Inspector\n  clis:\n    - cli: codex\n      model: test-model\n",
+        "inspect:\n  name: Inspector\n  clis:\n    - cli: codex\n      model: test-model\n"
+        "develop:\n  name: Inspector\n  clis:\n    - cli: codex\n      model: test-model\n",
         encoding="utf-8",
     )
     skill = config / "skills" / "report"
@@ -76,6 +83,19 @@ def test_runtime_returns_report_format_rejection_to_same_producer(
             }
         },
     }
+    if review_case:
+        playbook["steps"]["inspect"]["on"]["await_agent"] = "develop"
+        playbook["steps"]["inspect"]["behavior"]["feedback_routes"] = {
+            "develop": {
+                "artifact": "report", "source_kind": "review",
+                "todo_source": "review", "todo_id_prefix": "BLK",
+            }
+        }
+        playbook["steps"]["develop"] = {
+            "skill": "report", "role": "reviewer", "input_artifacts": ["report"],
+            "output_artifact": "repair", "behavior": {"completion": "baton"},
+            "allowed_tools": ["Read", "Write"], "on": {"await_agent": "_done"},
+        }
 
     class ReportAgent:
         def __init__(self):
@@ -86,6 +106,7 @@ def test_runtime_returns_report_format_rejection_to_same_producer(
             )
             self.calls = []
             self.metadata = []
+            self.received_todos = None
 
         def get_agent(self, _name):
             return self.agent
@@ -97,6 +118,13 @@ def test_runtime_returns_report_format_rejection_to_same_producer(
             return "report-session"
 
         def execute(self, name, prompt, *, continuation=None, **kwargs):
+            if kwargs.get("phase_name") == "develop":
+                state = BlackboardStore(issue_dir).load_or_create("develop")
+                content = (repo / state.artifacts["report"].path).read_text(encoding="utf-8")
+                self.received_todos = parse_todo_list(content, expected_source="review")
+                (issue_dir / "develop" / "iteration_001" / "output.md").write_text("Repair.\n")
+                (issue_dir / "next_step.txt").write_text('{"version":1,"intent":"await_agent"}')
+                return "", TokenUsage(), [], [], [], None
             self.calls.append((name, prompt, continuation, kwargs.get("allowed_tools")))
             assert not (iteration / "artifact.json").exists()
             state = BlackboardStore(issue_dir).load_or_create("inspect")
@@ -105,9 +133,32 @@ def test_runtime_returns_report_format_rejection_to_same_producer(
             assert HumanTaskRecordStore(issue_dir).tasks() == ()
             assert (iteration / "checklist.md").read_bytes() == b""
             self.metadata.append(json.loads((iteration / "iteration.json").read_text()))
-            report = "# Inspection\n\n## Todo List\n\nNo actionable work.\n"
-            if len(self.calls) == 1 or not repair_succeeds:
-                report += "\n# Earlier inspection\n\n## Todo List\n\nNo actionable work.\n"
+            rejected = len(self.calls) == 1 or not repair_succeeds
+            if review_case:
+                original, residual, work = review_case
+                todo_id = residual if rejected else original
+                status = "closed" if rejected else "open"
+                report = (
+                    "## Finding Registry\n\n"
+                    "| ID | kind | root-cause identity | first-seen iteration/HEAD | impact | "
+                    "confidence | current status | linked ID | evidence HEAD |\n"
+                    "| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+                    f"| {original} | BLK | Original scope | 1/8903e19b | Important | 95 | "
+                    f"{status} | — | 52ec9a4f |\n"
+                )
+                if rejected:
+                    report += (
+                        f"| {residual} | BLK | Residual case | 2/52ec9a4f | Important | 95 | "
+                        f"open | {original} | 52ec9a4f |\n"
+                    )
+                report += (
+                    f"\n## Todo List\n\n- [ ] `{todo_id}` — Source: `review` — Work: {work}"
+                    " — Closure: Preserve the original acceptance. — Evidence: probe.tsx:42\n"
+                )
+            else:
+                report = "# Inspection\n\n## Todo List\n\nNo actionable work.\n"
+                if rejected:
+                    report += "\n# Earlier inspection\n\n## Todo List\n\nNo actionable work.\n"
             (iteration / "output.md").write_text(report, encoding="utf-8")
             (issue_dir / "next_step.txt").write_text(
                 json.dumps({"version": 1, "intent": "await_agent"}), encoding="utf-8"
@@ -135,7 +186,10 @@ def test_runtime_returns_report_format_rejection_to_same_producer(
     assert len(manager.calls) == (2 if repair_succeeds else 3)
     for name, prompt, continuation, allowed_tools in manager.calls[1:]:
         assert name == "Inspector"
-        assert "exactly one '## Todo List' section" in prompt
+        if review_case:
+            assert f"marks {review_case[0]} closed but links it to open {review_case[1]}" in prompt
+        else:
+            assert "exactly one '## Todo List' section" in prompt
         assert continuation.session_id == "report-session"
         assert allowed_tools == manager.calls[0][3]
     for metadata in manager.metadata:
@@ -152,9 +206,15 @@ def test_runtime_returns_report_format_rejection_to_same_producer(
         assert persisted.artifacts["report"].version == 1
         assert (iteration / "artifact.json").exists()
         assert any(e.event_type == "step_completed" for e in persisted.events)
+        if review_case:
+            received, = manager.received_todos
+            assert (received.item_id, received.work, received.evidence) == (
+                review_case[0], review_case[2], "probe.tsx:42",
+            )
     else:
         assert result.completed is False
         assert persisted.artifacts == {}
+        assert manager.received_todos is None
         assert not (iteration / "artifact.json").exists()
         assert len(tasks) == 1
         assert HumanTaskRecordStore(issue_dir).get_assignment(tasks[0].id).assignee_type == "user"

@@ -2,16 +2,16 @@
 
 [ ] Read src/cafe/data/agents/developer/Nick.md to understand your role
 [ ] Write engineering prose in the repository content language stated in the runtime context, and anything addressed to the user in the workflow conversation language; your own preferred language overrides neither
-[ ] Carefully read .cafe/issues/test/spec/iteration_001/output.md and .cafe/issues/test/plan/iteration_001/output.md
+[ ] Resolve the active corrections against applicable requirements in .cafe/issues/test/spec/iteration_001/output.md and .cafe/issues/test/plan/iteration_001/output.md; consult only needed sections missing from current context
 [ ] Read feedback todo list in .cafe/issues/test/review/iteration_001/output.md
-[ ] Keep this Develop invocation running through every authorized executable blocker; after each bounded unit, validate evidence, update the authoritative feedback/plan progress and cumulative development summary, then continue instead of treating a commit or targeted check as an iteration boundary
+[ ] Keep this Develop invocation running through every authorized executable blocker; after each bounded unit, validate evidence, update the phase-owned `## Todo Progress` ledger and summarize new changes and remaining work, then continue instead of treating a commit or targeted check as an iteration boundary
 [ ] Address each issue raised in the feedback
 [ ] Keep .cafe/issues/test/review/iteration_001/output.md immutable; record completion only in .cafe/issues/test/develop/iteration_001/output.md `## Todo Progress` with current fingerprint and evidence
 [ ] Commit changes with descriptive messages
 [ ] Confirm: Maximized code reuse by looking for existing patterns and utilities
 [ ] Confirm: Commit messages strictly match existing format, language, and structure
 [ ] Confirm: All issues are fixed
-[ ] Read the plan **Test List** in .cafe/issues/test/plan/iteration_001/output.md; new or changed tests still map to listed items and follow `src/cafe/data/skills/cafe-plan/references/test_invariants_policy.md`
+[ ] Confirm: New or changed tests map to applicable **Test List** entries in .cafe/issues/test/plan/iteration_001/output.md; consult missing or changed entries and follow `src/cafe/data/skills/cafe-plan/references/test_invariants_policy.md`
 [ ] Confirm: Corrected tests do not reintroduce brittle bindings (UI copy, CSS classes, DOM structure, internal state shape) unless the spec explicitly allows them
 [ ] Run targeted tests for corrected behavior with bounded output; when a plan is supplied, map them to its Test List; do not rerun repository full-suite, coverage, release, or pre-push gates from this phase
 [ ] Confirm: All correction commits are made and the worktree is clean

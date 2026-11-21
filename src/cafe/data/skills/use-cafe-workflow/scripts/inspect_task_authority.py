@@ -20,8 +20,14 @@ def main() -> None:
     parser.add_argument("--issue-dir", required=True, type=Path)
     parser.add_argument("--task-id", required=True)
     parser.add_argument("--assessment", type=Path)
+    parser.add_argument(
+        "--clarification-context", action="store_true",
+        help="Include bounded evidence excerpts for an eligible pending clarification.",
+    )
     parser.add_argument("--json", action="store_true", required=True)
     args = parser.parse_args()
+    if args.assessment and args.clarification_context:
+        parser.error("--clarification-context cannot be combined with --assessment")
     assessment = None
     if args.assessment:
         if args.assessment.is_symlink() or args.assessment.stat().st_size > 256 * 1024:
@@ -34,12 +40,20 @@ def main() -> None:
         from cafe.driver.task_inspection import inspect_task_authority
     else:
         from cafe.manager.task_inspection import inspect_task_authority
+    options = (
+        {"include_clarification_context": True}
+        if args.clarification_context and authority.name != "driver"
+        else {}
+    )
     result = inspect_task_authority(
         args.issue_dir,
         args.task_id,
         response=assessment.get("response") if assessment else None,
         evidence=assessment.get("evidence") if assessment else None,
+        **options,
     )
+    if args.clarification_context and authority.name == "driver":
+        result["clarification_context"] = {"status": "unavailable", "reason": "legacy_driver"}
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
 
 

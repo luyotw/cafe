@@ -343,7 +343,8 @@ class GenericPhase:
                     "Latest workflow handoff from blackboard:",
                     context["handoff_summary"],
                     "Treat this handoff as the highest-priority current request unless current files prove it is already completed.",
-                    "Before finishing this step, verify whether the requested state change has actually happened in files or external state relevant to this phase.",
+                    "Before reporting completion, verify whether the requested state change "
+                    "has actually happened in files or external state relevant to this phase.",
                     "If the handoff asks for a retry, re-run, re-sync, or re-open action, do not treat an old artifact or a closed external object as completion.",
                 ]
             )
@@ -377,7 +378,8 @@ class GenericPhase:
             runtime_context.extend(
                 [
                     "Current resume scope (declared step inputs):",
-                    "Read every listed current source before selecting work.",
+                    "Use these current sources to resolve the active scope; "
+                    "do not rely on stale session context.",
                     context["resume_input_artifacts"],
                 ]
             )
@@ -386,7 +388,10 @@ class GenericPhase:
                 [
                     "Declared input loading modes:",
                     context["input_loading_modes"],
-                    "A packet is a validated exact Downstream Contract; full and full_fallback paths remain complete authoritative sources.",
+                    "A packet contains validated source-derived context; use its packet_kind "
+                    "to read the contract or structural fragments, and consult its source path "
+                    "for missing requirements. full and full_fallback paths remain complete "
+                    "authoritative sources.",
                 ]
             )
         if context and context.get("workflow_feedback_batch_file"):
@@ -414,9 +419,12 @@ class GenericPhase:
         if context and context.get("delta_packet"):
             runtime_context.extend(
                 [
-                    f"Correction delta packet ({context.get('delta_packet_path', 'inline')}):",
+                    f"Iteration context manifest ({context.get('delta_packet_path', 'inline')}):",
                     context["delta_packet"],
-                    "This is a derived manifest, not a new source of truth. Read previous_output and re-verify prior findings or requested changes item by item before completing this step.",
+                    "This derived manifest supplies references, not proof of completion. "
+                    "Its legacy run_kind label does not classify the current request. "
+                    "Follow the current handoff and input; use previous_output to fill "
+                    "specific context or evidence gaps and verify applicable corrections.",
                 ]
             )
         if context and context.get("user_input"):
@@ -430,9 +438,15 @@ class GenericPhase:
             lines.append("")
 
         if checklist_file is not None:
-            lines.append("Do NOT finish this step until ALL checklist items are marked as [x].")
             lines.append(
-                "Before a successful handoff, complete ALL applicable primary and overlay checklist gates and revalidate their Todo evidence. Do not delete or rewrite required gates to mark completion. Existing clarification, permission and manual handoff routes remain available."
+                "Before a successful handoff, mark all applicable primary and overlay checklist "
+                "gates as [x] and revalidate their Todo evidence. Keep the required gates intact."
+            )
+        if "need_clarification" in {intent.strip() for intent in baton_intents.split(",")}:
+            lines.append(
+                "For a blocking clarification, save any new progress, write the question and "
+                "need_clarification baton, then pause. Leave the checklist open and skip the "
+                "completion sweep."
             )
 
         supplied = (context or {}).get("constraint_context")
