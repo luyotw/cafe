@@ -209,7 +209,8 @@ def test_notice_projects_event_time_baton_without_mutating_state(
 
     observed = WorkflowHost(issue_dir).run(observe_notice, hosting="foreground").result
     active = json.loads(observed.split("Wake notice: ", 1)[1])["supervision"]
-    assert active["assessment"] == ("later_handoff" if later_handoff else "continue")
+    assert active["expected_step"] is None
+    assert active["assessment"] == "inspect"
     assert active["worker"]["step"] == state.current_step
     before = {p: p.read_bytes() for p in issue_dir.rglob("*") if p.is_file()}
 
@@ -3812,7 +3813,7 @@ def test_nested_issue_callback_status_chat_and_delivery_keep_full_identity(tmp_p
     assert delivered[0]["issue"] == "codex/issue119"
 
 
-@pytest.mark.parametrize("situation", ["three_handoffs", "contradiction", "repeated", "pending"])
+@pytest.mark.parametrize("situation", ["three_handoffs", "contradiction", "repeated", "pending", "correction_loop", "changed_result", "long_history"])
 def test_dispatch_explains_current_owner_and_preserves_decisions(tmp_path, monkeypatch, situation):
     from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
     from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
@@ -3829,6 +3830,17 @@ def test_dispatch_explains_current_owner_and_preserves_decisions(tmp_path, monke
     steps = ["diagnose_custom", "repair_custom", "inspect_custom", "accept_custom"]
     presented = []
 
+    loop = situation in {"correction_loop", "changed_result"}
+    if loop:
+        steps = ["review", "repair", "review", "repair"]
+    if situation == "long_history":
+        # An over-budget snapshot cannot establish that no user decision is open.
+        task = records.materialize(workflow_id=state.workflow_id, step=steps[0], iteration=1,
+            trigger="confirm_output", policy_id="decision", prompt="archived",
+            expected_result={}, continuations={}, assignee_type="user")
+        records.complete(workflow_id=state.workflow_id, task_id=task.id,
+            payload={"feedback": "x" * callback.MAX_CALLBACK_INPUT_BYTES}, source="interactive")
+
     def dispatch():
         for source, target in zip(steps, steps[1:]):
             pending = situation == "pending"
@@ -3839,8 +3851,12 @@ def test_dispatch_explains_current_owner_and_preserves_decisions(tmp_path, monke
             )
             state.current_step = handoff.to_step
             state.handoff_contract = handoff
-            store.record_event(state, "transition", {"from": source, "to": handoff.to_step},
-                               baton_contract=handoff)
+            edge = {"from": source, "to": handoff.to_step}
+            if loop:
+                edge.update(transition_intent="manual_handoff" if source == "review" else "await_agent",
+                            source_artifact={"name": "verdict", "updated_by": source,
+                                "content_sha256": ("b" if situation == "changed_result" and presented else "a") * 64})
+            store.record_event(state, "transition", edge, baton_contract=handoff)
             current_control().position(state, {target: {}})
             payload = {"workflow_id": state.workflow_id, "issue": issue.name,
                        "event_type": "phase_terminal", "step": source, "status_code": "await_agent",
@@ -3861,13 +3877,16 @@ def test_dispatch_explains_current_owner_and_preserves_decisions(tmp_path, monke
                 callback.run_callback(event, repository_root=tmp_path)
             notice = json.loads(daemon.input[0]["text"].split("Wake notice: ", 1)[1])
             presented.append(notice["supervision"])
-            if situation != "three_handoffs":
+            if situation != "three_handoffs" and not loop:
                 break
 
     WorkflowHost(issue).run(dispatch, hosting="foreground")
     if situation == "three_handoffs":
         assert [p["assessment"] for p in presented] == ["continue"] * 3
         assert [p["current_step"] for p in presented] == steps[1:]
+    elif loop:
+        assert presented[-1]["assessment"] == ("inspect" if situation == "correction_loop" else "continue")
+        assert bool(presented[-1]["same_problem_attempts"]) == (situation == "correction_loop")
     elif situation == "pending":
         task, = records.tasks()
         assert task.status == HumanTaskStatus.PENDING

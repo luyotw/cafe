@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from cafe.core import worker_liveness
-from cafe.core.packet_io import atomic_write_bytes
+from cafe.core.packet_io import atomic_write_bytes, read_regular_bytes
 from cafe.utils.issue_paths import issue_name_from_dir
 
 try:
@@ -102,7 +102,7 @@ class WorkerLaunchStore:
     def running_positions(self, workflow_id: str) -> list[dict[str, Any]]:
         """Read recorded worker positions without changing the worker or its lease."""
         positions = []
-        for record in self._read_unlocked().values():
+        for record in self._read_unlocked(max_bytes=256 * 1024).values():
             active = record.get("active") or {}
             if (record["status"] == "running" and active.get("workflow_id") == workflow_id
                     and not worker_liveness.worker_abandoned(record)):
@@ -230,11 +230,12 @@ class WorkerLaunchStore:
                         ).encode("utf-8"),
                     )
 
-    def _read_unlocked(self) -> dict[str, Any]:
+    def _read_unlocked(self, *, max_bytes: int | None = None) -> dict[str, Any]:
         if not self.path.exists():
             return {}
         try:
-            loaded = json.loads(self.path.read_text(encoding="utf-8"))
+            loaded = json.loads(read_regular_bytes(self.path, max_bytes) if max_bytes is not None
+                                else self.path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise ValueError("worker launch state is unreadable; advancement is frozen") from exc
         attempts = loaded.get("attempts") if isinstance(loaded, dict) else None

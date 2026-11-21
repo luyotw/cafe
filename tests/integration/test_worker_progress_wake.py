@@ -12,7 +12,7 @@ from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.workflow_execution.workflow_hosting import WorkflowHost
 
 
-@pytest.mark.parametrize("activity", ["repeat", "quiet", "advance"])
+@pytest.mark.parametrize("activity", ["repeat", "quiet", "advance", "checklist"])
 def test_host_observes_provider_deadline_before_next_handoff(tmp_path, monkeypatch, activity):
     from cafe.agents import executor
 
@@ -37,12 +37,16 @@ for i in range(16):
     if activity == 'advance' and i in (4, 8, 12):
         with Path(path).open('a') as out:
             out.write(f'### PLAN-00{i}\\n- Status: completed\\n')
+    if activity == 'checklist' and i in (4, 8, 12):
+        checklist = Path(path).with_name('checklist.md')
+        checklist.write_text(checklist.read_text().replace('[ ]', '[x]', 1))
     if activity != 'quiet':
         print('same observation', flush=True)
     time.sleep(.1)
 print('complete', flush=True)
 """
         output.write_text("## Todo Progress\n")
+        output.with_name("checklist.md").write_text("[ ] First check\n[ ] Second check\n[ ] Third check\n")
         AgentExecutor(AgentConfig(name="fixture", cli=AgentCLI.CLAUDE))._execute_streaming_process(
             [sys.executable, "-c", script, activity, str(output)], "fixture"
         )
@@ -57,7 +61,7 @@ print('complete', flush=True)
     start = time.monotonic()
     WorkflowHost(issue).run(runtime.run, hosting="foreground")
     diagnostics = [e for e in events if e["event_type"] == "worker_progress_overdue"]
-    assert len(diagnostics) == (0 if activity == "advance" else 1)
+    assert len(diagnostics) == (0 if activity in ("advance", "checklist") else 1)
     if diagnostics:
         diagnostic, = diagnostics
         assert diagnostic["step"] == step and diagnostic["worker_id"]
@@ -87,3 +91,11 @@ def test_identical_item_cannot_renew_or_duplicate_elapsed_diagnostic(tmp_path):
     assert watch.due(10) is None
     now[0] = 27
     assert watch.due(10)["progress_source"] == "completed_todo"
+
+def test_unsuitable_progress_file_leaves_deadline_serviceable(tmp_path):
+    import os
+    import subprocess
+    output = tmp_path / "output.md"
+    os.mkfifo(output)
+    command = "from cafe.workflow_execution.progress_watch import ProgressWatch; from pathlib import Path; import sys; assert ProgressWatch(Path(sys.argv[1])).due(0)"
+    subprocess.run([sys.executable, "-c", command, str(output)], check=True, timeout=3)

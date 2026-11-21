@@ -1752,9 +1752,55 @@ def _callback_to_step(event: dict[str, Any], *, repository_root: Path) -> str | 
     return None
 
 
+def _recent_pending_tasks(issue, workflow):
+    from cafe.core.human_task_records import (
+        HUMAN_TASK_RECORD_FILENAME, HUMAN_TASK_RECORD_SCHEMA_VERSION, HumanTaskStatus,
+    )
+    from cafe.core.packet_io import read_regular_bytes
+
+    try:
+        envelope = json.loads(read_regular_bytes(issue / HUMAN_TASK_RECORD_FILENAME, MAX_CALLBACK_INPUT_BYTES))
+    except FileNotFoundError:
+        return []
+    if (not isinstance(envelope, dict) or envelope.get("workflow_id") != workflow
+            or envelope.get("schema_version") != HUMAN_TASK_RECORD_SCHEMA_VERSION
+            or not isinstance(envelope.get("tasks"), list)):
+        raise ValueError("unknown task history")
+    tasks = []
+    for task in envelope["tasks"]:
+        if task["workflow_id"] != workflow:
+            raise ValueError("unknown task owner")
+        if HumanTaskStatus(task["status"]) == HumanTaskStatus.PENDING:
+            tasks.append({key: task[key] for key in ("id", "step", "trigger")})
+            if len(tasks) > 4:
+                raise ValueError("incomplete pending task projection")
+    return tasks
+
+
+def _recurring_result(transitions, current):
+    if not current:
+        return []
+    data = current["data"]
+    artifact = data.get("source_artifact") or {}
+    digest = artifact.get("content_sha256")
+    if not digest:
+        return []
+    matches = []
+    for record in reversed(transitions):
+        if record["sequence"] > current["sequence"]:
+            continue
+        prior = record["data"]
+        if (prior.get("from"), prior.get("to")) != (data.get("from"), data.get("to")):
+            continue
+        source = prior.get("source_artifact") or {}
+        if (source.get("name"), source.get("content_sha256")) != (artifact.get("name"), digest):
+            break
+        matches.append(record)
+    return list(reversed(matches[:4])) if len(matches) > 1 else []
+
+
 def _supervision(event, root, event_target):
     """Project recent durable decisions without acquiring an advancement lease."""
-    from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
     from cafe.workflow_execution.worker_launch import WorkerLaunchStore
 
     issue = root / ".cafe/issues" / _validated_issue_name(event)
@@ -1784,9 +1830,9 @@ def _supervision(event, root, event_target):
     failures = [r for r in records if r["event_type"] == "workflow_event_callback_enqueued"
                 and r["data"].get("step") == event["step"] and event.get("reason")
                 and r["data"].get("reason") == event["reason"]]
-    tasks = [{"id": t.id, "step": t.step, "trigger": t.trigger}
-             for t in HumanTaskRecordStore(issue).tasks()
-             if t.workflow_id == workflow and t.status == HumanTaskStatus.PENDING]
+    if event.get("event_type") == "phase_terminal":
+        failures = _recurring_result(transitions, origin)
+    tasks = _recent_pending_tasks(issue, workflow)
     workers = WorkerLaunchStore(issue).running_positions(workflow)
     worker = workers[0] if len(workers) == 1 else None
     decision = "inspect"
@@ -1794,7 +1840,7 @@ def _supervision(event, root, event_target):
         decision = "pending_decision"
     elif (event.get("event_type") == "phase_terminal" and origin and current
           and origin["data"].get("from") == event["step"]
-          and event.get("expected_step", event_target) == event_target == origin["data"].get("to")
+          and event.get("expected_step") == event_target == origin["data"].get("to")
           and not tasks
           and owner == "agent" and active == handoff.get("to_step") == current["data"].get("to")
           and worker and worker["step"] == active and not failures):

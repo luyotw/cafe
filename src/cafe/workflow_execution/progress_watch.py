@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import re
+import stat
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+from cafe.core.checklist import _CHECKBOX_LINE
+from cafe.core.packet_io import read_regular_bytes
 
 _COMPLETED = re.compile(r"^### ([A-Za-z][\w-]*)\s*\n- Status: completed\s*$", re.MULTILINE)
 
@@ -22,24 +26,38 @@ class ProgressWatch:
         self.next_check = self.last_advance
         self.reported = False
         self.seen = set()
-        self._stamp = None
+        self.stamps = {}
+        self.checklist_items = set()
         self._observe_items()
 
-    def _observe_items(self) -> bool:
+    def _changed_text(self, path):
         try:
-            stat = self.output.stat()
-            stamp = (stat.st_mtime_ns, stat.st_size, stat.st_ino)
-            if stamp == self._stamp or self.output.is_symlink() or stat.st_size > 256 * 1024:
-                return False
-            self._stamp = stamp
-            content = self.output.read_text(encoding="utf-8")
-        except (OSError, UnicodeError):
-            return False
+            info = path.lstat()
+            stamp = (info.st_ctime_ns, info.st_dev, info.st_ino)
+            if self.stamps.get(path) == stamp or not stat.S_ISREG(info.st_mode):
+                return ""
+            text = read_regular_bytes(path, 256 * 1024).decode()
+            self.stamps[path] = stamp
+            return text
+        except (OSError, ValueError):
+            return ""
+
+    def _observe_items(self):
+        content = self._changed_text(self.output)
         _, section, ledger = content.partition("## Todo Progress\n")
-        items = set(_COMPLETED.findall(ledger.split("\n## ", 1)[0])) if section else set()
-        new = items - self.seen
+        completed = {("completed_todo", key) for key in _COMPLETED.findall(ledger.split("\n## ", 1)[0])} if section else set()
+        checklist = self._changed_text(self.output.with_name("checklist.md"))
+        for line in checklist.splitlines():
+            match = _CHECKBOX_LINE.match(line)
+            if match:
+                key = match["body"].strip()
+                if match["state"] == " ":
+                    self.checklist_items.add(key)
+                elif key in self.checklist_items:
+                    completed.add(("completed_checklist_item", key))
+        new = completed - self.seen
         self.seen.update(new)
-        return bool(new)
+        return next((source for source, _ in new), None)
 
     def due(self, limit: float) -> dict | None:
         now = self.clock()
@@ -48,10 +66,11 @@ class ProgressWatch:
         if self.reported and now < self.next_check:
             return None
         self.next_check = now + min(2, limit / 8)
-        if self._observe_items():
+        advance = self._observe_items()
+        if advance:
             self.last_advance = now
             self.progress_at = datetime.now(timezone.utc).isoformat()
-            self.source = "completed_todo"
+            self.source = advance
             self.reported = False
         elapsed = now - self.last_advance
         if elapsed < limit or self.reported:
