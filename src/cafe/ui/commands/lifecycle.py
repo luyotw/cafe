@@ -1305,11 +1305,16 @@ _LOCAL_CLOSE_EVIDENCE = ".local-close-evidence"
 
 def _require_matching_archive(live, archive):
     """Only reuse a prior archive when it represents the entire live issue."""
-    from filecmp import cmp
-
     def contents(root):
         return {path.relative_to(root): path for path in root.rglob("*")
                 if path != archive / _LOCAL_CLOSE_JOURNAL}
+
+    def same_bytes(path, saved):
+        with path.open("rb") as source, saved.open("rb") as copy:
+            for chunk in iter(lambda: source.read(128 * 1024), b""):
+                if chunk != copy.read(len(chunk)):
+                    return False
+            return not copy.read(1)
 
     live_entries, saved_entries = contents(live), contents(archive)
     if live_entries.keys() != saved_entries.keys():
@@ -1319,7 +1324,7 @@ def _require_matching_archive(live, archive):
         if path.is_symlink() or saved.is_symlink():
             raise ValueError("cannot compare symlinked issue evidence for cleanup")
         if not (path.is_dir() and saved.is_dir()) and not (
-            path.is_file() and saved.is_file() and cmp(path, saved, shallow=False)
+            path.is_file() and saved.is_file() and same_bytes(path, saved)
         ):
             raise ValueError("live issue evidence differs from the existing archive")
 
@@ -1328,8 +1333,23 @@ def _live_close_alias(live, evidence):
     return live.is_symlink() and live.readlink() == evidence
 
 
-def _volume_close_evidence(checkout, selection_id):
-    return checkout.parent / f".cafe-close-{selection_id}" / "issue"
+def _volume_close_evidence(checkout, selection_id, *, linked):
+    staging_root = checkout.parent if linked else checkout / ".cafe"
+    return staging_root / f".cafe-close-{selection_id}" / "issue"
+
+
+def _staged_volume_close_evidence(checkout, selection_id, *, linked):
+    candidates = [_volume_close_evidence(checkout, selection_id, linked=linked)]
+    if not linked:
+        # Earlier versions staged current checkouts next to the repository.
+        candidates.append(_volume_close_evidence(checkout, selection_id, linked=True))
+    staged = [path for path in candidates if path.exists() or path.is_symlink()]
+    if len(staged) > 1:
+        raise ValueError("multiple staged issue directories match this local close")
+    if staged:
+        _validate_volume_close_directory(staged[0].parent)
+        return staged[0]
+    return None
 
 
 def _validate_volume_close_directory(directory):
@@ -1352,8 +1372,8 @@ def _relocate_close_evidence(issue, archive, volume_evidence):
     except OSError as exc:
         if exc.errno != errno.EXDEV:
             raise
-        # Keep the live inodes on the source volume, outside the worktree Git
-        # removes. The same deterministic path is available to archived retries.
+        # Keep the live inodes on the source volume. Linked checkout staging
+        # sits outside the worktree Git removes.
         volume_evidence.parent.mkdir(mode=0o700, exist_ok=True)
         _validate_volume_close_directory(volume_evidence.parent)
         issue.rename(volume_evidence)
@@ -1370,13 +1390,40 @@ def _publish_volume_close_evidence(evidence, archive):
     if archived.exists() or archived.is_symlink():
         if not archived.is_dir() or archived.is_symlink():
             raise ValueError("archived local close evidence is invalid")
-        _require_matching_archive(evidence, archived)
-        return
+        try:
+            _require_matching_archive(evidence, archived)
+        except ValueError:
+            pass  # The staged source can continue to receive evidence after publication.
+        else:
+            return
     with tempfile.TemporaryDirectory(prefix=".close-volume-", dir=archive) as temporary:
         copy = Path(temporary) / "issue"
         shutil.copytree(evidence, copy, symlinks=True)
         _require_matching_archive(evidence, copy)
-        copy.rename(archived)
+        previous = None
+        if archived.is_dir():
+            # Keep the prior published bytes recoverable even if the process
+            # stops after moving them out of the canonical location.
+            previous = Path(tempfile.mkdtemp(prefix=".close-volume-previous-", dir=archive)) / "issue"
+            archived.rename(previous)
+        try:
+            copy.rename(archived)
+        except OSError:
+            if previous is not None and not (archived.exists() or archived.is_symlink()):
+                previous.rename(archived)
+            raise
+        _require_matching_archive(evidence, archived)
+
+
+def _finish_volume_close_evidence(evidence, archive):
+    from cafe.core.packet_io import atomic_write_bytes, canonical_json, read_regular_bytes
+
+    _publish_volume_close_evidence(evidence, archive)
+    if evidence != archive / _LOCAL_CLOSE_EVIDENCE:
+        journal = archive / _LOCAL_CLOSE_JOURNAL
+        record = json.loads(read_regular_bytes(journal, 8192))
+        if record.pop("volume_staged", False):
+            atomic_write_bytes(journal, canonical_json(record))
 
 
 def _finish_archived_local_close(
@@ -1399,6 +1446,8 @@ def _finish_archived_local_close(
             _remove_worktree_inventory_pointer(
                 project_root=project_root, issue_name=source, worktree_path=str(checkout),
             )
+        _finish_volume_close_evidence(evidence, archive)
+        if linked and not checkout.exists():
             clear_marker_if_matches(destination / ".cafe", source)
         elif not linked and checkout.is_dir():
             source_git = GitOperations(str(checkout))
@@ -1448,7 +1497,8 @@ def _finish_archived_local_close(
         _remove_worktree_inventory_pointer(
             project_root=project_root, issue_name=source, worktree_path=str(checkout),
         )
-    else:
+    _finish_volume_close_evidence(evidence, archive)
+    if not linked:
         clear_marker_if_matches(checkout / ".cafe", source)
     clear_marker_if_matches(destination / ".cafe", source)
 
@@ -1465,10 +1515,12 @@ def _retry_archived_local_close(archive, issue_name, caller, project_root):
         raise ValueError("local cleanup archive is unavailable")
     with advancement_execution_lock(archive, reuse_existing=False):
         journal = json.loads(read_regular_bytes(archive / _LOCAL_CLOSE_JOURNAL, 8192))
+        volume_staged = journal.pop("volume_staged", False)
         checkout = Path(journal["checkout"]).resolve()
         destination = Path(journal["destination"]).resolve(strict=True)
         linked = journal["linked"]
-        if caller not in (checkout, destination) or type(linked) is not bool:
+        if (caller not in (checkout, destination) or type(linked) is not bool
+                or type(volume_staged) is not bool):
             raise ValueError("cleanup recovery is bound to the source and retained checkouts")
         retained = GitOperations(str(destination))
         source_lock = workspace_execution_lock(checkout, blocking=False) if checkout.is_dir() else nullcontext()
@@ -1477,12 +1529,10 @@ def _retry_archived_local_close(archive, issue_name, caller, project_root):
                 archive, source=issue_name, checkout=checkout,
                 configured_target=retained.get_current_branch(), linked=linked, archived=True,
             )
-            volume_evidence = _volume_close_evidence(checkout, selection["snapshot"])
-            if volume_evidence.exists() or volume_evidence.is_symlink():
-                _validate_volume_close_directory(volume_evidence.parent)
-                evidence = volume_evidence
-            else:
-                evidence = archive / _LOCAL_CLOSE_EVIDENCE
+            staged = _staged_volume_close_evidence(checkout, selection["snapshot"], linked=linked)
+            if volume_staged and staged is None:
+                raise ValueError("source-volume close evidence is unavailable")
+            evidence = staged or archive / _LOCAL_CLOSE_EVIDENCE
             live = checkout / ".cafe" / "issues" / issue_name
             if (journal != _local_close_binding(checkout, bound_destination, linked, selection)
                     or not evidence.is_dir() or evidence.is_symlink()
@@ -1539,20 +1589,30 @@ def _close_accepted_local(issue, source, target, checkout, project_root, git_ops
             observe()
             _require_matching_archive(issue, archive)
             journal = archive / _LOCAL_CLOSE_JOURNAL
-            binding = canonical_json(_local_close_binding(checkout, destination, linked, selection))
+            binding = _local_close_binding(checkout, destination, linked, selection)
+            local_journal = canonical_json(binding)
+            volume_journal = canonical_json({**binding, "volume_staged": True})
+            saved_journal = local_journal
             if journal.exists() or journal.is_symlink():
-                if read_regular_bytes(journal, 8192) != binding:
+                saved_journal = read_regular_bytes(journal, 8192)
+                if saved_journal not in (local_journal, volume_journal):
                     raise ValueError("cleanup recovery binding differs from the accepted checkout")
             else:
-                atomic_write_bytes(journal, binding)
+                atomic_write_bytes(journal, local_journal)
             if not linked and read_marker(checkout / ".cafe") is None:
                 write_marker(checkout / ".cafe", source)
             # Move the live directory itself. Open files and directory handles still
             # refer to archived inodes while Git removes the linked checkout.
+            if _staged_volume_close_evidence(checkout, selection["snapshot"], linked=linked) is not None:
+                raise ValueError("relocated cleanup evidence already exists")
             evidence = _relocate_close_evidence(
-                issue, archive, _volume_close_evidence(checkout, selection["snapshot"]),
+                issue, archive, _volume_close_evidence(checkout, selection["snapshot"], linked=linked),
             )
             try:
+                current_journal = (local_journal if evidence == archive / _LOCAL_CLOSE_EVIDENCE
+                                   else volume_journal)
+                if current_journal != saved_journal:
+                    atomic_write_bytes(journal, current_journal)
                 _finish_archived_local_close(
                     source, checkout, destination, project_root, retained, proposal, receipt, evidence,
                     archive=archive, linked=linked, selection_id=selection["snapshot"],

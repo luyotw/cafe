@@ -439,8 +439,9 @@ def test_cleanup_retains_the_checkout_already_owning_the_target(feature, tmp_pat
         "archive-retry-new-evidence", "ref-retry", "ref-retry-moved", "last-observation",
         "late-writer", "inventory-retry", "inventory-retry-recreated",
         "inventory-retry-recreated-worktree", "cross-volume", "cross-volume-retry",
+        "cross-volume-after-copy", "cross-volume-after-deletion",
         "branch-upstream", "late-checkout-switch", "checkout-during-remove",
-    )] + [(False, "detach-retry"), (False, "cross-volume")],
+    )] + [(False, name) for name in ("detach-retry", "cross-volume", "cross-volume-root", "cross-volume-root-retry")],
     indirect=["feature"],
 )
 def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
@@ -548,15 +549,22 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
         if scenario == "ref-retry-moved":
             git(root, "update-ref", "refs/heads/feature", base)
     archive = lifecycle._get_issue_archive_path(issue.name)
+    transferred = []
     if scenario.startswith("cross-volume"):
         import errno
 
         rename = Path.rename
 
         def split_volume(path, target):
-            if path == issue and Path(target).is_relative_to(archive):
+            outside_volume = (not Path(target).is_relative_to(worktree)
+                              if scenario.startswith("cross-volume-root")
+                              else Path(target).is_relative_to(archive))
+            if path == issue and outside_volume:
                 raise OSError(errno.EXDEV, "cross-device rename")
-            return rename(path, target)
+            relocated = rename(path, target)
+            if path == issue:
+                transferred.append(relocated)
+            return relocated
 
         monkeypatch.setattr(Path, "rename", split_volume)
     if scenario == "last-observation":
@@ -621,17 +629,6 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
             return remove(backend, path)
 
         monkeypatch.setattr(GitOperations, "remove_worktree", write_through_open_directory)
-    if scenario == "cross-volume-retry":
-        from cafe.core.git import GitOperations, GitError
-
-        def interrupt_branch_delete(*args, **kwargs):
-            raise GitError("interrupted before ref deletion")
-
-        with monkeypatch.context() as failure:
-            failure.setattr(GitOperations, "delete_cleanup_branch", interrupt_branch_delete)
-            interrupted = CliRunner().invoke(app, ["close"])
-        assert interrupted.exit_code != 0
-        assert not worktree.exists() and git(root, "rev-parse", "feature") == source
     remote = tmp_path / "remote.git"
     before = git(remote, "show-ref")
     attempts = []
@@ -643,20 +640,83 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
         return run(argv, **kwargs)
 
     monkeypatch.setattr(subprocess, "run", capture_remote)
+    before_delete_retry = {"cross-volume-retry", "cross-volume-root-retry"}
+    post_copy_cases = before_delete_retry | {"cross-volume-after-copy", "cross-volume-after-deletion"}
+    if scenario in post_copy_cases:
+        import os
+        from cafe.core.git import GitOperations, GitError
+
+        delete = GitOperations.delete_cleanup_branch
+        (issue / "changing-evidence.md").write_text("before\n")
+        with os.fdopen(os.open(issue / "changing-evidence.md", os.O_RDWR), "r+") as evidence_handle:
+            post_copy_fd = os.open(issue, os.O_RDONLY)
+
+            def write_after_publication(backend, *args, **kwargs):
+                assert (archive / ".local-close-evidence" / "changing-evidence.md").read_text() == "before\n"
+                if scenario not in before_delete_retry:
+                    delete(backend, *args, **kwargs)
+                note_fd = os.open("post-copy-note.md", os.O_CREAT | os.O_WRONLY, dir_fd=post_copy_fd)
+                with os.fdopen(note_fd, "w") as note:
+                    note.write("arrived after publication\n")
+                evidence_handle.write("after\n")
+                evidence_handle.truncate()
+                evidence_handle.flush()
+                if scenario != "cross-volume-after-copy":
+                    raise GitError("interrupted at ref deletion")
+
+            try:
+                with monkeypatch.context() as failure:
+                    failure.setattr(GitOperations, "delete_cleanup_branch", write_after_publication)
+                    interrupted = CliRunner().invoke(app, ["close"])
+            finally:
+                os.close(post_copy_fd)
+        if scenario == "cross-volume-after-copy":
+            result = interrupted
+        else:
+            assert interrupted.exit_code != 0
+            assert worktree.exists() == (not linked)
+            if not linked:
+                assert git(worktree, "branch", "--show-current") == ""
+            if scenario in before_delete_retry:
+                assert git(root, "rev-parse", "feature") == source
+            else:
+                assert git(root, "branch", "--list", "feature") == ""
+        if scenario == "cross-volume-retry":
+            # Simulate disconnecting the source volume after the first copy.
+            # The old canonical snapshot cannot settle a close with unseen writes.
+            staged, = transferred
+            offline = staged.rename(tmp_path / "temporarily-offline")
+            try:
+                monkeypatch.chdir(root)
+                unavailable = CliRunner().invoke(app, ["close", "--issue", "feature"])
+                assert unavailable.exit_code != 0
+                assert git(root, "rev-parse", "feature") == source
+            finally:
+                offline.rename(staged)
     lock = advancement_execution_lock(issue) if scenario == "active" else nullcontext()
     with lock:
-        if scenario.startswith(("ref-retry", "inventory-retry")) or scenario == "cross-volume-retry":
+        if scenario.startswith(("ref-retry", "inventory-retry")) or scenario in {
+            "cross-volume-retry", "cross-volume-after-deletion",
+        }:
             monkeypatch.chdir(root)
             result = CliRunner().invoke(app, ["close", "--issue", "feature"])
-        else:
+        elif scenario != "cross-volume-after-copy":
             result = CliRunner().invoke(app, ["close"])
+    if scenario == "cross-volume-retry" and result.exit_code == 0:
+        offline = staged.rename(tmp_path / "temporarily-offline")
+        try:
+            settled = CliRunner().invoke(app, ["close", "--issue", "feature"])
+            assert settled.exit_code == 0, settled.output
+        finally:
+            offline.rename(staged)
     assert git(remote, "show-ref") == before
     assert attempts == []
     assert git(root, "rev-parse", "unrelated") == base
     if scenario in {"ff-only", "merge-commit", "qualified-base", "archive-retry", "ref-retry",
                     "detach-retry", "inventory-retry", "inventory-retry-recreated",
                     "inventory-retry-recreated-worktree", "late-writer", "cross-volume",
-                    "cross-volume-retry", "branch-upstream", "checkout-during-remove"}:
+                    "cross-volume-retry", "cross-volume-root", "cross-volume-root-retry", "cross-volume-after-copy",
+                    "cross-volume-after-deletion", "branch-upstream", "checkout-during-remove"}:
         assert result.exit_code == 0, result.output + repr(result.exception)
         assert archive.is_dir()
         assert worktree.exists() == (not linked or scenario.endswith("recreated-worktree"))
@@ -672,6 +732,10 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
                        for p in archive.rglob("last-run-note.md"))
             assert any(p.read_text() == "preserve the path-based write"
                        for p in archive.rglob("last-path-note.md"))
+        if scenario in post_copy_cases:
+            published = archive / ".local-close-evidence"
+            assert (published / "post-copy-note.md").read_text() == "arrived after publication\n"
+            assert (published / "changing-evidence.md").read_text() == "after\n"
         if scenario.endswith("recreated-worktree"):
             assert git(worktree, "branch", "--show-current") == "feature"
             assert inventory.is_dir() and read_marker(destination / ".cafe") == issue.name
