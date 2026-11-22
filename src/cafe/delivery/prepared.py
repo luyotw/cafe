@@ -75,6 +75,7 @@ def resolve_local_review(playbook, config):
         name for name, definition in playbook["steps"].items()
         if (contract := definition.get("local_review")) and contract.get("integration_step")
         and isinstance(config.get(name), dict) and config[name].get("auto_create") is False
+        and config[name].get("endpoint") != "manual"
         and isinstance(config.get(contract["integration_step"]), dict)
         and config[contract["integration_step"]].get("mode") == "local"
     ]

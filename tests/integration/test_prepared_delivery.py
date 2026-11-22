@@ -213,6 +213,7 @@ def test_automatic_delivery_requires_choices_before_creating_branch(local_action
     [
         (False, "local", None, "local_preparation"),
         (False, None, None, "agent"),
+        (False, "local", "manual", "agent"),
         (True, "local", None, "agent"),
         (True, "github", None, "agent"),
         (False, None, "local-review", "local_review"),
