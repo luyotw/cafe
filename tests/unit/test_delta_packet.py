@@ -272,11 +272,15 @@ def test_large_packet_inlines_bounded_pointer() -> None:
     assert '"payload"' not in inline
 
 
-@pytest.mark.parametrize("change", ["none", "caller", "new-caller", "requirements", "evidence", "legacy"])
+@pytest.mark.parametrize(
+    "change", ["none", "caller", "new-caller", "new-doc-test", "doc-test",
+               "requirements", "evidence", "legacy"],
+)
 def test_review_correction_projection_reuses_only_current_boundary_evidence(tmp_path, change):
     from cafe.core.correction_context import review_projection
     from cafe.core.packet_io import sha256_bytes
     import subprocess
+    import sys
 
     def git(*args):
         return subprocess.check_output(["git", "-C", str(tmp_path), *args], text=True).strip()
@@ -285,15 +289,28 @@ def test_review_correction_projection_reuses_only_current_boundary_evidence(tmp_
     git("config", "user.email", "test@example.com")
     git("config", "user.name", "Test")
     (tmp_path / "docs").mkdir()
-    for path in ("caller.py", "implementation.py", "docs/other.md"):
-        (tmp_path / path).write_text("original")
+    for path in ("caller.py", "implementation.py"):
+        (tmp_path / path).write_text("VALUE = 1\n")
+    (tmp_path / "pytest.ini").write_text("[pytest]\naddopts = --doctest-glob=*.md\n")
+    (tmp_path / "docs/other.md").write_text("# Background\n\nOriginal notes about planning.\n")
+    (tmp_path / "docs/example.md").write_text(">>> from implementation import VALUE\n>>> VALUE\n1\n")
     git("add", ".")
     git("commit", "-m", "Reviewed")
     previous = git("rev-parse", "HEAD")
-    changed = {"caller": "caller.py", "new-caller": "new_cli.py"}.get(change, "docs/other.md")
-    (tmp_path / changed).write_text("import implementation" if change == "new-caller" else "changed")
+    changed = {"caller": "caller.py", "new-caller": "new_cli.py", "new-doc-test": "docs/new-example.md",
+               "doc-test": "docs/example.md"}.get(change, "docs/other.md")
+    if change in {"doc-test", "new-doc-test"}:
+        (tmp_path / changed).write_text(">>> from implementation import VALUE\n>>> VALUE\n2\n")
+    elif change == "new-caller":
+        (tmp_path / changed).write_text("import implementation\n")
+    else:
+        (tmp_path / changed).write_text("# Background\n\nExpanded notes about planning.\n")
     git("add", changed)
     git("commit", "-m", "Correction")
+    if change in {"doc-test", "new-doc-test"}:
+        gate = subprocess.run([sys.executable, "-m", "doctest", changed],
+                              cwd=tmp_path, capture_output=True, text=True)
+        assert gate.returncode == 1 and "Expected:" in gate.stdout and "Got:" in gate.stdout
     head = git("rev-parse", "HEAD")
     issue = tmp_path / ".cafe/issues/correction"
     issue.mkdir(parents=True)

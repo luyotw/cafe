@@ -135,6 +135,10 @@ def _local_result(commands, dest, proposal):
 
 
 def _validate_prepared_local_result(commands, dest, proposal, commit):
+    observation = _local_evidence(commands, dest)
+    if (observation["head"] != commit or not observation["clean"] or observation["pending"]
+            or commands.git(dest, "symbolic-ref", "--short", "HEAD") != proposal.target_branch):
+        raise OperationError("inconsistent_integrated_checkout", state="unknown")
     if commit == proposal.target_oid:
         # The reviewed source may already be contained in the approved target.
         return
@@ -431,7 +435,7 @@ def execute_action(
                             and observed_tip != prior.get("commit")):
                         raise OperationError("changed_integrated_destination")
                     result = _local_result(commands, dest, p)
-                    if p.local_preparation and reconcile_only and result is not None:
+                    if p.local_preparation and result is not None:
                         _validate_prepared_local_result(commands, dest, p, result["commit"])
                     if result is None:
                         if prior and prior["state"] not in {"not_dispatched", "blocked"}:
@@ -450,8 +454,9 @@ def execute_action(
                         store.start(action, local_before=before)
                         if p.local_preparation:
                             argv = [
-                                sys.executable, "-m", "cafe.delivery.local_git", str(dest),
+                                sys.executable, "-I", "-m", "cafe.delivery.local_git", str(dest),
                                 p.strategy, p.target_branch, p.target_oid, p.source_oid,
+                                p.source_branch, str(root.resolve()),
                             ]
                         else:
                             flag = "--ff-only" if p.strategy == "ff-only" else "--no-ff"
