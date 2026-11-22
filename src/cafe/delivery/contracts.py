@@ -33,6 +33,13 @@ class DeliveryBinding(FrozenModel):
     publication_artifact: str | None = None
     local_preparation_artifact: str | None = None
 
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        value = handler(self)
+        if self.local_preparation_artifact is None:
+            value.pop("local_preparation_artifact", None)
+        return value
+
 
 class ReviewSource(FrozenModel):
     """Original producer identity and bytes retained with the shown draft bundle."""

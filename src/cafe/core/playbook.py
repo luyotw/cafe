@@ -16,6 +16,7 @@ from pydantic import (
     ValidationError,
     TypeAdapter,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -637,6 +638,14 @@ class LocalReviewEndpoint(BaseModel):
         if bool(self.integration_step) != bool(self.integration_artifact):
             raise ValueError("local preparation requires both an integration step and artifact")
         return self
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        value = handler(self)
+        if self.integration_step is None:
+            value.pop("integration_step", None)
+            value.pop("integration_artifact", None)
+        return value
 
 
 class StepConfig(BaseModel):

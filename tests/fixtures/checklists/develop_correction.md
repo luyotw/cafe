@@ -3,7 +3,7 @@
 [ ] Read src/cafe/data/agents/developer/Nick.md to understand your role
 [ ] Write engineering prose in the repository content language stated in the runtime context, and anything addressed to the user in the workflow conversation language; your own preferred language overrides neither
 [ ] Resolve the active corrections against applicable requirements in .cafe/issues/test/spec/iteration_001/output.md and .cafe/issues/test/plan/iteration_001/output.md; consult only needed sections missing from current context
-[ ] Read feedback todo list in .cafe/issues/test/review/iteration_001/output.md
+[ ] Read feedback todo list in .cafe/issues/test/review/iteration_001/output.md or use its authoritative open rows in the correction context; consult other sections only for changed or missing evidence
 [ ] Keep this Develop invocation running through every authorized executable blocker; after each bounded unit, validate evidence, update the phase-owned `## Todo Progress` ledger and summarize new changes and remaining work, then continue instead of treating a commit or targeted check as an iteration boundary
 [ ] Address each issue raised in the feedback
 [ ] Keep .cafe/issues/test/review/iteration_001/output.md immutable; record completion only in .cafe/issues/test/develop/iteration_001/output.md `## Todo Progress` with current fingerprint and evidence

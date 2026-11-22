@@ -103,7 +103,7 @@ workflow:
           - optional_checklist: basic_principles.md
       - when: {min_iteration: 2, max_iteration: 3}
         sections:
-          - reference: execution_preflight.md
+          - reference: execution_correction_preflight.md
           - reference: execution_correction.md
           - reference: execution_risk_assessment.md
           - reference: execution_acceptance_closure.md
@@ -112,7 +112,7 @@ workflow:
           - optional_checklist: basic_principles.md
       - when: {min_iteration: 4}
         sections:
-          - reference: execution_preflight.md
+          - reference: execution_correction_preflight.md
           - reference: execution_convergence.md
           - reference: execution_risk_assessment.md
           - reference: execution_acceptance_closure.md
@@ -137,6 +137,7 @@ Read your agent file: {agent_file}
     python scripts/update_review_fallback.py --help
 
 ## Instructions
+- When retaining independently verified evidence with a complete recorded boundary, add a `### Correction Evidence` subsection under `## Review Baseline` with a fenced JSON array. Each record has `id`, original evidence `head`, complete repo-relative `paths` including callers, gates, configuration, tests and fixtures, plus the issue-relative `evidence_path` and its `sha256`. Reference earlier immutable evidence and carry its original head and digest forward. Leave an entry out if the evidence or complete boundary cannot be recorded, and preserve the explanatory evidence in the report.
 - Focus on defects and risk.
 - First confirm that the supplied requirements, plan, and implementation agree.
 - Use the authoring-time confirmed review discovery matrix: existing Codex and Claude reviewers are host-side CLI commands, not composable native Skills; no equivalent native Skills are confirmed for Gemini, Cursor, or Copilot, so all five CLIs use the pinned procedure in `references/review_procedure.md`. Runtime must not search, download, or replace reviewers.
