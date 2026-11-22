@@ -440,9 +440,14 @@ def test_cleanup_retains_the_checkout_already_owning_the_target(feature, tmp_pat
         "late-writer", "inventory-retry", "inventory-retry-recreated",
         "inventory-retry-recreated-worktree", "cross-volume", "cross-volume-retry",
         "cross-volume-after-copy", "cross-volume-after-deletion",
-        "cross-volume-final-comparison", "cross-volume-before-settlement", "cross-volume-legacy-retry",
+        "cross-volume-final-comparison", "cross-volume-before-settlement", "cross-volume-after-verification",
+        "cross-volume-legacy-retry",
+        "same-volume-rename-plain", "same-volume-rename-named",
         "branch-upstream", "late-checkout-switch", "checkout-during-remove",
-    )] + [(False, name) for name in ("detach-retry", "cross-volume", "cross-volume-root", "cross-volume-root-retry")],
+    )] + [(False, name) for name in (
+        "detach-retry", "cross-volume", "cross-volume-root", "cross-volume-root-retry",
+        "same-volume-rename-plain",
+    )],
     indirect=["feature"],
 )
 def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
@@ -551,6 +556,43 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
             git(root, "update-ref", "refs/heads/feature", base)
     archive = lifecycle._get_issue_archive_path(issue.name)
     transferred = []
+
+    def assert_snapshot_report(output, staged):
+        assert str(archive / ".local-close-evidence") in output
+        assert str(staged) in output
+        text = " ".join(output.lower().split())
+        assert "last successful" in text and "source" in text and "verification" in text
+        assert "writes after" in text
+
+    if scenario.startswith("same-volume-rename"):
+        rename = Path.rename
+        archived_evidence = archive / ".local-close-evidence"
+
+        def interrupt_after_rename(path, target):
+            moved = rename(path, target)
+            if path == issue and moved == archived_evidence:
+                raise OSError("interrupted after relocating the original issue")
+            return moved
+
+        with monkeypatch.context() as interruption:
+            interruption.setattr(Path, "rename", interrupt_after_rename)
+            interrupted = CliRunner().invoke(app, ["close"])
+        assert interrupted.exit_code != 0
+        assert not issue.exists() and (archived_evidence / "issue.yaml").is_file()
+        assert git(root, "rev-parse", "feature") == source
+        if scenario == "same-volume-rename-named":
+            import shutil
+
+            original_evidence = archived_evidence.rename(archive / "original-evidence")
+            try:
+                shutil.copytree(original_evidence, archived_evidence)
+                monkeypatch.chdir(root)
+                refused = CliRunner().invoke(app, ["close", "--issue", "feature"])
+                assert refused.exit_code != 0
+                assert git(root, "rev-parse", "feature") == source
+            finally:
+                shutil.rmtree(archived_evidence)
+                original_evidence.rename(archived_evidence)
     if scenario.startswith("cross-volume"):
         import errno
 
@@ -643,7 +685,9 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
     monkeypatch.setattr(subprocess, "run", capture_remote)
     before_delete_retry = {"cross-volume-retry", "cross-volume-root-retry", "cross-volume-legacy-retry"}
     post_copy_cases = before_delete_retry | {"cross-volume-after-copy", "cross-volume-after-deletion"}
-    final_write_cases = {"cross-volume-final-comparison", "cross-volume-before-settlement"}
+    final_write_cases = {
+        "cross-volume-final-comparison", "cross-volume-before-settlement", "cross-volume-after-verification",
+    }
     if scenario in final_write_cases:
         import os
         from cafe.core import packet_io
@@ -681,8 +725,12 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
                 return atomic_write(path, content, before_replace=before_replace)
 
             def arrive_then_verify():
-                write_late_evidence()
-                before_replace()
+                if scenario == "cross-volume-after-verification":
+                    before_replace()
+                    write_late_evidence()
+                else:
+                    write_late_evidence()
+                    before_replace()
 
             return atomic_write(path, content, before_replace=arrive_then_verify)
 
@@ -759,16 +807,29 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
     with lock:
         if scenario.startswith(("ref-retry", "inventory-retry")) or scenario in {
             "cross-volume-retry", "cross-volume-legacy-retry", "cross-volume-after-deletion",
+            "same-volume-rename-named",
         }:
             monkeypatch.chdir(root)
             result = CliRunner().invoke(app, ["close", "--issue", "feature"])
         elif scenario != "cross-volume-after-copy" and scenario not in final_write_cases:
             result = CliRunner().invoke(app, ["close"])
     if scenario in {"cross-volume-retry", "cross-volume-legacy-retry"} and result.exit_code == 0:
+        if scenario == "cross-volume-retry":
+            completion = (archive / ".local-close.json").read_bytes()
+            dirty = destination / "uncommitted-note"
+            dirty.write_text("retained checkout must stay untouched\n")
+            try:
+                refused = CliRunner().invoke(app, ["close", "--issue", "feature"])
+                assert refused.exit_code != 0
+                assert dirty.is_file()
+                assert (archive / ".local-close.json").read_bytes() == completion
+            finally:
+                dirty.unlink()
         offline = staged.rename(tmp_path / "temporarily-offline")
         try:
             settled = CliRunner().invoke(app, ["close", "--issue", "feature"])
             assert settled.exit_code == 0, settled.output
+            assert_snapshot_report(settled.output, staged)
             published = archive / ".local-close-evidence" / "post-copy-note.md"
             content = published.read_bytes()
             published.write_bytes(content + b"changed archive")
@@ -778,6 +839,25 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
                 published.write_bytes(content)
         finally:
             offline.rename(staged)
+    if scenario == "cross-volume-root-retry" and result.exit_code == 0:
+        staged, = transferred
+        journal = archive / ".local-close.json"
+        verified = journal.read_bytes()
+        offline = staged.rename(tmp_path / "temporarily-offline")
+        try:
+            settled = CliRunner().invoke(app, ["close", "--issue", "feature"])
+            assert settled.exit_code == 0, settled.output
+            assert_snapshot_report(settled.output, staged)
+            earlier_record = json.loads(verified)
+            earlier_record.pop("source_evidence")
+            journal.write_text(json.dumps(earlier_record))
+            legacy = CliRunner().invoke(app, ["close", "--issue", "feature"])
+            assert legacy.exit_code == 0, legacy.output
+            assert str(staged) in legacy.output
+            assert str(worktree.parent / staged.parent.name / "issue") in legacy.output
+        finally:
+            journal.write_bytes(verified)
+            offline.rename(staged)
     assert git(remote, "show-ref") == before
     assert attempts == []
     assert git(root, "rev-parse", "unrelated") == base
@@ -786,8 +866,10 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
                     "inventory-retry-recreated-worktree", "late-writer", "cross-volume",
                     "cross-volume-retry", "cross-volume-root", "cross-volume-root-retry", "cross-volume-after-copy",
                     "cross-volume-after-deletion", "cross-volume-final-comparison", "cross-volume-before-settlement",
+                    "cross-volume-after-verification",
                     "cross-volume-legacy-retry",
-                    "branch-upstream", "checkout-during-remove"}:
+                    "branch-upstream", "checkout-during-remove", "same-volume-rename-plain",
+                    "same-volume-rename-named"}:
         assert result.exit_code == 0, result.output + repr(result.exception)
         assert archive.is_dir()
         assert worktree.exists() == (not linked or scenario.endswith("recreated-worktree"))
@@ -798,6 +880,9 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
             assert git(root, "branch", "--list", "feature") == ""
         assert git(root, "rev-parse", "develop") == target
         assert (target == source) == (scenario != "merge-commit")
+        if scenario.startswith("cross-volume"):
+            staged, = transferred
+            assert_snapshot_report(result.output, staged)
         if scenario in {"late-writer", "cross-volume", "cross-volume-retry"} and linked:
             assert any(p.read_text() == "preserve the only live copy"
                        for p in archive.rglob("last-run-note.md"))
@@ -809,7 +894,18 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
             assert (published / "changing-evidence.md").read_text() == "after\n"
         if scenario in final_write_cases:
             note = archive / ".local-close-evidence" / "completion-note.md"
-            assert note.read_text() == "written during archive finalization\n"
+            if scenario == "cross-volume-after-verification":
+                assert not note.exists()
+                assert (staged / note.name).read_text() == "written during archive finalization\n"
+                offline = staged.rename(tmp_path / "temporarily-offline")
+                try:
+                    settled = CliRunner().invoke(app, ["close", "--issue", "feature"])
+                    assert settled.exit_code == 0, settled.output
+                    assert_snapshot_report(settled.output, staged)
+                finally:
+                    offline.rename(staged)
+            else:
+                assert note.read_text() == "written during archive finalization\n"
         if scenario.endswith("recreated-worktree"):
             assert git(worktree, "branch", "--show-current") == "feature"
             assert inventory.is_dir() and read_marker(destination / ".cafe") == issue.name
