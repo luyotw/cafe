@@ -7,7 +7,7 @@ from pathlib import Path
 from cafe.core.blackboard import BlackboardStore
 from cafe.core.capabilities import default_capability_definition_dirs, load_capability_registry
 from cafe.delivery.contracts import DeliveryBinding, DeliveryVerification
-from cafe.delivery.prepared import prepared_request
+from cafe.delivery.prepared import matches_prepared_action, prepared_request
 from cafe.delivery.selection import approved_snapshot
 from cafe.delivery.service import execute_snapshot
 from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
@@ -52,9 +52,8 @@ def execute_delivery(*, root, issue_dir, step, iteration, playbook, state):
         validate_publication_reference(issue_dir, state, binding, snapshot)
     prepared = prepared_request(issue_dir, step)
     if prepared is not None:
-        for key in ("mode", "target_branch", "strategy", "destination", "issue_repository"):
-            if prepared.get(key, "") != getattr(snapshot.proposal, key):
-                raise ValueError("approved action differs from preparation-time delivery choices")
+        if not matches_prepared_action(prepared, snapshot.proposal):
+            raise ValueError("approved action differs from preparation-time delivery choices")
         if (
             DeliveryVerification.model_validate(prepared["verification"])
             != snapshot.proposal.verification

@@ -1,6 +1,7 @@
 """Receipt and checkout validation for cleanup after accepted local integration."""
 
 from pathlib import Path
+import re
 
 from cafe.core.blackboard import BlackboardStore
 from cafe.core.git import GitError
@@ -12,6 +13,26 @@ MAX_MANIFEST_BYTES = 1024 * 1024
 
 
 def has_local_integration(issue, config):
+    from cafe.core.human_task_records import HumanTaskRecordStore
+    from cafe.manager._store import load_contract, ManagerContractMissingError
+    from cafe.manager.closeout import accepted_delivery_task
+
+    records = HumanTaskRecordStore(issue)
+    if records.exists:
+        state = BlackboardStore(issue).load_read_only()
+        try:
+            contract, _ = load_contract(issue, workflow_id=state.workflow_id)
+        except ManagerContractMissingError:
+            contract = {}
+        binding = contract.get("closeout_contract", {}).get("delivery_result")
+        accepted = accepted_delivery_task(records, state.workflow_id, binding=binding)
+        if accepted is not None:
+            task, _ = accepted
+            match = re.search(r"Action snapshot SHA256: ([0-9a-f]{64})", task.prompt)
+            if match is None:
+                return "Local delivery SHA256:" in task.prompt
+            snapshot = _read_snapshot(issue, match[1], state.workflow_id)
+            return snapshot.proposal.mode == "local"
     if any(isinstance(values, dict) and values.get("mode") == "local" and "destination" in values
            for values in config.values()):
         return True
@@ -25,6 +46,15 @@ def has_local_integration(issue, config):
         .proposal.mode == "local"
         for path in manifests
     )
+
+
+def _read_snapshot(issue, identity, workflow):
+    snapshot = ActionSnapshot.model_validate_json(read_regular_bytes(
+        issue / "delivery" / identity / "actions.json", MAX_MANIFEST_BYTES,
+    ))
+    if snapshot.digest != identity or snapshot.proposal.workflow_id != workflow:
+        raise ValueError("delivery snapshot differs from the accepted workflow")
+    return snapshot
 
 
 def _authorizes_full_cleanup(commands, *, destination, worktree, issue_name):
@@ -80,7 +110,7 @@ def verify_local_receipt(git, proposal, receipt, *, exact_target=False):
     return integrated
 
 
-def accepted_local_cleanup(issue, *, source, checkout, configured_target, linked):
+def accepted_local_cleanup(issue, *, source, checkout, configured_target, linked, archived=False):
     from cafe.manager._store import load_contract
     from cafe.manager.closeout import inspect_closeout
     from cafe.manager.costs import validate_issue_identity
@@ -97,17 +127,15 @@ def accepted_local_cleanup(issue, *, source, checkout, configured_target, linked
         raise ValueError("local cleanup source differs from the approved checkout")
     if state.ownership_cursor or WorkerLaunchStore(issue).running_positions(workflow):
         raise ValueError("active workflow work blocks local cleanup")
-    closeout = inspect_closeout(issue, workflow)
+    closeout = inspect_closeout(issue, workflow, archived=archived)
     selected = closeout["selection"] or {}
     identity = selected.get("snapshot")
     if closeout["status"] != "accepted" or selected.get("choice") != "cleanup" or not identity:
         raise ValueError("local cleanup requires successful delivery acceptance and cleanup authority")
-    snapshot = ActionSnapshot.model_validate_json(read_regular_bytes(
-        issue / "delivery" / identity / "actions.json", MAX_MANIFEST_BYTES,
-    ))
+    snapshot = _read_snapshot(issue, identity, workflow)
     proposal = snapshot.proposal
-    if (snapshot.digest != identity or proposal.workflow_id != workflow or proposal.mode != "local"
-            or proposal.source_branch != source or proposal.target_branch != configured_target):
+    if (proposal.mode != "local" or proposal.source_branch != source
+            or proposal.target_branch != configured_target):
         raise ValueError("cleanup source or target differs from the accepted local action")
     destination = Path(proposal.destination).resolve(strict=True)
     if (destination == checkout or str(destination) != proposal.destination

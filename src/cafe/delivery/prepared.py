@@ -40,6 +40,17 @@ class PreparedDelivery(BaseModel):
         return self.model_dump(mode="json")
 
 
+def matches_prepared_action(request, proposal):
+    destination = request.get("destination", "")
+    if request["mode"] == "local":
+        destination = str(Path(destination).resolve(strict=True))
+    return (
+        destination == proposal.destination
+        and all(request.get(key, "") == getattr(proposal, key)
+                for key in ("mode", "target_branch", "strategy", "issue_repository"))
+    )
+
+
 def prepared_request(issue_dir: Path, step: str) -> dict | None:
     """Legacy workflows keep their shown choices; prepared choices cannot be overridden by an agent."""
     if not (issue_dir / "issue.yaml").exists():

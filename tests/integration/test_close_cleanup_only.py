@@ -434,7 +434,8 @@ def test_cleanup_retains_the_checkout_already_owning_the_target(feature, tmp_pat
 @pytest.mark.parametrize("feature", [True], indirect=True, ids=["linked"])
 @pytest.mark.parametrize(
     "scenario", ["ff-only", "merge-commit", "pending", "leave", "dirty", "active",
-                 "stale-receipt", "moved-target", "archive-failure"],
+                 "stale-receipt", "moved-target", "archive-failure", "qualified-base",
+                 "archive-retry", "archive-retry-new-evidence", "ref-retry", "ref-retry-moved"],
 )
 def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
     feature, tmp_path, monkeypatch, scenario,
@@ -462,6 +463,8 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
     issue.rmdir()
     ctx = delivery.setup((worktree, root, tmp_path / "actions", None), tmp_path, issue_name=issue.name)
     config |= yaml.safe_load((issue / "issue.yaml").read_text())
+    if scenario == "qualified-base":
+        config["base_branch"] = "refs/heads/develop"
     if scenario == "merge-commit":
         config[ctx[-1]]["strategy"] = "merge-commit"
     (issue / "issue.yaml").write_text(yaml.safe_dump(config))
@@ -497,6 +500,22 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
             raise OSError("Archive storage unavailable")
         monkeypatch.setattr(lifecycle, "_backup_issue_directory", fail_archive)
 
+    if scenario.startswith(("archive-retry", "ref-retry")):
+        from cafe.core.git import GitOperations, GitError
+
+        def unavailable(*args, **kwargs):
+            raise GitError("Git operation temporarily unavailable")
+
+        with monkeypatch.context() as failure:
+            method = "remove_worktree" if scenario.startswith("archive") else "delete_cleanup_branch"
+            failure.setattr(GitOperations, method, unavailable)
+            result = CliRunner().invoke(app, ["close"])
+        assert result.exit_code != 0
+        assert git(root, "rev-parse", "feature") == source
+        if scenario == "archive-retry-new-evidence":
+            (issue / "recovery-note.md").write_text("preserve the only live copy")
+        if scenario == "ref-retry-moved":
+            git(root, "update-ref", "refs/heads/feature", base)
     archive = lifecycle._get_issue_archive_path(issue.name)
     remote = tmp_path / "remote.git"
     before = git(remote, "show-ref")
@@ -511,16 +530,28 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
     monkeypatch.setattr(subprocess, "run", capture_remote)
     lock = advancement_execution_lock(issue) if scenario == "active" else nullcontext()
     with lock:
-        result = CliRunner().invoke(app, ["close"])
+        if scenario.startswith("ref-retry"):
+            monkeypatch.chdir(root)
+            result = CliRunner().invoke(app, ["close", "--issue", "feature"])
+        else:
+            result = CliRunner().invoke(app, ["close"])
     assert git(remote, "show-ref") == before
     assert attempts == []
     assert git(root, "rev-parse", "unrelated") == base
-    if scenario in {"ff-only", "merge-commit"}:
+    if scenario in {"ff-only", "merge-commit", "qualified-base", "archive-retry", "ref-retry"}:
         assert result.exit_code == 0, result.output + repr(result.exception)
         assert archive.is_dir() and not worktree.exists()
         assert git(root, "branch", "--list", "feature") == ""
         assert git(root, "rev-parse", "develop") == target
-        assert (target == source) == (scenario == "ff-only")
+        assert (target == source) == (scenario != "merge-commit")
+    elif scenario == "archive-retry-new-evidence":
+        assert result.exit_code != 0
+        assert archive.is_dir() and (issue / "recovery-note.md").is_file()
+        assert git(root, "rev-parse", "feature") == source
+    elif scenario == "ref-retry-moved":
+        assert result.exit_code != 0
+        assert archive.is_dir() and not worktree.exists()
+        assert git(root, "rev-parse", "feature") == base
     else:
         assert result.exit_code != 0
         assert not archive.exists() and worktree.exists()

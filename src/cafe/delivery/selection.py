@@ -55,7 +55,7 @@ def validate_local_preparation(issue_dir, proposal, *, check_target=False):
     if not proposal.local_preparation:
         return
     from cafe.core.blackboard import BlackboardStore
-    from cafe.delivery.prepared import prepared_request
+    from cafe.delivery.prepared import matches_prepared_action, prepared_request
     from cafe.delivery.reviewed_result import integration_evidence
 
     state = BlackboardStore(issue_dir).load_read_only()
@@ -68,8 +68,7 @@ def validate_local_preparation(issue_dir, proposal, *, check_target=False):
     _, reviewed_head = integration_evidence(issue_dir, state, entry)
     request = prepared_request(issue_dir, proposal.approval_step)
     if (reviewed_head != proposal.source_oid or request is None
-            or any(request[key] != getattr(proposal, key)
-                   for key in ("mode", "target_branch", "strategy", "destination", "issue_repository"))):
+            or not matches_prepared_action(request, proposal)):
         raise ActionReviewRequired("prepared local action differs from the displayed action")
     from cafe.delivery.contracts import DeliveryVerification
 

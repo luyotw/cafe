@@ -275,7 +275,7 @@ def test_user_accepts_only_the_reviewed_custom_revision(local_action, monkeypatc
         assert records.get_task(task.id).status.value == "completed"
 
 
-@pytest.mark.parametrize("drift", [None, "source", "target", "evidence", "workspace", "dispatch", "recover"])
+@pytest.mark.parametrize("drift", [None, "source", "target", "evidence", "workspace", "dispatch", "recover", "destination-alias"])
 def test_review_to_prepared_local_approval(local_action, monkeypatch, drift):
     from cafe.delivery.contracts import ActionProposal
     from cafe.delivery.selection import proposal_path
@@ -290,7 +290,7 @@ def test_review_to_prepared_local_approval(local_action, monkeypatch, drift):
         "playbook_id": "standard",
         "pr": {"auto_create": False},
         "deliver": {
-            "mode": "local", "destination": str(destination),
+            "mode": "local", "destination": str(destination) + ("/" if drift == "destination-alias" else ""),
             "target_branch": policy.target_branch, "strategy": policy.strategy,
             "verification": policy.verification.model_dump(mode="json"),
         },
@@ -376,8 +376,12 @@ def test_review_to_prepared_local_approval(local_action, monkeypatch, drift):
         changed = evidence if drift == "evidence" else ws
         changed.write_text(changed.read_text() + "\n")
     target_before = git(destination, "rev-parse", "HEAD")
-    assert (answer(approval, "integrate_only").rejection is None) == (drift in {None, "dispatch", "recover"})
+    assert (answer(approval, "integrate_only").rejection is None) == (drift in {None, "dispatch", "recover", "destination-alias"})
     assert git(destination, "rev-parse", "HEAD") == target_before
+    if drift == "destination-alias":
+        runtime.run()
+        assert any(task.policy_id == "delivery-outcome" for task in records.tasks())
+        assert git(destination, "rev-parse", "HEAD") == policy.source_oid
     if drift == "dispatch":
         git(destination, "merge", "--ff-only", policy.source_oid)
         git(destination, "commit", "--allow-empty", "-m", "Unapproved destination change")
