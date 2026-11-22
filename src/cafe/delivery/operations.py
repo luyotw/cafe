@@ -442,6 +442,8 @@ def execute_action(
                         if commands.git(dest, "rev-parse", "HEAD") != p.target_oid:
                             raise OperationError("changed_destination")
                         before = _local_evidence(commands, dest)
+                        if before["head"] != p.target_oid:
+                            raise OperationError("changed_destination")
                         if before["pending"]:
                             raise OperationError("unfinished_destination_operation")
                         store.start(action, local_before=before)

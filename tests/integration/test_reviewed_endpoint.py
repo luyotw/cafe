@@ -275,7 +275,7 @@ def test_user_accepts_only_the_reviewed_custom_revision(local_action, monkeypatc
         assert records.get_task(task.id).status.value == "completed"
 
 
-@pytest.mark.parametrize("drift", [None, "source", "target", "evidence", "workspace"])
+@pytest.mark.parametrize("drift", [None, "source", "target", "evidence", "workspace", "dispatch", "recover"])
 def test_review_to_prepared_local_approval(local_action, monkeypatch, drift):
     from cafe.delivery.contracts import ActionProposal
     from cafe.delivery.selection import proposal_path
@@ -348,6 +348,17 @@ def test_review_to_prepared_local_approval(local_action, monkeypatch, drift):
     summary = summaries[0]
     assert evidence.read_text().strip() in summary.prompt
     assert verdict.read_text().strip() in summary.prompt
+    if drift == "recover":
+        entry = runtime.blackboard.artifacts["local_preparation"]
+        path = root / entry.path
+        prepared = path.read_bytes()
+        # Simulate a stop before artifact publication in the same automatic visit.
+        path.unlink()
+        runtime.blackboard.artifacts.pop(entry.name)
+        runtime.blackboard_store.save(runtime.blackboard)
+        result = runtime.run(start_step="pr")
+        assert [task.id for task in records.tasks() if task.step == "pr"] == [summary.id], result
+        assert path.read_bytes() == prepared
     assert answer(summary, "confirm").rejection is None
     result = runtime.run()
     approvals = [task for task in records.tasks() if task.policy_id == "delivery-review"]
@@ -365,5 +376,13 @@ def test_review_to_prepared_local_approval(local_action, monkeypatch, drift):
         changed = evidence if drift == "evidence" else ws
         changed.write_text(changed.read_text() + "\n")
     target_before = git(destination, "rev-parse", "HEAD")
-    assert (answer(approval, "integrate_only").rejection is None) == (drift is None)
+    assert (answer(approval, "integrate_only").rejection is None) == (drift in {None, "dispatch", "recover"})
     assert git(destination, "rev-parse", "HEAD") == target_before
+    if drift == "dispatch":
+        git(destination, "merge", "--ff-only", policy.source_oid)
+        git(destination, "commit", "--allow-empty", "-m", "Unapproved destination change")
+        changed_target = git(destination, "rev-parse", "HEAD")
+        result = runtime.run()
+        assert not result.completed
+        assert not any(task.policy_id == "delivery-outcome" for task in records.tasks())
+        assert git(destination, "rev-parse", "HEAD") == changed_target

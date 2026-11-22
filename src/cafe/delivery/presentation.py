@@ -336,8 +336,9 @@ def present_action(
     ):
         raise ValueError("local preparation requires the same repository and distinct source and target")
     proposals, review_source = _proposals(state, binding, ctx.issue_dir)
-    if reviewed_head is not None and any(item.evidence_head != source for item in proposals):
-        raise ValueError("follow-up evidence must name the reviewed source")
+    if reviewed_head is not None:
+        for item in proposals:
+            commands.git(root, "merge-base", "--is-ancestor", item.evidence_head, source)
     proposal = ActionProposal(
         workflow_id=state.workflow_id,
         approval_step=binding.approval_step,
