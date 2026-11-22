@@ -57,8 +57,17 @@ def test_publishes_committed_summaries_only_after_workflow_start(tmp_path, monke
     store.save(board)
     assert path.stat().st_mtime_ns == mtime
 
+    develop = issue_dir / "develop"
+    (develop / "iteration_002").mkdir(parents=True)
+    (develop / "iteration_002" / "iteration.json").write_text("{}")
+    (develop / "iteration_003").mkdir()
+    (develop / "iteration_003" / "user_input.md").write_text("prepared only")
+    board.step_attempt_counts["develop"] = 5
+    store.save(board)
+    assert json.loads(path.read_text())["workflow"]["iteration"] == 2
+
     records = HumanTaskRecordStore(issue_dir)
-    task = records.materialize(workflow_id=board.workflow_id, step="review", iteration=1,
+    task = records.materialize(workflow_id=board.workflow_id, step="review", iteration=4,
         trigger="confirm_output", policy_id="review", prompt="private prompt",
         expected_result={}, continuations={"confirm": "done"}, assignee_type="user")
     store.update_handoff_contract(board, from_step="review", to_owner=HandoffOwner.USER,
@@ -66,6 +75,7 @@ def test_publishes_committed_summaries_only_after_workflow_start(tmp_path, monke
     store.set_current_step(board, "user")
     waiting = json.loads(path.read_text())["workflow"]
     assert (waiting["step"], waiting["status"], waiting["pendingTasks"]) == ("review", "waiting", 1)
+    assert waiting["iteration"] == 4
     assert "private prompt" not in path.read_text()
 
     records.complete(workflow_id=board.workflow_id, task_id=task.id,
@@ -74,6 +84,7 @@ def test_publishes_committed_summaries_only_after_workflow_start(tmp_path, monke
     completed = json.loads(path.read_text())["workflow"]
     assert completed["step"] == "done"
     assert (completed["status"], completed["pendingTasks"]) == ("completed", 0)
+    assert "iteration" not in completed
 
     # A different run at the same issue path must not overwrite a pending completion.
     shutil.rmtree(issue_dir)

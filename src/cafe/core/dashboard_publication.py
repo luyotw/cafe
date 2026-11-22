@@ -67,6 +67,33 @@ def _inbox() -> Path | None:
     return inbox if _private_directory(inbox) else None
 
 
+def _phase_iteration(issue_dir: Path, step: str | None) -> int:
+    if not step or Path(step).name != step or step in (".", ".."):
+        return 0
+    phase_dir = issue_dir / step
+    latest = 0
+    try:
+        if not stat.S_ISDIR(phase_dir.lstat().st_mode):
+            return latest
+        with os.scandir(phase_dir) as entries:
+            for entry in entries:
+                match = re.fullmatch(r"iteration_([0-9]{1,3})", entry.name)
+                if not match or not entry.is_dir(follow_symlinks=False):
+                    continue
+                iteration = int(match[1])
+                if iteration <= latest:
+                    continue
+                # Prepared user input may have a directory for a round that has yet to start.
+                try:
+                    if stat.S_ISREG((Path(entry.path) / "iteration.json").lstat().st_mode):
+                        latest = iteration
+                except OSError:
+                    continue
+    except OSError:
+        pass
+    return latest
+
+
 def _snapshot(
     inbox: Path, issue_dir: Path, board: "BlackboardState", *, start: bool, archived: bool,
 ) -> tuple[Path, bytes] | None:
@@ -114,12 +141,21 @@ def _snapshot(
         status = "waiting"
     elif handoff and handoff.to_owner == "user":
         status = "resuming" if tasks else "unknown"
+    phase = (handoff.from_step or None) if step == "user" and handoff else step
+    iteration = _phase_iteration(issue_dir, phase)
+    if step == "user":
+        iteration = max(iteration, max((task.iteration for task in tasks
+            if task.step == phase and task.status is HumanTaskStatus.PENDING), default=0))
+    if not iteration and archived and previous_workflow.get("step") == phase:
+        iteration = previous_workflow.get("iteration", 0)
     workflow = {
         "issue": issue, "workflowId": board.workflow_id, "playbookId": board.playbook_id,
-        "step": (handoff.from_step or None) if step == "user" and handoff else step,
+        "step": phase,
         "status": status, "pendingTasks": pending,
         "updatedAt": previous_workflow.get("updatedAt"),
     }
+    if type(iteration) is int and 0 < iteration <= 2**53 - 1:
+        workflow["iteration"] = iteration
     project = _project(checkout) if start or not previous else {
         field: previous[field] for field in ("projectId", "projectName")
     }
