@@ -353,6 +353,19 @@ def pending_task_positions(issue: Path, workflow: str) -> list[dict[str, str]]:
             tasks.append({key: task[key] for key in ("id", "step", "trigger")})
             if len(tasks) > 4:
                 raise ValueError("incomplete pending task projection")
+    if tasks:
+        assignments = envelope.get("assignments")
+        if not isinstance(assignments, list):
+            raise ValueError("pending task assignment is unavailable")
+        pending = {task["id"]: task for task in tasks}
+        for assignment in assignments:
+            if assignment["task_id"] in pending:
+                task = pending[assignment["task_id"]]
+                if "assignee_type" in task:
+                    raise ValueError("ambiguous pending task assignment")
+                task["assignee_type"] = assignment["assignee_type"]
+        if any("assignee_type" not in task for task in tasks):
+            raise ValueError("pending task assignment is unavailable")
     return tasks
 
 

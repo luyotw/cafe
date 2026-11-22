@@ -3836,6 +3836,7 @@ def _correction_report(situation, i):
     "three_handoffs", "contradiction", "repeated", "pending",
     "correction_loop", "changed_result", "long_history", "delayed_correction",
     "registry", "delayed_registry", "different_lineage",
+    "delivery_pending", "delivery_contradiction",
 ])
 def test_dispatch_explains_current_owner_and_preserves_decisions(tmp_path, monkeypatch, situation):
     from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
@@ -3864,6 +3865,46 @@ def test_dispatch_explains_current_owner_and_preserves_decisions(tmp_path, monke
             expected_result={}, continuations={}, assignee_type="user")
         records.complete(workflow_id=state.workflow_id, task_id=task.id,
             payload={"feedback": "x" * callback.MAX_CALLBACK_INPUT_BYTES}, source="interactive")
+
+    def deliver_pending():
+        state.current_step = "pr"
+        store.record_event(state, "transition", {"from": "review", "to": "pr"})
+        task = records.materialize(
+            workflow_id=state.workflow_id, step="deliver", iteration=1,
+            trigger="confirm_output", policy_id="delivery-outcome", prompt="Accept delivery?",
+            expected_result={}, continuations={}, assignee_type="user",
+        )
+        state.current_step = "user"
+        state.handoff_contract = store.build_handoff_contract(
+            from_step="review" if situation == "delivery_contradiction" else "deliver",
+            to_step="user", to_owner=HandoffOwner.USER, intent=HandoffIntent.CONFIRM_OUTPUT,
+        )
+        store.record_event(state, "human_task_materialized", {"step": "deliver", "task_id": task.id})
+        store.record_event(state, "workflow_paused", {"step": "deliver", "reason": "automatic_task"})
+        event = store.prepare_workflow_callback_event(state, {
+            "workflow_id": state.workflow_id, "issue": issue.name, "event_type": "human_task",
+            "step": "deliver", "task_id": task.id,
+        })
+        daemon = _HostDaemon(status="notLoaded")
+        with patch.object(callback.subprocess, "Popen", return_value=_HostProxy(daemon)):
+            callback.run_callback(event, repository_root=tmp_path)
+        notice = json.loads(daemon.input[0]["text"].split("Wake notice: ", 1)[1])
+        presented.append(notice["supervision"])
+
+    if situation.startswith("delivery_"):
+        WorkflowHost(issue).run(deliver_pending, hosting="foreground")
+        facts, = presented
+        assert facts["historical_transition"] == {"from": "review", "to": "pr"}
+        if situation == "delivery_contradiction":
+            assert facts["assessment"] == "inspect"
+            return
+        task, = records.tasks()
+        assert facts["current_step"] == "deliver" and facts["owner"] == "user"
+        assert facts["assessment"] == "pending_decision"
+        assert facts["current_transition"] == {"from": "deliver", "to": "user"}
+        assert facts["current_handoff"]["task_id"] == task.id
+        assert facts["current_handoff"]["intent"] == "confirm_output"
+        return
 
     def dispatch():
         delayed = None

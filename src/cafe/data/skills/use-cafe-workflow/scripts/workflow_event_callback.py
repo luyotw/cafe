@@ -1856,8 +1856,26 @@ def _supervision(event, root, event_target):
     workers = WorkerLaunchStore(issue).running_positions(workflow)
     worker = workers[0] if len(workers) == 1 else None
     decision = "inspect"
-    if tasks and owner == "user":
+    current_handoff = None
+    current_transition = edge(current)
+    from_step = handoff.get("from_step")
+    intent = handoff.get("intent")
+    task_trigger = {intent}
+    if intent == "need_permission":
+        from cafe.core.capability_approvals import CAPABILITY_APPROVAL_TRIGGER
+
+        task_trigger.add(CAPABILITY_APPROVAL_TRIGGER)
+    if (len(tasks) == 1 and owner == "user" and active == handoff.get("to_step") == "user"
+            and from_step and from_step == tasks[0]["step"]
+            and tasks[0]["trigger"] in task_trigger and tasks[0]["assignee_type"] == "user"
+            and (event.get("event_type") != "human_task"
+                 or (event.get("step") == from_step and event.get("task_id") == tasks[0]["id"]))):
         decision = "pending_decision"
+        current_transition = {"from": from_step, "to": active}
+        current_handoff = {
+            "from_step": from_step, "to_step": active, "to_owner": owner,
+            "intent": intent, "task_id": tasks[0]["id"],
+        }
     elif (event.get("event_type") == "phase_terminal" and origin and current
           and origin["data"].get("from") == event["step"]
           and event.get("expected_step") == event_target == origin["data"].get("to")
@@ -1868,11 +1886,14 @@ def _supervision(event, root, event_target):
         steps = [event_target] + [r["data"].get("to") for r in later]
         if all(r["data"].get("from") == previous for r, previous in zip(later, steps)):
             decision = "later_handoff" if later else "continue"
-    if audit.high_water(workflow) != high:
+    if ((current_handoff and pending_task_positions(issue, workflow) != tasks)
+            or audit.high_water(workflow) != high):
         raise ValueError("workflow advanced during observation")
     return {"assessment": decision, "expected_step": event.get("expected_step"),
             "event_transition": edge(origin),
-            "current_transition": edge(current), "current_step": active,
+            "current_transition": current_transition, "historical_transition": edge(current),
+            "current_handoff": current_handoff,
+            "current_step": current_handoff["from_step"] if current_handoff else active,
             "owner": owner, "worker": worker, "pending_tasks": tasks[:4],
             "last_progress": ({"sequence": progress["sequence"], "at": progress["timestamp"],
                                "source": progress["event_type"]} if progress else None),
