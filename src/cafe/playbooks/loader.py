@@ -31,7 +31,7 @@ def apply_issue_playbook_overrides(
         raise ValueError("issue.yaml must contain a mapping")
     from cafe.delivery.prepared import resolve_local_review
 
-    playbook = resolve_local_review(playbook, issue_config)
+    playbook = resolve_local_review(playbook, issue_config, issue_dir=issue_config_path.parent)
     overrides = issue_config.get("playbook_overrides")
     if overrides is None:
         return playbook

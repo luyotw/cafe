@@ -5,10 +5,14 @@ from __future__ import annotations
 from copy import deepcopy
 import json
 from pathlib import Path
+import re
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from cafe.core.blackboard import BlackboardStore, HandoffIntent
+from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
+from cafe.core.packet_io import read_regular_bytes
 from cafe.delivery.contracts import DeliveryVerification
 from cafe.utils.issue_config import read_issue_config_strict
 
@@ -79,7 +83,57 @@ def local_review_step(playbook):
     return candidates[0]
 
 
-def resolve_local_review(playbook, config):
+def legacy_preparation_task(tasks, workflow_id, step, iteration, delivery):
+    key = f"local-preparation:{workflow_id}:{step}:{iteration}"
+    matches = [
+        task
+        for task in tasks
+        if task.workflow_id == workflow_id
+        and task.step == step
+        and task.iteration == iteration
+        and task.handoff_key == key
+        and task.trigger == "confirm_output"
+        and task.continuations.get("confirm") == delivery
+        and task.status in (HumanTaskStatus.PENDING, HumanTaskStatus.COMPLETED)
+        and task.superseded_by_task_id is None
+    ]
+    if len(matches) > 1:
+        raise ValueError("legacy local preparation has ambiguous confirmation tasks")
+    return matches[0] if matches else None
+
+
+def _has_legacy_preparation_handoff(issue_dir, step, delivery):
+    """Keep the historical policy only where a matching task was already shown."""
+    if issue_dir is None:
+        return False
+    store = BlackboardStore(issue_dir)
+    records = HumanTaskRecordStore(issue_dir)
+    if not (store.file_path.is_file() and records.exists):
+        return False
+    tasks = records.tasks()
+    if not any(task.step == step and task.handoff_key.startswith("local-preparation:") for task in tasks):
+        return False
+    state = store.load_read_only()
+    handoff = state.handoff_contract
+    paused = handoff.from_step == step and handoff.intent == HandoffIntent.CONFIRM_OUTPUT
+    running = handoff.to_step == step and handoff.intent == HandoffIntent.AWAIT_AGENT
+    cursor = state.ownership_cursor or {}
+    execution = cursor.get("execution_id")
+    if (not (paused or running) or cursor.get("step") != step or cursor.get("owner") != "auto"
+            or not isinstance(execution, str) or not re.fullmatch(r"[0-9a-f]{32}", execution)):
+        return False
+    marker = issue_dir / step / "systematic" / f"{execution}.json"
+    try:
+        iteration = json.loads(read_regular_bytes(marker, 1024))["iteration"]
+    except FileNotFoundError:
+        return False
+    if type(iteration) is not int or iteration < 1:
+        raise ValueError("invalid local preparation iteration")
+    task = legacy_preparation_task(tasks, state.workflow_id, step, iteration, delivery)
+    return task is not None and (paused or task.status is HumanTaskStatus.PENDING)
+
+
+def resolve_local_review(playbook, config, *, issue_dir=None):
     selected = [name for name in playbook["steps"] if isinstance(config.get(name), dict)
                 and config[name].get("endpoint") == "local-review"]
     integration = [
@@ -131,11 +185,15 @@ def resolve_local_review(playbook, config):
                 or confirmation.get("outcomes", {}).get("confirm") != delivery_name
                 or config[name].get("endpoint") is not None):
             raise ValueError("invalid prepared local integration binding")
+        legacy = _has_legacy_preparation_handoff(issue_dir, name, delivery_name)
+        if legacy:
+            confirmation["presentation_task"] = "local-preparation-review"
         endpoint.update(
             assignee_type="auto", automatic={"executor": "local_preparation", "inputs": {}},
-            output_artifact=artifact, input_artifacts=inputs, human_tasks=[],
+            output_artifact=artifact, input_artifacts=inputs,
+            human_tasks=[confirmation] if legacy else [],
             capability_requests=[], allowed_tools=[], hooks={}, allowed_goto=[], behavior={},
-            on={"await_agent": delivery_name},
+            on=endpoint["on"] if legacy else {"await_agent": delivery_name},
         )
         delivery["input_artifacts"] = [
             artifact if item == publication else item for item in delivery["input_artifacts"]

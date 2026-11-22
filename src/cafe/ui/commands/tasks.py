@@ -166,7 +166,8 @@ def _resume_issue_workflow(
         dry_run=False,
         user_input=None,
         add_dir=[],
-        **({"context": context, "mute_agent_output": True} if context is not None else {}),
+        context=context,
+        **({"mute_agent_output": True} if context is not None else {}),
     )
 
 

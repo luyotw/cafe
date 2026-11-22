@@ -280,7 +280,8 @@ def test_user_accepts_only_the_reviewed_custom_revision(local_action, monkeypatc
 @pytest.mark.parametrize("drift", [
     None, "source", "target", "evidence", "verdict", "workspace", "patch", "dispatch",
     "patch-dispatch", "restart", "fix-now", "destination-alias", "merge-commit",
-    "large-evidence", "large-patch",
+    "large-evidence", "large-patch", "legacy-summary", "legacy-approval",
+    "legacy-before-output", "legacy-after-output",
 ])
 def test_review_to_prepared_local_approval(local_action, monkeypatch, drift):
     from cafe.delivery.contracts import ActionProposal
@@ -319,7 +320,43 @@ def test_review_to_prepared_local_approval(local_action, monkeypatch, drift):
             "verification": policy.verification.model_dump(mode="json"),
         },
     }))
-    graph = apply_issue_playbook_overrides(PlaybookLoader(project_root=root).load("standard"), config)
+
+    def load_graph():
+        return apply_issue_playbook_overrides(PlaybookLoader(project_root=root).load("standard"), config)
+
+    graph = load_graph()
+    legacy = drift is not None and drift.startswith("legacy-")
+    interrupted_legacy = drift in {"legacy-before-output", "legacy-after-output"}
+    if legacy:
+        from cafe.core.automatic_steps import AutomaticExecutionResult
+        from cafe.core.packet_io import atomic_write_bytes
+        from cafe.delivery import prepared, reviewed_result
+        from cafe.delivery.automatic import _presentation
+        from cafe.delivery.presentation import materialize_task
+        from cafe.workflow_execution import automatic
+
+        def old_preparation(inputs, *, context):
+            ctx, _ = _presentation(context)
+            text = reviewed_result.materials(ctx.issue_dir, ctx.state, ctx.step, ctx.step_def)
+            key = f"local-preparation:{ctx.state.workflow_id}:{ctx.step}:{ctx.iteration}"
+            task = materialize_task(ctx, text.rstrip(), handoff_key=key)
+            if drift == "legacy-before-output":
+                raise KeyboardInterrupt
+            atomic_write_bytes(ctx.output, text.encode())
+            if drift == "legacy-after-output":
+                raise KeyboardInterrupt
+            return AutomaticExecutionResult(
+                intent=task.trigger, task_id=task.id,
+                artifacts={ctx.step_def["output_artifact"]: str(ctx.output)},
+            )
+
+        with monkeypatch.context() as old:
+            old.setattr(prepared, "_has_legacy_preparation_handoff", lambda *args: True)
+            graph = load_graph()
+            old.setattr(automatic, "prepare_integration", old_preparation)
+            registry = automatic_executor_registry()
+    else:
+        registry = automatic_executor_registry()
     calls = []
 
     def provider(step, definition, state, **kwargs):
@@ -333,7 +370,7 @@ def test_review_to_prepared_local_approval(local_action, monkeypatch, drift):
         )
 
     runtime = BlackboardWorkflowRuntime(issue_dir=issue, playbook=graph, executor=provider,
-                                       automatic_registry=automatic_executor_registry())
+                                       automatic_registry=registry)
     build = issue / "develop/iteration_001"
     review = issue / "review/iteration_001"
     build.mkdir(parents=True)
@@ -376,10 +413,41 @@ def test_review_to_prepared_local_approval(local_action, monkeypatch, drift):
             "workflow", "--issue", issue.name, "--execute", "--start-step", "review",
         ])
         assert result.exit_code == 0, result.output + repr(result.exception)
+    elif interrupted_legacy:
+        with pytest.raises(KeyboardInterrupt):
+            runtime.run(start_step="review")
+        before = HumanTaskRecordStore(issue).tasks()
+        assert len(before) == 1
+        graph = load_graph()
+        runtime = BlackboardWorkflowRuntime(
+            issue_dir=issue, playbook=graph, executor=provider,
+            automatic_registry=automatic_executor_registry(),
+        )
+        result = runtime.run()
+        assert [task.id for task in HumanTaskRecordStore(issue).tasks()] == [before[0].id]
     else:
         result = runtime.run(start_step="review")
     records = HumanTaskRecordStore(issue)
     tasks = records.tasks()
+    if legacy:
+        assert len(tasks) == 1
+        summary = tasks[0]
+        assert summary.handoff_key.startswith("local-preparation:")
+        if drift == "legacy-summary":
+            graph = load_graph()
+        assert answer(summary, "confirm").rejection is None
+        assert runtime.blackboard_store.load_read_only().current_step == "deliver"
+        if drift == "legacy-approval":
+            # The previous release created the approval from the retained summary.
+            result = runtime.run()
+        graph = load_graph()
+        runtime = BlackboardWorkflowRuntime(
+            issue_dir=issue, playbook=graph, executor=provider,
+            automatic_registry=automatic_executor_registry(),
+        )
+        result = runtime.run()
+        assert [task.id for task in records.tasks() if task.step == "pr"] == [summary.id]
+        tasks = [task for task in records.tasks() if task.step == "deliver"]
     assert [task.policy_id for task in tasks] == ["delivery-review"], [task.prompt for task in tasks]
     approval = tasks[0]
     state = runtime.blackboard_store.load_read_only()
@@ -389,13 +457,17 @@ def test_review_to_prepared_local_approval(local_action, monkeypatch, drift):
         for event in events
         if event["event_type"] == "transition"
     ]
-    assert transitions[-2:] == [("review", "pr"), ("pr", "deliver")]
-    assert any(
-        event["event_type"] == "automatic_step_completed"
-        and event["data"]["step"] == "pr"
-        and event["data"]["intent"] == "await_agent"
-        for event in events
-    )
+    if legacy:
+        assert transitions[-1:] == [("review", "pr")]
+        assert records.get_result(summary.id).payload["continuation"] == "deliver"
+    else:
+        assert transitions[-2:] == [("review", "pr"), ("pr", "deliver")]
+        assert any(
+            event["event_type"] == "automatic_step_completed"
+            and event["data"]["step"] == "pr"
+            and event["data"]["intent"] == "await_agent"
+            for event in events
+        )
     proposal_file = proposal_path(issue, approval.id)
     proposal = ActionProposal.model_validate_json(proposal_file.read_bytes())
     assert calls == ["review"]
@@ -412,9 +484,13 @@ def test_review_to_prepared_local_approval(local_action, monkeypatch, drift):
         "git", "-C", str(root), "diff", "--binary", "--full-index",
         f"{workspace.base_sha}..{workspace.head_sha}", "--",
     ])
-    assert patch.read_bytes() == expected_patch
-    assert str(patch) in approval.prompt
-    assert hashlib.sha256(expected_patch).hexdigest() in approval.prompt
+    if legacy:
+        assert not patch.exists()
+        assert str(patch) not in approval.prompt
+    else:
+        assert patch.read_bytes() == expected_patch
+        assert str(patch) in approval.prompt
+        assert hashlib.sha256(expected_patch).hexdigest() in approval.prompt
     if drift == "large-patch":
         assert len(expected_patch) > 1024 * 1024
         assert b"GIT binary patch" in expected_patch
@@ -444,8 +520,8 @@ def test_review_to_prepared_local_approval(local_action, monkeypatch, drift):
         assert WorkflowFeedbackLedger(issue).pending(target_step="develop")
     elif drift != "large-evidence":
         assert (answer(approval, "integrate_only").rejection is None) == (
-            drift in {None, "dispatch", "patch-dispatch", "restart", "destination-alias",
-                      "merge-commit", "large-patch"}
+            legacy or drift in {None, "dispatch", "patch-dispatch", "restart", "destination-alias",
+                                "merge-commit", "large-patch"}
         )
     assert git(destination, "rev-parse", "HEAD") == target_before
     if drift == "large-evidence":
@@ -454,7 +530,7 @@ def test_review_to_prepared_local_approval(local_action, monkeypatch, drift):
         assert records.file_path.stat().st_size > 256 * 1024
         positions = pending_task_positions(issue, runtime.blackboard.workflow_id)
         assert [task["id"] for task in positions] == [approval.id]
-    if drift in {"destination-alias", "merge-commit"}:
+    if legacy or drift in {"destination-alias", "merge-commit"}:
         runtime.run()
         assert any(task.policy_id == "delivery-outcome" for task in records.tasks())
         integrated = git(destination, "rev-parse", "HEAD")

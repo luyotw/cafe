@@ -321,6 +321,7 @@ def _build_dynamic_step_click_command(step_name: str) -> Optional[click.Command]
             internal_worker_token=None,
             on_workflow_event=None,
             dry_run=False,
+            context=None,
         )
 
     return _dynamic_step_command

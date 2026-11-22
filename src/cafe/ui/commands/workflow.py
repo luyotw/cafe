@@ -673,7 +673,8 @@ def workflow(
             "requires --conversation-locale-source"
         ),
     ),
-    context: typer.Context = None,
+    *,
+    context: typer.Context,
 ) -> None:
     """Run playbook workflow using the new generic runner."""
     saved_continuation = context.obj if context is not None and isinstance(

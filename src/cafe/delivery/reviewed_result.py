@@ -12,6 +12,7 @@ from tempfile import TemporaryDirectory
 
 from cafe.core.automatic_steps import AutomaticExecutionResult
 from cafe.core.blackboard import BlackboardStore
+from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.packet_io import atomic_write_bytes
 from cafe.core.workspace_artifact import WorkspaceArtifact, verify_workspace_artifact
 from cafe.core.workspace_lock import workspace_execution_lock
@@ -19,6 +20,7 @@ from cafe.delivery.automatic import _presentation, validate_inputs
 from cafe.core.runtime_locales import render_text
 from cafe.delivery.local_result import MAX_EVIDENCE_BYTES, read_bounded
 from cafe.delivery.operations import Commands
+from cafe.delivery.prepared import legacy_preparation_task
 from cafe.delivery.presentation import materialize_task
 from cafe.utils.issue_paths import issue_project_root
 
@@ -47,11 +49,13 @@ def _reviewed_patch(root, workspace, path, *, create):
         before = os.fstat(stream.fileno())
         if not stat.S_ISREG(before.st_mode):
             raise ValueError("reviewed patch must be a regular file")
-        sha256 = hashlib.file_digest(stream, "sha256").hexdigest()
+        digest = hashlib.sha256()
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
         after = path.lstat()
         if not os.path.samestat(before, after) or before.st_ctime_ns != after.st_ctime_ns:
             raise ValueError("reviewed patch changed while reading")
-    return sha256
+    return digest.hexdigest()
 
 
 def materials(issue, state, step, definition, *, locale=None, retained=False,
@@ -168,14 +172,15 @@ def _present(inputs, context, *, integration=False):
         if context.execution_guard:
             context.execution_guard()
         patch_path = None
-        if integration:
+        legacy = integration and bool(ctx.step_def["human_tasks"])
+        if integration and not legacy:
             directory = ctx.output.parent.resolve()
             directory.relative_to(ctx.issue_dir.resolve())
             patch_path = directory / "reviewed.patch"
         text = materials(
             ctx.issue_dir, ctx.state, ctx.step, ctx.step_def,
             patch_path=patch_path,
-            create_patch=integration and not ctx.output.exists(),
+            create_patch=patch_path is not None and not ctx.output.exists(),
         )
         content = text.encode()
         if len(content) > MAX_EVIDENCE_BYTES:
@@ -183,7 +188,16 @@ def _present(inputs, context, *, integration=False):
         if ctx.output.exists() and read_bounded(ctx.output) != content:
             raise ValueError("prepared review evidence has changed")
         task = None
-        if not integration:
+        if legacy:
+            task = legacy_preparation_task(
+                HumanTaskRecordStore(ctx.issue_dir).tasks(), ctx.state.workflow_id,
+                ctx.step, ctx.iteration,
+                ctx.step_def["local_review"]["integration_step"],
+            )
+            if (task is None or task.status is not HumanTaskStatus.PENDING
+                    or not task.prompt.endswith("\n\n" + text.rstrip())):
+                raise ValueError("legacy local preparation confirmation is no longer current")
+        elif not integration:
             key = f"reviewed-result:{ctx.state.workflow_id}:{ctx.step}:{ctx.iteration}"
             task = materialize_task(ctx, text.rstrip(), handoff_key=key)
         if not ctx.output.exists():
@@ -262,9 +276,25 @@ def integration_evidence(issue, state, entry):
         raise ValueError("prepared local integration is no longer selected")
     text = _document(issue, root, entry)
     output = (root / entry.path).resolve(strict=True)
+    patch_path = output.with_name("reviewed.patch")
+    iteration = output.parent.name.removeprefix("iteration_")
+    if (output.name == "output.md" and iteration.isdigit()
+            and output.parent.parent == issue.resolve() / entry.updated_by):
+        records = HumanTaskRecordStore(issue)
+        delivery = definition["local_review"]["integration_step"]
+        task = legacy_preparation_task(
+            records.tasks(), state.workflow_id, entry.updated_by, int(iteration), delivery,
+        )
+        if task and task.status is HumanTaskStatus.COMPLETED:
+            result = records.get_result(task.id)
+            if (result is not None and result.workflow_id == state.workflow_id
+                    and result.payload.get("decision") == "confirm"
+                    and result.payload.get("continuation") == delivery
+                    and task.prompt.endswith("\n\n" + text.rstrip())):
+                patch_path = None
     if text != materials(
         issue, state, entry.updated_by, definition, retained=True,
-        patch_path=output.with_name("reviewed.patch"),
+        patch_path=patch_path,
     ):
         raise ValueError("prepared local evidence no longer matches the independent Review")
     workspace = state.artifacts[definition["workspace_input_artifact"]]
