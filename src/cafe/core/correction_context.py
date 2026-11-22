@@ -17,7 +17,6 @@ MAX_REVIEW_FRAGMENT_BYTES = 12 * 1024
 MAX_CORRECTION_PROJECTION_BYTES = 16 * 1024
 _HEAD = re.compile(r"^[0-9a-f]{40}$")
 _CLOSED_STATES = {"closed", "fixed", "withdrawn", "closed_fresh", "closed_reused"}
-_PROSE_LINE = re.compile(r"(?:#{1,6} )?[A-Za-z][A-Za-z0-9 ,.?!'’–—-]*")
 
 
 def _previous_head(sections):
@@ -53,19 +52,7 @@ def _evidence_rows(sections):
         return {}
 
 
-def _plain_document(run_git, head, path):
-    """Recognize only small, existing Markdown files made of headings and prose."""
-    blob = f"{head}:{path}"
-    size = int(run_git("cat-file", "-s", blob))
-    if not 0 < size <= 4096:
-        return False
-    lines = run_git("cat-file", "blob", blob).splitlines()
-    return bool(lines and lines[0].startswith("# ") and all(
-        not line or _PROSE_LINE.fullmatch(line) for line in lines
-    ))
-
-
-def _reusable(issue, row, *, safe_changes_since):
+def _reusable(issue, row, *, changes_since):
     if not isinstance(row, dict):
         return False
     head = row.get("head")
@@ -76,8 +63,10 @@ def _reusable(issue, row, *, safe_changes_since):
                    or ".." in Path(path).parts for path in paths)):
         return False
     try:
-        changes = safe_changes_since(head)
-        if changes is None or set(paths).intersection(changes):
+        # The recorded inputs cannot exclude a change that introduces a new
+        # match for a consumer's discovery rule. Only an unchanged tree proves
+        # that the old checked boundary still applies without fresh evidence.
+        if changes_since(head) != []:
             return False
         reference = Path(row["evidence_path"])
         if reference.is_absolute() or ".." in reference.parts:
@@ -129,28 +118,11 @@ def review_projection(*, issue, source, text, current_head, run_git, requirement
                 since[head] = None
         return since[head]
 
-    safe_changes = {}
-
-    def safe_changes_since(head):
-        if head not in safe_changes:
-            changes = changes_since(head)
-            safe_changes[head] = None
-            # A known path boundary can miss new callers or gates. The only
-            # exception is a small edit to existing, positively recognized prose.
-            if changes is not None and len(changes) <= 8 and all(
-                name.startswith("docs/") and name.endswith(".md")
-                and _plain_document(run_git, head, name)
-                and _plain_document(run_git, current_head, name)
-                for name in changes
-            ):
-                safe_changes[head] = changes
-        return safe_changes[head]
-
     reusable = [
         {"id": identifier, **rows[identifier]}
         for identifier in closed if identifier in rows and paths is not None and requirements
         and requirements == previous_requirements
-        and _reusable(issue, rows[identifier], safe_changes_since=safe_changes_since)
+        and _reusable(issue, rows[identifier], changes_since=changes_since)
     ]
     retained_ids = {row["id"] for row in reusable}
     recovery = []

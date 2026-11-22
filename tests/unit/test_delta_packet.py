@@ -273,7 +273,7 @@ def test_large_packet_inlines_bounded_pointer() -> None:
 
 
 @pytest.mark.parametrize(
-    "change", ["none", "caller", "new-caller", "new-doc-test", "doc-test",
+    "change", ["none", "caller", "new-caller", "new-doc-test", "doc-test", "navigation", "prose",
                "requirements", "evidence", "legacy"],
 )
 def test_review_correction_projection_reuses_only_current_boundary_evidence(tmp_path, change):
@@ -293,20 +293,33 @@ def test_review_correction_projection_reuses_only_current_boundary_evidence(tmp_
         (tmp_path / path).write_text("VALUE = 1\n")
     (tmp_path / "pytest.ini").write_text("[pytest]\naddopts = --doctest-glob=*.md\n")
     (tmp_path / "docs/other.md").write_text("# Background\n\nOriginal notes about planning.\n")
+    (tmp_path / "docs/setup.md").write_text("# Installation\n\nSetup instructions.\n")
+    (tmp_path / "navigation.py").write_text(
+        "from pathlib import Path\n"
+        "assert sum(page.read_text().startswith('# Installation\\n') "
+        "for page in Path('docs').glob('*.md')) == 1\n"
+    )
     (tmp_path / "docs/example.md").write_text(">>> from implementation import VALUE\n>>> VALUE\n1\n")
     git("add", ".")
     git("commit", "-m", "Reviewed")
     previous = git("rev-parse", "HEAD")
+    if change == "navigation":
+        subprocess.run([sys.executable, "navigation.py"], cwd=tmp_path, check=True)
     changed = {"caller": "caller.py", "new-caller": "new_cli.py", "new-doc-test": "docs/new-example.md",
                "doc-test": "docs/example.md"}.get(change, "docs/other.md")
     if change in {"doc-test", "new-doc-test"}:
         (tmp_path / changed).write_text(">>> from implementation import VALUE\n>>> VALUE\n2\n")
     elif change == "new-caller":
         (tmp_path / changed).write_text("import implementation\n")
-    else:
+    elif change == "navigation":
+        (tmp_path / changed).write_text("# Installation\n\nOriginal notes about planning.\n")
+    elif change != "none":
         (tmp_path / changed).write_text("# Background\n\nExpanded notes about planning.\n")
     git("add", changed)
-    git("commit", "-m", "Correction")
+    git("commit", "--allow-empty", "-m", "Correction")
+    if change == "navigation":
+        gate = subprocess.run([sys.executable, "navigation.py"], cwd=tmp_path, capture_output=True)
+        assert gate.returncode == 1
     if change in {"doc-test", "new-doc-test"}:
         gate = subprocess.run([sys.executable, "-m", "doctest", changed],
                               cwd=tmp_path, capture_output=True, text=True)
@@ -333,7 +346,8 @@ def test_review_correction_projection_reuses_only_current_boundary_evidence(tmp_
 """
     if change != "legacy":
         rows = [{
-            "id": "BLK-001", "head": previous, "paths": ["caller.py", "implementation.py"],
+            "id": "BLK-001", "head": previous,
+            "paths": ["caller.py", "implementation.py", "docs/setup.md", "navigation.py", "pytest.ini"],
             "evidence_path": "checks.txt", "sha256": sha256_bytes(proof.read_bytes()),
         }]
         report += "\n## Correction Evidence\n\n```json\n" + json.dumps(rows) + "\n```\n"
@@ -345,6 +359,11 @@ def test_review_correction_projection_reuses_only_current_boundary_evidence(tmp_
         requirements=current_requirements, previous_requirements=requirements,
     )
     assert [item["id"] for item in projection["open_todos"]] == ["BLK-002"]
-    assert projection["git"]["changed_paths"] == [changed]
+    assert projection["git"]["changed_paths"] == ([] if change == "none" else [changed])
     assert [item["id"] for item in projection["reusable"]] == (["BLK-001"] if change == "none" else [])
     assert projection["reopen"] == ([] if change == "none" else ["BLK-001"])
+    if change == "none":
+        retained = projection["reusable"][0]
+        assert retained["head"] == previous
+        assert (issue / retained["evidence_path"]).read_bytes() == proof.read_bytes()
+        assert retained["sha256"] == sha256_bytes(proof.read_bytes())
