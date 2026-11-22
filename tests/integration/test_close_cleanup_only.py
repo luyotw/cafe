@@ -16,6 +16,52 @@ def git(root, *args):
                           capture_output=True, text=True).stdout.strip()
 
 
+@pytest.mark.parametrize("byte_count", [8192, 8193])
+@pytest.mark.parametrize("completed", [False, True], ids=["pending", "completed"])
+def test_local_close_journal_writer_matches_reader_byte_bound(tmp_path, byte_count, completed):
+    from cafe.core.packet_io import canonical_json
+    from cafe.ui.commands import lifecycle
+
+    checkout = tmp_path / "escaped\tcheckout"
+    binding = {
+        "checkout": str(checkout), "destination": "/", "linked": False, "snapshot": "a" * 64,
+    }
+    digest = "b" * 64 if completed else None
+    record = {**binding, "evidence_kind": "volume", "source_evidence": 1}
+    if digest is not None:
+        record["archive_sha256"] = digest
+    padding = byte_count - len(canonical_json(record))
+    binding["destination"] += "é" * (padding // 2) + "x" * (padding % 2)
+    retained = checkout.parent / f".cafe-close-{binding['snapshot']}" / "issue"
+    journal = lifecycle._LocalCloseJournal(binding, "volume", digest, source_evidence=retained)
+    previous = tmp_path / ".local-close.json"
+    if byte_count == 8193:
+        previous.write_text("untouched")
+        with pytest.raises(ValueError):
+            lifecycle._write_local_close_journal(tmp_path, journal)
+        assert previous.read_text() == "untouched"
+    else:
+        lifecycle._write_local_close_journal(tmp_path, journal)
+        assert previous.stat().st_size == byte_count
+        assert lifecycle._read_local_close_journal(tmp_path) == journal
+
+
+def test_local_close_journal_reads_previously_recorded_absolute_source_path(tmp_path):
+    from cafe.core.packet_io import canonical_json
+    from cafe.ui.commands import lifecycle
+
+    checkout = tmp_path / "checkout"
+    binding = {
+        "checkout": str(checkout), "destination": str(tmp_path / "repo"), "linked": True, "snapshot": "a" * 64,
+    }
+    retained = checkout.parent / f".cafe-close-{binding['snapshot']}" / "issue"
+    (tmp_path / ".local-close.json").write_bytes(canonical_json({
+        **binding, "evidence_kind": "volume", "archive_sha256": "b" * 64, "source_evidence": str(retained),
+    }))
+    journal = lifecycle._read_local_close_journal(tmp_path)
+    assert journal.binding == binding and journal.source_evidence == retained and journal.digest == "b" * 64
+
+
 @pytest.fixture(params=[False, True], ids=["checkout", "worktree"])
 def feature(tmp_path, monkeypatch, request):
     root = tmp_path / "repo"
@@ -441,7 +487,8 @@ def test_cleanup_retains_the_checkout_already_owning_the_target(feature, tmp_pat
         "inventory-retry-recreated-worktree", "cross-volume", "cross-volume-retry",
         "cross-volume-after-copy", "cross-volume-after-deletion",
         "cross-volume-final-comparison", "cross-volume-before-settlement", "cross-volume-after-verification",
-        "cross-volume-legacy-retry",
+        "cross-volume-legacy-retry", "cross-volume-journal-at-limit", "cross-volume-journal-over-limit",
+        "cross-volume-journal-retry-limit",
         "same-volume-rename-plain", "same-volume-rename-named",
         "branch-upstream", "late-checkout-switch", "checkout-during-remove",
     )] + [(False, name) for name in (
@@ -610,6 +657,32 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
             return relocated
 
         monkeypatch.setattr(Path, "rename", split_volume)
+    if scenario in {"cross-volume-journal-at-limit", "cross-volume-journal-over-limit"}:
+        from cafe.core.packet_io import canonical_json
+
+        # Use short actual worktree paths and a scaled budget to exercise the
+        # same pending/final sizing seam regardless of the host path limit.
+        record = {
+            "checkout": str(worktree), "destination": str(destination), "linked": linked, "snapshot": "a" * 64,
+            "evidence_kind": "volume", "archive_sha256": "b" * 64, "source_evidence": 0,
+        }
+        final_size = len(canonical_json(record))
+        limit = final_size - (scenario == "cross-volume-journal-over-limit")
+        monkeypatch.setattr(lifecycle, "_LOCAL_CLOSE_JOURNAL_MAX_BYTES", limit, raising=False)
+    if scenario == "cross-volume-journal-retry-limit":
+        def interrupt_on_source_volume(path, target):
+            relocated = split_volume(path, target)
+            if path == issue:
+                raise OSError("interrupted after staging on the source volume")
+            return relocated
+
+        with monkeypatch.context() as interrupted:
+            interrupted.setattr(Path, "rename", interrupt_on_source_volume)
+            assert CliRunner().invoke(app, ["close"]).exit_code != 0
+        pending = archive / ".local-close.json"
+        assert worktree.is_dir() and not issue.exists() and len(transferred) == 1
+        assert git(root, "rev-parse", "feature") == source
+        monkeypatch.setattr(lifecycle, "_LOCAL_CLOSE_JOURNAL_MAX_BYTES", pending.stat().st_size, raising=False)
     if scenario == "last-observation":
         from cafe.delivery import local_cleanup
 
@@ -807,7 +880,7 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
     with lock:
         if scenario.startswith(("ref-retry", "inventory-retry")) or scenario in {
             "cross-volume-retry", "cross-volume-legacy-retry", "cross-volume-after-deletion",
-            "same-volume-rename-named",
+            "same-volume-rename-named", "cross-volume-journal-retry-limit",
         }:
             monkeypatch.chdir(root)
             result = CliRunner().invoke(app, ["close", "--issue", "feature"])
@@ -867,7 +940,7 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
                     "cross-volume-retry", "cross-volume-root", "cross-volume-root-retry", "cross-volume-after-copy",
                     "cross-volume-after-deletion", "cross-volume-final-comparison", "cross-volume-before-settlement",
                     "cross-volume-after-verification",
-                    "cross-volume-legacy-retry",
+                    "cross-volume-legacy-retry", "cross-volume-journal-at-limit",
                     "branch-upstream", "checkout-during-remove", "same-volume-rename-plain",
                     "same-volume-rename-named"}:
         assert result.exit_code == 0, result.output + repr(result.exception)
@@ -883,6 +956,15 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
         if scenario.startswith("cross-volume"):
             staged, = transferred
             assert_snapshot_report(result.output, staged)
+            if scenario == "cross-volume-journal-at-limit":
+                assert (archive / ".local-close.json").stat().st_size == limit
+                offline = staged.rename(tmp_path / "temporarily-offline")
+                try:
+                    settled = CliRunner().invoke(app, ["close", "--issue", "feature"])
+                    assert settled.exit_code == 0, settled.output
+                    assert_snapshot_report(settled.output, staged)
+                finally:
+                    offline.rename(staged)
         if scenario in {"late-writer", "cross-volume", "cross-volume-retry"} and linked:
             assert any(p.read_text() == "preserve the only live copy"
                        for p in archive.rglob("last-run-note.md"))
@@ -918,6 +1000,14 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
         if scenario == "branch-upstream":
             git(root, "branch", "feature", base)
             assert git(root, "for-each-ref", "--format=%(upstream:short)", "refs/heads/feature") == ""
+    elif scenario in {"cross-volume-journal-over-limit", "cross-volume-journal-retry-limit"}:
+        assert result.exit_code != 0
+        assert worktree.is_dir() and git(root, "rev-parse", "feature") == source
+        assert git(root, "rev-parse", "develop") == target
+        if scenario == "cross-volume-journal-over-limit":
+            assert (issue / "issue.yaml").is_file()
+        else:
+            assert (transferred[0] / "issue.yaml").is_file()
     elif scenario == "late-checkout-switch":
         assert result.exit_code != 0
         assert worktree.is_dir() and git(worktree, "branch", "--show-current") == "unrelated"

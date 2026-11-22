@@ -1302,6 +1302,7 @@ def _backup_issue_directory(issue_dir: Path, issue_name: str) -> Path:
 
 _LOCAL_CLOSE_JOURNAL = ".local-close.json"
 _LOCAL_CLOSE_EVIDENCE = ".local-close-evidence"
+_LOCAL_CLOSE_JOURNAL_MAX_BYTES = 8192
 
 
 @dataclass(frozen=True)
@@ -1385,9 +1386,13 @@ def _volume_close_evidence(checkout, selection_id, *, linked):
     return staging_root / f".cafe-close-{selection_id}" / "issue"
 
 
-def _volume_close_evidence_paths(checkout, selection_id, *, linked):
+def _volume_close_evidence_paths(binding):
+    checkout = Path(binding["checkout"])
+    selection_id = binding["snapshot"]
+    linked = binding["linked"]
     primary = _volume_close_evidence(checkout, selection_id, linked=linked)
-    # Earlier versions staged current checkouts next to the repository.
+    # Journal source selectors depend on this order. Earlier versions staged
+    # current checkouts next to the repository.
     return (primary,) if linked else (primary, _volume_close_evidence(checkout, selection_id, linked=True))
 
 
@@ -1431,11 +1436,12 @@ def _relocate_close_evidence(issue, archive, volume_evidence, journal):
     except OSError as exc:
         if exc.errno != errno.EXDEV:
             raise
+        pending = _prepare_volume_close_journal(journal, volume_evidence)
         # Keep the live inodes on the source volume. Linked checkout staging
         # sits outside the worktree Git removes.
         volume_evidence.parent.mkdir(mode=0o700, exist_ok=True)
         _validate_volume_close_directory(volume_evidence.parent)
-        _write_local_close_journal(archive, replace(journal, kind="volume", source_evidence=volume_evidence))
+        _write_local_close_journal(archive, pending)
         issue.rename(volume_evidence)
         return volume_evidence
     return archived
@@ -1593,12 +1599,13 @@ def _retry_archived_local_close(archive, issue_name, caller, project_root):
                 archive, source=issue_name, checkout=checkout,
                 configured_target=retained.get_current_branch(), linked=linked, archived=True,
             )
-            source_paths = _volume_close_evidence_paths(checkout, selection["snapshot"], linked=linked)
+            if binding != _local_close_binding(checkout, bound_destination, linked, selection):
+                raise ValueError("cleanup recovery binding differs from the accepted checkout")
+            source_paths = _volume_close_evidence_paths(binding)
             staged = _staged_volume_close_evidence(source_paths)
             evidence = staged or archive / _LOCAL_CLOSE_EVIDENCE
             live = checkout / ".cafe" / "issues" / issue_name
-            if (binding != _local_close_binding(checkout, bound_destination, linked, selection)
-                    or not evidence.is_dir() or evidence.is_symlink()
+            if (not evidence.is_dir() or evidence.is_symlink()
                     or ((live.exists() or live.is_symlink())
                         and not (linked and _live_close_alias(live, evidence)))):
                 raise ValueError("cleanup recovery has no matching relocated issue evidence")
@@ -1612,6 +1619,7 @@ def _retry_archived_local_close(archive, issue_name, caller, project_root):
                     raise ValueError("staged evidence conflicts with the recorded archive relocation")
                 # Keep the last verified journal until another check succeeds.
                 # Refusal before publication leaves that snapshot reusable.
+                _prepare_volume_close_journal(journal, staged)
                 retained_evidence = (staged,)
             elif journal.kind == "relocated":
                 if (journal.relocated_identity is not None
@@ -1643,7 +1651,7 @@ def _read_local_close_journal(archive):
 
     from cafe.core.packet_io import read_regular_bytes
 
-    record = json.loads(read_regular_bytes(archive / _LOCAL_CLOSE_JOURNAL, 8192))
+    record = json.loads(read_regular_bytes(archive / _LOCAL_CLOSE_JOURNAL, _LOCAL_CLOSE_JOURNAL_MAX_BYTES))
     if not isinstance(record, dict):
         raise ValueError("invalid local close journal")
     kind = record.pop("evidence_kind", None)
@@ -1655,22 +1663,29 @@ def _read_local_close_journal(archive):
             or (legacy_pending and kind is not None)
             or (digest is not None and (kind != "volume" or not isinstance(digest, str)
                                         or not re.fullmatch(r"[0-9a-f]{64}", digest)))
-            or (source_evidence is not None and (kind != "volume" or not isinstance(source_evidence, str)
-                                                 or not Path(source_evidence).is_absolute()))
+            or (source_evidence is not None and kind != "volume")
             or (relocated_identity is not None and (
                 kind != "relocated" or not isinstance(relocated_identity, list) or len(relocated_identity) != 2
                 or any(type(value) is not int or value < 0 for value in relocated_identity)
             ))):
         raise ValueError("invalid local close evidence record")
+    if type(source_evidence) is int:
+        candidates = _volume_close_evidence_paths(record)
+        if not 0 <= source_evidence < len(candidates):
+            raise ValueError("invalid local close source location")
+        source_evidence = candidates[source_evidence]
+    elif source_evidence is not None:
+        if not isinstance(source_evidence, str) or not Path(source_evidence).is_absolute():
+            raise ValueError("invalid local close source location")
+        source_evidence = Path(source_evidence)
     return _LocalCloseJournal(
-        record, "volume" if legacy_pending else kind, digest,
-        Path(source_evidence) if source_evidence is not None else None,
+        record, "volume" if legacy_pending else kind, digest, source_evidence,
         tuple(relocated_identity) if relocated_identity is not None else None,
     )
 
 
-def _write_local_close_journal(archive, journal, *, before_replace=None):
-    from cafe.core.packet_io import atomic_write_bytes, canonical_json
+def _encode_local_close_journal(journal):
+    from cafe.core.packet_io import canonical_json
 
     record = dict(journal.binding)
     if journal.kind is not None:
@@ -1678,10 +1693,29 @@ def _write_local_close_journal(archive, journal, *, before_replace=None):
     if journal.digest is not None:
         record["archive_sha256"] = journal.digest
     if journal.source_evidence is not None:
-        record["source_evidence"] = str(journal.source_evidence)
+        record["source_evidence"] = _volume_close_evidence_paths(journal.binding).index(journal.source_evidence)
     if journal.relocated_identity is not None:
         record["relocated_identity"] = journal.relocated_identity
-    atomic_write_bytes(archive / _LOCAL_CLOSE_JOURNAL, canonical_json(record), before_replace=before_replace)
+    encoded = canonical_json(record)
+    if len(encoded) > _LOCAL_CLOSE_JOURNAL_MAX_BYTES:
+        raise ValueError("local close journal exceeds the recovery reader's byte limit")
+    return encoded
+
+
+def _prepare_volume_close_journal(journal, evidence):
+    pending = replace(journal, kind="volume", source_evidence=evidence)
+    # Reserve the completed record before cleanup. Every actual SHA-256
+    # digest has the same JSON byte length as this placeholder.
+    _encode_local_close_journal(replace(pending, digest="0" * 64))
+    return pending
+
+
+def _write_local_close_journal(archive, journal, *, before_replace=None):
+    from cafe.core.packet_io import atomic_write_bytes
+
+    atomic_write_bytes(
+        archive / _LOCAL_CLOSE_JOURNAL, _encode_local_close_journal(journal), before_replace=before_replace,
+    )
 
 
 def _close_accepted_local(issue, source, target, checkout, project_root, git_ops, *, linked):
@@ -1731,7 +1765,7 @@ def _close_accepted_local(issue, source, target, checkout, project_root, git_ops
                 write_marker(checkout / ".cafe", source)
             # Move the live directory itself. Open files and directory handles still
             # refer to archived inodes while Git removes the linked checkout.
-            source_paths = _volume_close_evidence_paths(checkout, selection["snapshot"], linked=linked)
+            source_paths = _volume_close_evidence_paths(binding)
             if _staged_volume_close_evidence(source_paths) is not None:
                 raise ValueError("relocated cleanup evidence already exists")
             evidence = _relocate_close_evidence(
