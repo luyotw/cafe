@@ -4,6 +4,8 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
+import subprocess
+from types import SimpleNamespace
 
 import cafe
 
@@ -275,19 +277,40 @@ def test_user_accepts_only_the_reviewed_custom_revision(local_action, monkeypatc
         assert records.get_task(task.id).status.value == "completed"
 
 
-@pytest.mark.parametrize("drift", [None, "source", "target", "evidence", "workspace", "dispatch", "recover", "destination-alias", "merge-commit", "large-evidence"])
+@pytest.mark.parametrize("drift", [
+    None, "source", "target", "evidence", "verdict", "workspace", "patch", "dispatch",
+    "patch-dispatch", "restart", "fix-now", "destination-alias", "merge-commit",
+    "large-evidence", "large-patch",
+])
 def test_review_to_prepared_local_approval(local_action, monkeypatch, drift):
     from cafe.delivery.contracts import ActionProposal
     from cafe.delivery.selection import proposal_path
+    from tests.conftest import create_minimal_config
 
     root, destination, _, snapshot = local_action
     monkeypatch.chdir(root)
+    create_minimal_config(root)
     issue = root / ".cafe/issues/prepared-local"
     issue.mkdir(parents=True)
     policy = snapshot.proposal
+    if drift == "merge-commit":
+        (destination / "target.txt").write_text("Destination-only change")
+        git(destination, "add", "target.txt")
+        git(destination, "commit", "-m", "Move destination past the reviewed base")
+    expected_target = git(destination, "rev-parse", "HEAD")
+    if drift == "large-patch":
+        (root / "large.txt").write_text("reviewed patch line\n" * 60_000)
+        (root / "binary.dat").write_bytes(b"\0\xff\x80")
+        git(root, "add", "large.txt", "binary.dat")
+        git(root, "commit", "-m", "Large and binary reviewed changes")
+        policy = policy.model_copy(update={"source_oid": git(root, "rev-parse", "HEAD")})
     config = issue / "issue.yaml"
     config.write_text(yaml.safe_dump({
         "playbook_id": "standard",
+        "confirmation_contract": {
+            "user_required": ["pr", "deliver"],
+            "manager_confirmable": ["spec", "plan"],
+        },
         "pr": {"auto_create": False},
         "deliver": {
             "mode": "local", "destination": str(destination) + ("/" if drift == "destination-alias" else ""),
@@ -317,7 +340,7 @@ def test_review_to_prepared_local_approval(local_action, monkeypatch, drift):
     review.mkdir(parents=True)
     evidence = build / "output.md"
     evidence.write_text("Saved tests passed on the reviewed revision.\n"
-                        + ("saved evidence\n" * 12_000 if drift == "large-evidence" else ""))
+                        + ("saved evidence\n" * 20_000 if drift == "large-evidence" else ""))
     verdict = review / "output.md"
     verdict.write_text("Independent review passed.\n")
     workspace = build_workspace_artifact(
@@ -335,52 +358,94 @@ def test_review_to_prepared_local_approval(local_action, monkeypatch, drift):
         )
     runtime.blackboard_store.save(runtime.blackboard)
 
-    def answer(task, decision):
+    def answer(task, decision, **response):
         return apply_human_task_payload(
             issue_dir=issue, playbook_data=graph,
             blackboard=runtime.blackboard_store.load_read_only(),
             from_step=task.step, trigger=task.trigger, source="interactive",
-            raw_payload={"decision": decision, "human_task_id": task.id},
+            raw_payload={"decision": decision, "human_task_id": task.id, **response},
         )
 
-    result = runtime.run(start_step="review")
+    if drift is None:
+        monkeypatch.setattr(
+            "cafe.ui.commands.workflow._build_workflow_step_executor",
+            lambda **kwargs: SimpleNamespace(execute_step=provider),
+        )
+        monkeypatch.setattr("cafe.ui.commands.workflow._check_agent_clis_available", lambda *a, **k: [])
+        result = CliRunner().invoke(app, [
+            "workflow", "--issue", issue.name, "--execute", "--start-step", "review",
+        ])
+        assert result.exit_code == 0, result.output + repr(result.exception)
+    else:
+        result = runtime.run(start_step="review")
     records = HumanTaskRecordStore(issue)
-    summaries = [task for task in records.tasks() if task.step == "pr"]
-    assert len(summaries) == 1, result
-    summary = summaries[0]
-    assert evidence.read_text().strip() in summary.prompt
-    assert verdict.read_text().strip() in summary.prompt
-    if drift == "recover":
-        entry = runtime.blackboard.artifacts["local_preparation"]
-        path = root / entry.path
-        prepared = path.read_bytes()
-        # Simulate a stop before artifact publication in the same automatic visit.
-        path.unlink()
-        runtime.blackboard.artifacts.pop(entry.name)
-        runtime.blackboard_store.save(runtime.blackboard)
-        result = runtime.run(start_step="pr")
-        assert [task.id for task in records.tasks() if task.step == "pr"] == [summary.id], result
-        assert path.read_bytes() == prepared
-    assert answer(summary, "confirm").rejection is None
-    result = runtime.run()
-    approvals = [task for task in records.tasks() if task.policy_id == "delivery-review"]
-    assert len(approvals) == 1, result
-    approval = approvals[0]
-    proposal = ActionProposal.model_validate_json(proposal_path(issue, approval.id).read_bytes())
+    tasks = records.tasks()
+    assert [task.policy_id for task in tasks] == ["delivery-review"], [task.prompt for task in tasks]
+    approval = tasks[0]
+    state = runtime.blackboard_store.load_read_only()
+    events = list(runtime.blackboard_store.audit.iter_records(state.workflow_id))
+    transitions = [
+        (event["data"]["from"], event["data"]["to"])
+        for event in events
+        if event["event_type"] == "transition"
+    ]
+    assert transitions[-2:] == [("review", "pr"), ("pr", "deliver")]
+    assert any(
+        event["event_type"] == "automatic_step_completed"
+        and event["data"]["step"] == "pr"
+        and event["data"]["intent"] == "await_agent"
+        for event in events
+    )
+    proposal_file = proposal_path(issue, approval.id)
+    proposal = ActionProposal.model_validate_json(proposal_file.read_bytes())
     assert calls == ["review"]
-    assert (proposal.source_oid, proposal.target_oid) == (policy.source_oid, policy.target_oid)
+    assert (proposal.source_oid, proposal.target_oid) == (policy.source_oid, expected_target)
+    assert (proposal.source_branch, proposal.target_branch) == ("feature", policy.target_branch)
+    assert proposal.strategy == ("merge-commit" if drift == "merge-commit" else policy.strategy)
+    assert Path(proposal.destination).resolve() == destination.resolve()
     assert str(destination) in approval.prompt
     assert evidence.read_text().strip() in approval.prompt
+    assert verdict.read_text().strip() in approval.prompt
     assert proposal.digest in approval.prompt
+    patch = (issue / proposal.reviewed_artifact).with_name("reviewed.patch")
+    expected_patch = subprocess.check_output([
+        "git", "-C", str(root), "diff", "--binary", "--full-index",
+        f"{workspace.base_sha}..{workspace.head_sha}", "--",
+    ])
+    assert patch.read_bytes() == expected_patch
+    assert str(patch) in approval.prompt
+    assert hashlib.sha256(expected_patch).hexdigest() in approval.prompt
+    if drift == "large-patch":
+        assert len(expected_patch) > 1024 * 1024
+        assert b"GIT binary patch" in expected_patch
+    assert git(destination, "rev-parse", "HEAD") == expected_target
+    if drift == "restart":
+        restart = BlackboardWorkflowRuntime(
+            issue_dir=issue, playbook=graph, executor=provider,
+            automatic_registry=automatic_executor_registry(),
+        )
+        restart.run()
+        assert [task.id for task in records.tasks()] == [approval.id]
+        assert ActionProposal.model_validate_json(proposal_file.read_bytes()) == proposal
+        assert calls == ["review"]
     if drift in {"source", "target"}:
         git(root if drift == "source" else destination, "commit", "--allow-empty", "-m", "Drift")
-    if drift in {"evidence", "workspace"}:
-        changed = evidence if drift == "evidence" else ws
-        changed.write_text(changed.read_text() + "\n")
+    changed = {"evidence": evidence, "verdict": verdict, "workspace": ws, "patch": patch}.get(drift)
+    if changed:
+        changed.write_bytes(changed.read_bytes() + b"\n")
     target_before = git(destination, "rev-parse", "HEAD")
-    if drift != "large-evidence":
+    if drift == "fix-now":
+        from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+
+        correction = answer(approval, "fix_now", feedback="Revise the reviewed change.")
+        assert correction.rejection is None
+        assert correction.target == "develop"
+        assert records.get_result(approval.id).payload["feedback"] == "Revise the reviewed change."
+        assert WorkflowFeedbackLedger(issue).pending(target_step="develop")
+    elif drift != "large-evidence":
         assert (answer(approval, "integrate_only").rejection is None) == (
-            drift in {None, "dispatch", "recover", "destination-alias", "merge-commit"}
+            drift in {None, "dispatch", "patch-dispatch", "restart", "destination-alias",
+                      "merge-commit", "large-patch"}
         )
     assert git(destination, "rev-parse", "HEAD") == target_before
     if drift == "large-evidence":
@@ -395,7 +460,7 @@ def test_review_to_prepared_local_approval(local_action, monkeypatch, drift):
         integrated = git(destination, "rev-parse", "HEAD")
         if drift == "merge-commit":
             assert git(destination, "rev-list", "--parents", "-1", integrated).split()[1:] == [
-                policy.target_oid, policy.source_oid,
+                expected_target, policy.source_oid,
             ]
         else:
             assert integrated == policy.source_oid
@@ -407,3 +472,8 @@ def test_review_to_prepared_local_approval(local_action, monkeypatch, drift):
         assert not result.completed
         assert not any(task.policy_id == "delivery-outcome" for task in records.tasks())
         assert git(destination, "rev-parse", "HEAD") == changed_target
+    if drift == "patch-dispatch":
+        patch.write_bytes(b"changed after approval")
+        assert not runtime.run().completed
+        assert not any(task.policy_id == "delivery-outcome" for task in records.tasks())
+        assert git(destination, "rev-parse", "HEAD") == target_before

@@ -131,11 +131,11 @@ def resolve_local_review(playbook, config):
                 or confirmation.get("outcomes", {}).get("confirm") != delivery_name
                 or config[name].get("endpoint") is not None):
             raise ValueError("invalid prepared local integration binding")
-        confirmation["presentation_task"] = "local-preparation-review"
         endpoint.update(
             assignee_type="auto", automatic={"executor": "local_preparation", "inputs": {}},
-            output_artifact=artifact, input_artifacts=inputs, human_tasks=[confirmation],
+            output_artifact=artifact, input_artifacts=inputs, human_tasks=[],
             capability_requests=[], allowed_tools=[], hooks={}, allowed_goto=[], behavior={},
+            on={"await_agent": delivery_name},
         )
         delivery["input_artifacts"] = [
             artifact if item == publication else item for item in delivery["input_artifacts"]

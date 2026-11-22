@@ -5,6 +5,10 @@ from __future__ import annotations
 from contextlib import contextmanager
 import hashlib
 import json
+import os
+from pathlib import Path
+import stat
+from tempfile import TemporaryDirectory
 
 from cafe.core.automatic_steps import AutomaticExecutionResult
 from cafe.core.blackboard import BlackboardStore
@@ -14,6 +18,7 @@ from cafe.core.workspace_lock import workspace_execution_lock
 from cafe.delivery.automatic import _presentation, validate_inputs
 from cafe.core.runtime_locales import render_text
 from cafe.delivery.local_result import MAX_EVIDENCE_BYTES, read_bounded
+from cafe.delivery.operations import Commands
 from cafe.delivery.presentation import materialize_task
 from cafe.utils.issue_paths import issue_project_root
 
@@ -27,7 +32,30 @@ def _document(issue, root, entry):
     return content.decode("utf-8")
 
 
-def materials(issue, state, step, definition, *, locale=None, retained=False):
+def _reviewed_patch(root, workspace, path, *, create):
+    if create:
+        with TemporaryDirectory(dir=path.parent) as directory:
+            temporary = Path(directory) / path.name
+            Commands(30).git(
+                root, "diff", "--binary", "--full-index", "--no-ext-diff", "--no-textconv",
+                "--no-color", "--submodule=short", "--ignore-submodules=none",
+                f"--output={temporary}", f"{workspace.base_sha}..{workspace.head_sha}", "--",
+            )
+            temporary.replace(path)
+
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as stream:
+        before = os.fstat(stream.fileno())
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError("reviewed patch must be a regular file")
+        sha256 = hashlib.file_digest(stream, "sha256").hexdigest()
+        after = path.lstat()
+        if not os.path.samestat(before, after) or before.st_ctime_ns != after.st_ctime_ns:
+            raise ValueError("reviewed patch changed while reading")
+    return sha256
+
+
+def materials(issue, state, step, definition, *, locale=None, retained=False,
+              patch_path=None, create_patch=False):
     root = issue_project_root(issue.resolve())
     binding = definition["local_review"]
     reviewer = binding["review_step"]
@@ -101,8 +129,12 @@ def materials(issue, state, step, definition, *, locale=None, retained=False):
     lines = [
         "# " + copy("title"), "", copy("workflow", workflow=state.workflow_id), "",
         copy("revision", head=workspace.head_sha, base=workspace.base_sha),
-        copy("review", event=edge["event_id"]), "", "## " + copy("files"), "",
+        copy("review", event=edge["event_id"]),
     ]
+    if patch_path is not None:
+        sha256 = _reviewed_patch(root, workspace, patch_path, create=create_patch)
+        lines.extend(["", copy("diff", path=str(patch_path), sha256=sha256)])
+    lines.extend(["", "## " + copy("files"), ""])
     lines.extend("- " + json.dumps(item, ensure_ascii=False) for item in workspace.changed_files)
     for title, entry in (
         (copy("implementation"), author),
@@ -122,32 +154,43 @@ def materials(issue, state, step, definition, *, locale=None, retained=False):
 
 
 def execute(inputs, *, context):
-    return _present(inputs, context, key_prefix="reviewed-result")
+    return _present(inputs, context)
 
 
 def prepare_integration(inputs, *, context):
-    return _present(inputs, context, key_prefix="local-preparation")
+    return _present(inputs, context, integration=True)
 
 
-def _present(inputs, context, *, key_prefix):
+def _present(inputs, context, *, integration=False):
     validate_inputs(inputs)
     ctx, _ = _presentation(context)
     with workspace_execution_lock(ctx.root):
         if context.execution_guard:
             context.execution_guard()
-        text = materials(ctx.issue_dir, ctx.state, ctx.step, ctx.step_def)
-        key = f"{key_prefix}:{ctx.state.workflow_id}:{ctx.step}:{ctx.iteration}"
+        patch_path = None
+        if integration:
+            directory = ctx.output.parent.resolve()
+            directory.relative_to(ctx.issue_dir.resolve())
+            patch_path = directory / "reviewed.patch"
+        text = materials(
+            ctx.issue_dir, ctx.state, ctx.step, ctx.step_def,
+            patch_path=patch_path,
+            create_patch=integration and not ctx.output.exists(),
+        )
         content = text.encode()
         if len(content) > MAX_EVIDENCE_BYTES:
             raise ValueError("local review materials exceed the evidence limit; shorten the source evidence and repeat review")
         if ctx.output.exists() and read_bounded(ctx.output) != content:
             raise ValueError("prepared review evidence has changed")
-        task = materialize_task(ctx, text.rstrip(), handoff_key=key)
+        task = None
+        if not integration:
+            key = f"reviewed-result:{ctx.state.workflow_id}:{ctx.step}:{ctx.iteration}"
+            task = materialize_task(ctx, text.rstrip(), handoff_key=key)
         if not ctx.output.exists():
             atomic_write_bytes(ctx.output, content)
         return AutomaticExecutionResult(
-            intent=task.trigger,
-            task_id=task.id,
+            intent=task.trigger if task else "await_agent",
+            task_id=task.id if task else None,
             artifacts={ctx.step_def["output_artifact"]: str(ctx.output)},
         )
 
@@ -218,7 +261,11 @@ def integration_evidence(issue, state, entry):
             or definition.get("output_artifact") != entry.name):
         raise ValueError("prepared local integration is no longer selected")
     text = _document(issue, root, entry)
-    if text != materials(issue, state, entry.updated_by, definition, retained=True):
+    output = (root / entry.path).resolve(strict=True)
+    if text != materials(
+        issue, state, entry.updated_by, definition, retained=True,
+        patch_path=output.with_name("reviewed.patch"),
+    ):
         raise ValueError("prepared local evidence no longer matches the independent Review")
     workspace = state.artifacts[definition["workspace_input_artifact"]]
     return text, workspace.head_sha
