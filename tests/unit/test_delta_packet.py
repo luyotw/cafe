@@ -270,3 +270,62 @@ def test_large_packet_inlines_bounded_pointer() -> None:
     assert len(inline.encode("utf-8")) < 16 * 1024
     assert "delta_packet.json" in inline
     assert '"payload"' not in inline
+
+
+@pytest.mark.parametrize("change", ["none", "caller", "requirements", "evidence", "legacy"])
+def test_review_correction_projection_reuses_only_current_boundary_evidence(tmp_path, change):
+    from cafe.core.correction_context import review_projection
+    from cafe.core.packet_io import sha256_bytes
+    import subprocess
+
+    def git(*args):
+        return subprocess.check_output(["git", "-C", str(tmp_path), *args], text=True).strip()
+
+    git("init", "-b", "main")
+    git("config", "user.email", "test@example.com")
+    git("config", "user.name", "Test")
+    for path in ("caller.py", "implementation.py", "other.py"):
+        (tmp_path / path).write_text("original")
+    git("add", ".")
+    git("commit", "-m", "Reviewed")
+    previous = git("rev-parse", "HEAD")
+    changed = "caller.py" if change == "caller" else "other.py"
+    (tmp_path / changed).write_text("changed")
+    git("commit", "-am", "Correction")
+    head = git("rev-parse", "HEAD")
+    issue = tmp_path / ".cafe/issues/correction"
+    issue.mkdir(parents=True)
+    proof = issue / "checks.txt"
+    proof.write_text("caller and implementation check passed")
+    requirements = {"spec": "a" * 64, "plan": "b" * 64}
+    review = issue / "review.md"
+    report = f"""## Review Baseline
+
+- Reviewed HEAD: `{previous}`
+
+## Finding Registry
+
+| BLK-002 | BLK | Open caller issue | 004 | Important | 98 | open | — | {previous} |
+| BLK-001 | BLK | Verified public boundary | 003 | Important | 98 | closed | — | {previous} |
+
+## Todo List
+
+- [ ] `BLK-002` — Source: `review` — Work: Fix one problem. — Closure: Regression passes. — Evidence: Original failure.
+"""
+    if change != "legacy":
+        rows = [{
+            "id": "BLK-001", "head": previous, "paths": ["caller.py", "implementation.py"],
+            "evidence_path": "checks.txt", "sha256": sha256_bytes(proof.read_bytes()),
+        }]
+        report += "\n## Correction Evidence\n\n```json\n" + json.dumps(rows) + "\n```\n"
+    if change == "evidence":
+        proof.write_text("drift")
+    current_requirements = {**requirements, "spec": "c" * 64} if change == "requirements" else requirements
+    projection = review_projection(
+        issue=issue, source=review, text=report, current_head=head, run_git=git,
+        requirements=current_requirements, previous_requirements=requirements,
+    )
+    assert [item["id"] for item in projection["open_todos"]] == ["BLK-002"]
+    assert projection["git"]["changed_paths"] == [changed]
+    assert [item["id"] for item in projection["reusable"]] == (["BLK-001"] if change == "none" else [])
+    assert projection["reopen"] == ([] if change == "none" else ["BLK-001"])

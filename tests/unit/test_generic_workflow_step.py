@@ -10083,3 +10083,104 @@ def test_pure_plan_resolver_preserves_invalid_selected_metadata_types(tmp_path, 
     assert getattr(selected, field) == value
     assert type(getattr(selected, field)) is type(value)
     assert record_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("role", ["develop", "review"])
+@pytest.mark.parametrize("session", ["exact", "fresh", "incompatible"])
+def test_correction_role_receives_scoped_review_and_current_checklist(tmp_path, monkeypatch, role, session):
+    import cafe
+
+    monkeypatch.chdir(tmp_path)
+    git = GitOperations(str(tmp_path))
+    git.run_git("init", "-b", "main")
+    git.run_git("config", "user.email", "test@example.com")
+    git.run_git("config", "user.name", "Test")
+    (tmp_path / ".gitignore").write_text(".cafe/\n")
+    git.run_git("add", ".")
+    git.run_git("commit", "-m", "Reviewed baseline")
+    previous_head = git.run_git("rev-parse", "HEAD")
+    (tmp_path / "caller.py").write_text("correction")
+    git.run_git("add", "caller.py")
+    git.run_git("commit", "-m", "Correction")
+    issue = tmp_path / ".cafe/issues/issue-correction"
+    review = issue / "review/iteration_001/output.md"
+    review.parent.mkdir(parents=True)
+    review.write_text(f"""## Review Baseline
+
+- Reviewed HEAD: `{previous_head}`
+
+### Carried Evidence Summary
+
+Saved independent observation marker.
+
+## Finding Registry
+
+| BLK-001 | BLK | Affected caller | 001 | Important | 95 | open | — | {previous_head} |
+
+## Todo List
+
+- [ ] `BLK-001` — Source: `review` — Work: Repair the affected caller. — Closure: Public regression passes. — Evidence: Rejected previous call.
+""")
+    previous = issue / role / "iteration_001"
+    previous.mkdir(parents=True, exist_ok=True)
+    (previous / "iteration.json").write_text(json.dumps({
+        "cli": "codex", "session_id": "previous-session",
+        "model": "old-model" if session == "incompatible" else "gpt-5-test",
+        "end_time": "2026-07-30T00:00:00+08:00", "response": "completed previous turn",
+    }))
+    (previous / "output.md").touch(exist_ok=True)
+    playbook = {
+        "playbook": {"id": "default"}, "roles": {
+            "developer": {"default_agent": "David"}, "reviewer": {"default_agent": "Richard"},
+        },
+        "steps": {
+            "develop": {
+                "skill": "cafe-develop", "role": "developer", "output_artifact": "code",
+                "input_artifacts": ["review_feedback"], "on": {"await_agent": "review"},
+            },
+            "review": {
+                "skill": "cafe-review", "role": "reviewer", "output_artifact": "review_feedback",
+                "input_artifacts": ["code"], "allowed_goto": ["develop"],
+                "on": {"await_agent": "_done", "manual_handoff": "develop"},
+            },
+        },
+    }
+    step = playbook["steps"][role]
+    if session == "fresh":
+        step["correction_session"] = "fresh"
+    store = BlackboardStore(issue)
+    state = store.load_or_create(role)
+    store.put_artifact(state, ArtifactEntry(
+        name="review_feedback", kind=ArtifactKind.DOCUMENT, version=1, updated_by="review",
+        path=str(review), content_sha256=hashlib.sha256(review.read_bytes()).hexdigest(),
+    ))
+    if role == "develop":
+        store.record_event(state, "transition", {"from": "review", "to": role})
+    loader = SkillLoader(project_root=tmp_path, global_root=tmp_path / "global",
+                         builtin_root=Path(cafe.__file__).parent / "data")
+    phase = GenericPhase(loader, skill_bridge=NativeSkillBridge(
+        loader, project_root=tmp_path, home_dir=tmp_path / "home",
+    ))
+    observed = {}
+
+    def capture(**kw):
+        checklist = Path(kw["streaming_output_file"]).parent / "checklist.md"
+        observed.update(prompt=kw["prompt"], checklist=checklist.read_text())
+        raise AgentExecutionError("Stop after capturing the provider inputs")
+
+    manager = FakeAgentManager("await_agent", on_execute=capture)
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue, issue_name="issue-correction", playbook=playbook,
+        generic_phase=phase, agent_manager=manager, git_ops=git,
+        role_agent_map={"developer": "David", "reviewer": "Richard"},
+    )
+    with pytest.raises(AgentExecutionError):
+        executor.execute_step(role, step, state)
+    assert "Repair the affected caller." in observed["prompt"]
+    assert previous_head in observed["prompt"]
+    assert "caller.py" in observed["prompt"]
+    assert ("Saved independent observation marker." in observed["prompt"]) == (session != "exact")
+    assert ("correction context (exact)" in observed["prompt"]) == (session == "exact")
+    assert "Read the previous review and carry its complete" not in observed["checklist"]
+    if role == "develop":
+        assert "BLK-001" in observed["checklist"]

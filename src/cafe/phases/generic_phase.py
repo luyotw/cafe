@@ -416,6 +416,15 @@ class GenericPhase:
                         context["workflow_feedback_batch_todo_rows"],
                     ]
                 )
+        if context and context.get("correction_review_scope"):
+            runtime_context.extend([
+                "Independent Review correction context (" + context["correction_review_mode"] + "):",
+                context["correction_review_scope"],
+                "Use the open Todos, reviewed Git range and referenced evidence to scope work. "
+                "For reuse, verify the affected boundary and evidence reference. Reopen a check "
+                "when a caller, requirement, gate or evidence changed or cannot be verified. "
+                "Use the bound source for missing sections or referenced decisions.",
+            ])
         if context and context.get("delta_packet"):
             runtime_context.extend(
                 [

@@ -49,7 +49,7 @@ from cafe.core.delta_packet import (
     persist_delta_input_snapshot,
     persist_delta_packet,
 )
-from cafe.core.git import GitOperations
+from cafe.core.git import GitError, GitOperations
 from cafe.core.hooks import HookResult, NoChangesNeededHandler, PermissionRetryHandler
 from cafe.core.human_task_records import (
     HumanTaskRecordError,
@@ -685,6 +685,7 @@ class GenericWorkflowStepExecutor(Phase):
         ):
             self._invocation_order = None
         self._delta_packet_metadata = None
+        self._correction_review_projection = None
         iteration_dir = self._get_iteration_dir(self.iteration)
         iteration_dir.mkdir(parents=True, exist_ok=True)
         # HumanTask continuations can stage user_input.md before execution.
@@ -795,6 +796,17 @@ class GenericWorkflowStepExecutor(Phase):
             step_name=step_name,
             continuation=self._session_continuation,
         )
+        if (
+            self.iteration > 1
+            and not same_invocation_retry
+            and canonical_skill_name(skill_name) in {"cafe-develop", "cafe-review"}
+            and self._session_continuation.is_exact
+            and self._correction_session_model_changed(effective_agent_config)
+        ):
+            self._session_continuation = SessionContinuation.new()
+            effective_agent_config = self._resolve_execution_config_for_iteration(
+                agent_name=agent_name, step_name=step_name, continuation=self._session_continuation,
+            )
         context = self._build_context(
             step_name=step_name,
             step_def=step_def,
@@ -986,6 +998,7 @@ class GenericWorkflowStepExecutor(Phase):
                         "accounting_workspace_locked": True,
                         "allow_session_replacement": not same_invocation_retry,
                     },
+                    session_replacement_context=self._render_correction_recovery,
                     backup_context_callback=lambda error: self._build_backup_takeover_context(
                         error=error,
                         step_name=step_name,
@@ -2513,6 +2526,8 @@ class GenericWorkflowStepExecutor(Phase):
             checklist_file=checklist_file,
             workspace=workspace,
         )
+        if recovery := self._render_correction_recovery():
+            snapshot["correction_review_recovery"] = json.loads(recovery)
         return json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
 
     @staticmethod
@@ -3216,6 +3231,52 @@ class GenericWorkflowStepExecutor(Phase):
             return {}
         return snapshot
 
+    def _correction_session_model_changed(self, config):
+        session_id = self._current_session_continuation().session_id
+        for prior in (self._load_current_iteration_data(), self._load_previous_iteration_data()):
+            if prior and prior.get("session_id") == session_id:
+                effort = (prior.get("reasoning_evidence") or {}).get("configured")
+                return bool((prior.get("model") and prior["model"] != config.model)
+                            or (effort is not None and effort != config.reasoning_effort))
+        return False
+
+    def _add_review_correction_context(self, context, skill, artifacts, state, *, output_file):
+        if skill not in {"cafe-develop", "cafe-review"} or self.iteration < 2:
+            return
+        entry = state.artifacts.get("review_feedback")
+        if entry is None:
+            return
+        root = issue_project_root(self.issue_dir.resolve())
+        path = (root / entry.path).resolve()
+        if skill == "cafe-develop":
+            causal = artifacts.get("causal_todo")
+            if (causal is None or getattr(causal, "source", "review") != "review"
+                    or (root / causal.path).resolve() != path):
+                return
+        elif not path.is_relative_to(output_file.parent.parent.resolve()):
+            return
+
+        from cafe.core.correction_context import project_published_review, render_review_projection
+
+        try:
+            projection = project_published_review(
+                issue=self.issue_dir, root=root, state=state, entry=entry,
+                artifacts=artifacts, run_git=self.git_ops.run_git,
+            )
+        except (OSError, ValueError, KeyError, AttributeError, GitError):
+            # Existing declared inputs and checklist remain the recovery path.
+            return
+        self._correction_review_projection = projection
+        mode = "exact" if self._current_session_continuation().is_exact else "recovery"
+        context["correction_review_mode"] = mode
+        context["correction_review_scope"] = render_review_projection(projection, mode=mode)
+
+    def _render_correction_recovery(self):
+        from cafe.core.correction_context import render_review_projection
+
+        projection = getattr(self, "_correction_review_projection", None)
+        return render_review_projection(projection, mode="recovery")
+
     def _prepare_delta_packet(
         self,
         *,
@@ -3576,6 +3637,10 @@ class GenericWorkflowStepExecutor(Phase):
                 placeholder: self._display_path(Path(binding["path"]))
                 for placeholder, binding in effective_inputs.items()
             }
+        )
+        self._add_review_correction_context(
+            context, canonical_skill_name(skill_name), input_artifacts, blackboard_state,
+            output_file=output_file,
         )
         context["input_loading_modes"] = ", ".join(
             f"{placeholder}="

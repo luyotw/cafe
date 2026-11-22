@@ -128,7 +128,7 @@ workflow:
 Read your agent file: {agent_file}
 
 ## Context
-- Use the workflow inputs listed in the runtime context. Review every supplied requirement, plan, implementation artifact, and feedback item that applies to this run.
+- Use the workflow inputs listed in the runtime context. On a correction, use the projected open Todos and scoped reviewed changes when present. Consult applicable requirements and source sections for changed or uncertain boundaries and missing evidence.
 - When `workspace_file` is supplied, verify the declared Git workspace companion before relying on the code summary; use it for changed-file identity, while treating `develop_file` as the human-readable development summary.
 
 ## Available scripts

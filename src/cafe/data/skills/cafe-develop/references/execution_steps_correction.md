@@ -2,7 +2,7 @@
 
 [ ] Read {agent_file} to understand your role
 [ ] Write engineering prose in the repository content language stated in the runtime context, and anything addressed to the user in the workflow conversation language; your own preferred language overrides neither
-{correction_plan_context}[ ] Read feedback todo list in {feedback_file}
+{correction_plan_context}[ ] Read the authoritative open Todo rows in the correction context or the Todo List section in {feedback_file}; consult other sections only for changed or missing evidence
 [ ] Keep this Develop invocation running through every authorized executable blocker; after each bounded unit, validate evidence, update the phase-owned `## Todo Progress` ledger and summarize new changes and remaining work, then continue instead of treating a commit or targeted check as an iteration boundary
 [ ] Address each issue raised in the feedback
 [ ] Keep {feedback_file} immutable; record completion only in {output_file} `## Todo Progress` with current fingerprint and evidence

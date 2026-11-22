@@ -581,6 +581,7 @@ def test_phase_session_missing_can_restart_with_same_model(tmp_path, monkeypatch
         "phase_name": "develop",
         "continuation": SessionContinuation.resume_exact(AgentCLI.CODEX, "lost-session"),
         "allow_session_replacement": allow_replacement,
+        "session_replacement_context": lambda: "{\"open_todos\":[\"BLK-003\"]}",
     }
     if allow_replacement:
         assert manager.execute("David", phase_prompt, **kwargs)[0] == "finished"
@@ -595,7 +596,9 @@ def test_phase_session_missing_can_restart_with_same_model(tmp_path, monkeypatch
         # AgentManager relocates the independently refreshed constraints block.
         # All task context, references and completion instructions must survive.
         task_prompt = phase_prompt.split("<!-- cafe-runtime-constraints:start -->")[0].strip()
-        assert calls[1][4].endswith(task_prompt)
+        assert task_prompt in calls[1][4]
+        assert '"open_todos":["BLK-003"]' in calls[1][4]
+        assert '"open_todos":["BLK-003"]' not in calls[0][4]
         assert "Preserve existing changes" in calls[1][4]
         assert manager.session_manager.load_session(
             "David", AgentCLI.CODEX, "issue-381", "develop"
