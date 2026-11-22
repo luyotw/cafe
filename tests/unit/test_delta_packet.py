@@ -274,6 +274,7 @@ def test_large_packet_inlines_bounded_pointer() -> None:
 
 @pytest.mark.parametrize(
     "change", ["none", "caller", "new-caller", "new-doc-test", "doc-test", "navigation", "prose",
+               "ignored-gitlink",
                "requirements", "evidence", "legacy"],
 )
 def test_review_correction_projection_reuses_only_current_boundary_evidence(tmp_path, change):
@@ -288,6 +289,10 @@ def test_review_correction_projection_reuses_only_current_boundary_evidence(tmp_
     git("init", "-b", "main")
     git("config", "user.email", "test@example.com")
     git("config", "user.name", "Test")
+    if change == "ignored-gitlink":
+        git("commit", "--allow-empty", "-m", "Submodule fixture object")
+        link_head = git("rev-parse", "HEAD")
+        git("config", "diff.ignoreSubmodules", "all")
     (tmp_path / "docs").mkdir()
     for path in ("caller.py", "implementation.py"):
         (tmp_path / path).write_text("VALUE = 1\n")
@@ -301,6 +306,8 @@ def test_review_correction_projection_reuses_only_current_boundary_evidence(tmp_
     )
     (tmp_path / "docs/example.md").write_text(">>> from implementation import VALUE\n>>> VALUE\n1\n")
     git("add", ".")
+    if change == "ignored-gitlink":
+        git("update-index", "--add", "--cacheinfo", f"160000,{link_head},external")
     git("commit", "-m", "Reviewed")
     previous = git("rev-parse", "HEAD")
     if change == "navigation":
@@ -313,9 +320,12 @@ def test_review_correction_projection_reuses_only_current_boundary_evidence(tmp_
         (tmp_path / changed).write_text("import implementation\n")
     elif change == "navigation":
         (tmp_path / changed).write_text("# Installation\n\nOriginal notes about planning.\n")
-    elif change != "none":
+    elif change not in {"none", "ignored-gitlink"}:
         (tmp_path / changed).write_text("# Background\n\nExpanded notes about planning.\n")
-    git("add", changed)
+    if change == "ignored-gitlink":
+        git("update-index", "--cacheinfo", f"160000,{previous},external")
+    else:
+        git("add", changed)
     git("commit", "--allow-empty", "-m", "Correction")
     if change == "navigation":
         gate = subprocess.run([sys.executable, "navigation.py"], cwd=tmp_path, capture_output=True)
@@ -325,6 +335,8 @@ def test_review_correction_projection_reuses_only_current_boundary_evidence(tmp_
                               cwd=tmp_path, capture_output=True, text=True)
         assert gate.returncode == 1 and "Expected:" in gate.stdout and "Got:" in gate.stdout
     head = git("rev-parse", "HEAD")
+    if change == "ignored-gitlink":
+        assert git("diff", "--name-only", previous, head) == ""
     issue = tmp_path / ".cafe/issues/correction"
     issue.mkdir(parents=True)
     proof = issue / "checks.txt"
@@ -359,7 +371,8 @@ def test_review_correction_projection_reuses_only_current_boundary_evidence(tmp_
         requirements=current_requirements, previous_requirements=requirements,
     )
     assert [item["id"] for item in projection["open_todos"]] == ["BLK-002"]
-    assert projection["git"]["changed_paths"] == ([] if change == "none" else [changed])
+    expected_paths = {"none": [], "ignored-gitlink": ["external"]}.get(change, [changed])
+    assert projection["git"]["changed_paths"] == expected_paths
     assert [item["id"] for item in projection["reusable"]] == (["BLK-001"] if change == "none" else [])
     assert projection["reopen"] == ([] if change == "none" else ["BLK-001"])
     if change == "none":

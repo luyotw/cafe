@@ -1328,9 +1328,60 @@ def _live_close_alias(live, evidence):
     return live.is_symlink() and live.readlink() == evidence
 
 
+def _volume_close_evidence(checkout, selection_id):
+    return checkout.parent / f".cafe-close-{selection_id}" / "issue"
+
+
+def _validate_volume_close_directory(directory):
+    import os
+    import stat
+
+    info = directory.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise ValueError("the local close staging directory is not private")
+
+
+def _relocate_close_evidence(issue, archive, volume_evidence):
+    import errno
+
+    archived = archive / _LOCAL_CLOSE_EVIDENCE
+    if any(path.exists() or path.is_symlink() for path in (archived, volume_evidence)):
+        raise ValueError("relocated cleanup evidence already exists")
+    try:
+        issue.rename(archived)
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+        # Keep the live inodes on the source volume, outside the worktree Git
+        # removes. The same deterministic path is available to archived retries.
+        volume_evidence.parent.mkdir(mode=0o700, exist_ok=True)
+        _validate_volume_close_directory(volume_evidence.parent)
+        issue.rename(volume_evidence)
+        return volume_evidence
+    return archived
+
+
+def _publish_volume_close_evidence(evidence, archive):
+    import tempfile
+
+    archived = archive / _LOCAL_CLOSE_EVIDENCE
+    if evidence == archived:
+        return
+    if archived.exists() or archived.is_symlink():
+        if not archived.is_dir() or archived.is_symlink():
+            raise ValueError("archived local close evidence is invalid")
+        _require_matching_archive(evidence, archived)
+        return
+    with tempfile.TemporaryDirectory(prefix=".close-volume-", dir=archive) as temporary:
+        copy = Path(temporary) / "issue"
+        shutil.copytree(evidence, copy, symlinks=True)
+        _require_matching_archive(evidence, copy)
+        copy.rename(archived)
+
+
 def _finish_archived_local_close(
     source, checkout, destination, project_root, retained, proposal, receipt, evidence,
-    *, linked, selection_id,
+    *, archive, linked, selection_id,
 ):
     """Finish only outstanding effects for an archived, exact local delivery."""
     import os
@@ -1379,20 +1430,20 @@ def _finish_archived_local_close(
     alias = linked and _live_close_alias(live, evidence)
     if not alias and (live.exists() or live.is_symlink()):
         raise ValueError("new live issue evidence appeared during cleanup")
+    snapshot = {"source": source, "source_oid": proposal.source_oid, "target": proposal.target_branch,
+                "target_oid": integrated}
     os.chdir(destination)
     if linked and checkout.is_dir():
         if not alias:
             live.symlink_to(evidence, target_is_directory=True)
         try:
-            retained.remove_worktree(str(checkout))
+            with retained.lock_cleanup_worktree(checkout, snapshot):
+                retained.remove_worktree(str(checkout))
         finally:
             if _live_close_alias(live, evidence):
                 live.unlink()
-    retained.delete_cleanup_branch(
-        {"source": source, "source_oid": proposal.source_oid, "target": proposal.target_branch,
-         "target_oid": integrated},
-        verify_local_target=True, local_close_id=selection_id,
-    )
+    _publish_volume_close_evidence(evidence, archive)
+    retained.delete_cleanup_branch(snapshot, verify_local_target=True, local_close_id=selection_id)
     if linked:
         _remove_worktree_inventory_pointer(
             project_root=project_root, issue_name=source, worktree_path=str(checkout),
@@ -1426,7 +1477,12 @@ def _retry_archived_local_close(archive, issue_name, caller, project_root):
                 archive, source=issue_name, checkout=checkout,
                 configured_target=retained.get_current_branch(), linked=linked, archived=True,
             )
-            evidence = archive / _LOCAL_CLOSE_EVIDENCE
+            volume_evidence = _volume_close_evidence(checkout, selection["snapshot"])
+            if volume_evidence.exists() or volume_evidence.is_symlink():
+                _validate_volume_close_directory(volume_evidence.parent)
+                evidence = volume_evidence
+            else:
+                evidence = archive / _LOCAL_CLOSE_EVIDENCE
             live = checkout / ".cafe" / "issues" / issue_name
             if (journal != _local_close_binding(checkout, bound_destination, linked, selection)
                     or not evidence.is_dir() or evidence.is_symlink()
@@ -1435,7 +1491,7 @@ def _retry_archived_local_close(archive, issue_name, caller, project_root):
                 raise ValueError("cleanup recovery has no matching relocated issue evidence")
             _finish_archived_local_close(
                 issue_name, checkout, destination, project_root, retained, proposal, receipt, evidence,
-                linked=linked, selection_id=selection["snapshot"],
+                archive=archive, linked=linked, selection_id=selection["snapshot"],
             )
 
 
@@ -1489,18 +1545,17 @@ def _close_accepted_local(issue, source, target, checkout, project_root, git_ops
                     raise ValueError("cleanup recovery binding differs from the accepted checkout")
             else:
                 atomic_write_bytes(journal, binding)
-            evidence = archive / _LOCAL_CLOSE_EVIDENCE
-            if evidence.exists() or evidence.is_symlink():
-                raise ValueError("relocated cleanup evidence already exists")
             if not linked and read_marker(checkout / ".cafe") is None:
                 write_marker(checkout / ".cafe", source)
             # Move the live directory itself. Open files and directory handles still
             # refer to archived inodes while Git removes the linked checkout.
-            issue.rename(evidence)
+            evidence = _relocate_close_evidence(
+                issue, archive, _volume_close_evidence(checkout, selection["snapshot"]),
+            )
             try:
                 _finish_archived_local_close(
                     source, checkout, destination, project_root, retained, proposal, receipt, evidence,
-                    linked=linked, selection_id=selection["snapshot"],
+                    archive=archive, linked=linked, selection_id=selection["snapshot"],
                 )
             except Exception:
                 if checkout.is_dir() and not issue.exists() and not issue.is_symlink() and (

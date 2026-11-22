@@ -30,7 +30,9 @@ def _changed_paths(run_git, previous, current):
         return None
     try:
         run_git("merge-base", "--is-ancestor", previous, current)
-        changed = run_git("diff", "--name-only", "-z", "--no-renames", previous, current, "--")
+        changed = run_git(
+            "diff", "--name-only", "-z", "--no-renames", "--ignore-submodules=none", previous, current, "--",
+        )
     except (OSError, ValueError, RuntimeError, GitError, CalledProcessError):
         return None
     paths = sorted(set(filter(None, changed.split("\0"))))
@@ -52,7 +54,7 @@ def _evidence_rows(sections):
         return {}
 
 
-def _reusable(issue, row, *, changes_since):
+def _reusable(issue, row, *, same_tree):
     if not isinstance(row, dict):
         return False
     head = row.get("head")
@@ -66,7 +68,7 @@ def _reusable(issue, row, *, changes_since):
         # The recorded inputs cannot exclude a change that introduces a new
         # match for a consumer's discovery rule. Only an unchanged tree proves
         # that the old checked boundary still applies without fresh evidence.
-        if changes_since(head) != []:
+        if not same_tree(head):
             return False
         reference = Path(row["evidence_path"])
         if reference.is_absolute() or ".." in reference.parts:
@@ -105,24 +107,24 @@ def review_projection(*, issue, source, text, current_head, run_git, requirement
                 closed.append(fields[0])
     closed.extend(identifier for identifier in rows if identifier not in closed
                   and identifier not in {todo["id"] for todo in todos})
-    since = {previous: paths}
+    tree_matches = {}
 
-    def changes_since(head):
-        if head not in since:
-            if len(since) >= 16:
-                return None
-            try:
+    def same_tree(head):
+        if head not in tree_matches:
+            if len(tree_matches) >= 16:
+                return False
+            tree_matches[head] = False
+            if head != previous:
                 run_git("merge-base", "--is-ancestor", head, previous)
-                since[head] = _changed_paths(run_git, head, current_head)
-            except (OSError, ValueError, GitError, CalledProcessError):
-                since[head] = None
-        return since[head]
+            trees = run_git("rev-parse", f"{head}^{{tree}}", f"{current_head}^{{tree}}").splitlines()
+            tree_matches[head] = len(trees) == 2 and trees[0] == trees[1] and bool(_HEAD.fullmatch(trees[0]))
+        return tree_matches[head]
 
     reusable = [
         {"id": identifier, **rows[identifier]}
         for identifier in closed if identifier in rows and paths is not None and requirements
         and requirements == previous_requirements
-        and _reusable(issue, rows[identifier], changes_since=changes_since)
+        and _reusable(issue, rows[identifier], same_tree=same_tree)
     ]
     retained_ids = {row["id"] for row in reusable}
     recovery = []

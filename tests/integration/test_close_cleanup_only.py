@@ -438,8 +438,9 @@ def test_cleanup_retains_the_checkout_already_owning_the_target(feature, tmp_pat
         "moved-target", "archive-failure", "qualified-base", "wrong-base", "archive-retry",
         "archive-retry-new-evidence", "ref-retry", "ref-retry-moved", "last-observation",
         "late-writer", "inventory-retry", "inventory-retry-recreated",
-        "inventory-retry-recreated-worktree",
-    )] + [(False, "detach-retry")],
+        "inventory-retry-recreated-worktree", "cross-volume", "cross-volume-retry",
+        "branch-upstream", "late-checkout-switch", "checkout-during-remove",
+    )] + [(False, "detach-retry"), (False, "cross-volume")],
     indirect=["feature"],
 )
 def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
@@ -537,6 +538,7 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
             assert inventory.is_dir() and read_marker(destination / ".cafe") == issue.name
             if "recreated" in scenario:
                 git(root, "branch", "feature", source)
+                git(root, "branch", "--set-upstream-to=origin/develop", "feature")
             if scenario.endswith("recreated-worktree"):
                 git(root, "worktree", "add", str(worktree), "feature")
         else:
@@ -546,6 +548,17 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
         if scenario == "ref-retry-moved":
             git(root, "update-ref", "refs/heads/feature", base)
     archive = lifecycle._get_issue_archive_path(issue.name)
+    if scenario.startswith("cross-volume"):
+        import errno
+
+        rename = Path.rename
+
+        def split_volume(path, target):
+            if path == issue and Path(target).is_relative_to(archive):
+                raise OSError(errno.EXDEV, "cross-device rename")
+            return rename(path, target)
+
+        monkeypatch.setattr(Path, "rename", split_volume)
     if scenario == "last-observation":
         from cafe.delivery import local_cleanup
 
@@ -558,7 +571,38 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
             return result
 
         monkeypatch.setattr(local_cleanup, "observe_local_cleanup", write_after_archive)
-    if scenario == "late-writer":
+    if scenario == "late-checkout-switch":
+        from cafe.delivery import local_cleanup
+
+        observe = local_cleanup.observe_local_cleanup
+
+        def switch_after_observation(*args, **kwargs):
+            result = observe(*args, **kwargs)
+            if not issue.exists():
+                git(worktree, "checkout", "unrelated")
+            return result
+
+        monkeypatch.setattr(local_cleanup, "observe_local_cleanup", switch_after_observation)
+    if scenario == "checkout-during-remove":
+        from cafe.core.git import GitOperations
+
+        native = GitOperations.run_git
+
+        def attempt_at_removal(backend, *args):
+            if args[:2] == ("worktree", "remove"):
+                for mutation in (
+                    ["checkout", "unrelated"],
+                    ["symbolic-ref", "HEAD", "refs/heads/unrelated"],
+                    ["update-ref", "refs/heads/feature", base, source],
+                ):
+                    switched = subprocess.run(
+                        ["git", "-C", str(worktree), *mutation], capture_output=True,
+                    )
+                    assert switched.returncode != 0
+            return native(backend, *args)
+
+        monkeypatch.setattr(GitOperations, "run_git", attempt_at_removal)
+    if scenario in {"late-writer", "cross-volume", "cross-volume-retry"} and linked:
         import os
         from cafe.core.git import GitOperations
 
@@ -577,6 +621,17 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
             return remove(backend, path)
 
         monkeypatch.setattr(GitOperations, "remove_worktree", write_through_open_directory)
+    if scenario == "cross-volume-retry":
+        from cafe.core.git import GitOperations, GitError
+
+        def interrupt_branch_delete(*args, **kwargs):
+            raise GitError("interrupted before ref deletion")
+
+        with monkeypatch.context() as failure:
+            failure.setattr(GitOperations, "delete_cleanup_branch", interrupt_branch_delete)
+            interrupted = CliRunner().invoke(app, ["close"])
+        assert interrupted.exit_code != 0
+        assert not worktree.exists() and git(root, "rev-parse", "feature") == source
     remote = tmp_path / "remote.git"
     before = git(remote, "show-ref")
     attempts = []
@@ -590,7 +645,7 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
     monkeypatch.setattr(subprocess, "run", capture_remote)
     lock = advancement_execution_lock(issue) if scenario == "active" else nullcontext()
     with lock:
-        if scenario.startswith(("ref-retry", "inventory-retry")):
+        if scenario.startswith(("ref-retry", "inventory-retry")) or scenario == "cross-volume-retry":
             monkeypatch.chdir(root)
             result = CliRunner().invoke(app, ["close", "--issue", "feature"])
         else:
@@ -600,17 +655,19 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
     assert git(root, "rev-parse", "unrelated") == base
     if scenario in {"ff-only", "merge-commit", "qualified-base", "archive-retry", "ref-retry",
                     "detach-retry", "inventory-retry", "inventory-retry-recreated",
-                    "inventory-retry-recreated-worktree", "late-writer"}:
+                    "inventory-retry-recreated-worktree", "late-writer", "cross-volume",
+                    "cross-volume-retry", "branch-upstream", "checkout-during-remove"}:
         assert result.exit_code == 0, result.output + repr(result.exception)
         assert archive.is_dir()
         assert worktree.exists() == (not linked or scenario.endswith("recreated-worktree"))
         if "recreated" in scenario:
             assert git(root, "rev-parse", "feature") == source
+            assert git(root, "for-each-ref", "--format=%(upstream:short)", "refs/heads/feature") == "origin/develop"
         else:
             assert git(root, "branch", "--list", "feature") == ""
         assert git(root, "rev-parse", "develop") == target
         assert (target == source) == (scenario != "merge-commit")
-        if scenario == "late-writer":
+        if scenario in {"late-writer", "cross-volume", "cross-volume-retry"} and linked:
             assert any(p.read_text() == "preserve the only live copy"
                        for p in archive.rglob("last-run-note.md"))
             assert any(p.read_text() == "preserve the path-based write"
@@ -624,6 +681,14 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
             assert git(worktree, "branch", "--show-current") == ""
             assert (worktree / "change").read_text() == "delivered\n"
             assert not issue.exists()
+        if scenario == "branch-upstream":
+            git(root, "branch", "feature", base)
+            assert git(root, "for-each-ref", "--format=%(upstream:short)", "refs/heads/feature") == ""
+    elif scenario == "late-checkout-switch":
+        assert result.exit_code != 0
+        assert worktree.is_dir() and git(worktree, "branch", "--show-current") == "unrelated"
+        assert git(root, "rev-parse", "feature") == source
+        assert (issue / "issue.yaml").is_file()
     elif scenario == "archive-retry-new-evidence":
         assert result.exit_code != 0
         assert archive.is_dir() and (issue / "recovery-note.md").is_file()
