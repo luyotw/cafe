@@ -53,3 +53,6 @@ human_task.cafe_pr.pr_details: Clarify the missing PR content or publication det
 human_task.cafe_pr.reviewed_revision: "Accept the reviewed local commit or request a revision."
 human_task.cafe_pr.reviewed_finish: "Accept the local commit and finish"
 human_task.cafe_pr.reviewed_fix: "Return the implementation for revision"
+human_task.cafe_pr.local_preparation_review: "Review the saved evidence for the local integration. Confirmation continues to action approval."
+human_task.cafe_pr.local_preparation_fix: "Request a revision to the local preparation"
+human_task.cafe_pr.local_preparation_confirm: "Confirm preparation and continue to action approval"

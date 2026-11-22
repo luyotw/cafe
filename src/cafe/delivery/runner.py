@@ -10,13 +10,15 @@ from cafe.delivery.contracts import DeliveryBinding, DeliveryVerification
 from cafe.delivery.prepared import prepared_request
 from cafe.delivery.selection import approved_snapshot
 from cafe.delivery.service import execute_snapshot
-from cafe.playbooks.loader import PlaybookLoader
+from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
 from cafe.utils.issue_config import read_issue_config_strict
 
 
 def run_delivery(*, root: Path, issue_dir: Path, step: str, iteration: int):
     config = read_issue_config_strict(issue_dir / "issue.yaml")
-    playbook = PlaybookLoader(project_root=root).load(config["playbook_id"])
+    playbook = apply_issue_playbook_overrides(
+        PlaybookLoader(project_root=root).load(config["playbook_id"]), issue_dir / "issue.yaml"
+    )
     store = BlackboardStore(issue_dir)
     if not store.file_path.is_file():
         raise ValueError("delivery requires an existing workflow")
@@ -42,6 +44,8 @@ def execute_delivery(*, root, issue_dir, step, iteration, playbook, state):
     definition = playbook["steps"][step]
     binding = DeliveryBinding.model_validate(definition["delivery"])
     snapshot = approved_snapshot(issue_dir, workflow_id=state.workflow_id, binding=binding)
+    if binding.local_preparation_artifact != snapshot.proposal.local_preparation:
+        raise ValueError("the current delivery evidence route has changed")
     if binding.publication_artifact:
         from cafe.delivery.selection import validate_publication_reference
 

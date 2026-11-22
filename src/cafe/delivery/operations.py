@@ -133,6 +133,20 @@ def _local_result(commands, dest, proposal):
     return None
 
 
+def _validate_prepared_local_result(commands, dest, proposal, commit):
+    if commit == proposal.target_oid:
+        # The reviewed source may already be contained in the approved target.
+        return
+    if proposal.strategy == "ff-only":
+        if commit == proposal.source_oid:
+            return
+    else:
+        parents = commands.git(dest, "rev-list", "--parents", "-n", "1", commit).split()[1:]
+        if parents == [proposal.target_oid, proposal.source_oid]:
+            return
+    raise OperationError("unreconciled_local_attempt", state="unknown")
+
+
 def _local_evidence(commands, dest):
     pending = []
     for name in ("MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply"):
@@ -409,7 +423,15 @@ def execute_action(
             if action == "integration" and p.mode == "local":
                 with _destination_lock(p.destination):
                     dest = _local_identity(commands, root, p, reconcile_only=reconcile_only)
+                    observed_tip = commands.git(dest, "rev-parse", "HEAD")
+                    if p.local_preparation and not reconcile_only and observed_tip != p.target_oid:
+                        raise OperationError("changed_destination")
+                    if (p.local_preparation and prior and prior.get("state") == "succeeded"
+                            and observed_tip != prior.get("commit")):
+                        raise OperationError("changed_integrated_destination")
                     result = _local_result(commands, dest, p)
+                    if p.local_preparation and reconcile_only and result is not None:
+                        _validate_prepared_local_result(commands, dest, p, result["commit"])
                     if result is None:
                         if prior and prior["state"] not in {"not_dispatched", "blocked"}:
                             settled = _settled_local_attempt(commands, dest, prior, p)
@@ -432,6 +454,8 @@ def execute_action(
                             allow_failure=True,
                         )
                         result = _local_result(commands, dest, p)
+                        if result is not None and p.local_preparation:
+                            _validate_prepared_local_result(commands, dest, p, result["commit"])
                         if result is None:
                             if code:
                                 raise OperationError("integration_conflict", returncode=code)

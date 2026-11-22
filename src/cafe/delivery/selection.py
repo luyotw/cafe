@@ -51,6 +51,39 @@ def validate_publication_reference(issue_dir, state, binding, snapshot):
         raise ActionReviewRequired("current PR publication changed; fresh action review is required")
 
 
+def validate_local_preparation(issue_dir, proposal, *, check_target=False):
+    if not proposal.local_preparation:
+        return
+    from cafe.core.blackboard import BlackboardStore
+    from cafe.delivery.prepared import prepared_request
+    from cafe.delivery.reviewed_result import integration_evidence
+
+    state = BlackboardStore(issue_dir).load_read_only()
+    entry = state.artifacts.get(proposal.local_preparation)
+    root = issue_project_root(issue_dir.resolve())
+    if (state.workflow_id != proposal.workflow_id or entry is None
+            or (root / entry.path).resolve() != (issue_dir / proposal.reviewed_artifact).resolve()
+            or entry.content_sha256 != proposal.reviewed_artifact_sha256):
+        raise ActionReviewRequired("current local preparation differs from the displayed evidence")
+    _, reviewed_head = integration_evidence(issue_dir, state, entry)
+    request = prepared_request(issue_dir, proposal.approval_step)
+    if (reviewed_head != proposal.source_oid or request is None
+            or any(request[key] != getattr(proposal, key)
+                   for key in ("mode", "target_branch", "strategy", "destination", "issue_repository"))):
+        raise ActionReviewRequired("prepared local action differs from the displayed action")
+    from cafe.delivery.contracts import DeliveryVerification
+
+    if DeliveryVerification.model_validate(request["verification"]) != proposal.verification:
+        raise ActionReviewRequired("prepared verification differs from the displayed verification")
+    if check_target:
+        from cafe.delivery.operations import Commands, _local_identity
+
+        commands = Commands(15)
+        dest = _local_identity(commands, root, proposal)
+        if commands.git(dest, "rev-parse", "HEAD") != proposal.target_oid:
+            raise ActionReviewRequired("approved target tip has changed")
+
+
 def approved_snapshot(issue_dir: Path, *, workflow_id: str, binding) -> ActionSnapshot:
     records = HumanTaskRecordStore(issue_dir)
     tasks = [
@@ -125,6 +158,7 @@ def validate_snapshot_authority(issue_dir: Path, snapshot: ActionSnapshot):
     if current != snapshot:
         raise ValueError("action snapshot no longer matches current authority")
     validate_source_identity(issue_dir, snapshot.proposal)
+    validate_local_preparation(issue_dir, snapshot.proposal)
 
 
 def snapshot_from_args(args) -> ActionSnapshot:
@@ -136,10 +170,13 @@ def snapshot_from_args(args) -> ActionSnapshot:
 
 def validate_task_response(issue_dir, step_definition, policy, task, raw_payload):
     """The existing response entry delegates delivery rules without a generic registry."""
-    local_review = step_definition.get("automatic", {}).get("executor") == "local_review"
-    if task and task.handoff_key.startswith("reviewed-result:") != local_review:
+    executor = step_definition.get("automatic", {}).get("executor")
+    prefixes = {"local_review": "reviewed-result:", "local_preparation": "local-preparation:"}
+    task_prefix = next((prefix for prefix in prefixes.values()
+                        if task and task.handoff_key.startswith(prefix)), None)
+    if task_prefix != prefixes.get(executor):
         raise ValueError("local review endpoint selection changed")
-    if local_review:
+    if task_prefix:
         from cafe.core.blackboard import BlackboardStore
         from cafe.delivery.reviewed_result import revalidate
 
@@ -182,6 +219,9 @@ def validate_response(issue_dir, binding, task, payload, *, step_definition=None
                 raise ValueError("shown host capability review changed")
         validate_reviewed_artifact(issue_dir, proposal)
         validate_source_identity(issue_dir, proposal)
+        if binding.local_preparation_artifact != proposal.local_preparation:
+            raise ActionReviewRequired("the current delivery evidence route has changed")
+        validate_local_preparation(issue_dir, proposal, check_target=True)
         approve_selection(
             proposal,
             {

@@ -273,3 +273,97 @@ def test_user_accepts_only_the_reviewed_custom_revision(local_action, monkeypatc
     else:
         assert applied.target == ("repair_custom" if decision == "fix_now" else "done")
         assert records.get_task(task.id).status.value == "completed"
+
+
+@pytest.mark.parametrize("drift", [None, "source", "target", "evidence", "workspace"])
+def test_review_to_prepared_local_approval(local_action, monkeypatch, drift):
+    from cafe.delivery.contracts import ActionProposal
+    from cafe.delivery.selection import proposal_path
+
+    root, destination, _, snapshot = local_action
+    monkeypatch.chdir(root)
+    issue = root / ".cafe/issues/prepared-local"
+    issue.mkdir(parents=True)
+    policy = snapshot.proposal
+    config = issue / "issue.yaml"
+    config.write_text(yaml.safe_dump({
+        "playbook_id": "standard",
+        "pr": {"auto_create": False},
+        "deliver": {
+            "mode": "local", "destination": str(destination),
+            "target_branch": policy.target_branch, "strategy": policy.strategy,
+            "verification": policy.verification.model_dump(mode="json"),
+        },
+    }))
+    graph = apply_issue_playbook_overrides(PlaybookLoader(project_root=root).load("standard"), config)
+    calls = []
+
+    def provider(step, definition, state, **kwargs):
+        calls.append(step)
+        assert step == "review", "local preparation started a PR provider"
+        (review / "checklist.md").write_text("[x] Verify the exact revision.\n")
+        (issue / "next_step.txt").write_text('{"version":1,"intent":"await_agent"}')
+        return StepExecutionResult(
+            response="await_agent", status_code="await_agent",
+            artifacts={"review_feedback": str(verdict)}, agent_invoked=True,
+        )
+
+    runtime = BlackboardWorkflowRuntime(issue_dir=issue, playbook=graph, executor=provider,
+                                       automatic_registry=automatic_executor_registry())
+    build = issue / "develop/iteration_001"
+    review = issue / "review/iteration_001"
+    build.mkdir(parents=True)
+    review.mkdir(parents=True)
+    evidence = build / "output.md"
+    evidence.write_text("Saved tests passed on the reviewed revision.\n")
+    verdict = review / "output.md"
+    verdict.write_text("Independent review passed.\n")
+    workspace = build_workspace_artifact(
+        repo=root, name="workspace", base_sha=policy.target_oid,
+        head_sha=policy.source_oid, version=1, producer_step="develop",
+    )
+    ws = build / "workspace.json"
+    ws.write_text(json.dumps(workspace.to_dict()))
+    for name, kind, path in [("code", ArtifactKind.DOCUMENT, evidence),
+                              ("workspace", ArtifactKind.WORKSPACE, ws)]:
+        runtime.blackboard.artifacts[name] = ArtifactEntry(
+            name=name, kind=kind, path=str(path), version=1, updated_by="develop",
+            content_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+            head_sha=workspace.head_sha, base_sha=workspace.base_sha,
+        )
+    runtime.blackboard_store.save(runtime.blackboard)
+
+    def answer(task, decision):
+        return apply_human_task_payload(
+            issue_dir=issue, playbook_data=graph,
+            blackboard=runtime.blackboard_store.load_read_only(),
+            from_step=task.step, trigger=task.trigger, source="interactive",
+            raw_payload={"decision": decision, "human_task_id": task.id},
+        )
+
+    result = runtime.run(start_step="review")
+    records = HumanTaskRecordStore(issue)
+    summaries = [task for task in records.tasks() if task.step == "pr"]
+    assert len(summaries) == 1, result
+    summary = summaries[0]
+    assert evidence.read_text().strip() in summary.prompt
+    assert verdict.read_text().strip() in summary.prompt
+    assert answer(summary, "confirm").rejection is None
+    result = runtime.run()
+    approvals = [task for task in records.tasks() if task.policy_id == "delivery-review"]
+    assert len(approvals) == 1, result
+    approval = approvals[0]
+    proposal = ActionProposal.model_validate_json(proposal_path(issue, approval.id).read_bytes())
+    assert calls == ["review"]
+    assert (proposal.source_oid, proposal.target_oid) == (policy.source_oid, policy.target_oid)
+    assert str(destination) in approval.prompt
+    assert evidence.read_text().strip() in approval.prompt
+    assert proposal.digest in approval.prompt
+    if drift in {"source", "target"}:
+        git(root if drift == "source" else destination, "commit", "--allow-empty", "-m", "Drift")
+    if drift in {"evidence", "workspace"}:
+        changed = evidence if drift == "evidence" else ws
+        changed.write_text(changed.read_text() + "\n")
+    target_before = git(destination, "rev-parse", "HEAD")
+    assert (answer(approval, "integrate_only").rejection is None) == (drift is None)
+    assert git(destination, "rev-parse", "HEAD") == target_before

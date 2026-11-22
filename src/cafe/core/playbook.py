@@ -629,6 +629,14 @@ class LocalReviewEndpoint(BaseModel):
     presentation_task: str | None = None
     result_artifact: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_-]*$")
     outcomes: dict[str, str]
+    integration_step: str | None = None
+    integration_artifact: str | None = Field(default=None, pattern=r"^[A-Za-z][A-Za-z0-9_-]*$")
+
+    @model_validator(mode="after")
+    def complete_integration_binding(self):
+        if bool(self.integration_step) != bool(self.integration_artifact):
+            raise ValueError("local preparation requires both an integration step and artifact")
+        return self
 
 
 class StepConfig(BaseModel):

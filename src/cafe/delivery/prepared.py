@@ -71,11 +71,20 @@ def local_review_step(playbook):
 def resolve_local_review(playbook, config):
     selected = [name for name in playbook["steps"] if isinstance(config.get(name), dict)
                 and config[name].get("endpoint") == "local-review"]
-    if not selected:
+    integration = [
+        name for name, definition in playbook["steps"].items()
+        if (contract := definition.get("local_review")) and contract.get("integration_step")
+        and isinstance(config.get(name), dict) and config[name].get("auto_create") is False
+        and isinstance(config.get(contract["integration_step"]), dict)
+        and config[contract["integration_step"]].get("mode") == "local"
+    ]
+    if not selected and not integration:
         return playbook
     name = local_review_step(playbook)
-    if selected != [name]:
-        raise ValueError("local review must select its declared endpoint")
+    if (selected and selected != [name]) or (integration and integration != [name]):
+        raise ValueError("local delivery must select its declared endpoint")
+    if selected and integration:
+        raise ValueError("review-only acceptance conflicts with prepared local integration")
     result = deepcopy(playbook)
     steps = result["steps"]
     endpoint = steps[name]
@@ -93,12 +102,41 @@ def resolve_local_review(playbook, config):
     if len(confirmations) != 1 or any(t not in {*steps, "_done"} for t in contract["outcomes"].values()):
         raise ValueError("invalid local acceptance route")
     confirmation = confirmations[0]
+    inputs = [author["output_artifact"], reviewer["output_artifact"], workspace]
+    if integration:
+        delivery_name = contract["integration_step"]
+        delivery = steps.get(delivery_name, {})
+        binding = delivery.get("delivery") or {}
+        publication = binding.get("publication_artifact")
+        artifact = contract["integration_artifact"]
+        request_from_config(config, delivery_name)
+        if (delivery.get("automatic", {}).get("executor") != "delivery"
+                or binding.get("approval_step") != delivery_name
+                or publication != endpoint.get("output_artifact")
+                or publication not in (delivery.get("input_artifacts") or ())
+                or delivery.get("workspace_input_artifact") != workspace
+                or binding.get("proposals_artifact") != reviewer["output_artifact"]
+                or confirmation.get("outcomes", {}).get("confirm") != delivery_name
+                or config[name].get("endpoint") is not None):
+            raise ValueError("invalid prepared local integration binding")
+        confirmation["presentation_task"] = "local-preparation-review"
+        endpoint.update(
+            assignee_type="auto", automatic={"executor": "local_preparation", "inputs": {}},
+            output_artifact=artifact, input_artifacts=inputs, human_tasks=[confirmation],
+            capability_requests=[], allowed_tools=[], hooks={}, allowed_goto=[], behavior={},
+        )
+        delivery["input_artifacts"] = [
+            artifact if item == publication else item for item in delivery["input_artifacts"]
+        ]
+        binding.pop("publication_artifact")
+        binding["local_preparation_artifact"] = artifact
+        return result
     confirmation.update(outcomes=contract["outcomes"], mandatory_confirmation=True)
     if contract.get("presentation_task"):
         confirmation["presentation_task"] = contract["presentation_task"]
     endpoint.update(assignee_type="auto", automatic={"executor": "local_review", "inputs": {}},
                     output_artifact=contract["result_artifact"],
-                    input_artifacts=[author["output_artifact"], reviewer["output_artifact"], workspace],
+                    input_artifacts=inputs,
                     human_tasks=[confirmation], capability_requests=[], allowed_tools=[], hooks={},
                     allowed_goto=[], behavior={}, on={"confirm_output": name})
     return result
@@ -110,7 +148,8 @@ def validate_prepared_delivery(config: dict, playbook: dict) -> None:
         if definition.get("delivery") is not None:
             if effective is not playbook:
                 selected = local_review_step(playbook)
-                if definition["delivery"].get("publication_artifact") == playbook["steps"][selected].get("output_artifact"):
+                if (effective["steps"][selected]["automatic"]["executor"] == "local_review"
+                        and definition["delivery"].get("publication_artifact") == playbook["steps"][selected].get("output_artifact")):
                     continue
             request = request_from_config(config, step)
             if definition.get("assignee_type") == "auto" and request is None:

@@ -1330,7 +1330,7 @@ def _apply_human_task_payload(
 
                     commit_options["before_commit"] = recheck_before_commit
                 settings_lock = nullcontext()
-                if step_definition.get("automatic", {}).get("executor") == "local_review":
+                if step_definition.get("automatic", {}).get("executor") in {"local_review", "local_preparation"}:
                     from cafe.delivery.reviewed_result import local_review_decision_lock, revalidate_current_selection
 
                     settings_lock = local_review_decision_lock(issue_dir)

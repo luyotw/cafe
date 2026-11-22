@@ -27,12 +27,13 @@ def _document(issue, root, entry):
     return content.decode("utf-8")
 
 
-def materials(issue, state, step, definition, *, locale=None):
+def materials(issue, state, step, definition, *, locale=None, retained=False):
     root = issue_project_root(issue.resolve())
     binding = definition["local_review"]
     reviewer = binding["review_step"]
     audit = BlackboardStore(issue).audit
-    edge = audit.latest_record(state.workflow_id, {"transition"}, bounded=True)
+    edge = audit.latest_record(state.workflow_id, {"transition"},
+                               step=step if retained else None, bounded=True)
     if (
         not edge
         or edge["data"].get("from") != reviewer
@@ -121,18 +122,29 @@ def materials(issue, state, step, definition, *, locale=None):
 
 
 def execute(inputs, *, context):
+    return _present(inputs, context, key_prefix="reviewed-result")
+
+
+def prepare_integration(inputs, *, context):
+    return _present(inputs, context, key_prefix="local-preparation")
+
+
+def _present(inputs, context, *, key_prefix):
     validate_inputs(inputs)
     ctx, _ = _presentation(context)
     with workspace_execution_lock(ctx.root):
         if context.execution_guard:
             context.execution_guard()
         text = materials(ctx.issue_dir, ctx.state, ctx.step, ctx.step_def)
-        key = f"reviewed-result:{ctx.state.workflow_id}:{ctx.step}:{ctx.iteration}"
+        key = f"{key_prefix}:{ctx.state.workflow_id}:{ctx.step}:{ctx.iteration}"
         content = text.encode()
         if len(content) > MAX_EVIDENCE_BYTES:
             raise ValueError("local review materials exceed the evidence limit; shorten the source evidence and repeat review")
+        if ctx.output.exists() and read_bounded(ctx.output) != content:
+            raise ValueError("prepared review evidence has changed")
         task = materialize_task(ctx, text.rstrip(), handoff_key=key)
-        atomic_write_bytes(ctx.output, content)
+        if not ctx.output.exists():
+            atomic_write_bytes(ctx.output, content)
         return AutomaticExecutionResult(
             intent=task.trigger,
             task_id=task.id,
@@ -181,7 +193,8 @@ def revalidate_current_selection(issue, state, task):
     graph = load_issue_task_playbook(project_root=issue_project_root(issue.resolve()), issue_dir=issue,
                                      playbook_id=state.playbook_id)
     definition = graph["steps"].get(task.step, {})
-    if definition.get("automatic", {}).get("executor") != "local_review":
+    expected = "local_preparation" if task.handoff_key.startswith("local-preparation:") else "local_review"
+    if definition.get("automatic", {}).get("executor") != expected:
         raise ValueError("local review endpoint changed")
     policy, binding = resolve_step_human_task(
         playbook_data=graph, step_name=task.step, trigger=task.trigger, iteration=task.iteration,
@@ -189,6 +202,23 @@ def revalidate_current_selection(issue, state, task):
     )
     if (policy.for_locale(state.conversation_locale).model_dump(mode="json") != task.expected_result
             or binding.task_id != task.policy_id or binding.outcomes != task.continuations
-            or definition["local_review"]["outcomes"] != task.continuations):
+            or (expected == "local_review" and definition["local_review"]["outcomes"] != task.continuations)):
         raise ValueError("local acceptance policy or outcomes changed")
     revalidate(issue, state, definition, task)
+
+
+def integration_evidence(issue, state, entry):
+    """Read the current tracked preparation and reconstruct its reviewed inputs."""
+    from cafe.core.task_inbox import load_issue_task_playbook
+
+    root = issue_project_root(issue.resolve())
+    graph = load_issue_task_playbook(project_root=root, issue_dir=issue, playbook_id=state.playbook_id)
+    definition = graph["steps"].get(entry.updated_by, {})
+    if (definition.get("automatic", {}).get("executor") != "local_preparation"
+            or definition.get("output_artifact") != entry.name):
+        raise ValueError("prepared local integration is no longer selected")
+    text = _document(issue, root, entry)
+    if text != materials(issue, state, entry.updated_by, definition, retained=True):
+        raise ValueError("prepared local evidence no longer matches the independent Review")
+    workspace = state.artifacts[definition["workspace_input_artifact"]]
+    return text, workspace.head_sha

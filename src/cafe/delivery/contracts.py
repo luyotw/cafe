@@ -31,6 +31,7 @@ class DeliveryBinding(FrozenModel):
     correction_step: str
     proposals_artifact: str | None = None
     publication_artifact: str | None = None
+    local_preparation_artifact: str | None = None
 
 
 class ReviewSource(FrozenModel):
@@ -111,6 +112,7 @@ class ActionProposal(FrozenModel):
     issue_repository: str = ""
     proposals: tuple[FollowUp, ...] = Field(default=(), max_length=100)
     review_source: ReviewSource | None = None
+    local_preparation: str | None = None
     reviewed_artifact: str = ""
     reviewed_artifact_sha256: str = Field(default="", pattern=r"^(?:[0-9a-f]{64})?$")
     capability_review: dict[str, dict] | None = None
@@ -122,12 +124,16 @@ class ActionProposal(FrozenModel):
         # Preserve the exact digest of already-shown legacy proposals.
         if self.capability_review is None:
             value.pop("capability_review", None)
+        if self.local_preparation is None:
+            value.pop("local_preparation", None)
         if self.verification is None:
             value.pop("verification", None)
         return value
 
     @model_validator(mode="after")
     def exact_binding(self):
+        if self.local_preparation and (self.mode != "local" or not self.reviewed_artifact):
+            raise ValueError("local preparation requires reviewed local evidence")
         if self.mode == "github" and not re.fullmatch(
             r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", self.repository
         ):
