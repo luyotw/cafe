@@ -275,7 +275,7 @@ def test_user_accepts_only_the_reviewed_custom_revision(local_action, monkeypatc
         assert records.get_task(task.id).status.value == "completed"
 
 
-@pytest.mark.parametrize("drift", [None, "source", "target", "evidence", "workspace", "dispatch", "recover", "destination-alias"])
+@pytest.mark.parametrize("drift", [None, "source", "target", "evidence", "workspace", "dispatch", "recover", "destination-alias", "merge-commit", "large-evidence"])
 def test_review_to_prepared_local_approval(local_action, monkeypatch, drift):
     from cafe.delivery.contracts import ActionProposal
     from cafe.delivery.selection import proposal_path
@@ -291,7 +291,8 @@ def test_review_to_prepared_local_approval(local_action, monkeypatch, drift):
         "pr": {"auto_create": False},
         "deliver": {
             "mode": "local", "destination": str(destination) + ("/" if drift == "destination-alias" else ""),
-            "target_branch": policy.target_branch, "strategy": policy.strategy,
+            "target_branch": policy.target_branch,
+            "strategy": "merge-commit" if drift == "merge-commit" else policy.strategy,
             "verification": policy.verification.model_dump(mode="json"),
         },
     }))
@@ -315,7 +316,8 @@ def test_review_to_prepared_local_approval(local_action, monkeypatch, drift):
     build.mkdir(parents=True)
     review.mkdir(parents=True)
     evidence = build / "output.md"
-    evidence.write_text("Saved tests passed on the reviewed revision.\n")
+    evidence.write_text("Saved tests passed on the reviewed revision.\n"
+                        + ("saved evidence\n" * 12_000 if drift == "large-evidence" else ""))
     verdict = review / "output.md"
     verdict.write_text("Independent review passed.\n")
     workspace = build_workspace_artifact(
@@ -376,12 +378,27 @@ def test_review_to_prepared_local_approval(local_action, monkeypatch, drift):
         changed = evidence if drift == "evidence" else ws
         changed.write_text(changed.read_text() + "\n")
     target_before = git(destination, "rev-parse", "HEAD")
-    assert (answer(approval, "integrate_only").rejection is None) == (drift in {None, "dispatch", "recover", "destination-alias"})
+    if drift != "large-evidence":
+        assert (answer(approval, "integrate_only").rejection is None) == (
+            drift in {None, "dispatch", "recover", "destination-alias", "merge-commit"}
+        )
     assert git(destination, "rev-parse", "HEAD") == target_before
-    if drift == "destination-alias":
+    if drift == "large-evidence":
+        from cafe.core.human_task_records import pending_task_positions
+
+        assert records.file_path.stat().st_size > 256 * 1024
+        positions = pending_task_positions(issue, runtime.blackboard.workflow_id)
+        assert [task["id"] for task in positions] == [approval.id]
+    if drift in {"destination-alias", "merge-commit"}:
         runtime.run()
         assert any(task.policy_id == "delivery-outcome" for task in records.tasks())
-        assert git(destination, "rev-parse", "HEAD") == policy.source_oid
+        integrated = git(destination, "rev-parse", "HEAD")
+        if drift == "merge-commit":
+            assert git(destination, "rev-list", "--parents", "-1", integrated).split()[1:] == [
+                policy.target_oid, policy.source_oid,
+            ]
+        else:
+            assert integrated == policy.source_oid
     if drift == "dispatch":
         git(destination, "merge", "--ff-only", policy.source_oid)
         git(destination, "commit", "--allow-empty", "-m", "Unapproved destination change")

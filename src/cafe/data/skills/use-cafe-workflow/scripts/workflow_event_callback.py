@@ -1860,14 +1860,21 @@ def _supervision(event, root, event_target):
     current_transition = edge(current)
     from_step = handoff.get("from_step")
     intent = handoff.get("intent")
-    task_trigger = {intent}
-    if intent == "need_permission":
+    def matches(task):
+        from cafe.core.blackboard import HandoffContract
         from cafe.core.capability_approvals import CAPABILITY_APPROVAL_TRIGGER
+        from cafe.core.human_task_snapshot import matches_user_handoff
 
-        task_trigger.add(CAPABILITY_APPROVAL_TRIGGER)
-    if (len(tasks) == 1 and owner == "user" and active == handoff.get("to_step") == "user"
-            and from_step and from_step == tasks[0]["step"]
-            and tasks[0]["trigger"] in task_trigger and tasks[0]["assignee_type"] == "user"
+        triggers = {task["trigger"]}
+        if task["trigger"] == CAPABILITY_APPROVAL_TRIGGER:
+            triggers.add("need_permission")
+        return task["assignee_type"] == "user" and matches_user_handoff(
+            active, HandoffContract.from_dict(handoff) if handoff else None,
+            workflow_id=workflow, step=task["step"], handoff_key=task["handoff_key"],
+            triggers=triggers,
+        )
+
+    if (len(tasks) == 1 and matches(tasks[0])
             and (event.get("event_type") != "human_task"
                  or (event.get("step") == from_step and event.get("task_id") == tasks[0]["id"]))):
         decision = "pending_decision"
@@ -1894,7 +1901,9 @@ def _supervision(event, root, event_target):
             "current_transition": current_transition, "historical_transition": edge(current),
             "current_handoff": current_handoff,
             "current_step": current_handoff["from_step"] if current_handoff else active,
-            "owner": owner, "worker": worker, "pending_tasks": tasks[:4],
+            "owner": owner, "worker": worker,
+            "pending_tasks": [{k: v for k, v in task.items() if k != "handoff_key"}
+                              for task in tasks],
             "last_progress": ({"sequence": progress["sequence"], "at": progress["timestamp"],
                                "source": progress["event_type"]} if progress else None),
             "same_problem_attempts": [r["sequence"] for r in failures[-4:]],

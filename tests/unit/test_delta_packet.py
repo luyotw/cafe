@@ -272,7 +272,7 @@ def test_large_packet_inlines_bounded_pointer() -> None:
     assert '"payload"' not in inline
 
 
-@pytest.mark.parametrize("change", ["none", "caller", "requirements", "evidence", "legacy"])
+@pytest.mark.parametrize("change", ["none", "caller", "new-caller", "requirements", "evidence", "legacy"])
 def test_review_correction_projection_reuses_only_current_boundary_evidence(tmp_path, change):
     from cafe.core.correction_context import review_projection
     from cafe.core.packet_io import sha256_bytes
@@ -284,14 +284,16 @@ def test_review_correction_projection_reuses_only_current_boundary_evidence(tmp_
     git("init", "-b", "main")
     git("config", "user.email", "test@example.com")
     git("config", "user.name", "Test")
-    for path in ("caller.py", "implementation.py", "other.py"):
+    (tmp_path / "docs").mkdir()
+    for path in ("caller.py", "implementation.py", "docs/other.md"):
         (tmp_path / path).write_text("original")
     git("add", ".")
     git("commit", "-m", "Reviewed")
     previous = git("rev-parse", "HEAD")
-    changed = "caller.py" if change == "caller" else "other.py"
-    (tmp_path / changed).write_text("changed")
-    git("commit", "-am", "Correction")
+    changed = {"caller": "caller.py", "new-caller": "new_cli.py"}.get(change, "docs/other.md")
+    (tmp_path / changed).write_text("import implementation" if change == "new-caller" else "changed")
+    git("add", changed)
+    git("commit", "-m", "Correction")
     head = git("rev-parse", "HEAD")
     issue = tmp_path / ".cafe/issues/correction"
     issue.mkdir(parents=True)

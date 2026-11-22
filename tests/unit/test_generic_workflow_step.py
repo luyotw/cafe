@@ -10087,7 +10087,8 @@ def test_pure_plan_resolver_preserves_invalid_selected_metadata_types(tmp_path, 
 
 @pytest.mark.parametrize("role", ["develop", "review"])
 @pytest.mark.parametrize("session", ["exact", "fresh", "incompatible"])
-def test_correction_role_receives_scoped_review_and_current_checklist(tmp_path, monkeypatch, role, session):
+@pytest.mark.parametrize("path_count", [1, 256, 257])
+def test_correction_role_receives_scoped_review_and_current_checklist(tmp_path, monkeypatch, role, session, path_count):
     import cafe
 
     monkeypatch.chdir(tmp_path)
@@ -10100,7 +10101,9 @@ def test_correction_role_receives_scoped_review_and_current_checklist(tmp_path, 
     git.run_git("commit", "-m", "Reviewed baseline")
     previous_head = git.run_git("rev-parse", "HEAD")
     (tmp_path / "caller.py").write_text("correction")
-    git.run_git("add", "caller.py")
+    for index in range(path_count - 1):
+        (tmp_path / (f"{index:03}-" + "x" * 90 + ".py")).write_text("correction")
+    git.run_git("add", ".")
     git.run_git("commit", "-m", "Correction")
     issue = tmp_path / ".cafe/issues/issue-correction"
     review = issue / "review/iteration_001/output.md"
@@ -10178,8 +10181,19 @@ Saved independent observation marker.
         executor.execute_step(role, step, state)
     assert "Repair the affected caller." in observed["prompt"]
     assert previous_head in observed["prompt"]
-    assert "caller.py" in observed["prompt"]
-    assert ("Saved independent observation marker." in observed["prompt"]) == (session != "exact")
+    scope = next(line for line in observed["prompt"].splitlines()
+                 if line.startswith('{"') and '"previous_reviewed_head"' in line)
+    data = json.loads(scope)
+    assert len(scope.encode()) <= 16 * 1024
+    assert data["git"]["previous_reviewed_head"] == previous_head
+    assert (tmp_path / data["source"]["path"]).resolve() == review.resolve()
+    assert any(row["id"] == "BLK-001" for row in data.get("open_todos", [])) or (
+        "Todo List" in data["read_source_sections"]
+    )
+    if path_count == 1:
+        assert "caller.py" in data["git"]["changed_paths"]
+    if path_count == 1:
+        assert ("Saved independent observation marker." in observed["prompt"]) == (session != "exact")
     assert ("correction context (exact)" in observed["prompt"]) == (session == "exact")
     assert "Read the previous review and carry its complete" not in observed["checklist"]
     if role == "develop":

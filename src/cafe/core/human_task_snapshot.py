@@ -20,26 +20,28 @@ _MAX_INPUT_BYTES = 1024 * 1024
 def durable_task_matches_current_handoff(
     task: HumanTask, blackboard: BlackboardState, *, require_exact_handoff: bool = False
 ) -> bool:
-    contract = getattr(blackboard, "handoff_contract", None)
+    triggers = {task.trigger} if not require_exact_handoff and task.status is HumanTaskStatus.PENDING else set()
+    return matches_user_handoff(
+        getattr(blackboard, "current_step", None), getattr(blackboard, "handoff_contract", None),
+        workflow_id=task.workflow_id, step=task.step, handoff_key=task.handoff_key, triggers=triggers,
+    )
+
+
+def matches_user_handoff(current_step, contract, *, workflow_id, step, handoff_key, triggers):
+    """Match a durable task identity, including policy triggers distinct from the baton intent."""
     if (
-        getattr(blackboard, "current_step", None) != "user"
+        current_step != "user"
         or contract is None
         or contract.to_owner is not HandoffOwner.USER
         or contract.to_step != "user"
-        or contract.from_step != task.step
+        or contract.from_step != step
     ):
         return False
-    if task.handoff_key.startswith("user-handoff:"):
-        # Structured keys also identify handoffs whose policy trigger differs from the intent.
-        return task.handoff_key == ":".join(
-            ("user-handoff", task.workflow_id, contract.from_step, contract.intent.value,
-             contract.created_at)
+    if handoff_key.startswith("user-handoff:"):
+        return handoff_key == ":".join(
+            ("user-handoff", workflow_id, contract.from_step, contract.intent.value, contract.created_at)
         )
-    return (
-        not require_exact_handoff
-        and task.status is HumanTaskStatus.PENDING
-        and contract.intent.value == task.trigger
-    )
+    return contract.intent.value in triggers
 
 
 def uses_special_approval(task: HumanTask, step_definition: Mapping[str, Any]) -> bool:

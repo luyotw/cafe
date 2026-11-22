@@ -3836,7 +3836,8 @@ def _correction_report(situation, i):
     "three_handoffs", "contradiction", "repeated", "pending",
     "correction_loop", "changed_result", "long_history", "delayed_correction",
     "registry", "delayed_registry", "different_lineage",
-    "delivery_pending", "delivery_contradiction",
+    "delivery_pending", "delivery_contradiction", "delivery_large_evidence",
+    "delivery_interruption", "delivery_interruption_mismatch",
 ])
 def test_dispatch_explains_current_owner_and_preserves_decisions(tmp_path, monkeypatch, situation):
     from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
@@ -3865,20 +3866,42 @@ def test_dispatch_explains_current_owner_and_preserves_decisions(tmp_path, monke
             expected_result={}, continuations={}, assignee_type="user")
         records.complete(workflow_id=state.workflow_id, task_id=task.id,
             payload={"feedback": "x" * callback.MAX_CALLBACK_INPUT_BYTES}, source="interactive")
+        envelope = json.loads(records.file_path.read_bytes())
+        envelope.pop("pending_observation", None)
+        records.file_path.write_text(json.dumps(envelope))
 
     def deliver_pending():
         state.current_step = "pr"
         store.record_event(state, "transition", {"from": "review", "to": "pr"})
-        task = records.materialize(
-            workflow_id=state.workflow_id, step="deliver", iteration=1,
-            trigger="confirm_output", policy_id="delivery-outcome", prompt="Accept delivery?",
-            expected_result={}, continuations={}, assignee_type="user",
-        )
+        interruption = situation.startswith("delivery_interruption")
+        intent = HandoffIntent.MANUAL_HANDOFF if interruption else HandoffIntent.CONFIRM_OUTPUT
+        if situation == "delivery_large_evidence":
+            previous = records.materialize(
+                workflow_id=state.workflow_id, step="pr", iteration=1,
+                trigger="confirm_output", policy_id="pr-review", prompt="e" * 180_000,
+                expected_result={}, continuations={}, assignee_type="user",
+            )
+            records.complete(workflow_id=state.workflow_id, task_id=previous.id,
+                             payload={"decision": "confirm"}, source="interactive")
         state.current_step = "user"
         state.handoff_contract = store.build_handoff_contract(
             from_step="review" if situation == "delivery_contradiction" else "deliver",
-            to_step="user", to_owner=HandoffOwner.USER, intent=HandoffIntent.CONFIRM_OUTPUT,
+            to_step="user", to_owner=HandoffOwner.USER, intent=intent,
         )
+        handoff_key = None
+        if interruption:
+            timestamp = (state.handoff_contract.created_at
+                         if situation == "delivery_interruption" else "wrong-timestamp")
+            handoff_key = f"user-handoff:{state.workflow_id}:deliver:manual_handoff:{timestamp}"
+        task = records.materialize(
+            workflow_id=state.workflow_id, step="deliver", iteration=1,
+            trigger="agent_execution_interrupted" if interruption else "confirm_output",
+            policy_id="execution-interrupted" if interruption else "delivery-outcome",
+            prompt="e" * 180_000 if situation == "delivery_large_evidence" else "Accept delivery?",
+            expected_result={}, continuations={}, assignee_type="user", handoff_key=handoff_key,
+        )
+        if situation == "delivery_large_evidence":
+            assert records.file_path.stat().st_size > 256 * 1024
         store.record_event(state, "human_task_materialized", {"step": "deliver", "task_id": task.id})
         store.record_event(state, "workflow_paused", {"step": "deliver", "reason": "automatic_task"})
         event = store.prepare_workflow_callback_event(state, {
@@ -3895,15 +3918,17 @@ def test_dispatch_explains_current_owner_and_preserves_decisions(tmp_path, monke
         WorkflowHost(issue).run(deliver_pending, hosting="foreground")
         facts, = presented
         assert facts["historical_transition"] == {"from": "review", "to": "pr"}
-        if situation == "delivery_contradiction":
+        if situation in {"delivery_contradiction", "delivery_interruption_mismatch"}:
             assert facts["assessment"] == "inspect"
             return
-        task, = records.tasks()
+        task = records.tasks()[-1]
         assert facts["current_step"] == "deliver" and facts["owner"] == "user"
         assert facts["assessment"] == "pending_decision"
         assert facts["current_transition"] == {"from": "deliver", "to": "user"}
         assert facts["current_handoff"]["task_id"] == task.id
-        assert facts["current_handoff"]["intent"] == "confirm_output"
+        assert facts["current_handoff"]["intent"] == (
+            "manual_handoff" if situation == "delivery_interruption" else "confirm_output"
+        )
         return
 
     def dispatch():

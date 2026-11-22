@@ -14,6 +14,7 @@ from cafe.core.todo import MAX_TODO_ITEMS, parse_todo_list
 
 MAX_REVIEW_BYTES = 256 * 1024
 MAX_REVIEW_FRAGMENT_BYTES = 12 * 1024
+MAX_CORRECTION_PROJECTION_BYTES = 16 * 1024
 _HEAD = re.compile(r"^[0-9a-f]{40}$")
 _CLOSED_STATES = {"closed", "fixed", "withdrawn", "closed_fresh", "closed_reused"}
 
@@ -64,6 +65,12 @@ def _reusable(issue, row, *, changes_since):
     try:
         changes = changes_since(head)
         if changes is None or set(paths).intersection(changes):
+            return False
+        # A path list records the known boundary at the evidence revision.
+        # Changes outside it may introduce a caller, a binding or a new gate.
+        # Leave reuse open for independent proof whenever code or workflow
+        # inputs changed elsewhere. Ordinary repository docs carry no such edge.
+        if any(not (name.startswith("docs/") and name.endswith(".md")) for name in changes):
             return False
         reference = Path(row["evidence_path"])
         if reference.is_absolute() or ".." in reference.parts:
@@ -194,15 +201,21 @@ def render_review_projection(projection, *, mode):
         # Add complete fragments in source order while keeping the prompt bounded.
         for fallback, source in zip(base["recovery"], projection["recovery"]):
             fallback["text"] = source["text"]
-            if len(compact_json(base).encode()) > 16 * 1024:
+            if len(compact_json(base).encode()) > MAX_CORRECTION_PROJECTION_BYTES:
                 fallback["text"] = None
     encoded = compact_json(base)
-    if len(encoded.encode()) > 16 * 1024:
-        # Large canonical lists still remain available through the bound source
-        # and checklist. Never truncate the open list and claim completeness.
-        return compact_json({
-            "source": base["source"], "git": base["git"],
-            "read_source_sections": ["Todo List", "Finding Registry"],
-            "reuse_unproven": True, "requirements": base["requirements"],
-        })
-    return encoded
+    if len(encoded.encode()) <= MAX_CORRECTION_PROJECTION_BYTES:
+        return encoded
+    # Preserve the resolvable source and exact range. The worktree can produce
+    # the path set from the range, even when listing it inline exceeds budget.
+    fallback = {
+        "source": base["source"],
+        "git": {key: base["git"][key] for key in ("previous_reviewed_head", "head")},
+        "read_source_sections": ["Todo List", "Finding Registry", "Review Baseline"],
+        "reuse_unproven": True,
+        "requirements": base["requirements"],
+    }
+    with_todos = compact_json({**fallback, "open_todos": base["open_todos"]})
+    if len(with_todos.encode()) <= MAX_CORRECTION_PROJECTION_BYTES:
+        return with_todos
+    return compact_json(fallback)

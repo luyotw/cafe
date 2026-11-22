@@ -8,6 +8,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -447,14 +448,17 @@ def execute_action(
                         if before["pending"]:
                             raise OperationError("unfinished_destination_operation")
                         store.start(action, local_before=before)
-                        flag = "--ff-only" if p.strategy == "ff-only" else "--no-ff"
-                        _, code = _dispatch(
-                            commands,
-                            store,
-                            action,
-                            ["git", "-C", str(dest), "merge", flag, "--no-edit", p.source_oid],
-                            allow_failure=True,
-                        )
+                        if p.local_preparation:
+                            argv = [
+                                sys.executable, "-m", "cafe.delivery.local_git", str(dest),
+                                p.strategy, p.target_branch, p.target_oid, p.source_oid,
+                            ]
+                        else:
+                            flag = "--ff-only" if p.strategy == "ff-only" else "--no-ff"
+                            argv = ["git", "-C", str(dest), "merge", flag, "--no-edit", p.source_oid]
+                        _, code = _dispatch(commands, store, action, argv, allow_failure=True)
+                        if p.local_preparation and code:
+                            raise OperationError("prepared_integration_failed", returncode=code)
                         result = _local_result(commands, dest, p)
                         if result is not None and p.local_preparation:
                             _validate_prepared_local_result(commands, dest, p, result["commit"])

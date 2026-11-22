@@ -434,7 +434,7 @@ def test_cleanup_retains_the_checkout_already_owning_the_target(feature, tmp_pat
 @pytest.mark.parametrize("feature", [True], indirect=True, ids=["linked"])
 @pytest.mark.parametrize(
     "scenario", ["ff-only", "merge-commit", "pending", "leave", "dirty", "active",
-                 "stale-receipt", "moved-target", "archive-failure", "qualified-base",
+                 "stale-receipt", "moved-target", "archive-failure", "qualified-base", "wrong-base",
                  "archive-retry", "archive-retry-new-evidence", "ref-retry", "ref-retry-moved"],
 )
 def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
@@ -463,8 +463,8 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
     issue.rmdir()
     ctx = delivery.setup((worktree, root, tmp_path / "actions", None), tmp_path, issue_name=issue.name)
     config |= yaml.safe_load((issue / "issue.yaml").read_text())
-    if scenario == "qualified-base":
-        config["base_branch"] = "refs/heads/develop"
+    if scenario in {"qualified-base", "wrong-base"}:
+        config["base_branch"] = "refs/heads/" + ("develop" if scenario == "qualified-base" else "unrelated")
     if scenario == "merge-commit":
         config[ctx[-1]]["strategy"] = "merge-commit"
     (issue / "issue.yaml").write_text(yaml.safe_dump(config))

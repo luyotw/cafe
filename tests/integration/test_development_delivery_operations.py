@@ -159,3 +159,38 @@ def test_nonzero_exit_after_actual_integration_retains_positive_effect(local_act
     observed = execute_action(root, issue, snapshot, "integration")
     assert observed["state"] == "succeeded" and observed["process"] == completed["process"]
     assert len(mutations) == 1
+
+
+@pytest.mark.parametrize("strategy", ["ff-only", "merge-commit"])
+@pytest.mark.parametrize("changed", ["tip", "branch"])
+def test_prepared_approval_cannot_merge_into_concurrently_changed_checkout(
+    local_action, monkeypatch, strategy, changed,
+):
+    from cafe.delivery.records import ActionStore
+
+    root, dest, issue, original = local_action
+    p = original.proposal.model_copy(update={
+        "strategy": strategy,
+        "local_preparation": "local_preparation",
+        "reviewed_artifact": "preparation.md",
+    })
+    snapshot = approve_selection(p, authority(p, "integrate_only", ""))
+    starts = ActionStore.start
+
+    def move_at_dispatch(store, action, **details):
+        starts(store, action, **details)
+        if changed == "tip":
+            git(dest, "commit", "--allow-empty", "-m", "Concurrent target update")
+        else:
+            git(dest, "checkout", "-b", "other-target")
+
+    monkeypatch.setattr(ActionStore, "start", move_at_dispatch)
+    receipt = execute_action(root, issue, snapshot, "integration", timeout=30)
+    assert receipt["state"] != "succeeded"
+    assert not (dest / "result.txt").exists()
+    assert git(dest, "status", "--porcelain") == ""
+    if changed == "branch":
+        assert git(dest, "branch", "--show-current") == "other-target"
+        assert git(dest, "rev-parse", "develop") == p.target_oid
+    else:
+        assert git(dest, "show", "-s", "--format=%s", "develop") == "Concurrent target update"
