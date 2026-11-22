@@ -429,3 +429,99 @@ def test_cleanup_retains_the_checkout_already_owning_the_target(feature, tmp_pat
             assert git(source_checkout, "branch", "--show-current") == ""
             assert git(source_checkout, "rev-parse", "HEAD") == source
             assert (source_checkout / "change").read_text() == "delivered\n"
+
+
+@pytest.mark.parametrize("feature", [True], indirect=True, ids=["linked"])
+@pytest.mark.parametrize(
+    "scenario", ["ff-only", "merge-commit", "pending", "leave", "dirty", "active",
+                 "stale-receipt", "moved-target", "archive-failure"],
+)
+def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
+    feature, tmp_path, monkeypatch, scenario,
+):
+    from contextlib import nullcontext
+    import json
+
+    from cafe.manager import ActivateConfirmedContract, activate_confirmed_contract
+    from cafe.ui.commands import lifecycle
+    from cafe.utils.file_lock import advancement_execution_lock
+    from tests.integration import test_automatic_delivery as delivery
+    from tests.unit.test_manager_closeout_contract import proposal as manager_proposal
+
+    root, worktree, issue, source, _ = feature
+    base = git(root, "rev-parse", "develop")
+    git(root, "branch", "unrelated", base)
+    git(root, "checkout", "--detach", base)
+    git(root, "commit", "--allow-empty", "-m", "Remote-only history")
+    git(root, "push", "origin", "HEAD:develop")
+    git(root, "checkout", "develop")
+
+    config = yaml.safe_load((issue / "issue.yaml").read_text())
+    (issue / "issue.yaml").unlink()
+    (issue / "evidence").unlink()
+    issue.rmdir()
+    ctx = delivery.setup((worktree, root, tmp_path / "actions", None), tmp_path, issue_name=issue.name)
+    config |= yaml.safe_load((issue / "issue.yaml").read_text())
+    if scenario == "merge-commit":
+        config[ctx[-1]]["strategy"] = "merge-commit"
+    (issue / "issue.yaml").write_text(yaml.safe_dump(config))
+    runtime, result = delivery.run(ctx)
+    assert result.final_status_code == "BATON_NEED_PERMISSION", result
+    proposal = manager_proposal()
+    proposal["checkout"] = {"kind": "worktree", "path": str(worktree)}
+    proposal["closeout_contract"].update(
+        choice="leave" if scenario == "leave" else "cleanup",
+        plan={"cleanup": [{"argv": ["cafe", "close"]}]},
+    )
+    from datetime import datetime, timezone
+
+    activate_confirmed_contract(ActivateConfirmedContract(
+        issue_dir=issue, issue_name=issue.name, workflow_id=runtime.blackboard.workflow_id,
+        proposal=proposal, confirmed_by="user", confirmed_at=datetime.now(timezone.utc),
+    ))
+    delivery.answer(ctx, runtime, "integrate_only")
+    runtime, result = delivery.run(ctx)
+    assert result.final_status_code == "BATON_CONFIRM_OUTPUT", result
+    if scenario != "pending":
+        delivery.answer(ctx, runtime, "confirm")
+    target = git(root, "rev-parse", "develop")
+    if scenario == "stale-receipt":
+        receipt = next((issue / "delivery").glob("*/integration.json"))
+        receipt.write_text(json.dumps({**json.loads(receipt.read_text()), "commit": base}))
+    if scenario == "moved-target":
+        git(root, "commit", "--allow-empty", "-m", "Moved after acceptance")
+    if scenario == "dirty":
+        (worktree / "dirty").write_text("keep")
+    if scenario == "archive-failure":
+        def fail_archive(*args, **kwargs):
+            raise OSError("Archive storage unavailable")
+        monkeypatch.setattr(lifecycle, "_backup_issue_directory", fail_archive)
+
+    archive = lifecycle._get_issue_archive_path(issue.name)
+    remote = tmp_path / "remote.git"
+    before = git(remote, "show-ref")
+    attempts = []
+    run = subprocess.run
+
+    def capture_remote(argv, **kwargs):
+        if argv[0] == "gh" or (argv[0] == "git" and "push" in argv):
+            attempts.append(argv)
+        return run(argv, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", capture_remote)
+    lock = advancement_execution_lock(issue) if scenario == "active" else nullcontext()
+    with lock:
+        result = CliRunner().invoke(app, ["close"])
+    assert git(remote, "show-ref") == before
+    assert attempts == []
+    assert git(root, "rev-parse", "unrelated") == base
+    if scenario in {"ff-only", "merge-commit"}:
+        assert result.exit_code == 0, result.output + repr(result.exception)
+        assert archive.is_dir() and not worktree.exists()
+        assert git(root, "branch", "--list", "feature") == ""
+        assert git(root, "rev-parse", "develop") == target
+        assert (target == source) == (scenario == "ff-only")
+    else:
+        assert result.exit_code != 0
+        assert not archive.exists() and worktree.exists()
+        assert git(root, "rev-parse", "feature") == source

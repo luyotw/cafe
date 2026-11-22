@@ -507,11 +507,24 @@ class GitOperations:
         elif self._cleanup_remote_heads(snapshot["remote"]["push"], snapshot["source"]):
             raise GitError("remote source appeared after cleanup preflight")
 
-    def delete_cleanup_branch(self, snapshot: dict) -> None:
+    def delete_cleanup_branch(self, snapshot: dict, *, verify_local_target: bool = False) -> None:
         """Compare-and-delete the proven tip, including squash/rebase deliveries."""
         if any(tree.get("branch") == snapshot["source"] for tree in self.list_worktrees()):
             raise GitError("cleanup source branch is still checked out")
-        self.run_git("update-ref", "-d", f"refs/heads/{snapshot['source']}", snapshot["source_oid"])
+        source_ref = f"refs/heads/{snapshot['source']}"
+        if verify_local_target:
+            target_ref = f"refs/heads/{snapshot['target']}"
+            try:
+                subprocess.run(
+                    ["git", "update-ref", "--stdin"], cwd=self.repo_path, check=True,
+                    text=True, capture_output=True,
+                    input=(f"verify {target_ref} {snapshot['target_oid']}\n"
+                           f"delete {source_ref} {snapshot['source_oid']}\n"),
+                )
+            except subprocess.CalledProcessError as exc:
+                raise GitError("cleanup source or target ref changed") from exc
+        else:
+            self.run_git("update-ref", "-d", source_ref, snapshot["source_oid"])
         try:
             self.run_git("config", "--remove-section", f"branch.{snapshot['source']}")
         except GitError:

@@ -1285,13 +1285,76 @@ def _remove_worktree_inventory_pointer(
 
 
 def _backup_issue_directory(issue_dir: Path, issue_name: str) -> Path:
+    import tempfile
+
     archive_path = _get_issue_archive_path(issue_name)
     archive_base = archive_path.parent
     archive_base.mkdir(parents=True, exist_ok=True)
-    if archive_path.exists():
-        shutil.rmtree(archive_path)
-    shutil.copytree(issue_dir, archive_path)
+    with tempfile.TemporaryDirectory(prefix=".close-", dir=archive_base) as staging:
+        copy = Path(staging) / "issue"
+        shutil.copytree(issue_dir, copy)
+        if archive_path.exists() or archive_path.is_symlink():
+            raise ValueError("cleanup archive already exists")
+        copy.rename(archive_path)
     return archive_path
+
+
+def _close_accepted_local(issue, source, target, checkout, project_root, git_ops, *, linked):
+    import os
+
+    from cafe.core.workspace_lock import workspace_execution_lock
+    from cafe.delivery.local_cleanup import accepted_local_cleanup, observe_local_cleanup
+    from cafe.manager._store import contract_lock
+    from cafe.manager.closeout import inspect_closeout
+    from cafe.utils.file_lock import advancement_execution_lock
+
+    with (
+        advancement_execution_lock(issue, reuse_existing=False),
+        workspace_execution_lock(checkout, blocking=False),
+        contract_lock(issue, blocking=False),
+    ):
+        proposal, receipt, destination, selection = accepted_local_cleanup(
+            issue, source=source, checkout=checkout, configured_target=target, linked=linked,
+        )
+        retained = GitOperations(str(destination))
+        with workspace_execution_lock(destination, blocking=False):
+            def observe():
+                return observe_local_cleanup(
+                    git_ops, retained, checkout=checkout, destination=destination,
+                    proposal=proposal, receipt=receipt,
+                )
+
+            integrated = observe()
+            archive = _get_issue_archive_path(source)
+            if archive.exists() or archive.is_symlink():
+                saved = inspect_closeout(archive, proposal.workflow_id, archived=True)
+                if saved["status"] != "accepted" or saved["selection"] != selection:
+                    raise ValueError("saved cleanup archive differs from current accepted evidence")
+            else:
+                local_config = checkout / ".cafe" / "config.yaml"
+                if local_config.exists() and not (issue / "config.yaml").exists():
+                    shutil.copy2(local_config, issue / "config.yaml")
+                archive = _backup_issue_directory(issue, source)
+            observe()
+            if not linked:
+                git_ops.run_git("checkout", "--detach", proposal.source_oid)
+            os.chdir(destination)
+            if linked:
+                retained.remove_worktree(str(checkout))
+            retained.delete_cleanup_branch(
+                {"source": source, "source_oid": proposal.source_oid,
+                 "target": target, "target_oid": integrated},
+                verify_local_target=True,
+            )
+            if linked:
+                _remove_worktree_inventory_pointer(
+                    project_root=project_root, issue_name=source, worktree_path=str(checkout),
+                )
+            else:
+                shutil.rmtree(issue)
+                clear_marker_if_matches(checkout / ".cafe", source)
+            clear_marker_if_matches(destination / ".cafe", source)
+    return archive, destination
 
 
 def _merged_cleanup_pr(snapshot: dict) -> dict | None:
@@ -1381,6 +1444,16 @@ def close(
                 declared = project_root / declared
             if declared.resolve() != source_root:
                 raise ValueError("configured worktree differs from the current checkout")
+        from cafe.delivery.local_cleanup import has_local_integration
+
+        if has_local_integration(issue, config):
+            archive, destination = _close_accepted_local(
+                issue, source, target, source_root, project_root, git_ops, linked=bool(worktree),
+            )
+            console.print(f"[green]✓ Successfully closed issue: {source}[/green]")
+            console.print(f"  Issue data archived to: {archive}")
+            console.print(f"  Retained checkout: {destination}")
+            return
         snapshot = git_ops.cleanup_snapshot(source, target)
         target = snapshot["target"]
         try:
