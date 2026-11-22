@@ -11,7 +11,7 @@ from typing import Any, List, Optional
 import typer
 import yaml
 
-from cafe.core.active_issue import clear_marker_if_matches, write_marker
+from cafe.core.active_issue import clear_marker_if_matches, read_marker, write_marker
 from cafe.core.blackboard import (
     BlackboardState,
     BlackboardStore,
@@ -1299,12 +1299,17 @@ def _backup_issue_directory(issue_dir: Path, issue_name: str) -> Path:
     return archive_path
 
 
+_LOCAL_CLOSE_JOURNAL = ".local-close.json"
+_LOCAL_CLOSE_EVIDENCE = ".local-close-evidence"
+
+
 def _require_matching_archive(live, archive):
     """Only reuse a prior archive when it represents the entire live issue."""
     from filecmp import cmp
 
     def contents(root):
-        return {path.relative_to(root): path for path in root.rglob("*")}
+        return {path.relative_to(root): path for path in root.rglob("*")
+                if path != archive / _LOCAL_CLOSE_JOURNAL}
 
     live_entries, saved_entries = contents(live), contents(archive)
     if live_entries.keys() != saved_entries.keys():
@@ -1319,50 +1324,128 @@ def _require_matching_archive(live, archive):
             raise ValueError("live issue evidence differs from the existing archive")
 
 
-def _retry_archived_local_close(archive, issue_name, destination, project_root, git):
-    """Finish only the archived linked-worktree close selected by the caller."""
+def _live_close_alias(live, evidence):
+    return live.is_symlink() and live.readlink() == evidence
+
+
+def _finish_archived_local_close(
+    source, checkout, destination, project_root, retained, proposal, receipt, evidence,
+    *, linked, selection_id,
+):
+    """Finish only outstanding effects for an archived, exact local delivery."""
+    import os
+
+    from cafe.delivery.local_cleanup import observe_local_cleanup, verify_local_receipt
+
+    integrated = verify_local_receipt(retained, proposal, receipt, exact_target=True)
+    if retained.has_in_progress_operation() or retained.run_git("status", "--porcelain", "--untracked-files=all"):
+        raise ValueError("local cleanup recovery requires the exact clean retained checkout")
+    branch_deleted = retained.local_close_branch_deleted(selection_id, proposal.source_oid)
+    if branch_deleted:
+        # The same path can belong to a later linked checkout after this
+        # selection's delete committed. Its inventory and markers belong to it.
+        if linked and not checkout.exists():
+            _remove_worktree_inventory_pointer(
+                project_root=project_root, issue_name=source, worktree_path=str(checkout),
+            )
+            clear_marker_if_matches(destination / ".cafe", source)
+        elif not linked and checkout.is_dir():
+            source_git = GitOperations(str(checkout))
+            if not source_git.get_current_branch() and source_git.run_git("rev-parse", "HEAD") == proposal.source_oid:
+                clear_marker_if_matches(checkout / ".cafe", source)
+                clear_marker_if_matches(destination / ".cafe", source)
+        return
+    if checkout.is_dir():
+        source_git = GitOperations(str(checkout))
+        if linked or source_git.get_current_branch():
+            observe_local_cleanup(
+                source_git, retained, checkout=checkout, destination=destination,
+                proposal=proposal, receipt=receipt,
+            )
+            if not linked:
+                source_git.run_git("checkout", "--detach", proposal.source_oid)
+        elif (
+            Path(source_git.run_git("rev-parse", "--show-toplevel")).resolve() != checkout
+            or Path(source_git.run_git("rev-parse", "--path-format=absolute", "--git-common-dir")).resolve()
+            != Path(proposal.repository).resolve()
+            or source_git.run_git("rev-parse", "HEAD") != proposal.source_oid
+            or source_git.has_in_progress_operation()
+            or source_git.run_git("status", "--porcelain", "--untracked-files=all")
+        ):
+            raise ValueError("detached checkout no longer matches the accepted source")
+    elif not linked or any(Path(tree["path"]).resolve() == checkout for tree in retained.list_worktrees()):
+        raise ValueError("the source checkout removal could not be verified")
+    live = checkout / ".cafe" / "issues" / source
+    alias = linked and _live_close_alias(live, evidence)
+    if not alias and (live.exists() or live.is_symlink()):
+        raise ValueError("new live issue evidence appeared during cleanup")
+    os.chdir(destination)
+    if linked and checkout.is_dir():
+        if not alias:
+            live.symlink_to(evidence, target_is_directory=True)
+        try:
+            retained.remove_worktree(str(checkout))
+        finally:
+            if _live_close_alias(live, evidence):
+                live.unlink()
+    retained.delete_cleanup_branch(
+        {"source": source, "source_oid": proposal.source_oid, "target": proposal.target_branch,
+         "target_oid": integrated},
+        verify_local_target=True, local_close_id=selection_id,
+    )
+    if linked:
+        _remove_worktree_inventory_pointer(
+            project_root=project_root, issue_name=source, worktree_path=str(checkout),
+        )
+    else:
+        clear_marker_if_matches(checkout / ".cafe", source)
+    clear_marker_if_matches(destination / ".cafe", source)
+
+
+def _retry_archived_local_close(archive, issue_name, caller, project_root):
+    from contextlib import nullcontext
+
+    from cafe.core.packet_io import read_regular_bytes
     from cafe.core.workspace_lock import workspace_execution_lock
-    from cafe.delivery.local_cleanup import accepted_local_cleanup, verify_local_receipt
-    from cafe.manager._store import load_contract
+    from cafe.delivery.local_cleanup import accepted_local_cleanup
     from cafe.utils.file_lock import advancement_execution_lock
 
     if not archive.is_dir() or archive.is_symlink():
         raise ValueError("local cleanup archive is unavailable")
-    with advancement_execution_lock(archive, reuse_existing=False), workspace_execution_lock(
-        destination, blocking=False,
-    ):
-        contract, _ = load_contract(archive, issue_name=issue_name)
-        bound = contract["checkout"]
-        if bound.get("kind") != "worktree":
-            raise ValueError("archive must identify a removed linked worktree")
-        source = Path(bound["path"]).resolve()
-        if source.exists() or source == destination or any(
-            Path(tree["path"]).resolve() == source for tree in git.list_worktrees()
-        ):
-            raise ValueError("finish cleanup from the original worktree while it exists")
-        target = git.get_current_branch()
-        proposal, receipt, retained, _ = accepted_local_cleanup(
-            archive, source=issue_name, checkout=source, configured_target=target,
-            linked=True, archived=True,
-        )
-        if (retained != destination or git.has_in_progress_operation()
-                or git.run_git("status", "--porcelain", "--untracked-files=all")):
-            raise ValueError("local cleanup recovery requires the exact clean retained checkout")
-        integrated = verify_local_receipt(git, proposal, receipt, exact_target=True)
-        git.delete_cleanup_branch(
-            {"source": issue_name, "source_oid": proposal.source_oid,
-             "target": proposal.target_branch, "target_oid": integrated},
-            verify_local_target=True,
-        )
-        _remove_worktree_inventory_pointer(
-            project_root=project_root, issue_name=issue_name, worktree_path=str(source),
-        )
-        clear_marker_if_matches(destination / ".cafe", issue_name)
+    with advancement_execution_lock(archive, reuse_existing=False):
+        journal = json.loads(read_regular_bytes(archive / _LOCAL_CLOSE_JOURNAL, 8192))
+        checkout = Path(journal["checkout"]).resolve()
+        destination = Path(journal["destination"]).resolve(strict=True)
+        linked = journal["linked"]
+        if caller not in (checkout, destination) or type(linked) is not bool:
+            raise ValueError("cleanup recovery is bound to the source and retained checkouts")
+        retained = GitOperations(str(destination))
+        source_lock = workspace_execution_lock(checkout, blocking=False) if checkout.is_dir() else nullcontext()
+        with workspace_execution_lock(destination, blocking=False), source_lock:
+            proposal, receipt, bound_destination, selection = accepted_local_cleanup(
+                archive, source=issue_name, checkout=checkout,
+                configured_target=retained.get_current_branch(), linked=linked, archived=True,
+            )
+            evidence = archive / _LOCAL_CLOSE_EVIDENCE
+            live = checkout / ".cafe" / "issues" / issue_name
+            if (journal != _local_close_binding(checkout, bound_destination, linked, selection)
+                    or not evidence.is_dir() or evidence.is_symlink()
+                    or ((live.exists() or live.is_symlink())
+                        and not (linked and _live_close_alias(live, evidence)))):
+                raise ValueError("cleanup recovery has no matching relocated issue evidence")
+            _finish_archived_local_close(
+                issue_name, checkout, destination, project_root, retained, proposal, receipt, evidence,
+                linked=linked, selection_id=selection["snapshot"],
+            )
+
+
+def _local_close_binding(checkout, destination, linked, selection):
+    return {"checkout": str(checkout), "destination": str(destination), "linked": linked,
+            "snapshot": selection["snapshot"]}
 
 
 def _close_accepted_local(issue, source, target, checkout, project_root, git_ops, *, linked):
-    import os
-
+    from cafe.core.packet_io import atomic_write_bytes, canonical_json, read_regular_bytes
     from cafe.core.workspace_lock import workspace_execution_lock
     from cafe.delivery.local_cleanup import accepted_local_cleanup, observe_local_cleanup
     from cafe.manager._store import contract_lock
@@ -1386,37 +1469,45 @@ def _close_accepted_local(issue, source, target, checkout, project_root, git_ops
                     proposal=proposal, receipt=receipt,
                 )
 
-            integrated = observe()
+            observe()
             archive = _get_issue_archive_path(source)
             if archive.exists() or archive.is_symlink():
                 saved = inspect_closeout(archive, proposal.workflow_id, archived=True)
                 if saved["status"] != "accepted" or saved["selection"] != selection:
                     raise ValueError("saved cleanup archive differs from current accepted evidence")
-                _require_matching_archive(issue, archive)
             else:
                 local_config = checkout / ".cafe" / "config.yaml"
                 if local_config.exists() and not (issue / "config.yaml").exists():
                     shutil.copy2(local_config, issue / "config.yaml")
                 archive = _backup_issue_directory(issue, source)
             observe()
-            if not linked:
-                git_ops.run_git("checkout", "--detach", proposal.source_oid)
-            os.chdir(destination)
-            if linked:
-                retained.remove_worktree(str(checkout))
-            retained.delete_cleanup_branch(
-                {"source": source, "source_oid": proposal.source_oid,
-                 "target": target, "target_oid": integrated},
-                verify_local_target=True,
-            )
-            if linked:
-                _remove_worktree_inventory_pointer(
-                    project_root=project_root, issue_name=source, worktree_path=str(checkout),
-                )
+            _require_matching_archive(issue, archive)
+            journal = archive / _LOCAL_CLOSE_JOURNAL
+            binding = canonical_json(_local_close_binding(checkout, destination, linked, selection))
+            if journal.exists() or journal.is_symlink():
+                if read_regular_bytes(journal, 8192) != binding:
+                    raise ValueError("cleanup recovery binding differs from the accepted checkout")
             else:
-                shutil.rmtree(issue)
-                clear_marker_if_matches(checkout / ".cafe", source)
-            clear_marker_if_matches(destination / ".cafe", source)
+                atomic_write_bytes(journal, binding)
+            evidence = archive / _LOCAL_CLOSE_EVIDENCE
+            if evidence.exists() or evidence.is_symlink():
+                raise ValueError("relocated cleanup evidence already exists")
+            if not linked and read_marker(checkout / ".cafe") is None:
+                write_marker(checkout / ".cafe", source)
+            # Move the live directory itself. Open files and directory handles still
+            # refer to archived inodes while Git removes the linked checkout.
+            issue.rename(evidence)
+            try:
+                _finish_archived_local_close(
+                    source, checkout, destination, project_root, retained, proposal, receipt, evidence,
+                    linked=linked, selection_id=selection["snapshot"],
+                )
+            except Exception:
+                if checkout.is_dir() and not issue.exists() and not issue.is_symlink() and (
+                    linked or git_ops.get_current_branch() == source
+                ):
+                    evidence.rename(issue)
+                raise
     return archive, destination
 
 
@@ -1464,11 +1555,23 @@ def close(
             if Path(git_ops.run_git("rev-parse", "--show-toplevel")).resolve() != original:
                 raise ValueError("run close from the retained checkout root")
             archive = _get_issue_archive_path(issue)
-            _retry_archived_local_close(archive, issue, original, _get_project_root(), git_ops)
+            _retry_archived_local_close(archive, issue, original, _get_project_root())
             console.print(f"[green]✓ Successfully closed issue: {issue}[/green]")
             console.print(f"  Issue data archived to: {archive}")
             return
         source = git_ops.get_current_branch()
+        recovery_issue = source or read_marker(original / ".cafe")
+        if not archive_only and recovery_issue:
+            import re
+            live = original / ".cafe" / "issues" / recovery_issue
+            if (re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", recovery_issue)
+                    and (live.is_symlink() or not (live / "issue.yaml").exists())):
+                archive = _get_issue_archive_path(recovery_issue)
+                if (archive / _LOCAL_CLOSE_JOURNAL).is_file():
+                    _retry_archived_local_close(archive, recovery_issue, original, _get_project_root())
+                    console.print(f"[green]✓ Successfully closed issue: {recovery_issue}[/green]")
+                    console.print(f"  Issue data archived to: {archive}")
+                    return
         if not source:
             raise ValueError("cleanup requires a named source branch")
         issue_name = issue if explicit_issue else source

@@ -431,11 +431,16 @@ def test_cleanup_retains_the_checkout_already_owning_the_target(feature, tmp_pat
             assert (source_checkout / "change").read_text() == "delivered\n"
 
 
-@pytest.mark.parametrize("feature", [True], indirect=True, ids=["linked"])
 @pytest.mark.parametrize(
-    "scenario", ["ff-only", "merge-commit", "pending", "leave", "dirty", "active",
-                 "stale-receipt", "moved-target", "archive-failure", "qualified-base", "wrong-base",
-                 "archive-retry", "archive-retry-new-evidence", "ref-retry", "ref-retry-moved"],
+    "feature,scenario",
+    [(True, name) for name in (
+        "ff-only", "merge-commit", "pending", "leave", "dirty", "active", "stale-receipt",
+        "moved-target", "archive-failure", "qualified-base", "wrong-base", "archive-retry",
+        "archive-retry-new-evidence", "ref-retry", "ref-retry-moved", "last-observation",
+        "late-writer", "inventory-retry", "inventory-retry-recreated",
+        "inventory-retry-recreated-worktree",
+    )] + [(False, "detach-retry")],
+    indirect=["feature"],
 )
 def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
     feature, tmp_path, monkeypatch, scenario,
@@ -449,19 +454,22 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
     from tests.integration import test_automatic_delivery as delivery
     from tests.unit.test_manager_closeout_contract import proposal as manager_proposal
 
-    root, worktree, issue, source, _ = feature
+    root, worktree, issue, source, linked = feature
     base = git(root, "rev-parse", "develop")
     git(root, "branch", "unrelated", base)
-    git(root, "checkout", "--detach", base)
-    git(root, "commit", "--allow-empty", "-m", "Remote-only history")
-    git(root, "push", "origin", "HEAD:develop")
-    git(root, "checkout", "develop")
+    destination = root if linked else tmp_path / "destination"
+    if not linked:
+        git(root, "worktree", "add", str(destination), "develop")
+    git(destination, "checkout", "--detach", base)
+    git(destination, "commit", "--allow-empty", "-m", "Remote-only history")
+    git(destination, "push", "origin", "HEAD:develop")
+    git(destination, "checkout", "develop")
 
     config = yaml.safe_load((issue / "issue.yaml").read_text())
     (issue / "issue.yaml").unlink()
     (issue / "evidence").unlink()
     issue.rmdir()
-    ctx = delivery.setup((worktree, root, tmp_path / "actions", None), tmp_path, issue_name=issue.name)
+    ctx = delivery.setup((worktree, destination, tmp_path / "actions", None), tmp_path, issue_name=issue.name)
     config |= yaml.safe_load((issue / "issue.yaml").read_text())
     if scenario in {"qualified-base", "wrong-base"}:
         config["base_branch"] = "refs/heads/" + ("develop" if scenario == "qualified-base" else "unrelated")
@@ -471,7 +479,8 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
     runtime, result = delivery.run(ctx)
     assert result.final_status_code == "BATON_NEED_PERMISSION", result
     proposal = manager_proposal()
-    proposal["checkout"] = {"kind": "worktree", "path": str(worktree)}
+    proposal["checkout"] = ({"kind": "worktree", "path": str(worktree)}
+                            if linked else {"kind": "current_checkout"})
     proposal["closeout_contract"].update(
         choice="leave" if scenario == "leave" else "cleanup",
         plan={"cleanup": [{"argv": ["cafe", "close"]}]},
@@ -500,23 +509,74 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
             raise OSError("Archive storage unavailable")
         monkeypatch.setattr(lifecycle, "_backup_issue_directory", fail_archive)
 
-    if scenario.startswith(("archive-retry", "ref-retry")):
+    if scenario.startswith(("archive-retry", "ref-retry", "detach-retry", "inventory-retry")):
         from cafe.core.git import GitOperations, GitError
+        from cafe.core.active_issue import read_marker, write_marker
+
+        inventory = root / ".cafe" / "issues" / issue.name
+        if scenario.startswith("inventory"):
+            inventory.mkdir(parents=True, exist_ok=True)
+            (inventory / "issue.yaml").write_text(yaml.safe_dump({
+                "issue_name": issue.name, "worktree_path": str(worktree),
+            }))
+            write_marker(destination / ".cafe", issue.name)
 
         def unavailable(*args, **kwargs):
             raise GitError("Git operation temporarily unavailable")
 
         with monkeypatch.context() as failure:
-            method = "remove_worktree" if scenario.startswith("archive") else "delete_cleanup_branch"
-            failure.setattr(GitOperations, method, unavailable)
+            if scenario.startswith("inventory"):
+                failure.setattr(lifecycle, "_remove_worktree_inventory_pointer", unavailable)
+            else:
+                method = "remove_worktree" if scenario.startswith("archive") else "delete_cleanup_branch"
+                failure.setattr(GitOperations, method, unavailable)
             result = CliRunner().invoke(app, ["close"])
         assert result.exit_code != 0
-        assert git(root, "rev-parse", "feature") == source
+        if scenario.startswith("inventory"):
+            assert git(root, "branch", "--list", "feature") == ""
+            assert inventory.is_dir() and read_marker(destination / ".cafe") == issue.name
+            if "recreated" in scenario:
+                git(root, "branch", "feature", source)
+            if scenario.endswith("recreated-worktree"):
+                git(root, "worktree", "add", str(worktree), "feature")
+        else:
+            assert git(root, "rev-parse", "feature") == source
         if scenario == "archive-retry-new-evidence":
             (issue / "recovery-note.md").write_text("preserve the only live copy")
         if scenario == "ref-retry-moved":
             git(root, "update-ref", "refs/heads/feature", base)
     archive = lifecycle._get_issue_archive_path(issue.name)
+    if scenario == "last-observation":
+        from cafe.delivery import local_cleanup
+
+        observe = local_cleanup.observe_local_cleanup
+
+        def write_after_archive(*args, **kwargs):
+            result = observe(*args, **kwargs)
+            if archive.is_dir():
+                (issue / "last-run-note.md").write_text("preserve the only live copy")
+            return result
+
+        monkeypatch.setattr(local_cleanup, "observe_local_cleanup", write_after_archive)
+    if scenario == "late-writer":
+        import os
+        from cafe.core.git import GitOperations
+
+        remove = GitOperations.remove_worktree
+        issue_fd = os.open(issue, os.O_RDONLY)
+
+        def write_through_open_directory(backend, path):
+            try:
+                note_fd = os.open("last-run-note.md", os.O_CREAT | os.O_WRONLY, dir_fd=issue_fd)
+                with os.fdopen(note_fd, "w") as note:
+                    note.write("preserve the only live copy")
+            finally:
+                os.close(issue_fd)
+            issue.mkdir(parents=True, exist_ok=True)
+            (issue / "last-path-note.md").write_text("preserve the path-based write")
+            return remove(backend, path)
+
+        monkeypatch.setattr(GitOperations, "remove_worktree", write_through_open_directory)
     remote = tmp_path / "remote.git"
     before = git(remote, "show-ref")
     attempts = []
@@ -530,7 +590,7 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
     monkeypatch.setattr(subprocess, "run", capture_remote)
     lock = advancement_execution_lock(issue) if scenario == "active" else nullcontext()
     with lock:
-        if scenario.startswith("ref-retry"):
+        if scenario.startswith(("ref-retry", "inventory-retry")):
             monkeypatch.chdir(root)
             result = CliRunner().invoke(app, ["close", "--issue", "feature"])
         else:
@@ -538,12 +598,32 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
     assert git(remote, "show-ref") == before
     assert attempts == []
     assert git(root, "rev-parse", "unrelated") == base
-    if scenario in {"ff-only", "merge-commit", "qualified-base", "archive-retry", "ref-retry"}:
+    if scenario in {"ff-only", "merge-commit", "qualified-base", "archive-retry", "ref-retry",
+                    "detach-retry", "inventory-retry", "inventory-retry-recreated",
+                    "inventory-retry-recreated-worktree", "late-writer"}:
         assert result.exit_code == 0, result.output + repr(result.exception)
-        assert archive.is_dir() and not worktree.exists()
-        assert git(root, "branch", "--list", "feature") == ""
+        assert archive.is_dir()
+        assert worktree.exists() == (not linked or scenario.endswith("recreated-worktree"))
+        if "recreated" in scenario:
+            assert git(root, "rev-parse", "feature") == source
+        else:
+            assert git(root, "branch", "--list", "feature") == ""
         assert git(root, "rev-parse", "develop") == target
         assert (target == source) == (scenario != "merge-commit")
+        if scenario == "late-writer":
+            assert any(p.read_text() == "preserve the only live copy"
+                       for p in archive.rglob("last-run-note.md"))
+            assert any(p.read_text() == "preserve the path-based write"
+                       for p in archive.rglob("last-path-note.md"))
+        if scenario.endswith("recreated-worktree"):
+            assert git(worktree, "branch", "--show-current") == "feature"
+            assert inventory.is_dir() and read_marker(destination / ".cafe") == issue.name
+        elif scenario.startswith("inventory"):
+            assert not inventory.exists() and read_marker(destination / ".cafe") is None
+        if not linked:
+            assert git(worktree, "branch", "--show-current") == ""
+            assert (worktree / "change").read_text() == "delivered\n"
+            assert not issue.exists()
     elif scenario == "archive-retry-new-evidence":
         assert result.exit_code != 0
         assert archive.is_dir() and (issue / "recovery-note.md").is_file()
@@ -552,6 +632,10 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
         assert result.exit_code != 0
         assert archive.is_dir() and not worktree.exists()
         assert git(root, "rev-parse", "feature") == base
+    elif scenario == "last-observation":
+        assert (archive / "last-run-note.md").is_file() or (
+            result.exit_code != 0 and (issue / "last-run-note.md").is_file()
+        )
     else:
         assert result.exit_code != 0
         assert not archive.exists() and worktree.exists()

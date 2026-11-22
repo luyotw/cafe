@@ -1,5 +1,6 @@
 """Git operations for CAFE."""
 
+import re
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -507,24 +508,55 @@ class GitOperations:
         elif self._cleanup_remote_heads(snapshot["remote"]["push"], snapshot["source"]):
             raise GitError("remote source appeared after cleanup preflight")
 
-    def delete_cleanup_branch(self, snapshot: dict, *, verify_local_target: bool = False) -> None:
+    @staticmethod
+    def _local_close_receipt_ref(local_close_id: str) -> str:
+        if not re.fullmatch(r"[0-9a-f]{64}", local_close_id):
+            raise GitError("invalid local close receipt identity")
+        return f"refs/cafe/local-close/{local_close_id}"
+
+    def local_close_branch_deleted(self, local_close_id: str, source_oid: str) -> bool:
+        receipt = self._local_close_receipt_ref(local_close_id)
+        rows = self.run_git("for-each-ref", "--format=%(refname) %(objectname)", receipt)
+        prior = next((line.split()[1] for line in rows.splitlines()
+                      if line.startswith(receipt + " ")), None)
+        if prior and prior != source_oid:
+            raise GitError("local close ref receipt differs from the accepted tip")
+        return prior is not None
+
+    def delete_cleanup_branch(
+        self, snapshot: dict, *, verify_local_target: bool = False, local_close_id: str | None = None,
+    ) -> None:
         """Compare-and-delete the proven tip, including squash/rebase deliveries."""
+        receipt = None
+        if local_close_id is not None:
+            if not verify_local_target:
+                raise GitError("local close receipt requires exact target verification")
+            if self.local_close_branch_deleted(local_close_id, snapshot["source_oid"]):
+                return
+            receipt = self._local_close_receipt_ref(local_close_id)
         if any(tree.get("branch") == snapshot["source"] for tree in self.list_worktrees()):
             raise GitError("cleanup source branch is still checked out")
         source_ref = f"refs/heads/{snapshot['source']}"
         if verify_local_target:
             target_ref = f"refs/heads/{snapshot['target']}"
+            updates = (f"verify {target_ref} {snapshot['target_oid']}\n"
+                       f"delete {source_ref} {snapshot['source_oid']}\n")
+            if receipt:
+                # A later branch with the same name or even the same tip must
+                # survive retries of this exact completed deletion.
+                updates += f"create {receipt} {snapshot['source_oid']}\n"
             try:
                 subprocess.run(
                     ["git", "update-ref", "--stdin"], cwd=self.repo_path, check=True,
                     text=True, capture_output=True,
-                    input=(f"verify {target_ref} {snapshot['target_oid']}\n"
-                           f"delete {source_ref} {snapshot['source_oid']}\n"),
+                    input=updates,
                 )
             except subprocess.CalledProcessError as exc:
                 raise GitError("cleanup source or target ref changed") from exc
         else:
             self.run_git("update-ref", "-d", source_ref, snapshot["source_oid"])
+        if receipt:
+            return  # A branch recreated after publication may own its configuration.
         try:
             self.run_git("config", "--remove-section", f"branch.{snapshot['source']}")
         except GitError:
