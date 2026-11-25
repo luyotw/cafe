@@ -864,8 +864,8 @@ def test_task_command_allows_supervisor_to_handoff_to_any_playbook_phase(
 
 
 @pytest.mark.parametrize("target", [None, "develop", "deliver"])
-def test_supervisor_redirect_does_not_retry_a_missing_agent_session(tmp_path, monkeypatch, target):
-    """A pre-invocation interruption can leave its step without creating a session."""
+def test_supervisor_redirect_scopes_recovery_for_a_missing_agent_session(tmp_path, monkeypatch, target):
+    """Only a retry of the interrupted step requires a new session."""
     from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
     from cafe.workflow_execution.automatic import automatic_executor_registry
 
@@ -904,17 +904,21 @@ def test_supervisor_redirect_does_not_retry_a_missing_agent_session(tmp_path, mo
     if target:
         argv.extend(["--handoff-to", target])
     result = runner.invoke(app, argv)
+    assert result.exit_code == 0, result.stdout
+    saved = records.get_result(task.id)
     if target == "deliver":
-        assert result.exit_code == 0, result.stdout
-        saved = records.get_result(task.id)
         assert saved.payload["continuation"] == "deliver"
         assert saved.payload["declared_continuation"] == "develop"
         assert "session_continuation" not in saved.payload
         assert "restart_recovery" not in saved.payload
     else:
-        assert result.exit_code == 1
-        assert json.loads(result.stdout)["error"]["code"] == "invalid_response"
-        assert records.get_task(task.id).status is HumanTaskStatus.PENDING
+        assert saved.payload["continuation"] == "develop"
+        recovery = saved.payload["session_continuation"]
+        assert recovery["policy"] == "new"
+        assert recovery["reason"] == "retry_without_session"
+        assert recovery["workflow_id"] == task.workflow_id
+        assert recovery["human_task_id"] == task.id
+        assert (recovery["step"], recovery["iteration"]) == ("develop", 1)
     assert (directory / "iteration.json").read_bytes() == context
 
 

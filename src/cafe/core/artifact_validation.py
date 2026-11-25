@@ -6,9 +6,11 @@ against earlier artifacts, and workflow authority remain the caller's concern.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from cafe.core.downstream_contract import visible_markdown
 from cafe.core.todo import (
     PlanTodoDocument,
     PlanTodoDocumentKind,
@@ -20,6 +22,14 @@ from cafe.core.todo import (
 )
 
 MAX_ARTIFACT_CORRECTIONS = 2
+_REVIEW_REGISTRY_HEADER = (
+    "id", "kind", "root-cause identity", "first-seen iteration/head", "impact",
+    "confidence", "current status", "linked id", "evidence head",
+)
+_REVIEW_BLOCKER_ID = re.compile(r"BLK-\d{3}")
+_FINDING_REGISTRY_HEADING = "## Finding Registry"
+_MARKDOWN_SECTION = re.compile(r"^ {0,3}#{1,6}(?:[ \t]|$)")
+_TABLE_DIVIDER = re.compile(r":?-+:?")
 
 
 class ArtifactFormatError(ValueError):
@@ -60,6 +70,86 @@ class ArtifactSyntax:
     continuity: dict[str, str] = field(default_factory=dict)
 
 
+def _review_registry_cells(line: str) -> tuple[str, ...]:
+    cells = re.split(r"(?<!\\)\|", line.strip("|"))
+    return tuple(cell.strip().strip("`") for cell in cells)
+
+
+def review_finding_lineages(
+    content: str, items: tuple[TodoItem, ...],
+) -> dict[str, tuple[str, str]]:
+    """Validate the optional registry and return stable identities for its open findings."""
+    if _FINDING_REGISTRY_HEADING not in content:
+        return {}
+    lines = visible_markdown(content).splitlines()
+    start = next(
+        (i for i, line in enumerate(lines)
+         if line.strip() == _FINDING_REGISTRY_HEADING and _MARKDOWN_SECTION.match(line)),
+        None,
+    )
+    if start is None:
+        return {}
+    section = []
+    for line in lines[start + 1:]:
+        if _MARKDOWN_SECTION.match(line):
+            break
+        if line.strip():
+            section.append(line.strip())
+    # The existing table schema opts in. Legacy and custom reports can use prose
+    # or other tables in a section with the same name.
+    if not section:
+        return {}
+    header = tuple(cell.lower() for cell in _review_registry_cells(section[0]))
+    if header != _REVIEW_REGISTRY_HEADER:
+        return {}
+    divider = _review_registry_cells(section[1]) if len(section) > 1 else ()
+    if len(divider) != len(header) or not all(_TABLE_DIVIDER.fullmatch(cell) for cell in divider):
+        raise TodoContractError("Finding Registry has an invalid table separator")
+
+    blockers: dict[str, tuple[str, str]] = {}
+    lineages = {}
+    for line in section[2:]:
+        cells = _review_registry_cells(line)
+        if len(cells) == 1:
+            break
+        blocker = cells[0]
+        if not _REVIEW_BLOCKER_ID.fullmatch(blocker):
+            continue
+        if len(cells) != len(_REVIEW_REGISTRY_HEADER) or cells[1] != "BLK":
+            raise TodoContractError(f"Finding Registry blocker {blocker} has an invalid row")
+        status, linked = cells[6:8]
+        if blocker in blockers or status not in {"open", "closed"}:
+            raise TodoContractError(
+                f"Finding Registry blocker {blocker} has a duplicate ID or invalid status"
+            )
+        blockers[blocker] = (status, linked)
+        if status == "open" and cells[2] and cells[3]:
+            lineages[blocker] = (cells[2], cells[3])
+
+    for blocker, (status, linked) in blockers.items():
+        if not _REVIEW_BLOCKER_ID.fullmatch(linked):
+            continue
+        if linked not in blockers:
+            raise TodoContractError(f"Finding Registry blocker {blocker} links to missing {linked}")
+        linked_status, _ = blockers[linked]
+        if {status, linked_status} == {"open", "closed"}:
+            closed, opened = (blocker, linked) if status == "closed" else (linked, blocker)
+            raise TodoContractError(
+                f"Finding Registry marks {closed} closed but links it to open {opened}. "
+                "Keep the original blocker ID open and put the remaining case and evidence "
+                "in its Todo."
+            )
+
+    open_ids = {blocker for blocker, (status, _) in blockers.items() if status == "open"}
+    todo_ids = {item.item_id for item in items if item.source == "review" and not item.checked}
+    if open_ids != todo_ids:
+        difference = ", ".join(sorted(open_ids ^ todo_ids))
+        raise TodoContractError(
+            f"Finding Registry and unchecked Review Todos disagree: {difference}"
+        )
+    return lineages
+
+
 def validate_artifact_syntax(
     content: str, *, producer: str, artifact: str, path: str,
 ) -> ArtifactSyntax:
@@ -78,6 +168,7 @@ def validate_artifact_syntax(
             plan is None or plan.kind is not PlanTodoDocumentKind.PROVISIONAL_ALIGNMENT
         ):
             continuity = parse_todo_identity_continuity(content)
+            review_finding_lineages(content, items)
     except TodoContractError as exc:
         raise ArtifactFormatError(producer, artifact, path, str(exc)) from exc
     return ArtifactSyntax(plan, items, continuity)

@@ -144,3 +144,5 @@ Write the phase evidence and development/review summary to {output_file}.
 
 ## Handoff
 Write {next_step_path} only after completion or a genuine existing human boundary.
+
+For a one-time staged commit permission, save `staged_commit_request.json` beside the current output with a single-line `message` and boolean `skip_hooks`. Set `skip_hooks` to true only when explicitly requesting an exception for this commit. Submit the existing permission handoff and leave the staged state intact. At continuation use the runtime-supplied commit command.

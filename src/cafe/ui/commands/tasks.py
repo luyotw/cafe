@@ -166,7 +166,8 @@ def _resume_issue_workflow(
         dry_run=False,
         user_input=None,
         add_dir=[],
-        **({"context": context, "mute_agent_output": True} if context is not None else {}),
+        context=context,
+        **({"mute_agent_output": True} if context is not None else {}),
     )
 
 
@@ -406,6 +407,19 @@ def task_continuation(
         _emit_json(_envelope("continuation", data=request.response(status)))
     else:
         typer.echo(status)
+
+
+@task_app.command("commit-staged")
+def commit_staged(task_id: str, issue_dir: Path = typer.Option(..., "--issue-dir")) -> None:
+    """Perform the one approved commit inside the continuing agent environment."""
+    from cafe.core.staged_commit import commit
+    from cafe.core.git import GitError
+
+    try:
+        typer.echo(commit(issue_dir, task_id))
+    except (OSError, ValueError, GitError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
 
 
 @task_app.command("complete")

@@ -871,11 +871,172 @@ def test_preparation_cannot_clear_prior_agent_invocation_marker(tmp_path):
     assert json.loads(path.read_text())["agent_invoked"] is True
 
 
+@pytest.mark.parametrize("decision", ["retry", "retry_fresh_session"])
+@pytest.mark.parametrize("failure", ["configuration", "checkpoint", "input_save", "preview"])
+def test_preparation_failure_retries_preallocated_iteration(
+    tmp_path, monkeypatch, decision, failure,
+):
+    from typer.testing import CliRunner
+    from cafe.ui.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    manager = FakeAgentManager("confirmed", on_execute=_complete_current_checklist)
+    executor = _minimal_spec_executor(tmp_path, agent_manager=manager)
+    issue_dir = executor.issue_dir
+    iteration = issue_dir / "spec/iteration_001"
+    iteration.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text("playbook_id: standard\n")
+    (iteration / "user_input.md").write_text("Saved requirements from the previous phase.")
+    executor.playbook["playbook"]["id"] = "standard"
+    executor.playbook["entry_point"] = "spec"
+    phase_file = tmp_path / ".cafe/phases.yaml"
+    valid_configuration = "spec:\n  name: Roger\n  clis:\n  - cli: codex\n    model: gpt-5-test\n"
+    phase_file.write_text(
+        "spec:\n  clis: invalid\n" if failure == "configuration" else valid_configuration,
+    )
+    monkeypatch.setattr(executor, "_resolve_phase_config_paths", lambda: (phase_file, None))
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=executor.playbook, executor=executor.execute_step,
+    )
+
+    def fail_preparation(*_args, **_kwargs):
+        raise OSError("preparation interrupted")
+
+    with monkeypatch.context() as failing:
+        if failure == "checkpoint":
+            failing.setattr(runtime, "_check_execution_resume", fail_preparation)
+        elif failure == "input_save":
+            failing.setattr(executor, "_save_user_input", fail_preparation)
+        elif failure == "preview":
+            failing.setattr(manager, "preview_cli_environment", fail_preparation)
+        interrupted = runtime.run(single_step=True)
+    assert interrupted.final_status_code == "INTERRUPTED:agent_error"
+    assert manager.execute_call_count == 0
+    saved = json.loads((iteration / "iteration.json").read_text())
+    assert saved.get("agent_invoked") is (None if failure == "checkpoint" else False)
+    assert "cli" not in saved and "session_id" not in saved
+
+    phase_file.write_text(valid_configuration)
+    task, = HumanTaskRecordStore(issue_dir).tasks()
+    complete = CliRunner().invoke(
+        app, ["task", "complete", task.id, "--result", json.dumps({"decision": decision}),
+              "--no-resume", "--json"],
+    )
+    assert complete.exit_code == 0, complete.stdout
+    resumed = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=executor.playbook, executor=executor.execute_step,
+    )
+    resumed.run(single_step=True)
+    assert manager.execute_call_count == 1
+    assert executor._session_continuation.policy is SessionContinuationPolicy.NEW
+    assert list((issue_dir / "spec").glob("iteration_*")) == [iteration]
+
+
+def test_checkpoint_failure_preserves_previous_completed_iteration(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.playbook["entry_point"] = "spec"
+    issue_dir = executor.issue_dir
+    original = issue_dir / "spec/iteration_001/iteration.json"
+    original.parent.mkdir(parents=True)
+    completed = json.dumps({
+        "end_time": "2026-01-01T00:00:00+00:00", "workflow_completion_trusted": True,
+        "agent_invoked": True, "cli": "codex", "session_id": "completed-session",
+    })
+    original.write_text(completed)
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=executor.playbook, executor=executor.execute_step,
+    )
+
+    def reject_checkpoint(*_args):
+        raise ValueError("execution_checkpoint_blocked: workspace changed")
+
+    monkeypatch.setattr(runtime, "_check_execution_resume", reject_checkpoint)
+    result = runtime.run(single_step=True)
+    assert result.final_status_code == "INTERRUPTED:agent_error"
+    assert original.read_text() == completed
+    task, = HumanTaskRecordStore(issue_dir).tasks()
+    assert task.iteration == 2
+    second = issue_dir / "spec/iteration_002/iteration.json"
+    assert json.loads(second.read_text())["agent_interruption"]["iteration"] == 2
+
+
+@pytest.mark.parametrize("decision", ["retry", "retry_fresh_session"])
+def test_recovery_prefers_observed_session_only_for_normal_retry(tmp_path, monkeypatch, decision):
+    from typer.testing import CliRunner
+    from cafe.core.session import SessionManager
+    from cafe.ui.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    manager = FakeAgentManager("confirmed")
+    manager.session_manager = SessionManager()
+    executor = _minimal_spec_executor(tmp_path, agent_manager=manager)
+    issue_dir = executor.issue_dir
+    iteration = issue_dir / "spec/iteration_001"
+    iteration.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text("playbook_id: standard\n")
+    (iteration / "iteration.json").write_text(json.dumps({
+        "cli": "codex", "model": "gpt-5-test", "timestamp": "2026-01-01T00:00:00+00:00",
+        "session_continuation": {"policy": "new"}, "agent_invoked": True,
+    }))
+    state = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="standard")
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=executor.playbook, executor=executor.execute_step,
+    )
+    assert runtime.blackboard.workflow_id == state.workflow_id
+    runtime._pause_for_agent_execution_interruption(
+        current_step="spec", reason="agent_error", runtime="legacy",
+    )
+    manager.session_manager.save_session(
+        "Roger", AgentCLI.CODEX, "observed-session", executor.issue_name, "spec",
+    )
+    task, = HumanTaskRecordStore(issue_dir).tasks()
+    complete = CliRunner().invoke(
+        app, ["task", "complete", task.id, "--result", json.dumps({"decision": decision}),
+              "--no-resume", "--json"],
+    )
+    assert complete.exit_code == 0, complete.stdout
+    executor.phase_name = "spec"
+    executor.phase_dir = iteration.parent
+    executor.iteration = 1
+    continuation = executor._select_session_continuation(
+        agent_name="Roger", step_def=executor.playbook["steps"]["spec"], workflow_id=state.workflow_id,
+    )
+    if decision == "retry":
+        assert continuation == SessionContinuation.resume_exact(AgentCLI.CODEX, "observed-session")
+        manager.session_manager.delete_session("Roger", AgentCLI.CODEX, executor.issue_name, "spec")
+        continuation = executor._select_session_continuation(
+            agent_name="Roger", step_def=executor.playbook["steps"]["spec"], workflow_id=state.workflow_id,
+        )
+    assert continuation == SessionContinuation.new()
+    context_file = iteration / "iteration.json"
+    saved = json.loads(context_file.read_text())
+    saved["session_recovery"] = executor._session_recovery
+    context_file.write_text(json.dumps(saved))
+    executor._persist_agent_invocation_marker(
+        iteration_dir=iteration, agent_invoked=True, dispatch_started=True,
+    )
+    started_at = json.loads(context_file.read_text())["session_invocation_started_at"]
+    executor._persist_agent_invocation_marker(iteration_dir=iteration, agent_invoked=True)
+    assert json.loads(context_file.read_text())["session_invocation_started_at"] == started_at
+    with pytest.raises(RuntimeError, match="attempted session identity"):
+        executor._select_session_continuation(
+            agent_name="Roger", step_def=executor.playbook["steps"]["spec"], workflow_id=state.workflow_id,
+        )
+    manager.session_manager.save_session(
+        "Roger", AgentCLI.CODEX, "replacement-session", executor.issue_name, "spec",
+    )
+    assert executor._select_session_continuation(
+        agent_name="Roger", step_def=executor.playbook["steps"]["spec"], workflow_id=state.workflow_id,
+    ) == SessionContinuation.resume_exact(AgentCLI.CODEX, "replacement-session")
+
+
 @pytest.mark.parametrize("tampered", [False, True])
 @pytest.mark.parametrize("legacy_workspace", [
     False, True, "native_skill", "native_skill_bad_marker", "native_skill_unknown_error",
     "native_skill_recovery_error", "correction_preparation", "correction_bad_marker",
-    "packet_preparation", "packet_already_materialized",
+    "correction_route_ambiguous", "correction_route_bad_marker",
+    "packet_preparation", "packet_already_materialized", "phase_configuration",
 ])
 def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
     tmp_path,
@@ -888,8 +1049,9 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
     from cafe.ui.cli import app
 
     native_skill = isinstance(legacy_workspace, str) and legacy_workspace.startswith("native_skill")
-    correction_preparation = legacy_workspace in {"correction_preparation", "correction_bad_marker"}
+    correction_preparation = isinstance(legacy_workspace, str) and legacy_workspace.startswith("correction_")
     packet_preparation = legacy_workspace in {"packet_preparation", "packet_already_materialized"}
+    phase_configuration = legacy_workspace == "phase_configuration"
     monkeypatch.chdir(tmp_path)
     executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
     executor.phase_name = "spec"
@@ -901,7 +1063,7 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
     path.write_text(
         json.dumps(
             {"workflow_completion_trusted": False}
-            if packet_preparation else {"effective_inputs": {}, "workflow_completion_trusted": False}
+            if packet_preparation or phase_configuration else {"effective_inputs": {}, "workflow_completion_trusted": False}
             if legacy_workspace else {"agent_invoked": False}
         )
     )
@@ -957,7 +1119,7 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
         ),
     )
     if legacy_workspace:
-        if native_skill or correction_preparation or packet_preparation:
+        if native_skill or correction_preparation or packet_preparation or phase_configuration:
             marker = {
                 "id": state.handoff_contract.created_at,
                 "reason": "agent_error",
@@ -976,7 +1138,13 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
                 "reason": "agent_error",
                 "detail": (
                     "Invalid persisted context packet decision" if packet_preparation else
+                    "Correction Todo feedback route is ambiguous" if legacy_workspace in {
+                        "correction_route_ambiguous", "correction_route_bad_marker",
+                    } else
                     "Correction Todo provenance is missing" if correction_preparation else
+                    "invalid phase config in '/repo/.cafe/phases.yaml': step='spec': "
+                    "field='spec.clis[0].reasoning_effort': reasoning_effort: unsupported tuple"
+                    if phase_configuration else
                     "Skill not found: Unmanaged or changed native skill conflict: "
                     "/repo/.codex/skills/shared. Back up and relocate the entry, "
                     "then rerun prepare or launch; legacy names or matching contents "
@@ -993,7 +1161,7 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
                 ),
             },
         )
-        if native_skill or correction_preparation or packet_preparation:
+        if native_skill or correction_preparation or packet_preparation or phase_configuration:
             boards.record_event(
                 state, "agent_interruption_prepared",
                 {"step": "spec", "marker": marker},
@@ -1001,7 +1169,7 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
         boards.record_event(
             state, "agent_execution_task_materialized", {"step": "spec", "task_id": task.id}
         )
-        if legacy_workspace in {"native_skill_bad_marker", "correction_bad_marker"}:
+        if legacy_workspace in {"native_skill_bad_marker", "correction_bad_marker", "correction_route_bad_marker"}:
             metadata = json.loads(path.read_text())
             metadata["agent_interruption"]["workflow_id"] = "another-workflow"
             path.write_text(json.dumps(metadata))
@@ -1018,7 +1186,7 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
         ],
     )
     if legacy_workspace in {
-        "native_skill_bad_marker", "native_skill_unknown_error", "correction_bad_marker", "packet_already_materialized",
+        "native_skill_bad_marker", "native_skill_unknown_error", "correction_bad_marker", "correction_route_bad_marker", "packet_already_materialized",
     }:
         assert completed.exit_code != 0
         assert records.get_result(task.id) is None
@@ -3403,9 +3571,10 @@ def test_generic_workflow_step_pr_prompt_uses_baton_wording(tmp_path: Path, monk
 
     executor.execute_step("pr", playbook["steps"]["pr"], state)
 
-    assert any("Before finishing this step" in prompt for prompt in agent_manager.prompts)
+    assert any("Before reporting completion" in prompt for prompt in agent_manager.prompts)
     assert any(
-        "Do NOT finish this step until ALL checklist items are marked as [x]." in prompt
+        "Before a successful handoff, mark all applicable primary and "
+        "overlay checklist gates as [x]" in prompt
         for prompt in agent_manager.prompts
     )
     assert not any("Before returning a status code" in prompt for prompt in agent_manager.prompts)
@@ -6191,8 +6360,8 @@ def test_correction_writes_and_inlines_delta_packet(
     assert (iteration_dir / "delta_input.md").read_text(encoding="utf-8") == "Apply correction"
     assert metadata["path"].endswith("spec/iteration_002/delta_packet.json")
     assert metadata["bytes"] == packet_path.stat().st_size
-    assert "Correction delta packet" in manager.prompts[0]
-    assert "Read previous_output" in manager.prompts[0]
+    assert "Iteration context manifest" in manager.prompts[0]
+    assert "Read previous_output and re-verify" not in manager.prompts[0]
 
 
 def test_checklist_retry_receives_exact_session_and_phase_name(
@@ -6470,6 +6639,80 @@ Prepare packet inputs.
         ]
         == persisted
     )
+
+
+@pytest.mark.parametrize("mode", ["packet", "full", "full_fallback"])
+def test_checklist_uses_effective_inputs_without_changing_todo_authority(
+    tmp_path: Path, monkeypatch, mode: str
+) -> None:
+    """Custom workflows use the prepared input in prose and the source for Todo gates."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "input-consistency"
+    source = tmp_path / "dossier.md"
+    source.write_text(
+        "# Dossier\n\n## Todo List\n"
+        "- [ ] `ITEM-1` — Source: `dossier` — Work: Resolve the current item "
+        "— Closure: Item resolved — Evidence: Targeted verification\n",
+        encoding="utf-8",
+    )
+    skill_dir = tmp_path / ".cafe" / "skills" / "cafe-synthesis"
+    (skill_dir / "references").mkdir(parents=True)
+    (skill_dir / "references" / "steps.md").write_text(
+        "[ ] Consult {dossier_file} as needed\n", encoding="utf-8"
+    )
+    policy = "" if mode == "full" else "      load_policy: [{mode: packet, contract_kind: spec}]\n"
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: cafe-synthesis\ndescription: Consume a dossier\nworkflow:\n"
+        "  prompt_inputs:\n    - artifacts: [dossier]\n      placeholder: dossier_file\n"
+        + policy
+        + "  checklist:\n    variants:\n      - when: {}\n        sections:\n"
+        "          - reference: steps.md\n"
+        "          - todo_projection: {artifact: dossier, source: dossier}\n"
+        "---\n\nSynthesize the current item.\n",
+        encoding="utf-8",
+    )
+    if mode == "full_fallback":
+
+        def fail_packet_write(*args, **kwargs):
+            raise OSError("Packet storage unavailable")
+
+        monkeypatch.setattr("cafe.core.context_packet.persist_context_packet", fail_packet_write)
+    step = {
+        "skill": "cafe-synthesis", "role": "developer", "input_artifacts": ["dossier"],
+        "output_artifact": "report", "allowed_tools": ["Read"],
+        "valid_intents": ["need_clarification", "confirmed"],
+        "on": {"await_agent": "_done", "need_clarification": "synthesis"},
+    }
+    playbook = {"playbook": {"id": "custom"}, "steps": {"synthesis": step}}
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("synthesis")
+    store.set_artifact(state, "dossier", str(source))
+
+    def request_clarification(*, streaming_output_file, **_kwargs):
+        Path(streaming_output_file).with_name("questions.xml").write_text(
+            '<questions><question id="q1"><title>Which item should proceed?</title>'
+            '<options><option>Current item</option><option>Revise scope</option></options>'
+            '</question></questions>', encoding="utf-8",
+        )
+
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir, issue_name="input-consistency", playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("need_clarification", on_execute=request_clarification),
+        git_ops=FakeGitOperations(), role_agent_map={"developer": "David"},
+    )
+    result = executor.execute_step("synthesis", step, state)
+    assert result.status_code == "need_clarification"
+    output = issue_dir / "synthesis" / "iteration_001" / "output.md"
+    binding = json.loads(output.with_name("iteration.json").read_text())["effective_inputs"][
+        "dossier_file"
+    ]
+    assert binding["mode"] == mode
+    effective_path = executor._display_path(Path(binding["path"]))
+    assert f"Consult {effective_path} as needed" in output.with_name("checklist.md").read_text()
+    binding, = executor._effective_checklist.projections
+    assert Path(binding["path"]).resolve() == source.resolve()
+    assert binding["rows"][0].startswith("[ ] `ITEM-1` — Resolve the current item")
 
 
 def test_primary_and_backup_reject_persisted_full_active_packet_binding(
@@ -8899,6 +9142,121 @@ def test_causal_todo_local_review_human_task_precedes_direct_pr_fallback(
     assert [item.work for item in resolved.items] == ["fix the user's selected PR concern"]
 
 
+@pytest.mark.parametrize("same_step_retry", [False, True])
+@pytest.mark.parametrize("defect", [
+    None, "revoked_route", "missing_supervisor", "wrong_task", "changed_content", "other_iteration",
+    "missing_result", "other_artifact", "changed_result_source", "old_task_id", "old_result_id", "declared_target",
+    "superseded_task", "missing_latest_pair",
+])
+def test_supervisor_correction_input_uses_the_saved_inbound_playbook_route(
+    tmp_path, same_step_retry, defect,
+):
+    issue = tmp_path / "issue"
+    ledger = WorkflowFeedbackLedger(issue)
+    ledger.record(
+        source_identity="editor_review:editor:accept-review:4", source_kind="editor_review",
+        target_step="builder", content="Repair the selected integration.",
+    )
+    state = BlackboardStore(issue).load_or_create("builder")
+    records = HumanTaskRecordStore(issue)
+    for iteration in (3, 4):
+        content = "Old correction." if iteration == 3 else "Repair the selected integration."
+        task = records.materialize(
+            workflow_id=state.workflow_id, step="editor", iteration=iteration, trigger="confirm_output",
+            policy_id="accept-review", prompt="Review the draft", assignee_type="user",
+            expected_result={"decisions": [{"id": "fix_now", "correction": True}]},
+            continuations={"fix_now": "editor", "confirm": "_done"},
+        )
+        result = records.complete(
+            workflow_id=state.workflow_id, task_id=task.id, source="command",
+            payload={"task": task.policy_id, "decision": "fix_now", "feedback": content,
+                     "continuation": "builder", "declared_continuation": "editor", "supervisor_handoff_to": "builder"},
+        )
+        if iteration == 3:
+            old_task, old_result = task, result
+            state.events.append(EventEntry(
+                timestamp=result.completed_at, step="editor", event_type="human_task_completed", message="",
+                data={"task_id": "accept-review", "trigger": "confirm_output", "to_step": "builder"},
+            ))
+            ledger.record(source_identity="editor_review:editor:accept-review:3", source_kind="editor_review",
+                          target_step="builder", content=content)
+            ledger.consume("editor_review:editor:accept-review:3")
+    state.events.append(EventEntry(
+        timestamp=result.completed_at, step="editor", event_type="human_task_completed",
+        message="", data={"task_id": "wrong" if defect == "wrong_task" else "accept-review",
+                          "trigger": "confirm_output", "source": "command",
+                          "to_step": "builder", "supervisor_handoff": defect != "missing_supervisor"},
+    ))
+    state.handoff_contract = HandoffContract(
+        version=1, to_owner=HandoffOwner.AGENT, to_step="builder", intent=HandoffIntent.AWAIT_AGENT,
+        from_step="builder" if same_step_retry else "editor", source="human_task.command",
+    )
+    playbook = {"steps": {
+        "editor": {
+            "allowed_goto": [] if defect == "revoked_route" else ["builder"],
+            "human_tasks": [{"task_id": "accept-review", "trigger": "confirm_output", "outcomes": {"fix_now": "editor", "confirm": "_done"},
+                             "feedback_delivery": {"artifact": "signals", "source_kind": "editor_review",
+                                                   "todo_source": "review_work", "todo_id_prefix": "EDIT"}}],
+        },
+        "builder": {},
+    }}
+    artifacts = {"signals": ArtifactEntry(
+        name="signals", kind=ArtifactKind.DOCUMENT, version=1, updated_by="human_task",
+        path=str(ledger.path),
+    )}
+    from copy import deepcopy
+    other_trigger = deepcopy(playbook["steps"]["editor"]["human_tasks"][0])
+    other_trigger["trigger"] = "need_clarification"
+    playbook["steps"]["editor"]["human_tasks"].append(other_trigger)
+    if defect == "changed_content":
+        raw = json.loads(ledger.path.read_text())
+        raw["entries"][0]["content"] = "Unrelated replacement."
+        ledger.path.write_text(json.dumps(raw))
+    elif defect == "other_iteration":
+        ledger.consume("editor_review:editor:accept-review:4")
+        ledger.record(source_identity="editor_review:editor:accept-review:5", source_kind="editor_review",
+                      target_step="builder", content="Unrelated later work.")
+    elif defect == "missing_result":
+        records.file_path.unlink()
+    elif defect == "other_artifact":
+        alternate = tmp_path / "unverified.json"
+        alternate.write_bytes(ledger.path.read_bytes())
+        artifacts["signals"].path = str(alternate)
+    elif defect == "changed_result_source":
+        raw = json.loads(records.file_path.read_text())
+        raw["results"][-1]["source"] = "other"
+        records.file_path.write_text(json.dumps(raw))
+    elif defect == "old_task_id":
+        state.events[-1].data["human_task_id"] = old_task.id
+    elif defect == "old_result_id":
+        state.events[-1].data["result_id"] = old_result.id
+    elif defect == "declared_target":
+        state.events[-1].data["declared_to_step"] = "builder"
+    elif defect in {"superseded_task", "missing_latest_pair"}:
+        raw = json.loads(records.file_path.read_text())
+        if defect == "superseded_task":
+            raw["tasks"][-1]["superseded_by_task_id"] = "replacement-task"
+        else:
+            raw["tasks"].pop()
+            raw["results"].pop()
+        records.file_path.write_text(json.dumps(raw))
+    if defect == "wrong_task" and same_step_retry:
+        resolved = GenericWorkflowStepExecutor._add_causal_todo_artifact(
+            artifacts, state, playbook=playbook, issue_dir=issue,
+        )
+        assert "causal_todo" not in resolved
+        return
+    if defect and defect != "other_iteration":
+        with pytest.raises(ValueError, match="Correction Todo"):
+            GenericWorkflowStepExecutor._add_causal_todo_artifact(artifacts, state, playbook=playbook, issue_dir=issue)
+        return
+    resolved = GenericWorkflowStepExecutor._add_causal_todo_artifact(
+        artifacts, state, playbook=playbook, issue_dir=issue,
+    )["causal_todo"]
+    assert [item.work for item in resolved.items] == ["Repair the selected integration."]
+    assert resolved.items[0].item_id.startswith("EDIT-")
+
+
 def test_outbound_causal_todo_is_validated_from_declarative_topology(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "outbound-todo"
     skill_dir = tmp_path / ".cafe" / "skills" / "repair-kit"
@@ -9844,3 +10202,118 @@ def test_pure_plan_resolver_preserves_invalid_selected_metadata_types(tmp_path, 
     assert getattr(selected, field) == value
     assert type(getattr(selected, field)) is type(value)
     assert record_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("role", ["develop", "review"])
+@pytest.mark.parametrize("session", ["exact", "fresh", "incompatible"])
+@pytest.mark.parametrize("path_count", [1, 256, 257])
+def test_correction_role_receives_scoped_review_and_current_checklist(tmp_path, monkeypatch, role, session, path_count):
+    import cafe
+
+    monkeypatch.chdir(tmp_path)
+    git = GitOperations(str(tmp_path))
+    git.run_git("init", "-b", "main")
+    git.run_git("config", "user.email", "test@example.com")
+    git.run_git("config", "user.name", "Test")
+    (tmp_path / ".gitignore").write_text(".cafe/\n")
+    git.run_git("add", ".")
+    git.run_git("commit", "-m", "Reviewed baseline")
+    previous_head = git.run_git("rev-parse", "HEAD")
+    (tmp_path / "caller.py").write_text("correction")
+    for index in range(path_count - 1):
+        (tmp_path / (f"{index:03}-" + "x" * 90 + ".py")).write_text("correction")
+    git.run_git("add", ".")
+    git.run_git("commit", "-m", "Correction")
+    issue = tmp_path / ".cafe/issues/issue-correction"
+    review = issue / "review/iteration_001/output.md"
+    review.parent.mkdir(parents=True)
+    review.write_text(f"""## Review Baseline
+
+- Reviewed HEAD: `{previous_head}`
+
+### Carried Evidence Summary
+
+Saved independent observation marker.
+
+## Finding Registry
+
+| BLK-001 | BLK | Affected caller | 001 | Important | 95 | open | — | {previous_head} |
+
+## Todo List
+
+- [ ] `BLK-001` — Source: `review` — Work: Repair the affected caller. — Closure: Public regression passes. — Evidence: Rejected previous call.
+""")
+    previous = issue / role / "iteration_001"
+    previous.mkdir(parents=True, exist_ok=True)
+    (previous / "iteration.json").write_text(json.dumps({
+        "cli": "codex", "session_id": "previous-session",
+        "model": "old-model" if session == "incompatible" else "gpt-5-test",
+        "end_time": "2026-07-30T00:00:00+08:00", "response": "completed previous turn",
+    }))
+    (previous / "output.md").touch(exist_ok=True)
+    playbook = {
+        "playbook": {"id": "default"}, "roles": {
+            "developer": {"default_agent": "David"}, "reviewer": {"default_agent": "Richard"},
+        },
+        "steps": {
+            "develop": {
+                "skill": "cafe-develop", "role": "developer", "output_artifact": "code",
+                "input_artifacts": ["review_feedback"], "on": {"await_agent": "review"},
+            },
+            "review": {
+                "skill": "cafe-review", "role": "reviewer", "output_artifact": "review_feedback",
+                "input_artifacts": ["code"], "allowed_goto": ["develop"],
+                "on": {"await_agent": "_done", "manual_handoff": "develop"},
+            },
+        },
+    }
+    step = playbook["steps"][role]
+    if session == "fresh":
+        step["correction_session"] = "fresh"
+    store = BlackboardStore(issue)
+    state = store.load_or_create(role)
+    store.put_artifact(state, ArtifactEntry(
+        name="review_feedback", kind=ArtifactKind.DOCUMENT, version=1, updated_by="review",
+        path=str(review), content_sha256=hashlib.sha256(review.read_bytes()).hexdigest(),
+    ))
+    if role == "develop":
+        store.record_event(state, "transition", {"from": "review", "to": role})
+    loader = SkillLoader(project_root=tmp_path, global_root=tmp_path / "global",
+                         builtin_root=Path(cafe.__file__).parent / "data")
+    phase = GenericPhase(loader, skill_bridge=NativeSkillBridge(
+        loader, project_root=tmp_path, home_dir=tmp_path / "home",
+    ))
+    observed = {}
+
+    def capture(**kw):
+        checklist = Path(kw["streaming_output_file"]).parent / "checklist.md"
+        observed.update(prompt=kw["prompt"], checklist=checklist.read_text())
+        raise AgentExecutionError("Stop after capturing the provider inputs")
+
+    manager = FakeAgentManager("await_agent", on_execute=capture)
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue, issue_name="issue-correction", playbook=playbook,
+        generic_phase=phase, agent_manager=manager, git_ops=git,
+        role_agent_map={"developer": "David", "reviewer": "Richard"},
+    )
+    with pytest.raises(AgentExecutionError):
+        executor.execute_step(role, step, state)
+    assert "Repair the affected caller." in observed["prompt"]
+    assert previous_head in observed["prompt"]
+    scope = next(line for line in observed["prompt"].splitlines()
+                 if line.startswith('{"') and '"previous_reviewed_head"' in line)
+    data = json.loads(scope)
+    assert len(scope.encode()) <= 16 * 1024
+    assert data["git"]["previous_reviewed_head"] == previous_head
+    assert (tmp_path / data["source"]["path"]).resolve() == review.resolve()
+    assert any(row["id"] == "BLK-001" for row in data.get("open_todos", [])) or (
+        "Todo List" in data["read_source_sections"]
+    )
+    if path_count == 1:
+        assert "caller.py" in data["git"]["changed_paths"]
+    if path_count == 1:
+        assert ("Saved independent observation marker." in observed["prompt"]) == (session != "exact")
+    assert ("correction context (exact)" in observed["prompt"]) == (session == "exact")
+    assert "Read the previous review and carry its complete" not in observed["checklist"]
+    if role == "develop":
+        assert "BLK-001" in observed["checklist"]

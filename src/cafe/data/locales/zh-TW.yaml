@@ -59,3 +59,14 @@ manager.progress.cost.partial: '資料不完整'
 manager.progress.cost.native_partial: '子代理涵蓋範圍尚未確認'
 manager.progress.cost.no_model: '$0.0000（未呼叫模型）'
 manager.progress.cost.stale: '費率已過期'
+
+workspace.commit_permission: "本次申請在 {root} 執行一次 {command}。父提交 {parent}，暫存 tree {tree}，路徑 {files}，提交訊息「{message}」。若同意，請在此待辦回覆「approve-staged-commit {tree}」。"
+workspace.commit_resume: "請在目前的代理執行環境執行 {command}，記錄傳回的提交識別碼後繼續。"
+reviewed_result.title: "本機審查"
+reviewed_result.workflow: "工作流程 `{workflow}`"
+reviewed_result.revision: "受審提交 `{head}`，比較基底 `{base}`"
+reviewed_result.review: "獨立審查交接 `{event}`"
+reviewed_result.diff: "完整受審 Git 差異位於 `{path}`（SHA-256 `{sha256}`）。"
+reviewed_result.files: "變更檔案"
+reviewed_result.implementation: "實作驗證"
+reviewed_result.limits: "獨立審查結論與驗證限制"

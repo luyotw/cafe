@@ -70,17 +70,11 @@ def completion_authority(records, task, result):
     return matches[0] if len(matches) == 1 and isinstance(matches[0], dict) else None
 
 
-def accepted_delivery_result(issue_dir, workflow_id, *, archived=False, binding=None):
-    """Verify the exact accepted snapshot and receipts, including after archival."""
-    issue_dir = Path(issue_dir)
-    from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
+def accepted_delivery_task(records, workflow_id, *, binding=None):
+    """Identify the current durable final result decision."""
+    from cafe.core.human_task_records import HumanTaskStatus
     from cafe.delivery.closeout import TERMINAL_DECISIONS
-    from cafe.delivery.contracts import ActionSnapshot, DeliveryBinding, digest
-    from cafe.delivery.records import ActionStore
-    from cafe.delivery.selection import approved_snapshot
-    from cafe.delivery.verification import validate_observation
 
-    records = HumanTaskRecordStore(issue_dir)
     tasks = [
         t
         for t in records.tasks()
@@ -101,6 +95,24 @@ def accepted_delivery_result(issue_dir, workflow_id, *, archived=False, binding=
     decision = result.payload.get("decision")
     if decision not in TERMINAL_DECISIONS:
         return None
+    return task, result
+
+
+def accepted_delivery_result(issue_dir, workflow_id, *, archived=False, binding=None):
+    """Verify the exact accepted snapshot and receipts, including after archival."""
+    issue_dir = Path(issue_dir)
+    from cafe.core.human_task_records import HumanTaskRecordStore
+    from cafe.delivery.contracts import ActionSnapshot, DeliveryBinding, digest
+    from cafe.delivery.records import ActionStore
+    from cafe.delivery.selection import approved_snapshot
+    from cafe.delivery.verification import validate_observation
+
+    records = HumanTaskRecordStore(issue_dir)
+    accepted = accepted_delivery_task(records, workflow_id, binding=binding)
+    if accepted is None:
+        return None
+    task, result = accepted
+    decision = result.payload["decision"]
     if "Local delivery SHA256:" in task.prompt:
         # Artifact acceptance has no integration snapshot or effect receipts.
         # Reuse its owning validator rather than infer success from task status.

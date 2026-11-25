@@ -246,7 +246,7 @@ def test_fresh_session_completion_preserves_prior_session_and_user_input(
     assert BlackboardStore(issue_dir).load_or_create("spec").current_step == "spec"
 
 
-def test_existing_session_retry_without_identity_keeps_task_pending(tmp_path, monkeypatch):
+def test_retry_when_new_session_was_not_observed(tmp_path, monkeypatch):
     issue_dir, iteration_dir, task = _legacy_interrupted_task_repo(tmp_path, monkeypatch)
     path = iteration_dir / "iteration.json"
     data = json.loads(path.read_text())
@@ -254,11 +254,13 @@ def test_existing_session_retry_without_identity_keeps_task_pending(tmp_path, mo
     path.write_text(json.dumps(data))
     result = runner.invoke(app, ["task", "complete", task.id, "--result",
                                  '{"decision":"retry"}', "--no-resume", "--json"])
-    assert result.exit_code != 0
+    assert result.exit_code == 0, result.stdout
     store = HumanTaskRecordStore(issue_dir)
-    assert store.get_task(task.id).status is HumanTaskStatus.PENDING
-    assert store.get_result(task.id) is None
-    assert "identity was not saved or is invalid" in result.stdout
+    assert store.get_task(task.id).status is HumanTaskStatus.COMPLETED
+    recovery = store.get_result(task.id).payload["session_continuation"]
+    assert recovery["reason"] == "retry_without_session"
+    assert recovery["previous"]["session_id"] is None
+    assert recovery["previous"]["session_unobserved"] is True
 
 
 def test_existing_retry_with_invalid_cli_keeps_task_pending(tmp_path, monkeypatch):

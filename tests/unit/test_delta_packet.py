@@ -270,3 +270,113 @@ def test_large_packet_inlines_bounded_pointer() -> None:
     assert len(inline.encode("utf-8")) < 16 * 1024
     assert "delta_packet.json" in inline
     assert '"payload"' not in inline
+
+
+@pytest.mark.parametrize(
+    "change", ["none", "caller", "new-caller", "new-doc-test", "doc-test", "navigation", "prose",
+               "ignored-gitlink",
+               "requirements", "evidence", "legacy"],
+)
+def test_review_correction_projection_reuses_only_current_boundary_evidence(tmp_path, change):
+    from cafe.core.correction_context import review_projection
+    from cafe.core.packet_io import sha256_bytes
+    import subprocess
+    import sys
+
+    def git(*args):
+        return subprocess.check_output(["git", "-C", str(tmp_path), *args], text=True).strip()
+
+    git("init", "-b", "main")
+    git("config", "user.email", "test@example.com")
+    git("config", "user.name", "Test")
+    if change == "ignored-gitlink":
+        git("commit", "--allow-empty", "-m", "Submodule fixture object")
+        link_head = git("rev-parse", "HEAD")
+        git("config", "diff.ignoreSubmodules", "all")
+    (tmp_path / "docs").mkdir()
+    for path in ("caller.py", "implementation.py"):
+        (tmp_path / path).write_text("VALUE = 1\n")
+    (tmp_path / "pytest.ini").write_text("[pytest]\naddopts = --doctest-glob=*.md\n")
+    (tmp_path / "docs/other.md").write_text("# Background\n\nOriginal notes about planning.\n")
+    (tmp_path / "docs/setup.md").write_text("# Installation\n\nSetup instructions.\n")
+    (tmp_path / "navigation.py").write_text(
+        "from pathlib import Path\n"
+        "assert sum(page.read_text().startswith('# Installation\\n') "
+        "for page in Path('docs').glob('*.md')) == 1\n"
+    )
+    (tmp_path / "docs/example.md").write_text(">>> from implementation import VALUE\n>>> VALUE\n1\n")
+    git("add", ".")
+    if change == "ignored-gitlink":
+        git("update-index", "--add", "--cacheinfo", f"160000,{link_head},external")
+    git("commit", "-m", "Reviewed")
+    previous = git("rev-parse", "HEAD")
+    if change == "navigation":
+        subprocess.run([sys.executable, "navigation.py"], cwd=tmp_path, check=True)
+    changed = {"caller": "caller.py", "new-caller": "new_cli.py", "new-doc-test": "docs/new-example.md",
+               "doc-test": "docs/example.md"}.get(change, "docs/other.md")
+    if change in {"doc-test", "new-doc-test"}:
+        (tmp_path / changed).write_text(">>> from implementation import VALUE\n>>> VALUE\n2\n")
+    elif change == "new-caller":
+        (tmp_path / changed).write_text("import implementation\n")
+    elif change == "navigation":
+        (tmp_path / changed).write_text("# Installation\n\nOriginal notes about planning.\n")
+    elif change not in {"none", "ignored-gitlink"}:
+        (tmp_path / changed).write_text("# Background\n\nExpanded notes about planning.\n")
+    if change == "ignored-gitlink":
+        git("update-index", "--cacheinfo", f"160000,{previous},external")
+    else:
+        git("add", changed)
+    git("commit", "--allow-empty", "-m", "Correction")
+    if change == "navigation":
+        gate = subprocess.run([sys.executable, "navigation.py"], cwd=tmp_path, capture_output=True)
+        assert gate.returncode == 1
+    if change in {"doc-test", "new-doc-test"}:
+        gate = subprocess.run([sys.executable, "-m", "doctest", changed],
+                              cwd=tmp_path, capture_output=True, text=True)
+        assert gate.returncode == 1 and "Expected:" in gate.stdout and "Got:" in gate.stdout
+    head = git("rev-parse", "HEAD")
+    if change == "ignored-gitlink":
+        assert git("diff", "--name-only", previous, head) == ""
+    issue = tmp_path / ".cafe/issues/correction"
+    issue.mkdir(parents=True)
+    proof = issue / "checks.txt"
+    proof.write_text("caller and implementation check passed")
+    requirements = {"spec": "a" * 64, "plan": "b" * 64}
+    review = issue / "review.md"
+    report = f"""## Review Baseline
+
+- Reviewed HEAD: `{previous}`
+
+## Finding Registry
+
+| BLK-002 | BLK | Open caller issue | 004 | Important | 98 | open | — | {previous} |
+| BLK-001 | BLK | Verified public boundary | 003 | Important | 98 | closed | — | {previous} |
+
+## Todo List
+
+- [ ] `BLK-002` — Source: `review` — Work: Fix one problem. — Closure: Regression passes. — Evidence: Original failure.
+"""
+    if change != "legacy":
+        rows = [{
+            "id": "BLK-001", "head": previous,
+            "paths": ["caller.py", "implementation.py", "docs/setup.md", "navigation.py", "pytest.ini"],
+            "evidence_path": "checks.txt", "sha256": sha256_bytes(proof.read_bytes()),
+        }]
+        report += "\n## Correction Evidence\n\n```json\n" + json.dumps(rows) + "\n```\n"
+    if change == "evidence":
+        proof.write_text("drift")
+    current_requirements = {**requirements, "spec": "c" * 64} if change == "requirements" else requirements
+    projection = review_projection(
+        issue=issue, source=review, text=report, current_head=head, run_git=git,
+        requirements=current_requirements, previous_requirements=requirements,
+    )
+    assert [item["id"] for item in projection["open_todos"]] == ["BLK-002"]
+    expected_paths = {"none": [], "ignored-gitlink": ["external"]}.get(change, [changed])
+    assert projection["git"]["changed_paths"] == expected_paths
+    assert [item["id"] for item in projection["reusable"]] == (["BLK-001"] if change == "none" else [])
+    assert projection["reopen"] == ([] if change == "none" else ["BLK-001"])
+    if change == "none":
+        retained = projection["reusable"][0]
+        assert retained["head"] == previous
+        assert (issue / retained["evidence_path"]).read_bytes() == proof.read_bytes()
+        assert retained["sha256"] == sha256_bytes(proof.read_bytes())

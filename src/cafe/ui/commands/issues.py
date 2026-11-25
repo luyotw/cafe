@@ -263,6 +263,8 @@ def remove_issue(
     """Remove one or more issues and all their data."""
     import fnmatch
 
+    from cafe.core.dashboard_publication import prepare_workflow_archive
+
     # If no arguments, show issue list and prompt for issue name
     if not issue_names:
         list_issues()
@@ -358,14 +360,18 @@ def remove_issue(
 
             if worktree_path is not None and worktree_path.exists():
                 worktree_issue_dir = worktree_path / ".cafe" / "issues" / issue_name
+                publish_archive = prepare_workflow_archive(worktree_issue_dir)
                 if worktree_issue_dir.exists():
                     archive_path = lifecycle_commands._backup_issue_directory(worktree_issue_dir, issue_name)
                     backup_info = str(archive_path)
                     console.print(f"[green]✓[/green] Backed up issue '{issue_name}' to {archive_path}")
                 shutil.rmtree(worktree_path)
+                publish_archive()
                 console.print(f"[green]✓[/green] Removed worktree '{worktree_path}'")
 
+            publish_archive = prepare_workflow_archive(issue_path)
             shutil.rmtree(issue_path)
+            publish_archive()
             console.print(f"[dim]  Backup: {backup_info}[/dim]")
             console.print(f"[green]✓[/green] Issue '{issue_name}' deleted successfully")
             success_count += 1

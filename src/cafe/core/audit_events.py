@@ -128,11 +128,15 @@ class AuditEventStore:
                 yield record
 
     def latest_record(
-        self, workflow_id: str, event_types: set[str], *, step: str | None = None
+        self, workflow_id: str, event_types: set[str], *, step: str | None = None,
+        bounded: bool = False, before_sequence: int | None = None,
     ) -> dict[str, Any] | None:
         """Find the newest relevant event without hydrating unrelated audit bodies."""
         wanted = {kind.encode("ascii") for kind in event_types}
-        for sequence in range(self.high_water(workflow_id), 0, -1):
+        high = self.high_water(workflow_id)
+        if before_sequence is not None:
+            high = min(high, before_sequence - 1)
+        for sequence in range(high, 0, -1):
             path = self._path(sequence)
             if path.is_symlink():
                 raise ValueError("audit event is symlinked")
@@ -146,7 +150,7 @@ class AuditEventStore:
             if match is None:
                 raise ValueError("audit event has no bounded type prefix")
             if match.group(1) in wanted:
-                record = self.read(workflow_id, sequence)
+                record = self.read(workflow_id, sequence, bounded=bounded)
                 if record is not None and (step is None or record["step"] == step):
                     return record
         return None

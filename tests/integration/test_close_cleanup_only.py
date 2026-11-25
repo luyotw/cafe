@@ -8,12 +8,58 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
-from cafe.ui.cli import app
+from cafe.manager.cli import app
 
 
 def git(root, *args):
     return subprocess.run(["git", "-C", str(root), *args], check=True,
                           capture_output=True, text=True).stdout.strip()
+
+
+@pytest.mark.parametrize("byte_count", [8192, 8193])
+@pytest.mark.parametrize("completed", [False, True], ids=["pending", "completed"])
+def test_local_close_journal_writer_matches_reader_byte_bound(tmp_path, byte_count, completed):
+    from cafe.core.packet_io import canonical_json
+    from cafe.ui.commands import lifecycle
+
+    checkout = tmp_path / "escaped\tcheckout"
+    binding = {
+        "checkout": str(checkout), "destination": "/", "linked": False, "snapshot": "a" * 64,
+    }
+    digest = "b" * 64 if completed else None
+    record = {**binding, "evidence_kind": "volume", "source_evidence": 1}
+    if digest is not None:
+        record["archive_sha256"] = digest
+    padding = byte_count - len(canonical_json(record))
+    binding["destination"] += "é" * (padding // 2) + "x" * (padding % 2)
+    retained = checkout.parent / f".cafe-close-{binding['snapshot']}" / "issue"
+    journal = lifecycle._LocalCloseJournal(binding, "volume", digest, source_evidence=retained)
+    previous = tmp_path / ".local-close.json"
+    if byte_count == 8193:
+        previous.write_text("untouched")
+        with pytest.raises(ValueError):
+            lifecycle._write_local_close_journal(tmp_path, journal)
+        assert previous.read_text() == "untouched"
+    else:
+        lifecycle._write_local_close_journal(tmp_path, journal)
+        assert previous.stat().st_size == byte_count
+        assert lifecycle._read_local_close_journal(tmp_path) == journal
+
+
+def test_local_close_journal_reads_previously_recorded_absolute_source_path(tmp_path):
+    from cafe.core.packet_io import canonical_json
+    from cafe.ui.commands import lifecycle
+
+    checkout = tmp_path / "checkout"
+    binding = {
+        "checkout": str(checkout), "destination": str(tmp_path / "repo"), "linked": True, "snapshot": "a" * 64,
+    }
+    retained = checkout.parent / f".cafe-close-{binding['snapshot']}" / "issue"
+    (tmp_path / ".local-close.json").write_bytes(canonical_json({
+        **binding, "evidence_kind": "volume", "archive_sha256": "b" * 64, "source_evidence": str(retained),
+    }))
+    journal = lifecycle._read_local_close_journal(tmp_path)
+    assert journal.binding == binding and journal.source_evidence == retained and journal.digest == "b" * 64
 
 
 @pytest.fixture(params=[False, True], ids=["checkout", "worktree"])
@@ -429,3 +475,571 @@ def test_cleanup_retains_the_checkout_already_owning_the_target(feature, tmp_pat
             assert git(source_checkout, "branch", "--show-current") == ""
             assert git(source_checkout, "rev-parse", "HEAD") == source
             assert (source_checkout / "change").read_text() == "delivered\n"
+
+
+@pytest.mark.parametrize(
+    "feature,scenario",
+    [(True, name) for name in (
+        "ff-only", "merge-commit", "pending", "leave", "dirty", "active", "stale-receipt",
+        "moved-target", "archive-failure", "qualified-base", "wrong-base", "archive-retry",
+        "archive-retry-new-evidence", "ref-retry", "ref-retry-moved", "last-observation",
+        "late-writer", "inventory-retry", "inventory-retry-recreated",
+        "inventory-retry-recreated-worktree", "cross-volume", "cross-volume-retry",
+        "cross-volume-after-copy", "cross-volume-after-deletion",
+        "cross-volume-final-comparison", "cross-volume-before-settlement", "cross-volume-after-verification",
+        "cross-volume-legacy-retry", "cross-volume-journal-at-limit", "cross-volume-journal-over-limit",
+        "cross-volume-journal-retry-limit",
+        "same-volume-rename-plain", "same-volume-rename-named",
+        "branch-upstream", "late-checkout-switch", "checkout-during-remove",
+    )] + [(False, name) for name in (
+        "detach-retry", "cross-volume", "cross-volume-root", "cross-volume-root-retry",
+        "same-volume-rename-plain",
+    )],
+    indirect=["feature"],
+)
+def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
+    feature, tmp_path, monkeypatch, scenario,
+):
+    from contextlib import nullcontext
+    import json
+
+    from cafe.manager import ActivateConfirmedContract, activate_confirmed_contract
+    from cafe.ui.commands import lifecycle
+    from cafe.utils.file_lock import advancement_execution_lock
+    from tests.integration import test_automatic_delivery as delivery
+    from tests.unit.test_manager_closeout_contract import proposal as manager_proposal
+
+    root, worktree, issue, source, linked = feature
+    if scenario == "ff-only":
+        dashboard = tmp_path / "dashboard"
+        dashboard.mkdir(mode=0o700)
+        pairing = dashboard / "publication-pairing.json"
+        connection = "e9302025-7b5b-4cab-af95-4091c945e362"
+        pairing.write_text(json.dumps({"connectionId": connection}))
+        pairing.chmod(0o600)
+        monkeypatch.setenv("CAFE_DASHBOARD_STATE_DIR", str(dashboard))
+    base = git(root, "rev-parse", "develop")
+    git(root, "branch", "unrelated", base)
+    destination = root if linked else tmp_path / "destination"
+    if not linked:
+        git(root, "worktree", "add", str(destination), "develop")
+    git(destination, "checkout", "--detach", base)
+    git(destination, "commit", "--allow-empty", "-m", "Remote-only history")
+    git(destination, "push", "origin", "HEAD:develop")
+    git(destination, "checkout", "develop")
+
+    config = yaml.safe_load((issue / "issue.yaml").read_text())
+    (issue / "issue.yaml").unlink()
+    (issue / "evidence").unlink()
+    issue.rmdir()
+    ctx = delivery.setup((worktree, destination, tmp_path / "actions", None), tmp_path, issue_name=issue.name)
+    config |= yaml.safe_load((issue / "issue.yaml").read_text())
+    if scenario in {"qualified-base", "wrong-base"}:
+        config["base_branch"] = "refs/heads/" + ("develop" if scenario == "qualified-base" else "unrelated")
+    if scenario == "merge-commit":
+        config[ctx[-1]]["strategy"] = "merge-commit"
+    (issue / "issue.yaml").write_text(yaml.safe_dump(config))
+    runtime, result = delivery.run(ctx)
+    assert result.final_status_code == "BATON_NEED_PERMISSION", result
+    proposal = manager_proposal()
+    proposal["checkout"] = ({"kind": "worktree", "path": str(worktree)}
+                            if linked else {"kind": "current_checkout"})
+    proposal["closeout_contract"].update(
+        choice="leave" if scenario == "leave" else "cleanup",
+        plan={"cleanup": [{"argv": ["cafe", "close"]}]},
+    )
+    from datetime import datetime, timezone
+
+    activate_confirmed_contract(ActivateConfirmedContract(
+        issue_dir=issue, issue_name=issue.name, workflow_id=runtime.blackboard.workflow_id,
+        proposal=proposal, confirmed_by="user", confirmed_at=datetime.now(timezone.utc),
+    ))
+    delivery.answer(ctx, runtime, "integrate_only")
+    runtime, result = delivery.run(ctx)
+    assert result.final_status_code == "BATON_CONFIRM_OUTPUT", result
+    if scenario != "pending":
+        delivery.answer(ctx, runtime, "confirm")
+    target = git(root, "rev-parse", "develop")
+    if scenario == "stale-receipt":
+        receipt = next((issue / "delivery").glob("*/integration.json"))
+        receipt.write_text(json.dumps({**json.loads(receipt.read_text()), "commit": base}))
+    if scenario == "moved-target":
+        git(root, "commit", "--allow-empty", "-m", "Moved after acceptance")
+    if scenario == "dirty":
+        (worktree / "dirty").write_text("keep")
+    if scenario == "archive-failure":
+        def fail_archive(*args, **kwargs):
+            raise OSError("Archive storage unavailable")
+        monkeypatch.setattr(lifecycle, "_backup_issue_directory", fail_archive)
+
+    if scenario.startswith(("archive-retry", "ref-retry", "detach-retry", "inventory-retry")):
+        from cafe.core.git import GitOperations, GitError
+        from cafe.core.active_issue import read_marker, write_marker
+
+        inventory = root / ".cafe" / "issues" / issue.name
+        if scenario.startswith("inventory"):
+            inventory.mkdir(parents=True, exist_ok=True)
+            (inventory / "issue.yaml").write_text(yaml.safe_dump({
+                "issue_name": issue.name, "worktree_path": str(worktree),
+            }))
+            write_marker(destination / ".cafe", issue.name)
+
+        def unavailable(*args, **kwargs):
+            raise GitError("Git operation temporarily unavailable")
+
+        with monkeypatch.context() as failure:
+            if scenario.startswith("inventory"):
+                failure.setattr(lifecycle, "_remove_worktree_inventory_pointer", unavailable)
+            else:
+                method = "remove_worktree" if scenario.startswith("archive") else "delete_cleanup_branch"
+                failure.setattr(GitOperations, method, unavailable)
+            result = CliRunner().invoke(app, ["close"])
+        assert result.exit_code != 0
+        if scenario.startswith("inventory"):
+            assert git(root, "branch", "--list", "feature") == ""
+            assert inventory.is_dir() and read_marker(destination / ".cafe") == issue.name
+            if "recreated" in scenario:
+                git(root, "branch", "feature", source)
+                git(root, "branch", "--set-upstream-to=origin/develop", "feature")
+            if scenario.endswith("recreated-worktree"):
+                git(root, "worktree", "add", str(worktree), "feature")
+        else:
+            assert git(root, "rev-parse", "feature") == source
+        if scenario == "archive-retry-new-evidence":
+            (issue / "recovery-note.md").write_text("preserve the only live copy")
+        if scenario == "ref-retry-moved":
+            git(root, "update-ref", "refs/heads/feature", base)
+    archive = lifecycle._get_issue_archive_path(issue.name)
+    transferred = []
+
+    def assert_snapshot_report(output, staged):
+        assert str(archive / ".local-close-evidence") in output
+        assert str(staged) in output
+        text = " ".join(output.lower().split())
+        assert "last successful" in text and "source" in text and "verification" in text
+        assert "writes after" in text
+
+    if scenario.startswith("same-volume-rename"):
+        rename = Path.rename
+        archived_evidence = archive / ".local-close-evidence"
+
+        def interrupt_after_rename(path, target):
+            moved = rename(path, target)
+            if path == issue and moved == archived_evidence:
+                raise OSError("interrupted after relocating the original issue")
+            return moved
+
+        with monkeypatch.context() as interruption:
+            interruption.setattr(Path, "rename", interrupt_after_rename)
+            interrupted = CliRunner().invoke(app, ["close"])
+        assert interrupted.exit_code != 0
+        assert not issue.exists() and (archived_evidence / "issue.yaml").is_file()
+        assert git(root, "rev-parse", "feature") == source
+        if scenario == "same-volume-rename-named":
+            import shutil
+
+            original_evidence = archived_evidence.rename(archive / "original-evidence")
+            try:
+                shutil.copytree(original_evidence, archived_evidence)
+                monkeypatch.chdir(root)
+                refused = CliRunner().invoke(app, ["close", "--issue", "feature"])
+                assert refused.exit_code != 0
+                assert git(root, "rev-parse", "feature") == source
+            finally:
+                shutil.rmtree(archived_evidence)
+                original_evidence.rename(archived_evidence)
+    if scenario.startswith("cross-volume"):
+        import errno
+
+        rename = Path.rename
+
+        def split_volume(path, target):
+            outside_volume = (not Path(target).is_relative_to(worktree)
+                              if scenario.startswith("cross-volume-root")
+                              else Path(target).is_relative_to(archive))
+            if path == issue and outside_volume:
+                raise OSError(errno.EXDEV, "cross-device rename")
+            relocated = rename(path, target)
+            if path == issue:
+                transferred.append(relocated)
+            return relocated
+
+        monkeypatch.setattr(Path, "rename", split_volume)
+    if scenario in {"cross-volume-journal-at-limit", "cross-volume-journal-over-limit"}:
+        from cafe.core.packet_io import canonical_json
+
+        # Use short actual worktree paths and a scaled budget to exercise the
+        # same pending/final sizing seam regardless of the host path limit.
+        record = {
+            "checkout": str(worktree), "destination": str(destination), "linked": linked, "snapshot": "a" * 64,
+            "evidence_kind": "volume", "archive_sha256": "b" * 64, "source_evidence": 0,
+        }
+        final_size = len(canonical_json(record))
+        limit = final_size - (scenario == "cross-volume-journal-over-limit")
+        monkeypatch.setattr(lifecycle, "_LOCAL_CLOSE_JOURNAL_MAX_BYTES", limit, raising=False)
+    if scenario == "cross-volume-journal-retry-limit":
+        def interrupt_on_source_volume(path, target):
+            relocated = split_volume(path, target)
+            if path == issue:
+                raise OSError("interrupted after staging on the source volume")
+            return relocated
+
+        with monkeypatch.context() as interrupted:
+            interrupted.setattr(Path, "rename", interrupt_on_source_volume)
+            assert CliRunner().invoke(app, ["close"]).exit_code != 0
+        pending = archive / ".local-close.json"
+        assert worktree.is_dir() and not issue.exists() and len(transferred) == 1
+        assert git(root, "rev-parse", "feature") == source
+        monkeypatch.setattr(lifecycle, "_LOCAL_CLOSE_JOURNAL_MAX_BYTES", pending.stat().st_size, raising=False)
+    if scenario == "last-observation":
+        from cafe.delivery import local_cleanup
+
+        observe = local_cleanup.observe_local_cleanup
+
+        def write_after_archive(*args, **kwargs):
+            result = observe(*args, **kwargs)
+            if archive.is_dir():
+                (issue / "last-run-note.md").write_text("preserve the only live copy")
+            return result
+
+        monkeypatch.setattr(local_cleanup, "observe_local_cleanup", write_after_archive)
+    if scenario == "late-checkout-switch":
+        from cafe.delivery import local_cleanup
+
+        observe = local_cleanup.observe_local_cleanup
+
+        def switch_after_observation(*args, **kwargs):
+            result = observe(*args, **kwargs)
+            if not issue.exists():
+                git(worktree, "checkout", "unrelated")
+            return result
+
+        monkeypatch.setattr(local_cleanup, "observe_local_cleanup", switch_after_observation)
+    if scenario == "checkout-during-remove":
+        from cafe.core.git import GitOperations
+
+        native = GitOperations.run_git
+
+        def attempt_at_removal(backend, *args):
+            if args[:2] == ("worktree", "remove"):
+                for mutation in (
+                    ["checkout", "unrelated"],
+                    ["symbolic-ref", "HEAD", "refs/heads/unrelated"],
+                    ["update-ref", "refs/heads/feature", base, source],
+                ):
+                    switched = subprocess.run(
+                        ["git", "-C", str(worktree), *mutation], capture_output=True,
+                    )
+                    assert switched.returncode != 0
+            return native(backend, *args)
+
+        monkeypatch.setattr(GitOperations, "run_git", attempt_at_removal)
+    if scenario in {"late-writer", "cross-volume", "cross-volume-retry"} and linked:
+        import os
+        from cafe.core.git import GitOperations
+
+        remove = GitOperations.remove_worktree
+        issue_fd = os.open(issue, os.O_RDONLY)
+
+        def write_through_open_directory(backend, path):
+            try:
+                note_fd = os.open("last-run-note.md", os.O_CREAT | os.O_WRONLY, dir_fd=issue_fd)
+                with os.fdopen(note_fd, "w") as note:
+                    note.write("preserve the only live copy")
+            finally:
+                os.close(issue_fd)
+            issue.mkdir(parents=True, exist_ok=True)
+            (issue / "last-path-note.md").write_text("preserve the path-based write")
+            return remove(backend, path)
+
+        monkeypatch.setattr(GitOperations, "remove_worktree", write_through_open_directory)
+    remote = tmp_path / "remote.git"
+    before = git(remote, "show-ref")
+    attempts = []
+    run = subprocess.run
+
+    def capture_remote(argv, **kwargs):
+        if argv[0] == "gh" or (argv[0] == "git" and "push" in argv):
+            attempts.append(argv)
+        return run(argv, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", capture_remote)
+    before_delete_retry = {"cross-volume-retry", "cross-volume-root-retry", "cross-volume-legacy-retry"}
+    post_copy_cases = before_delete_retry | {"cross-volume-after-copy", "cross-volume-after-deletion"}
+    final_write_cases = {
+        "cross-volume-final-comparison", "cross-volume-before-settlement", "cross-volume-after-verification",
+    }
+    if scenario in final_write_cases:
+        import os
+        from cafe.core import packet_io
+        from cafe.core.git import GitOperations
+
+        published_file = archive / ".local-close-evidence" / "comparison-evidence.md"
+        (issue / published_file.name).write_text("already copied\n")
+        directory_fd = os.open(issue, os.O_RDONLY)
+        delete = GitOperations.delete_cleanup_branch
+        open_file = Path.open
+        atomic_write = packet_io.atomic_write_bytes
+        deleted = False
+        written = False
+
+        def observe_delete(backend, *args, **kwargs):
+            nonlocal deleted
+            delete(backend, *args, **kwargs)
+            deleted = True
+
+        def write_late_evidence():
+            nonlocal written
+            note_fd = os.open("completion-note.md", os.O_CREAT | os.O_WRONLY, dir_fd=directory_fd)
+            with os.fdopen(note_fd, "w") as note:
+                note.write("written during archive finalization\n")
+            written = True
+
+        def write_during_comparison(path, *args, **kwargs):
+            if deleted and not written and path == published_file and args == ("rb",):
+                write_late_evidence()
+            return open_file(path, *args, **kwargs)
+
+        def write_during_journal_publish(path, content, *, before_replace=None):
+            if not (deleted and not written and path == archive / ".local-close.json"
+                    and b'"archive_sha256"' in content):
+                return atomic_write(path, content, before_replace=before_replace)
+
+            def arrive_then_verify():
+                if scenario == "cross-volume-after-verification":
+                    before_replace()
+                    write_late_evidence()
+                else:
+                    write_late_evidence()
+                    before_replace()
+
+            return atomic_write(path, content, before_replace=arrive_then_verify)
+
+        try:
+            with monkeypatch.context() as arrival:
+                arrival.setattr(GitOperations, "delete_cleanup_branch", observe_delete)
+                if scenario == "cross-volume-final-comparison":
+                    arrival.setattr(Path, "open", write_during_comparison)
+                else:
+                    arrival.setattr(packet_io, "atomic_write_bytes", write_during_journal_publish)
+                result = CliRunner().invoke(app, ["close"])
+        finally:
+            os.close(directory_fd)
+        assert written
+    if scenario in post_copy_cases:
+        import os
+        from cafe.core.git import GitOperations, GitError
+
+        delete = GitOperations.delete_cleanup_branch
+        (issue / "changing-evidence.md").write_text("before\n")
+        with os.fdopen(os.open(issue / "changing-evidence.md", os.O_RDWR), "r+") as evidence_handle:
+            post_copy_fd = os.open(issue, os.O_RDONLY)
+
+            def write_after_publication(backend, *args, **kwargs):
+                assert (archive / ".local-close-evidence" / "changing-evidence.md").read_text() == "before\n"
+                if scenario not in before_delete_retry:
+                    delete(backend, *args, **kwargs)
+                note_fd = os.open("post-copy-note.md", os.O_CREAT | os.O_WRONLY, dir_fd=post_copy_fd)
+                with os.fdopen(note_fd, "w") as note:
+                    note.write("arrived after publication\n")
+                evidence_handle.write("after\n")
+                evidence_handle.truncate()
+                evidence_handle.flush()
+                if scenario != "cross-volume-after-copy":
+                    raise GitError("interrupted at ref deletion")
+
+            try:
+                with monkeypatch.context() as failure:
+                    failure.setattr(GitOperations, "delete_cleanup_branch", write_after_publication)
+                    interrupted = CliRunner().invoke(app, ["close"])
+            finally:
+                os.close(post_copy_fd)
+        if scenario == "cross-volume-after-copy":
+            result = interrupted
+        else:
+            assert interrupted.exit_code != 0
+            assert worktree.exists() == (not linked)
+            if not linked:
+                assert git(worktree, "branch", "--show-current") == ""
+            if scenario in before_delete_retry:
+                assert git(root, "rev-parse", "feature") == source
+            else:
+                assert git(root, "branch", "--list", "feature") == ""
+        if scenario in {"cross-volume-retry", "cross-volume-legacy-retry"}:
+            if scenario == "cross-volume-legacy-retry":
+                # The pre-flag close producer recorded only this checkout binding.
+                journal = archive / ".local-close.json"
+                record = json.loads(journal.read_text())
+                journal.write_text(json.dumps({key: record[key] for key in (
+                    "checkout", "destination", "linked", "snapshot",
+                )}))
+            # Simulate disconnecting the source volume after the first copy.
+            # The old canonical snapshot cannot settle a close with unseen writes.
+            staged, = transferred
+            offline = staged.rename(tmp_path / "temporarily-offline")
+            try:
+                monkeypatch.chdir(root)
+                unavailable = CliRunner().invoke(app, ["close", "--issue", "feature"])
+                assert unavailable.exit_code != 0
+                assert git(root, "rev-parse", "feature") == source
+            finally:
+                offline.rename(staged)
+    lock = advancement_execution_lock(issue) if scenario == "active" else nullcontext()
+    with lock:
+        if scenario.startswith(("ref-retry", "inventory-retry")) or scenario in {
+            "cross-volume-retry", "cross-volume-legacy-retry", "cross-volume-after-deletion",
+            "same-volume-rename-named", "cross-volume-journal-retry-limit",
+        }:
+            monkeypatch.chdir(root)
+            result = CliRunner().invoke(app, ["close", "--issue", "feature"])
+        elif scenario != "cross-volume-after-copy" and scenario not in final_write_cases:
+            result = CliRunner().invoke(app, ["close"])
+    if scenario in {"cross-volume-retry", "cross-volume-legacy-retry"} and result.exit_code == 0:
+        if scenario == "cross-volume-retry":
+            completion = (archive / ".local-close.json").read_bytes()
+            dirty = destination / "uncommitted-note"
+            dirty.write_text("retained checkout must stay untouched\n")
+            try:
+                refused = CliRunner().invoke(app, ["close", "--issue", "feature"])
+                assert refused.exit_code != 0
+                assert dirty.is_file()
+                assert (archive / ".local-close.json").read_bytes() == completion
+            finally:
+                dirty.unlink()
+        offline = staged.rename(tmp_path / "temporarily-offline")
+        try:
+            settled = CliRunner().invoke(app, ["close", "--issue", "feature"])
+            assert settled.exit_code == 0, settled.output
+            assert_snapshot_report(settled.output, staged)
+            published = archive / ".local-close-evidence" / "post-copy-note.md"
+            content = published.read_bytes()
+            published.write_bytes(content + b"changed archive")
+            try:
+                assert CliRunner().invoke(app, ["close", "--issue", "feature"]).exit_code != 0
+            finally:
+                published.write_bytes(content)
+        finally:
+            offline.rename(staged)
+    if scenario == "cross-volume-root-retry" and result.exit_code == 0:
+        staged, = transferred
+        journal = archive / ".local-close.json"
+        verified = journal.read_bytes()
+        offline = staged.rename(tmp_path / "temporarily-offline")
+        try:
+            settled = CliRunner().invoke(app, ["close", "--issue", "feature"])
+            assert settled.exit_code == 0, settled.output
+            assert_snapshot_report(settled.output, staged)
+            earlier_record = json.loads(verified)
+            earlier_record.pop("source_evidence")
+            journal.write_text(json.dumps(earlier_record))
+            legacy = CliRunner().invoke(app, ["close", "--issue", "feature"])
+            assert legacy.exit_code == 0, legacy.output
+            assert str(staged) in legacy.output
+            assert str(worktree.parent / staged.parent.name / "issue") in legacy.output
+        finally:
+            journal.write_bytes(verified)
+            offline.rename(staged)
+    assert git(remote, "show-ref") == before
+    assert attempts == []
+    assert git(root, "rev-parse", "unrelated") == base
+    if scenario in {"ff-only", "merge-commit", "qualified-base", "archive-retry", "ref-retry",
+                    "detach-retry", "inventory-retry", "inventory-retry-recreated",
+                    "inventory-retry-recreated-worktree", "late-writer", "cross-volume",
+                    "cross-volume-retry", "cross-volume-root", "cross-volume-root-retry", "cross-volume-after-copy",
+                    "cross-volume-after-deletion", "cross-volume-final-comparison", "cross-volume-before-settlement",
+                    "cross-volume-after-verification",
+                    "cross-volume-legacy-retry", "cross-volume-journal-at-limit",
+                    "branch-upstream", "checkout-during-remove", "same-volume-rename-plain",
+                    "same-volume-rename-named"}:
+        assert result.exit_code == 0, result.output + repr(result.exception)
+        assert archive.is_dir()
+        assert worktree.exists() == (not linked or scenario.endswith("recreated-worktree"))
+        if "recreated" in scenario:
+            assert git(root, "rev-parse", "feature") == source
+            assert git(root, "for-each-ref", "--format=%(upstream:short)", "refs/heads/feature") == "origin/develop"
+        else:
+            assert git(root, "branch", "--list", "feature") == ""
+        assert git(root, "rev-parse", "develop") == target
+        assert (target == source) == (scenario != "merge-commit")
+        if scenario == "ff-only":
+            publication, = (dashboard / f"workflow-publications-v3-{connection}").glob("*.json")
+            archived = json.loads(publication.read_text())
+            assert archived["archived"] is True
+            assert archived["workflow"]["workflowId"] == runtime.blackboard.workflow_id
+            assert archived["workflow"]["status"] == "completed"
+        if scenario.startswith("cross-volume"):
+            staged, = transferred
+            assert_snapshot_report(result.output, staged)
+            if scenario == "cross-volume-journal-at-limit":
+                assert (archive / ".local-close.json").stat().st_size == limit
+                offline = staged.rename(tmp_path / "temporarily-offline")
+                try:
+                    settled = CliRunner().invoke(app, ["close", "--issue", "feature"])
+                    assert settled.exit_code == 0, settled.output
+                    assert_snapshot_report(settled.output, staged)
+                finally:
+                    offline.rename(staged)
+        if scenario in {"late-writer", "cross-volume", "cross-volume-retry"} and linked:
+            assert any(p.read_text() == "preserve the only live copy"
+                       for p in archive.rglob("last-run-note.md"))
+            assert any(p.read_text() == "preserve the path-based write"
+                       for p in archive.rglob("last-path-note.md"))
+        if scenario in post_copy_cases:
+            published = archive / ".local-close-evidence"
+            assert (published / "post-copy-note.md").read_text() == "arrived after publication\n"
+            assert (published / "changing-evidence.md").read_text() == "after\n"
+        if scenario in final_write_cases:
+            note = archive / ".local-close-evidence" / "completion-note.md"
+            if scenario == "cross-volume-after-verification":
+                assert not note.exists()
+                assert (staged / note.name).read_text() == "written during archive finalization\n"
+                offline = staged.rename(tmp_path / "temporarily-offline")
+                try:
+                    settled = CliRunner().invoke(app, ["close", "--issue", "feature"])
+                    assert settled.exit_code == 0, settled.output
+                    assert_snapshot_report(settled.output, staged)
+                finally:
+                    offline.rename(staged)
+            else:
+                assert note.read_text() == "written during archive finalization\n"
+        if scenario.endswith("recreated-worktree"):
+            assert git(worktree, "branch", "--show-current") == "feature"
+            assert inventory.is_dir() and read_marker(destination / ".cafe") == issue.name
+        elif scenario.startswith("inventory"):
+            assert not inventory.exists() and read_marker(destination / ".cafe") is None
+        if not linked:
+            assert git(worktree, "branch", "--show-current") == ""
+            assert (worktree / "change").read_text() == "delivered\n"
+            assert not issue.exists()
+        if scenario == "branch-upstream":
+            git(root, "branch", "feature", base)
+            assert git(root, "for-each-ref", "--format=%(upstream:short)", "refs/heads/feature") == ""
+    elif scenario in {"cross-volume-journal-over-limit", "cross-volume-journal-retry-limit"}:
+        assert result.exit_code != 0
+        assert worktree.is_dir() and git(root, "rev-parse", "feature") == source
+        assert git(root, "rev-parse", "develop") == target
+        if scenario == "cross-volume-journal-over-limit":
+            assert (issue / "issue.yaml").is_file()
+        else:
+            assert (transferred[0] / "issue.yaml").is_file()
+    elif scenario == "late-checkout-switch":
+        assert result.exit_code != 0
+        assert worktree.is_dir() and git(worktree, "branch", "--show-current") == "unrelated"
+        assert git(root, "rev-parse", "feature") == source
+        assert (issue / "issue.yaml").is_file()
+    elif scenario == "archive-retry-new-evidence":
+        assert result.exit_code != 0
+        assert archive.is_dir() and (issue / "recovery-note.md").is_file()
+        assert git(root, "rev-parse", "feature") == source
+    elif scenario == "ref-retry-moved":
+        assert result.exit_code != 0
+        assert archive.is_dir() and not worktree.exists()
+        assert git(root, "rev-parse", "feature") == base
+    elif scenario == "last-observation":
+        assert (archive / "last-run-note.md").is_file() or (
+            result.exit_code != 0 and (issue / "last-run-note.md").is_file()
+        )
+    else:
+        assert result.exit_code != 0
+        assert not archive.exists() and worktree.exists()
+        assert git(root, "rev-parse", "feature") == source

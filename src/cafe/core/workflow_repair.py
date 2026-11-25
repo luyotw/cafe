@@ -227,7 +227,7 @@ def reconcile_completed_feedback(
     from cafe.core.workflow_feedback import (
         WorkflowFeedbackError,
         WorkflowFeedbackLedger,
-        feedback_todo_mappings,
+        feedback_completion_todo_mappings,
         validate_completed_feedback_projection,
     )
     from cafe.utils.checklist_validator import completion_requires_checklist, validate_checklist
@@ -301,7 +301,10 @@ def reconcile_completed_feedback(
             _read(ledger.path, 1_048_576)
             batch = _json(_read(directory / "workflow_feedback_batch.json", 1_048_576)[0])
             identities = tuple(entry["source_identity"] for entry in batch["entries"])
-            mappings = feedback_todo_mappings(playbook, target_step=step)
+            mappings = feedback_completion_todo_mappings(
+                issue, playbook=playbook, workflow_id=state.workflow_id,
+                target_step=step, source_identities=identities,
+            )
             if load_materialization(
                 directory / "iteration.json"
             ) is None or not validate_completed_feedback_projection(

@@ -120,7 +120,7 @@ def test_review_corrections_close_root_causes_without_restarting_full_audit() ->
         None,
     ]
     assert [section.get("reference") for section in contract["variants"][1]["sections"]] == [
-        "execution_preflight.md",
+        "execution_correction_preflight.md",
         "execution_correction.md",
         "execution_risk_assessment.md",
         "execution_acceptance_closure.md",

@@ -16,6 +16,7 @@ from pydantic import (
     ValidationError,
     TypeAdapter,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -620,6 +621,33 @@ class ExecutionRequirements(BaseModel):
         return self
 
 
+class LocalReviewEndpoint(BaseModel):
+    """Roles and outcomes for a prepared local acceptance boundary."""
+
+    model_config = ConfigDict(extra="forbid")
+    review_step: str
+    implementation_step: str
+    presentation_task: str | None = None
+    result_artifact: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_-]*$")
+    outcomes: dict[str, str]
+    integration_step: str | None = None
+    integration_artifact: str | None = Field(default=None, pattern=r"^[A-Za-z][A-Za-z0-9_-]*$")
+
+    @model_validator(mode="after")
+    def complete_integration_binding(self):
+        if bool(self.integration_step) != bool(self.integration_artifact):
+            raise ValueError("local preparation requires both an integration step and artifact")
+        return self
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        value = handler(self)
+        if self.integration_step is None:
+            value.pop("integration_step", None)
+            value.pop("integration_artifact", None)
+        return value
+
+
 class StepConfig(BaseModel):
     """One playbook step."""
 
@@ -642,6 +670,7 @@ class StepConfig(BaseModel):
     initial_input: Optional[InitialInputDeclaration] = None
     execution: ExecutionRequirements = Field(default_factory=ExecutionRequirements)
     delivery: Optional["DeliveryBinding"] = None
+    local_review: LocalReviewEndpoint | None = None
     template: Optional[str] = None
     allowed_tools: List[str] = Field(default_factory=list)
     capability_requests: List[str] = Field(default_factory=list)

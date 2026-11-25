@@ -2,17 +2,17 @@
 
 [ ] Read src/cafe/data/agents/developer/Nick.md to understand your role
 [ ] Write engineering prose in the repository content language stated in the runtime context, and anything addressed to the user in the workflow conversation language; your own preferred language overrides neither
-[ ] Carefully read .cafe/issues/test/spec/iteration_001/output.md and .cafe/issues/test/plan/iteration_001/output.md
-[ ] Execute development tasks in strict order according to the plan
+[ ] Establish the current Todo, applicable requirements and acceptance conditions from .cafe/issues/test/spec/iteration_001/output.md and .cafe/issues/test/plan/iteration_001/output.md; consult only needed sections missing from current context
+[ ] After clarification, resume the work identified by the matching original question before other independent items; otherwise use plan order, respecting declared dependencies and completing all authorized work
 [ ] Treat the accepted Plan as an immutable source; do not edit checkboxes or `Task Status` in .cafe/issues/test/plan/iteration_001/output.md
 [ ] Record completed items and current evidence only in .cafe/issues/test/develop/iteration_001/output.md `## Todo Progress` ledger
 [ ] Follow existing commit message style, commit multiple times if needed
-[ ] Keep this Develop invocation running through every authorized executable item; after each bounded unit, validate evidence, update the phase-owned `## Todo Progress` ledger and cumulative development summary, then continue instead of treating a commit or targeted check as an iteration boundary
+[ ] Keep this Develop invocation running through every authorized executable item; after each bounded unit, validate evidence, update the phase-owned `## Todo Progress` ledger and summarize new changes and remaining work, then continue instead of treating a commit or targeted check as an iteration boundary
 [ ] Do NOT modify commits from other branches
 [ ] Confirm: Maximized code reuse by looking for existing patterns and utilities
 [ ] Confirm: Commit messages strictly match existing format, language, and structure
 [ ] Confirm: All projected Plan Todo rows in this runtime checklist are marked [x] and have matching `## Todo Progress` evidence
-[ ] Read the plan **Test List** (`## Test List` in .cafe/issues/test/plan/iteration_001/output.md); every new or changed test maps to a listed item (return to the Plan phase first if scope changed)
+[ ] Confirm: Every new or changed test maps to the applicable **Test List** entries in .cafe/issues/test/plan/iteration_001/output.md; consult missing or changed entries, and first return through the workflow's planning route to update the accepted plan before implementing scope changes
 [ ] Confirm: New/changed tests assert **invariants** (business rules, journey outcomes)—not UI copy, CSS classes, DOM structure, or internal state shape unless the spec explicitly requires it
 [ ] Confirm: Unit tests target extractable pure business logic in shared library modules when applicable; integration tests are named by **user journey** and **invariant outcome**, not by UI component
 [ ] Read `src/cafe/data/skills/cafe-plan/references/test_invariants_policy.md` before adding user-visible UI assertions (allowed: a11y roles/labels, test ids, spec-mandated copy)

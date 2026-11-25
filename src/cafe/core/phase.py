@@ -833,6 +833,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         denied_tools: Optional[List[str]] = None,
         phase_specific_data: Optional[Dict[str, Any]] = None,
         backup_context_callback: Optional[Callable[[AgentExecutionError], str]] = None,
+        session_replacement_context: Optional[Callable[[], str]] = None,
     ) -> tuple[str, Optional[PhaseStatusCode]]:
         """Common agent execution flow that all phases can use.
 
@@ -1086,6 +1087,8 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                 and "allow_session_replacement" in execute_signature.parameters
             ):
                 execute_kwargs["allow_session_replacement"] = True
+                if session_replacement_context and "session_replacement_context" in execute_signature.parameters:
+                    execute_kwargs["session_replacement_context"] = session_replacement_context
 
             raw_constraints = (phase_specific_data or {}).get("constraint_context")
             if raw_constraints and "constraint_context" in execute_signature.parameters:
@@ -1099,6 +1102,11 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             consume_recovery = getattr(self, "_consume_restart_recovery", None)
             if callable(consume_recovery):
                 consume_recovery(context_file)
+            persist_invocation = getattr(self, "_persist_agent_invocation_marker", None)
+            if callable(persist_invocation):
+                persist_invocation(
+                    iteration_dir=iteration_dir, agent_invoked=True, dispatch_started=True,
+                )
             response, token_usage, permission_denials, cli_command_args, streaming_log, model = (
                 self.agent_manager.execute(
                     agent_name,

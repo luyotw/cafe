@@ -156,6 +156,14 @@ steps:
       need_clarification: review
 
   pr:
+    local_review:
+      presentation_task: reviewed-revision
+      review_step: review
+      implementation_step: develop
+      result_artifact: local_review_result
+      integration_step: deliver
+      integration_artifact: local_preparation
+      outcomes: {confirm: _done, fix_now: develop}
     handoff_label: Revise PR content
     type: skill
     skill: cafe-pr

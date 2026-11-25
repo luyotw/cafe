@@ -249,7 +249,8 @@ def journey(tmp_path, monkeypatch):
                 if workspace_action:
                     workspace_action(repo, iteration, len(self.calls))
                 assert not any(t.status.value == "pending" for t in HumanTaskRecordStore(issue).tasks())
-                assert not any(e.event_type == "step_completed" for e in BlackboardStore(issue).load_or_create("inspect_custom").events)
+                assert not any(e.event_type == "step_completed" and e.data.get("status_code") != "BATON_NEED_PERMISSION"
+                               for e in BlackboardStore(issue).load_or_create("inspect_custom").events)
                 if len(self.calls) == 1 and completed_checklist:
                     checklist = iteration / "checklist.md"
                     checklist.write_text(checklist.read_text().replace("[ ]", "[x]"))

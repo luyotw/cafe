@@ -308,6 +308,7 @@ class HumanTaskBinding(BaseModel):
 
     trigger: str
     task_id: str
+    presentation_task: Optional[str] = None
     outcomes: dict[str, str] = Field(default_factory=dict)
     allowed_targets: tuple[str, ...] = ()
     prompt: Optional[str] = None
@@ -462,9 +463,9 @@ def agent_execution_interrupted_human_task(
         configured_outcomes[RETRY_CONFIGURED_ORDER] = normalized_step
     prompt = (
         "Agent execution was interrupted or its completion failed validation. "
-        "Review saved diagnostics and choose an existing-session or fresh-session retry."
+        "Review saved diagnostics and choose retry or explicitly start a fresh session."
     )
-    prompt_zh = "Agent 執行中斷或完成驗證失敗。請查看已保存的診斷，選擇原 session 或新 session 重試。"
+    prompt_zh = "Agent 執行中斷或完成驗證失敗。請查看已保存的診斷，選擇重試，或明確指定用新 session 重試。"
     if configured_decisions:
         prompt += (
             " Saved restart policy: recheck_priority. Configured-order recovery retries the same "
@@ -485,7 +486,7 @@ def agent_execution_interrupted_human_task(
                 HumanTaskDecision(
                     id=AGENT_EXECUTION_RETRY_DECISION,
                     label="Retry the interrupted workflow step",
-                    label_locales={"zh-TW": "以原 session 重試中斷步驟"},
+                    label_locales={"zh-TW": "重試中斷步驟（有原 session 就沿用）"},
                 ),
                 HumanTaskDecision(
                     id=AGENT_EXECUTION_FRESH_SESSION_DECISION,
@@ -519,6 +520,14 @@ def resolve_human_task_policy(
         )
     policy = matching[0]
     changes: dict[str, Any] = {}
+    if binding.presentation_task:
+        alternate = next((p for p in defaults if p.id == binding.presentation_task), None)
+        if alternate is None or {d.id for d in alternate.decisions} != {d.id for d in policy.decisions}:
+            raise HumanTaskPolicyError("presentation policy must cover the bound decisions")
+        labels = {d.id: d for d in alternate.decisions}
+        changes.update(prompt=alternate.prompt, prompt_locales=alternate.prompt_locales,
+                       decisions=[{**d.model_dump(), "label": labels[d.id].label,
+                                   "label_locales": labels[d.id].label_locales} for d in policy.decisions])
     if binding.prompt is not None:
         changes["prompt"] = binding.prompt
     if binding.correction_guidance is not None:

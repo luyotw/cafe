@@ -130,8 +130,8 @@ def _markdown_heading_positions(text: str, pattern: re.Pattern[str]) -> list[int
     return positions
 
 
-def _visible_markdown(text: str) -> str:
-    """Exclude fenced examples from authoritative-body ID validation."""
+def visible_markdown(text: str) -> str:
+    """Return the Markdown outside fenced code blocks."""
     lines: list[str] = []
     fence: str | None = None
     for line in text.splitlines(keepends=True):
@@ -202,7 +202,7 @@ def extract_downstream_contract(path: str | Path, *, kind: str) -> DownstreamCon
         raise ContractValidationError("Unexpected contract content")
     if kind == "plan":
         _validate_plan_references(sections, ids)
-    body = _visible_markdown(text[:start] + text[end:])
+    body = visible_markdown(text[:start] + text[end:])
     if kind == "plan":
         body_task_states = {
             identifier: "completed" if marker.lower() == "x" else "pending"

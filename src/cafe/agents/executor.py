@@ -320,6 +320,10 @@ class AgentExecutor:
                 )
 
             from cafe.agents.cli.effort import project_environment
+            from cafe.core.staged_commit import SCOPE_ENV, provider_environment
+
+            env.pop(SCOPE_ENV, None)
+            env.update(provider_environment())
             env = project_environment(self.config, env)
 
             # Execute with streaming
@@ -1619,6 +1623,8 @@ class AgentExecutor:
             limit_context = execution_context(self.config.cli, capabilities=["long-command"])
             idle_timeout = (numeric_limit("agent.stdout-idle", "idle", limit_context, expected_unit="seconds")
                             if use_idle_timeout else None)
+            observer = current_control()
+            observe_wait = getattr(observer, "observe_provider_wait", None)
             last_output_time = time.time() if use_idle_timeout else None
             idle_timeout_triggered = False  # Track if we exited due to idle timeout
             # A workflow-backed structured stream must end in an explicit completion
@@ -1811,6 +1817,8 @@ class AgentExecutor:
             try:
                 if process.stdout:
                     while True:
+                        if observe_wait:
+                            observe_wait(idle_timeout)
                         check_control()
                         if execution_limit_reached.is_set():
                             break
@@ -1826,6 +1834,8 @@ class AgentExecutor:
                             persist_safe_stream_error(error)
                             raise error from cause
                         except Empty:
+                            if observe_wait:
+                                observe_wait(idle_timeout)
                             # Activity can arrive while stdout readline is waiting.
                             record_stream_activity()
                             if execution_limit_reached.is_set():

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
@@ -17,7 +18,7 @@ try:
 except ImportError:  # pragma: no cover - Windows falls back to the local lock.
     fcntl = None  # type: ignore[assignment]
 
-from cafe.core.packet_io import atomic_write_bytes, canonical_json
+from cafe.core.packet_io import atomic_write_bytes, canonical_json, compact_json, read_regular_bytes
 
 HUMAN_TASK_RECORD_FILENAME = "human_tasks.json"
 HUMAN_TASK_RECORD_SCHEMA_VERSION = 1
@@ -68,6 +69,7 @@ class HumanTask:
     completed_at: Optional[str] = None
     cancelled_at: Optional[str] = None
     superseded_by_task_id: Optional[str] = None
+    staged_commit: Optional[dict[str, Any]] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -83,6 +85,7 @@ class HumanTask:
             "continuations": dict(self.continuations),
             "status": self.status.value,
             "created_at": self.created_at,
+            **({"staged_commit": self.staged_commit} if self.staged_commit else {}),
             "capability_approval": (
                 dict(self.capability_approval) if self.capability_approval is not None else None
             ),
@@ -112,6 +115,7 @@ class HumanTask:
                     if data.get("capability_approval") is not None
                     else None
                 ),
+                staged_commit=_mapping(data, "staged_commit") if "staged_commit" in data else None,
                 completed_at=_optional_text(data.get("completed_at")),
                 cancelled_at=_optional_text(data.get("cancelled_at")),
                 superseded_by_task_id=_optional_text(data.get("superseded_by_task_id")),
@@ -332,6 +336,90 @@ class _Envelope:
                 raise HumanTaskRecordSchemaError("result does not match its task/workflow")
 
 
+_OBSERVATION_LIMIT = 256 * 1024
+_OBSERVATION_HEADER_LIMIT = 16 * 1024
+_OBSERVATION_PREFIX = b'{"pending_observation":'
+_POSITION_FIELDS = {"id", "step", "trigger", "handoff_key", "assignee_type"}
+
+
+def _positions_from_envelope(envelope, workflow):
+    if (not isinstance(envelope, dict) or envelope.get("workflow_id") != workflow
+            or envelope.get("schema_version") != HUMAN_TASK_RECORD_SCHEMA_VERSION
+            or not isinstance(envelope.get("tasks"), list)):
+        raise ValueError("unknown task history")
+    tasks = []
+    for task in envelope["tasks"]:
+        if task["workflow_id"] != workflow:
+            raise ValueError("unknown task owner")
+        if HumanTaskStatus(task["status"]) == HumanTaskStatus.PENDING:
+            tasks.append({key: task[key] for key in ("id", "step", "trigger", "handoff_key")})
+            if len(tasks) > 4:
+                raise ValueError("incomplete pending task projection")
+    if tasks:
+        assignments = envelope.get("assignments")
+        if not isinstance(assignments, list):
+            raise ValueError("pending task assignment is unavailable")
+        pending = {task["id"]: task for task in tasks}
+        if len(pending) != len(tasks):
+            raise ValueError("ambiguous pending task identity")
+        for assignment in assignments:
+            if assignment["task_id"] in pending:
+                task = pending[assignment["task_id"]]
+                if "assignee_type" in task:
+                    raise ValueError("ambiguous pending task assignment")
+                task["assignee_type"] = assignment["assignee_type"]
+        if any("assignee_type" not in task for task in tasks):
+            raise ValueError("pending task assignment is unavailable")
+    return tasks
+
+
+
+def _validated_positions(positions):
+    if (not isinstance(positions, list) or len(positions) > 4
+            or any(not isinstance(row, dict) or set(row) != _POSITION_FIELDS
+                   or any(not isinstance(value, str) or not value for value in row.values())
+                   for row in positions)
+            or len({row["id"] for row in positions}) != len(positions)):
+        raise ValueError("invalid or ambiguous pending task observation")
+    return positions
+
+
+def pending_task_positions(issue: Path, workflow: str) -> list[dict[str, str]]:
+    """Read the atomic envelope's bounded summary, or a small legacy envelope."""
+    path = issue / HUMAN_TASK_RECORD_FILENAME
+    try:
+        before = path.lstat()
+    except FileNotFoundError:
+        return []
+    try:
+        data = read_regular_bytes(path, _OBSERVATION_LIMIT, prefix=True)
+        after = path.lstat()
+    except FileNotFoundError as exc:
+        raise ValueError("pending task history changed during observation") from exc
+    if (not os.path.samestat(before, after)
+            or (before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+            != (after.st_size, after.st_mtime_ns, after.st_ctime_ns)):
+        raise ValueError("pending task history changed during observation")
+
+    if data.startswith(_OBSERVATION_PREFIX):
+        line, newline, _ = data.partition(b"\n")
+        if not newline or not line.endswith(b",") or len(line) > _OBSERVATION_HEADER_LIMIT:
+            raise ValueError("invalid pending task observation header")
+        header = json.loads(line[len(_OBSERVATION_PREFIX):-1])
+        if (not isinstance(header, dict) or header.get("workflow_id") != workflow
+                or header.get("version") != HUMAN_TASK_RECORD_SCHEMA_VERSION
+                or header.get("body_bytes") != after.st_size - len(line) + 1):
+            raise ValueError("pending task observation does not match its envelope")
+        positions = _validated_positions(header.get("positions"))
+        if after.st_size <= _OBSERVATION_LIMIT:
+            if _positions_from_envelope(json.loads(data), workflow) != positions:
+                raise ValueError("pending task observation disagrees with its envelope")
+        return positions
+    if after.st_size > _OBSERVATION_LIMIT:
+        raise ValueError("legacy task history exceeds the observation budget")
+    return _validated_positions(_positions_from_envelope(json.loads(data), workflow))
+
+
 class HumanTaskRecordStore:
     """Versioned local store for durable task, wait, result, and audit records."""
 
@@ -445,6 +533,7 @@ class HumanTaskRecordStore:
         assignee_type: str,
         assignee_id: Optional[str] = None,
         capability_approval: Optional[Mapping[str, Any]] = None,
+        staged_commit: Optional[dict[str, Any]] = None,
         handoff_key: Optional[str] = None,
         superseded_task_ids: Sequence[str] = (),
     ) -> HumanTaskMaterialization:
@@ -485,6 +574,7 @@ class HumanTaskRecordStore:
                 status=HumanTaskStatus.PENDING,
                 created_at=now,
                 capability_approval=capability_metadata,
+                staged_commit=staged_commit,
             )
             envelope.tasks[task.id] = task
             envelope.assignments[task.id] = Assignment(
@@ -860,7 +950,21 @@ class HumanTaskRecordStore:
 
     def _save(self, envelope: _Envelope, *, before_commit: Callable[[], None] | None = None) -> None:
         envelope.validate()
-        content = canonical_json(envelope.to_dict())
+        document = envelope.to_dict()
+        body = canonical_json(document)
+        try:
+            positions = _positions_from_envelope(document, envelope.workflow_id)
+        except ValueError:
+            positions = None
+        # A bounded passive view and the full records are published by the same
+        # atomic replace. Legacy readers still receive the ordinary JSON object.
+        header = {"workflow_id": envelope.workflow_id, "body_bytes": len(body),
+                  "version": HUMAN_TASK_RECORD_SCHEMA_VERSION, "positions": positions}
+        prefix = _OBSERVATION_PREFIX + compact_json(header).encode() + b","
+        if len(prefix) > _OBSERVATION_HEADER_LIMIT:
+            header["positions"] = None
+            prefix = _OBSERVATION_PREFIX + compact_json(header).encode() + b","
+        content = prefix + body[1:]
         if before_commit is None:
             atomic_write_bytes(self.file_path, content)
         else:

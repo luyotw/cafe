@@ -596,6 +596,10 @@ def _consume_pending_chat_handoff(
     # resume into an explicit start override before runtime validation.
     if contract.source.startswith("human_task.") or contract.source == "workflow.interrupted_step":
         return None
+    if (contract.source == "workflow.feedback_delivery_validation"
+            and contract.status_code == "INVALID_FEEDBACK_DELIVERY"
+            and contract.from_step == contract.to_step == blackboard.current_step):
+        return None
 
     target_step = contract.to_step
     if (

@@ -40,3 +40,9 @@ human_task.cafe_pr.pr_review: 請審查已發布的 PR 內容。確認後進入�
 human_task.cafe_pr.pr_fix: 修訂 PR 內容
 human_task.cafe_pr.pr_confirm: 確認 PR 內容並進入交付
 human_task.cafe_pr.pr_details: 請釐清缺少的 PR 內容或發布資訊。
+human_task.cafe_pr.reviewed_revision: "請驗收受審的本機提交，或要求修訂。"
+human_task.cafe_pr.reviewed_finish: "接受本機提交並完成流程"
+human_task.cafe_pr.reviewed_fix: "退回實作階段修訂"
+human_task.cafe_pr.local_preparation_review: "請檢閱本機整合的既有證據。確認後會進入整合動作的審批。"
+human_task.cafe_pr.local_preparation_fix: "要求修訂本機交付準備"
+human_task.cafe_pr.local_preparation_confirm: "確認準備並進入動作審批"

@@ -30,6 +30,7 @@ from cafe.manager.costs import accounted_call
 from cafe.constraints import execution_context, numeric_limit
 from cafe.core.audit_events import AuditEventStore
 from cafe.core.conversation_locale import DEFAULT_CONVERSATION_LOCALE
+from cafe.core.human_task_records import pending_task_positions
 from cafe.core.human_task_notifications import (
     build_workflow_callback_failure_message,
     load_human_task_notification_settings,
@@ -1369,7 +1370,8 @@ def _bounded_event(event: dict[str, Any]) -> dict[str, Any]:
         "task_id",
         "route_status",
         "resolution_owner",
-        "evidence_reason",
+        "evidence_reason", "expected_step", "worker_id", "iteration", "elapsed_seconds",
+        "wait_seconds", "progress_at", "progress_source",
     }
     return {key: value for key, value in event.items() if key in allowed}
 
@@ -1716,7 +1718,9 @@ EventDriverSessionStore = EventManagerSessionStore
 def _callback_to_step(event: dict[str, Any], *, repository_root: Path) -> str | None:
     """Project the event-time baton without changing callback or workflow authority."""
     issue = event.get("issue")
-    if not isinstance(issue, str) or issue in {"", ".", ".."} or Path(issue).name != issue:
+    try:
+        issue = validate_issue_name(issue)
+    except ValueError:
         return None
     audit = AuditEventStore(repository_root / ".cafe" / "issues" / issue)
     try:
@@ -1725,7 +1729,7 @@ def _callback_to_step(event: dict[str, Any], *, repository_root: Path) -> str | 
                 or record["timestamp"] != event.get("occurred_at")
                 or record["event_type"] != "workflow_event_callback_enqueued"):
             return None
-        for sequence in range(record["sequence"] - 1, 0, -1):
+        for sequence in range(record["sequence"] - 1, max(0, record["sequence"] - 33), -1):
             prior = audit.read(event["workflow_id"], sequence, bounded=True)
             if prior is None:
                 continue
@@ -1749,19 +1753,183 @@ def _callback_to_step(event: dict[str, Any], *, repository_root: Path) -> str | 
     return None
 
 
+def _open_todos(issue, root, artifact):
+    from cafe.core.artifact_validation import review_finding_lineages
+    from cafe.core.packet_io import read_regular_bytes
+    from cafe.core.todo import parse_todo_list
+
+    path = (root / artifact["path"]).resolve()
+    if not path.is_relative_to(issue.resolve()):
+        raise ValueError("correction evidence is outside its issue")
+    content = read_regular_bytes(path, MAX_CALLBACK_INPUT_BYTES)
+    if hashlib.sha256(content).hexdigest() != artifact["content_sha256"]:
+        raise ValueError("correction evidence changed")
+    document = content.decode()
+    if not any(line.strip() == "## Todo List" for line in document.splitlines()):
+        return frozenset()
+    items = parse_todo_list(document)
+    lineages = review_finding_lineages(document, items)
+    # Supervision follows a problem across revisions. Handoff validation still
+    # fingerprints the full Todo, including its current evidence.
+    return frozenset(
+        (item.source, item.item_id, lineages[item.item_id]
+         if item.source == "review" and item.item_id in lineages else " ".join(item.work.split()))
+        for item in items if not item.checked
+    )
+
+
+def _recurring_result(transitions, current, read_todos):
+    if not current:
+        return []
+    data = current["data"]
+    artifact = data.get("source_artifact") or {}
+    digest = artifact.get("content_sha256")
+    if not digest:
+        return []
+    matches = []
+    unresolved = None
+    for record in reversed(transitions):
+        if record["sequence"] > current["sequence"]:
+            continue
+        prior = record["data"]
+        if (prior.get("from"), prior.get("to")) != (data.get("from"), data.get("to")):
+            continue
+        source = prior.get("source_artifact") or {}
+        if source.get("name") != artifact.get("name"):
+            break
+        if source.get("content_sha256") != digest:
+            if not source.get("path") or not artifact.get("path"):
+                break
+            if unresolved is None:
+                unresolved = read_todos(artifact)
+            unresolved = unresolved.intersection(read_todos(source))
+            if not unresolved:
+                break
+        matches.append(record)
+        if len(matches) == 4:
+            break
+    return list(reversed(matches[:4])) if len(matches) > 1 else []
+
+
+def _supervision(event, root, event_target):
+    """Project recent durable decisions without acquiring an advancement lease."""
+    from cafe.workflow_execution.worker_launch import WorkerLaunchStore
+
+    issue = root / ".cafe/issues" / _validated_issue_name(event)
+    workflow = event["workflow_id"]
+    audit = AuditEventStore(issue)
+    position = json.loads(_read_bounded_text(issue / "blackboard.json", label="workflow state"))
+    high = audit.high_water(workflow)
+    if position.get("workflow_id") != workflow or position.get("applied_event_sequence") != high:
+        raise ValueError("workflow position needs reconciliation")
+    handoff = position.get("handoff_contract") or {}
+    active = position.get("current_step")
+    owner = handoff.get("to_owner")
+    records = [record for seq in range(max(1, high - 31), high + 1)
+               if (record := audit.read(workflow, seq, bounded=True))]
+    event_position = event["sequence"]
+    transitions = [r for r in records if r["event_type"] == "transition"]
+    origin = next((r for r in reversed(transitions) if r["sequence"] < event_position), None)
+    current = transitions[-1] if transitions else None
+
+    def edge(record):
+        return {k: record["data"].get(k) for k in ("from", "to")} if record else None
+
+    events = [r for r in records if r["event_type"] in {
+        "transition", "human_task_completed", "workflow_completed", "human_task_materialized"
+    }]
+    progress = events[-1] if events else None
+    failures = [r for r in records if r["event_type"] == "workflow_event_callback_enqueued"
+                and r["data"].get("step") == event["step"] and event.get("reason")
+                and r["data"].get("reason") == event["reason"]]
+    if event.get("event_type") == "phase_terminal":
+        todo_cache = {}
+        def read_todos(artifact):
+            key = (artifact["path"], artifact["content_sha256"])
+            if key not in todo_cache:
+                todo_cache[key] = _open_todos(issue, root, artifact)
+            return todo_cache[key]
+        failures = _recurring_result(transitions, current, read_todos)
+        if not failures and current != origin:
+            failures = _recurring_result(transitions, origin, read_todos)
+    tasks = pending_task_positions(issue, workflow)
+    workers = WorkerLaunchStore(issue).running_positions(workflow)
+    worker = workers[0] if len(workers) == 1 else None
+    decision = "inspect"
+    current_handoff = None
+    current_transition = edge(current)
+    from_step = handoff.get("from_step")
+    intent = handoff.get("intent")
+    def matches(task):
+        from cafe.core.blackboard import HandoffContract
+        from cafe.core.capability_approvals import CAPABILITY_APPROVAL_TRIGGER
+        from cafe.core.human_task_snapshot import matches_user_handoff
+
+        triggers = {task["trigger"]}
+        if task["trigger"] == CAPABILITY_APPROVAL_TRIGGER:
+            triggers.add("need_permission")
+        return task["assignee_type"] == "user" and matches_user_handoff(
+            active, HandoffContract.from_dict(handoff) if handoff else None,
+            workflow_id=workflow, step=task["step"], handoff_key=task["handoff_key"],
+            triggers=triggers,
+        )
+
+    if (len(tasks) == 1 and matches(tasks[0])
+            and (event.get("event_type") != "human_task"
+                 or (event.get("step") == from_step and event.get("task_id") == tasks[0]["id"]))):
+        decision = "pending_decision"
+        current_transition = {"from": from_step, "to": active}
+        current_handoff = {
+            "from_step": from_step, "to_step": active, "to_owner": owner,
+            "intent": intent, "task_id": tasks[0]["id"],
+        }
+    elif (event.get("event_type") == "phase_terminal" and origin and current
+          and origin["data"].get("from") == event["step"]
+          and event.get("expected_step") == event_target == origin["data"].get("to")
+          and not tasks
+          and owner == "agent" and active == handoff.get("to_step") == current["data"].get("to")
+          and worker and worker["step"] == active and not failures):
+        later = [r for r in transitions if r["sequence"] > origin["sequence"]]
+        steps = [event_target] + [r["data"].get("to") for r in later]
+        if all(r["data"].get("from") == previous for r, previous in zip(later, steps)):
+            decision = "later_handoff" if later else "continue"
+    if ((current_handoff and pending_task_positions(issue, workflow) != tasks)
+            or audit.high_water(workflow) != high):
+        raise ValueError("workflow advanced during observation")
+    return {"assessment": decision, "expected_step": event.get("expected_step"),
+            "event_transition": edge(origin),
+            "current_transition": current_transition, "historical_transition": edge(current),
+            "current_handoff": current_handoff,
+            "current_step": current_handoff["from_step"] if current_handoff else active,
+            "owner": owner, "worker": worker,
+            "pending_tasks": [{k: v for k, v in task.items() if k != "handoff_key"}
+                              for task in tasks],
+            "last_progress": ({"sequence": progress["sequence"], "at": progress["timestamp"],
+                               "source": progress["event_type"]} if progress else None),
+            "same_problem_attempts": [r["sequence"] for r in failures[-4:]],
+            "observed_through": high}
+
+
 def _callback_prompt(
     event: dict[str, Any], *, repository_root: Path, include_instructions: bool = False
 ) -> str:
+    target = _callback_to_step(event, repository_root=repository_root)
+    facts = {}
+    if target is not None or event.get("event_type") == "worker_progress_overdue":
+        try:
+            facts["supervision"] = _supervision(event, repository_root, target)
+        except (KeyError, OSError, TypeError, ValueError):
+            facts["supervision"] = {"assessment": "inspect"}
     notice = json.dumps(
-        {**event, "to_step": _callback_to_step(event, repository_root=repository_root)},
+        {**event, "to_step": target, **facts},
         ensure_ascii=False, sort_keys=True,
     )
     instructions = (
         "You are the event-driven CAFE workflow manager.",
         "This is an asynchronous wake notification, not a workflow advancement gate.",
         "Read the builtin use-cafe-workflow skill and follow its current confirmed contract.",
-        "First inspect current durable state with cafe status/show before acting; "
-        "the event may be stale.",
+        "Use the supervision facts for routine and verified later handoffs. Inspect the "
+        "specific missing or conflicting fact for other wakes before acting.",
         "For the current task, run cafe task inspect <task-id> --json, then "
         "inspect_task_authority.py --issue-dir <issue-dir> --task-id <task-id> --json. "
         "Treat route_status, resolution_owner, and evidence_reason independently.",

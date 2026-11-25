@@ -17,7 +17,6 @@ def test_packaged_workflow_common_uses_bounded_digest() -> None:
     builtin_root = PROJECT_ROOT / "src" / "cafe" / "data" / "skills"
     text = _skill_text(builtin_root, "cafe-workflow-common")
 
-    assert "version: 1.9.0" in text
     assert "Bounded blackboard digest" in text
     assert "Do **not** read or print the whole file" in text
     assert '"from_step": "<current step name>"' not in text
@@ -36,8 +35,7 @@ def test_packaged_develop_skill_uses_repository_quality_gate_guidance() -> None:
     builtin_root = PROJECT_ROOT / "src" / "cafe" / "data" / "skills"
     text = _skill_text(builtin_root, "cafe-develop")
 
-    assert "version: 1.12.0" in text
-    assert "與變更直接相關的 targeted checks" in text
+    assert "Run bounded targeted checks for the changed behavior" in text
     assert "Repository-owned quality gates" in text
     assert "max_read_only_commands" not in text
     assert "20 次" not in text
@@ -45,12 +43,12 @@ def test_packaged_develop_skill_uses_repository_quality_gate_guidance() -> None:
     assert "不得繼續探索" not in text
     assert "任兩次實質修改之間" not in text
     assert "3 次唯讀呼叫內" not in text
-    assert "accepted plan 與 feedback 是不可變輸入" in text
-    assert "不得修改其 checkbox 或 Task Status" in text
-    assert "在 handoff 前寫入非空的 development summary" in text
-    assert "完成一個 bounded unit、commit 或 targeted check 都只是進度" in text
-    assert "不得以純進度說明" in text
-    assert "只因 checkbox 已勾選或 commit 存在就假定工作完成" in text
+    assert "Accepted plan and feedback are immutable" in text
+    assert "never edit their checkboxes or Task Status" in text
+    assert "For other handoffs, write a non-empty development summary" in text
+    assert "A bounded unit, commit or targeted check is progress" in text
+    assert "A progress-only reply or request for another `continue`/`resume` is not a valid stopping point" in text
+    assert "A checked box or existing commit alone is not completion" in text
 
 
 def test_behaviorally_changed_skills_have_minor_version_bumps() -> None:
@@ -60,6 +58,7 @@ def test_behaviorally_changed_skills_have_minor_version_bumps() -> None:
     minimum_versions = {
         "cafe-spec": "1.7.0",
         "cafe-plan": "1.11.0",
+        "cafe-develop": "1.12.0",
         "cafe-review": "1.15.0",
         "cafe-pr": "1.9.0",
         "cafe-workflow-common": "1.9.0",

@@ -93,11 +93,11 @@ def _verify_integration(root, source, proposal, receipt):
                 or pr["mergeCommit"]["oid"] != receipt["commit"]):
             raise ValueError("GitHub delivery identity changed")
     else:
-        common = _git(root, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
-        if Path(proposal.repository).resolve() != Path(common).resolve():
-            raise ValueError("local integration belongs to another repository")
-        _require_original_ancestry(root, source, receipt["commit"])
-        _require_original_ancestry(root, receipt["commit"], f"refs/heads/{proposal.target_branch}")
+        from cafe.core.git import GitOperations
+        from cafe.delivery.local_cleanup import verify_local_receipt
+
+        verify_local_receipt(GitOperations(str(root)), proposal, receipt)
+
 
 
 def cleanup(project_root, worktree, issue_name, remote=None):

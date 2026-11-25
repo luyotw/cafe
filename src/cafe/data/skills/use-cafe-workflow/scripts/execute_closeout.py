@@ -14,7 +14,7 @@ import os
 import re
 import stat
 import subprocess
-from contextlib import contextmanager, nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -285,7 +285,8 @@ def main() -> int:
                     raise ValueError("closeout requires an authorized Manager selection and accepted delivery")
             from cafe.manager.costs import quiescent_worker, preserve_worker_cost
             guard = quiescent_worker(args.issue_dir) if args.stage == "cleanup" else nullcontext()
-            with guard:
+            with ExitStack() as lease:
+                lease.enter_context(guard)
                 if args.stage == "cleanup":
                     if authority.get("closeout_contract", {}).get("choice") == "cleanup":
                         dirty = subprocess.run(
@@ -297,6 +298,16 @@ def main() -> int:
                     preserve_worker_cost(args.project_root, args.issue_dir, args.issue_name, args.workflow_id)
                 command["status"] = "unknown"
                 _write(path, record)
+                if args.stage == "cleanup" and command["argv"] == ["cafe", "close"]:
+                    from cafe.manager.local_cleanup import has_local_integration
+                    from cafe.utils.issue_config import read_issue_config_strict
+
+                    config_path = args.issue_dir / "issue.yaml"
+                    config = read_issue_config_strict(config_path) if config_path.exists() else {}
+                    if has_local_integration(args.issue_dir, config):
+                        # The local close process takes and owns the quiescence
+                        # lease through archival and checked ref deletion.
+                        lease.close()
                 try:
                     if authority.get("contract_mode") == "compact":
                         from cafe.manager.delivery import run_compact_closeout_command

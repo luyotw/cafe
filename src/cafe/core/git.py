@@ -1,7 +1,13 @@
 """Git operations for CAFE."""
 
+import os
+import re
+import select
+import shutil
+import signal
 import subprocess
 import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
@@ -18,6 +24,25 @@ class BranchHealth:
 
 class GitError(Exception):
     """Git operation error."""
+
+
+@contextmanager
+def _reserve_git_file(path: Path):
+    """Exclude ordinary Git writers without replacing their lockfiles."""
+    lock = path.with_name(path.name + ".lock")
+    try:
+        with lock.open("xb") as handle:
+            identity = os.fstat(handle.fileno())
+    except FileExistsError as exc:
+        raise GitError(f"Git is using {path.name}") from exc
+    try:
+        yield
+    finally:
+        try:
+            if os.path.samestat(lock.lstat(), identity):
+                lock.unlink()
+        except FileNotFoundError:
+            pass  # Worktree removal can delete the administrative directory.
 
     pass
 
@@ -507,11 +532,147 @@ class GitOperations:
         elif self._cleanup_remote_heads(snapshot["remote"]["push"], snapshot["source"]):
             raise GitError("remote source appeared after cleanup preflight")
 
-    def delete_cleanup_branch(self, snapshot: dict) -> None:
+    @staticmethod
+    def _local_close_receipt_ref(local_close_id: str) -> str:
+        if not re.fullmatch(r"[0-9a-f]{64}", local_close_id):
+            raise GitError("invalid local close receipt identity")
+        return f"refs/cafe/local-close/{local_close_id}"
+
+    def local_close_branch_deleted(self, local_close_id: str, source_oid: str) -> bool:
+        receipt = self._local_close_receipt_ref(local_close_id)
+        rows = self.run_git("for-each-ref", "--format=%(refname) %(objectname)", receipt)
+        prior = next((line.split()[1] for line in rows.splitlines()
+                      if line.startswith(receipt + " ")), None)
+        if prior and prior != source_oid:
+            raise GitError("local close ref receipt differs from the accepted tip")
+        return prior is not None
+
+    @contextmanager
+    def _prepared_cleanup_refs(self, updates: str):
+        """Hold Git's branch predicates until the caller commits or releases them."""
+        with subprocess.Popen(
+            ["git", "update-ref", "--stdin"], cwd=self.repo_path,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+            start_new_session=True,
+        ) as child:
+            def exchange(command, acknowledgement):
+                try:
+                    child.stdin.write(command + "\n")
+                    child.stdin.flush()
+                except OSError as exc:
+                    raise GitError("cleanup Git transaction closed before acknowledging") from exc
+                if (not select.select([child.stdout], [], [], 30)[0]
+                        or child.stdout.readline().rstrip("\n") != acknowledgement):
+                    raise GitError("cleanup source or target ref changed or is busy")
+
+            try:
+                exchange("start", "start: ok")
+                exchange(updates + "prepare", "prepare: ok")
+                yield lambda: exchange("commit", "commit: ok")
+            finally:
+                try:
+                    child.stdin.close()
+                except BrokenPipeError:
+                    pass
+                try:
+                    child.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(child.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    child.wait(timeout=5)
+                    raise GitError("cleanup Git transaction did not exit")
+            if child.returncode:
+                raise GitError("cleanup Git transaction did not exit successfully")
+
+    @contextmanager
+    def lock_cleanup_worktree(self, path: Path, snapshot: dict):
+        """Bind the registered worktree and its approved refs through removal."""
+        source = GitOperations(str(path))
+        git_dir = source._git_dir_path()
+        source_ref = f"refs/heads/{snapshot['source']}"
+        target_ref = f"refs/heads/{snapshot['target']}"
+        index = Path(source.run_git("rev-parse", "--path-format=absolute", "--git-path", "index"))
+        with (
+            _reserve_git_file(index),
+            self._prepared_cleanup_refs(
+                f"verify {source_ref} {snapshot['source_oid']}\n"
+                f"verify {target_ref} {snapshot['target_oid']}\n"
+            ),
+            source._prepared_cleanup_refs(f"option no-deref\nverify HEAD {snapshot['source_oid']}\n"),
+        ):
+            if (source._git_dir_path() != git_dir
+                    or Path(source.run_git("rev-parse", "--show-toplevel")).resolve() != path
+                    or source.run_git("symbolic-ref", "HEAD") != source_ref
+                    or source.has_in_progress_operation()
+                    or not any(Path(row["path"]).resolve() == path and row.get("branch") == snapshot["source"]
+                               for row in self.list_worktrees())):
+                raise GitError("cleanup worktree no longer owns the accepted source branch")
+            yield
+
+    def _delete_local_cleanup_branch(self, snapshot, updates, local_close_id):
+        common = Path(self.run_git("rev-parse", "--path-format=absolute", "--git-common-dir"))
+        config = common / "config"
+        section = f"branch.{snapshot['source']}"
+        with (
+            self._prepared_cleanup_refs(updates) as commit,
+            _reserve_git_file(config),
+            tempfile.TemporaryDirectory(prefix=".close-config-", dir=common) as temporary,
+        ):
+            prepared = Path(temporary) / "config"
+            original = Path(temporary) / "original"
+            shutil.copy2(config, original)
+            shutil.copy2(original, prepared)
+            keys = self.run_git("config", "--file", str(prepared), "--name-only", "--list")
+            if not any(key.rsplit(".", 1)[0] == section for key in keys.splitlines()):
+                commit()
+                return
+            self.run_git("config", "--file", str(prepared), "--remove-section", section)
+            # The old ref is still locked. No later branch can inherit this
+            # configuration or have its own configuration removed.
+            prepared.replace(config)
+            try:
+                commit()
+            except GitError:
+                if not self.local_close_branch_deleted(local_close_id, snapshot["source_oid"]):
+                    original.replace(config)
+                raise
+
+    def delete_cleanup_branch(
+        self, snapshot: dict, *, verify_local_target: bool = False, local_close_id: str | None = None,
+    ) -> None:
         """Compare-and-delete the proven tip, including squash/rebase deliveries."""
+        receipt = None
+        if local_close_id is not None:
+            if not verify_local_target:
+                raise GitError("local close receipt requires exact target verification")
+            if self.local_close_branch_deleted(local_close_id, snapshot["source_oid"]):
+                return
+            receipt = self._local_close_receipt_ref(local_close_id)
         if any(tree.get("branch") == snapshot["source"] for tree in self.list_worktrees()):
             raise GitError("cleanup source branch is still checked out")
-        self.run_git("update-ref", "-d", f"refs/heads/{snapshot['source']}", snapshot["source_oid"])
+        source_ref = f"refs/heads/{snapshot['source']}"
+        if verify_local_target:
+            target_ref = f"refs/heads/{snapshot['target']}"
+            updates = (f"verify {target_ref} {snapshot['target_oid']}\n"
+                       f"delete {source_ref} {snapshot['source_oid']}\n")
+            if receipt:
+                # A later branch with the same name or even the same tip must
+                # survive retries of this exact completed deletion.
+                updates += f"create {receipt} {snapshot['source_oid']}\n"
+                self._delete_local_cleanup_branch(snapshot, updates, local_close_id)
+                return
+            try:
+                subprocess.run(
+                    ["git", "update-ref", "--stdin"], cwd=self.repo_path, check=True,
+                    text=True, capture_output=True,
+                    input=updates,
+                )
+            except subprocess.CalledProcessError as exc:
+                raise GitError("cleanup source or target ref changed") from exc
+        else:
+            self.run_git("update-ref", "-d", source_ref, snapshot["source_oid"])
         try:
             self.run_git("config", "--remove-section", f"branch.{snapshot['source']}")
         except GitError:

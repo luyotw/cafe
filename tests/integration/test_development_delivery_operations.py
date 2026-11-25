@@ -1,6 +1,7 @@
 """I2/I5/I7: real local integration, restart and changed destinations."""
 
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -159,3 +160,123 @@ def test_nonzero_exit_after_actual_integration_retains_positive_effect(local_act
     observed = execute_action(root, issue, snapshot, "integration")
     assert observed["state"] == "succeeded" and observed["process"] == completed["process"]
     assert len(mutations) == 1
+
+
+@pytest.mark.parametrize("strategy", ["ff-only", "merge-commit"])
+@pytest.mark.parametrize("changed", ["tip", "branch", "source"])
+def test_prepared_approval_cannot_merge_into_concurrently_changed_checkout(
+    local_action, monkeypatch, strategy, changed,
+):
+    from cafe.delivery.records import ActionStore
+
+    root, dest, issue, original = local_action
+    p = original.proposal.model_copy(update={
+        "strategy": strategy,
+        "local_preparation": "local_preparation",
+        "reviewed_artifact": "preparation.md",
+    })
+    snapshot = approve_selection(p, authority(p, "integrate_only", ""))
+    starts = ActionStore.start
+
+    def move_at_dispatch(store, action, **details):
+        starts(store, action, **details)
+        if changed == "tip":
+            git(dest, "commit", "--allow-empty", "-m", "Concurrent target update")
+        elif changed == "branch":
+            git(dest, "checkout", "-b", "other-target")
+        else:
+            git(root, "commit", "--allow-empty", "-m", "Concurrent source update")
+
+    monkeypatch.setattr(ActionStore, "start", move_at_dispatch)
+    receipt = execute_action(root, issue, snapshot, "integration", timeout=30)
+    assert receipt["state"] != "succeeded"
+    assert not (dest / "result.txt").exists()
+    assert git(dest, "status", "--porcelain") == ""
+    if changed == "branch":
+        assert git(dest, "branch", "--show-current") == "other-target"
+        assert git(dest, "rev-parse", "develop") == p.target_oid
+    elif changed == "tip":
+        assert git(dest, "show", "-s", "--format=%s", "develop") == "Concurrent target update"
+    else:
+        assert git(dest, "rev-parse", "develop") == p.target_oid
+        assert git(root, "rev-parse", "feature") != p.source_oid
+
+
+@pytest.mark.parametrize("strategy", ["ff-only", "merge-commit"])
+@pytest.mark.parametrize("interruption", ["index_install", "after_ref"])
+def test_prepared_integration_recovers_only_with_consistent_checkout(
+    local_action, monkeypatch, strategy, interruption,
+):
+    from cafe.delivery import local_git
+    from cafe.delivery.operations import Commands
+
+    root, dest, issue, original = local_action
+    p = original.proposal.model_copy(update={
+        "strategy": strategy, "local_preparation": "local_preparation",
+        "reviewed_artifact": "preparation.md",
+    })
+    snapshot = approve_selection(p, authority(p, "integrate_only", ""))
+    run = Commands.run
+    replace = Path.replace
+    final_index = Path(git(dest, "rev-parse", "--path-format=absolute", "--git-path", "index"))
+
+    def interrupt_replace(path, target):
+        if target == final_index:
+            raise OSError("fixed test failure installing the real index")
+        return replace(path, target)
+
+    def interrupt(self, argv, **kwargs):
+        if "cafe.delivery.local_git" not in argv:
+            return run(self, argv, **kwargs)
+        arguments = argv[argv.index("cafe.delivery.local_git") + 1:]
+        if interruption == "index_install":
+            with monkeypatch.context() as failure:
+                failure.setattr(Path, "replace", interrupt_replace)
+                try:
+                    local_git.install(Path(arguments[0]), *arguments[1:])
+                except OSError:
+                    return "", 1
+            pytest.fail("index installation fault was never reached")
+        run(self, argv, **kwargs)
+        # Model the index left behind by a previous adapter after publishing the ref.
+        git(dest, "read-tree", p.target_oid)
+        return "", 1
+
+    monkeypatch.setattr(Commands, "run", interrupt)
+    first = execute_action(root, issue, snapshot, "integration", timeout=30)
+    assert first["process"]["returncode"] == 1
+    assert first["state"] != "succeeded"
+    observed = execute_action(root, issue, snapshot, "integration", timeout=30)
+    assert observed["state"] != "succeeded"
+    if interruption == "index_install":
+        assert git(dest, "rev-parse", "HEAD") == p.target_oid
+        assert git(dest, "status", "--porcelain") == ""
+        assert not (dest / "result.txt").exists()
+    else:
+        assert git(dest, "status", "--porcelain")
+        git(dest, "read-tree", "HEAD")
+        assert git(dest, "status", "--porcelain") == ""
+        recovered = execute_action(root, issue, snapshot, "integration", timeout=30)
+        assert recovered["state"] == "succeeded"
+        assert recovered["process"]["returncode"] == 1
+        assert recovered["commit"] == git(dest, "rev-parse", "HEAD")
+
+
+def test_fixed_prepared_helper_uses_installed_package_from_project_checkout(
+    local_action, monkeypatch,
+):
+    root, dest, issue, original = local_action
+    (root / "cafe").mkdir()
+    (root / "cafe" / "__init__.py").write_text("")
+    git(root, "add", "cafe")
+    git(root, "commit", "-m", "Add project package")
+    monkeypatch.chdir(root)
+    p = original.proposal.model_copy(update={
+        "local_preparation": "local_preparation", "reviewed_artifact": "preparation.md",
+        "source_oid": git(root, "rev-parse", "HEAD"),
+    })
+    snapshot = approve_selection(p, authority(p, "integrate_only", ""))
+    receipt = execute_action(root, issue, snapshot, "integration", timeout=30)
+    assert receipt["state"] == "succeeded"
+    assert receipt["commit"] == git(dest, "rev-parse", "HEAD") == p.source_oid
+    assert git(dest, "status", "--porcelain") == ""

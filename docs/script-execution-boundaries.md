@@ -25,12 +25,19 @@ This inventory is executable documentation: the unit contract discovers every `s
 | `src/cafe/core/capabilities.py::_current_repo_slug` | Internal fixed Git query |
 | `src/cafe/core/capabilities.py::_git_ref_exists` | Internal fixed Git query |
 | `src/cafe/core/capabilities.py::run_pr_publish_capability` | Registered host capability adapter |
+| `src/cafe/core/dashboard_publication.py::_project.git` | Internal fixed Git repository and worktree identity queries |
+| `src/cafe/core/git.py::_prepared_cleanup_refs` | Confirmed cleanup Git ref transaction |
+| `src/cafe/core/git.py::delete_cleanup_branch` | Confirmed cleanup Git branch deletion |
 | `src/cafe/core/git.py::initialize_repository` | Internal fixed Git command |
 | `src/cafe/core/git.py::is_repository` | Internal fixed Git query |
 | `src/cafe/core/git.py::run_git` | Internal fixed Git command family |
 | `src/cafe/core/phase_review_mixin.py::_open_file_with_editor` | Explicit interactive editor |
 | `src/cafe/core/sandbox_execution.py::preflight_sandbox` | Internal fixed sandbox preflight |
 | `src/cafe/core/sandbox_execution.py::run` | Sandbox script adapter |
+| `src/cafe/core/staged_commit.py::_commit_tree` | Approved staged commit preparation in an isolated index and HEAD |
+| `src/cafe/core/staged_commit.py::_matches_approved_commit` | Internal fixed Git commit object query |
+| `src/cafe/core/staged_commit.py::_promote_candidate` | Approved staged commit Git ref transaction |
+| `src/cafe/core/staged_commit.py::snapshot` | Internal fixed Git index snapshot command |
 | `src/cafe/core/automatic_commands.py::execute_command` | Sandbox argv step adapter |
 | `src/cafe/core/workspace_artifact.py::_git` | Internal fixed Git query family |
 | `src/cafe/core/workspace_artifact.py::build_workspace_artifact` | Internal fixed Git ancestry query |
@@ -41,6 +48,8 @@ This inventory is executable documentation: the unit contract discovers every `s
 | `src/cafe/data/skills/use-cafe-workflow/scripts/format_kickoff_contract.py::_reexec_with_cafe_python` | Internal fixed Python re-exec |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/render_workflow_progress.py::_reexec_with_cafe_python` | Internal fixed Python re-exec |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/catalog_version_check.py::run_catalog_check` | Internal fixed CAFE catalog inspection |
+| `src/cafe/delivery/local_git.py::_git` | Internal Git query and command family for approved local delivery |
+| `src/cafe/delivery/local_git.py::install` | Approved local delivery Git ref transaction |
 | `src/cafe/delivery/verification.py::run_tool` | Explicit approved delivery verification tool adapter |
 | `src/cafe/manager/costs.py::common_dir` | Internal fixed Git common-directory query |
 | `src/cafe/manager/costs.py::_archive` | Internal fixed Git common-directory query |

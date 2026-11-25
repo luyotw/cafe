@@ -2622,3 +2622,25 @@ def test_explicit_redirect_skips_only_the_uninvoked_interrupted_attempt(tmp_path
     line = next(line for line in rendered.splitlines() if "build" in line)
     assert ("Skipped" in line) == (case == "redirected")
     assert "Completed" not in line
+
+
+def test_prepared_input_does_not_invent_a_completed_iteration(tmp_path):
+    issue = tmp_path / "issue"
+    issue.mkdir()
+    _write_runtime_state(issue, {"current_step": "publish-draft", "events": [
+        {"event_type": "step_started", "step": "資料盤點", "data": {"iteration": 6}},
+        {"event_type": "step_completed", "step": "資料盤點", "data": {"iteration": 6}},
+    ]})
+    completed = issue / "資料盤點/iteration_006"
+    completed.mkdir(parents=True)
+    (completed / "iteration.json").write_text(json.dumps({"iteration": 6}))
+    prepared = issue / "資料盤點/iteration_007"
+    prepared.mkdir()
+    (prepared / "user_input.md").write_text("Saved correction not yet dispatched.")
+    rendered = _module().render_progress(
+        playbook=_custom_playbook(), issue_dir=issue, contract=_contract(),
+        manager_state={"proactive_review": {"publish-draft": "pending"}, "deliver": "pending", "cleanup": "pending"},
+        locale="en",
+    )
+    assert "資料盤點 · iteration 6 · Completed" in rendered
+    assert "資料盤點 · iteration 7" not in rendered

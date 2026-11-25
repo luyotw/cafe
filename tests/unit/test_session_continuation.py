@@ -23,6 +23,8 @@ from cafe.core.types import (
     CriticalPhaseError,
     TokenUsage,
 )
+from cafe.phases.generic_phase import GenericPhase
+from cafe.skills.loader import SkillLoader
 
 
 @pytest.fixture(autouse=True)
@@ -553,6 +555,18 @@ def test_exact_continuation_requires_configured_complete_pair() -> None:
 def test_phase_session_missing_can_restart_with_same_model(tmp_path, monkeypatch, allow_replacement):
     manager = _manager(tmp_path, monkeypatch)
     calls = []
+    phase_prompt = GenericPhase(
+        SkillLoader(project_root=tmp_path, global_root=tmp_path / "global")
+    ).build_prompt(
+        skill_name="cafe-develop", skill_invocation="/cafe-develop",
+        shared_skill_invocations=["/cafe-workflow-common"],
+        context={
+            "handoff_summary": "Apply the answer to pending ITEM-2 without changing authority.",
+            "user_input": "For question 1, use the existing local implementation.",
+        },
+        output_file=tmp_path / "iteration_002" / "output.md",
+        checklist_file=tmp_path / "iteration_002" / "checklist.md",
+    )
 
     def execute(executor, prompt, *args, **kwargs):
         config = executor.config
@@ -567,18 +581,24 @@ def test_phase_session_missing_can_restart_with_same_model(tmp_path, monkeypatch
         "phase_name": "develop",
         "continuation": SessionContinuation.resume_exact(AgentCLI.CODEX, "lost-session"),
         "allow_session_replacement": allow_replacement,
+        "session_replacement_context": lambda: "{\"open_todos\":[\"BLK-003\"]}",
     }
     if allow_replacement:
-        assert manager.execute("David", "full phase context", **kwargs)[0] == "finished"
+        assert manager.execute("David", phase_prompt, **kwargs)[0] == "finished"
     else:
         with pytest.raises(AgentExecutionError, match="no rollout"):
-            manager.execute("David", "full phase context", **kwargs)
+            manager.execute("David", phase_prompt, **kwargs)
 
     assert calls[0][:4] == (AgentCLI.CODEX, "codex-model", "lost-session", True)
     assert len(calls) == (2 if allow_replacement else 1)
     if allow_replacement:
         assert calls[1][:4] == (AgentCLI.CODEX, "codex-model", None, None)
-        assert calls[1][4].endswith("full phase context")
+        # AgentManager relocates the independently refreshed constraints block.
+        # All task context, references and completion instructions must survive.
+        task_prompt = phase_prompt.split("<!-- cafe-runtime-constraints:start -->")[0].strip()
+        assert task_prompt in calls[1][4]
+        assert '"open_todos":["BLK-003"]' in calls[1][4]
+        assert '"open_todos":["BLK-003"]' not in calls[0][4]
         assert "Preserve existing changes" in calls[1][4]
         assert manager.session_manager.load_session(
             "David", AgentCLI.CODEX, "issue-381", "develop"

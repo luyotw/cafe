@@ -182,6 +182,7 @@ def test_notice_projects_event_time_baton_without_mutating_state(
     )
     state.handoff_contract = handoff
     original_handoff = handoff
+    state.current_step = "develop"
     store.record_event(state, "transition", {"from": "pr", "to": "develop"},
                        baton_contract=handoff)
     event = store.prepare_workflow_callback_event(
@@ -193,17 +194,38 @@ def test_notice_projects_event_time_baton_without_mutating_state(
             from_step="develop", to_owner=HandoffOwner.AGENT,
             to_step="review", intent=HandoffIntent.AWAIT_AGENT,
         )
+        state.current_step = "review"
         if later_handoff == "backdated":
             handoff = replace(handoff, created_at=original_handoff.created_at)
         state.handoff_contract = handoff
         store.record_event(state, "transition", {"from": "develop", "to": "review"},
                            baton_contract=handoff)
+    from cafe.workflow_execution.workflow_hosting import WorkflowHost
+    from cafe.core.workflow_control import current_control
+
+    def observe_notice():
+        current_control().position(state, {state.current_step: {}})
+        return callback._callback_prompt(event, repository_root=tmp_path)
+
+    observed = WorkflowHost(issue_dir).run(observe_notice, hosting="foreground").result
+    active = json.loads(observed.split("Wake notice: ", 1)[1])["supervision"]
+    assert active["expected_step"] is None
+    assert active["assessment"] == "inspect"
+    assert active["worker"]["step"] == state.current_step
     before = {p: p.read_bytes() for p in issue_dir.rglob("*") if p.is_file()}
 
     prompt = callback._callback_prompt(event, repository_root=tmp_path)
     notice = json.loads(prompt.split("Wake notice: ", 1)[1])
 
-    assert notice == {**event, "to_step": "develop"}
+    assert notice["to_step"] == "develop"
+    facts = notice["supervision"]
+    assert facts["event_transition"] == {"from": "pr", "to": "develop"}
+    assert facts["current_transition"]["to"] == ("review" if later_handoff else "develop")
+    assert facts["last_progress"]["at"]
+    assert facts["last_progress"]["sequence"] < store.audit.high_water(state.workflow_id) + 1
+    assert facts["owner"] == "agent"
+    assert facts["pending_tasks"] == []
+    assert facts["same_problem_attempts"] == []
     assert store.validate_workflow_callback_event(state.workflow_id, event)
     assert before == {p: p.read_bytes() for p in issue_dir.rglob("*") if p.is_file()}
 
@@ -3789,3 +3811,191 @@ def test_nested_issue_callback_status_chat_and_delivery_keep_full_identity(tmp_p
     monkeypatch.setattr(callback, "_run_v3_callback", lambda *a, **kw: (delivered.append(a[2]) or a[1]))
     callback.run_callback(event, repository_root=tmp_path)
     assert delivered[0]["issue"] == "codex/issue119"
+
+
+def _correction_report(situation, i):
+    work = "Same finding"
+    if i == 2 and situation in {"changed_result", "registry", "delayed_registry", "different_lineage"}:
+        work = "Updated correction"
+    evidence = f"Observed failure at revision {i}"
+    registry = ""
+    if situation in {"registry", "delayed_registry", "different_lineage"}:
+        first_seen = "002/b" if situation == "different_lineage" and i == 2 else "001/a"
+        registry = (
+            "## Finding Registry\n"
+            "| ID | kind | root-cause identity | first-seen iteration/HEAD | impact | confidence | current status | linked ID | evidence HEAD |\n"
+            "|---|---|---|---|---|---|---|---|---|\n"
+            f"| BLK-001 | BLK | Missing receipt | {first_seen} | High | 99 | open | — | {i} |\n\n"
+        )
+    return (f"# Baseline {i}\n\n{registry}## Todo List\n"
+            f"- [ ] `BLK-001` — Source: `review` — Work: {work}"
+            f" — Closure: Complete the check — Evidence: {evidence}\n").encode()
+
+
+@pytest.mark.parametrize("situation", [
+    "three_handoffs", "contradiction", "repeated", "pending",
+    "correction_loop", "changed_result", "long_history", "delayed_correction",
+    "registry", "delayed_registry", "different_lineage",
+    "delivery_pending", "delivery_contradiction", "delivery_large_evidence",
+    "delivery_interruption", "delivery_interruption_mismatch",
+])
+def test_dispatch_explains_current_owner_and_preserves_decisions(tmp_path, monkeypatch, situation):
+    from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+    from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
+    from cafe.core.workflow_control import current_control
+    from cafe.workflow_execution.workflow_hosting import WorkflowHost
+
+    callback = _callback_module()
+    monkeypatch.setenv("CODEX_THREAD_ID", "visible-thread")
+    manager, _, _ = _contract_event_context(callback, tmp_path, [("codex", "exact")], bind_host=True)
+    issue = manager.parent
+    store = BlackboardStore(issue)
+    state = store.load_or_create("spec")
+    records = HumanTaskRecordStore(issue)
+    steps = ["diagnose_custom", "repair_custom", "inspect_custom", "accept_custom"]
+    presented = []
+
+    loop = situation in {"correction_loop", "changed_result", "delayed_correction",
+                         "registry", "delayed_registry", "different_lineage"}
+    if loop:
+        steps = ["review", "repair", "review", "repair"]
+    if situation == "long_history":
+        # An over-budget snapshot cannot establish that no user decision is open.
+        task = records.materialize(workflow_id=state.workflow_id, step=steps[0], iteration=1,
+            trigger="confirm_output", policy_id="decision", prompt="archived",
+            expected_result={}, continuations={}, assignee_type="user")
+        records.complete(workflow_id=state.workflow_id, task_id=task.id,
+            payload={"feedback": "x" * callback.MAX_CALLBACK_INPUT_BYTES}, source="interactive")
+        envelope = json.loads(records.file_path.read_bytes())
+        envelope.pop("pending_observation", None)
+        records.file_path.write_text(json.dumps(envelope))
+
+    def deliver_pending():
+        state.current_step = "pr"
+        store.record_event(state, "transition", {"from": "review", "to": "pr"})
+        interruption = situation.startswith("delivery_interruption")
+        intent = HandoffIntent.MANUAL_HANDOFF if interruption else HandoffIntent.CONFIRM_OUTPUT
+        if situation == "delivery_large_evidence":
+            previous = records.materialize(
+                workflow_id=state.workflow_id, step="pr", iteration=1,
+                trigger="confirm_output", policy_id="pr-review", prompt="e" * 180_000,
+                expected_result={}, continuations={}, assignee_type="user",
+            )
+            records.complete(workflow_id=state.workflow_id, task_id=previous.id,
+                             payload={"decision": "confirm"}, source="interactive")
+        state.current_step = "user"
+        state.handoff_contract = store.build_handoff_contract(
+            from_step="review" if situation == "delivery_contradiction" else "deliver",
+            to_step="user", to_owner=HandoffOwner.USER, intent=intent,
+        )
+        handoff_key = None
+        if interruption:
+            timestamp = (state.handoff_contract.created_at
+                         if situation == "delivery_interruption" else "wrong-timestamp")
+            handoff_key = f"user-handoff:{state.workflow_id}:deliver:manual_handoff:{timestamp}"
+        task = records.materialize(
+            workflow_id=state.workflow_id, step="deliver", iteration=1,
+            trigger="agent_execution_interrupted" if interruption else "confirm_output",
+            policy_id="execution-interrupted" if interruption else "delivery-outcome",
+            prompt="e" * 180_000 if situation == "delivery_large_evidence" else "Accept delivery?",
+            expected_result={}, continuations={}, assignee_type="user", handoff_key=handoff_key,
+        )
+        if situation == "delivery_large_evidence":
+            assert records.file_path.stat().st_size > 256 * 1024
+        store.record_event(state, "human_task_materialized", {"step": "deliver", "task_id": task.id})
+        store.record_event(state, "workflow_paused", {"step": "deliver", "reason": "automatic_task"})
+        event = store.prepare_workflow_callback_event(state, {
+            "workflow_id": state.workflow_id, "issue": issue.name, "event_type": "human_task",
+            "step": "deliver", "task_id": task.id,
+        })
+        daemon = _HostDaemon(status="notLoaded")
+        with patch.object(callback.subprocess, "Popen", return_value=_HostProxy(daemon)):
+            callback.run_callback(event, repository_root=tmp_path)
+        notice = json.loads(daemon.input[0]["text"].split("Wake notice: ", 1)[1])
+        presented.append(notice["supervision"])
+
+    if situation.startswith("delivery_"):
+        WorkflowHost(issue).run(deliver_pending, hosting="foreground")
+        facts, = presented
+        assert facts["historical_transition"] == {"from": "review", "to": "pr"}
+        if situation in {"delivery_contradiction", "delivery_interruption_mismatch"}:
+            assert facts["assessment"] == "inspect"
+            return
+        task = records.tasks()[-1]
+        assert facts["current_step"] == "deliver" and facts["owner"] == "user"
+        assert facts["assessment"] == "pending_decision"
+        assert facts["current_transition"] == {"from": "deliver", "to": "user"}
+        assert facts["current_handoff"]["task_id"] == task.id
+        assert facts["current_handoff"]["intent"] == (
+            "manual_handoff" if situation == "delivery_interruption" else "confirm_output"
+        )
+        return
+
+    def dispatch():
+        delayed = None
+        for i, (source, target) in enumerate(zip(steps, steps[1:])):
+            pending = situation == "pending"
+            handoff = store.build_handoff_contract(
+                from_step=source, to_step="user" if pending else target,
+                to_owner=HandoffOwner.USER if pending else HandoffOwner.AGENT,
+                intent=HandoffIntent.NEED_PERMISSION if pending else HandoffIntent.AWAIT_AGENT,
+            )
+            state.current_step = handoff.to_step
+            state.handoff_contract = handoff
+            edge = {"from": source, "to": handoff.to_step}
+            if loop:
+                content = _correction_report(situation, i)
+                path = issue / source / f"iteration_{i + 1:03d}" / "output.md"
+                path.parent.mkdir(parents=True)
+                path.write_bytes(content)
+                edge.update(transition_intent="manual_handoff" if source == "review" else "await_agent",
+                            source_artifact={"name": "verdict", "updated_by": source,
+                                "path": str(path.relative_to(tmp_path)),
+                                "content_sha256": hashlib.sha256(content).hexdigest()})
+            store.record_event(state, "transition", edge, baton_contract=handoff)
+            current_control().position(state, {target: {}})
+            payload = {"workflow_id": state.workflow_id, "issue": issue.name,
+                       "event_type": "phase_terminal", "step": source, "status_code": "await_agent",
+                       "expected_step": "other" if situation == "contradiction" else target}
+            if pending:
+                task = records.materialize(
+                    workflow_id=state.workflow_id, step=source, iteration=1, trigger="need_permission",
+                    policy_id="permission", prompt="Approve?", expected_result={}, continuations={},
+                    assignee_type="user",
+                )
+                payload.update(event_type="human_task", task_id=task.id)
+            if situation == "repeated":
+                payload.update(event_type="workflow_interruption", reason="same_boundary")
+                store.prepare_workflow_callback_event(state, payload)
+            event = store.prepare_workflow_callback_event(state, payload)
+            if situation in {"delayed_correction", "delayed_registry"}:
+                if i == 0:
+                    delayed = event
+                if i < len(steps) - 2:
+                    continue
+                event = delayed
+            daemon = _HostDaemon(status="notLoaded")
+            with patch.object(callback.subprocess, "Popen", return_value=_HostProxy(daemon)):
+                callback.run_callback(event, repository_root=tmp_path)
+            notice = json.loads(daemon.input[0]["text"].split("Wake notice: ", 1)[1])
+            presented.append(notice["supervision"])
+            if situation != "three_handoffs" and not loop:
+                break
+
+    WorkflowHost(issue).run(dispatch, hosting="foreground")
+    if situation == "three_handoffs":
+        assert [p["assessment"] for p in presented] == ["continue"] * 3
+        assert [p["current_step"] for p in presented] == steps[1:]
+    elif loop:
+        expect_inspection = situation in {"correction_loop", "delayed_correction", "registry", "delayed_registry"}
+        assert presented[-1]["assessment"] == ("inspect" if expect_inspection else "continue")
+        assert bool(presented[-1]["same_problem_attempts"]) == expect_inspection
+    elif situation == "pending":
+        task, = records.tasks()
+        assert task.status == HumanTaskStatus.PENDING
+        assert presented[0]["pending_tasks"][0]["id"] == task.id
+        assert presented[0]["assessment"] == "pending_decision"
+    else:
+        assert presented[0]["assessment"] == "inspect"
+        if situation == "repeated":
+            assert len(presented[0]["same_problem_attempts"]) == 2

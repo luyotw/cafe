@@ -476,6 +476,7 @@ class AgentManager:
         constraint_context: Context | None = None,
         native_review_configuration: Optional[Dict[str, Any]] = None,
         allow_session_replacement: bool = False,
+        session_replacement_context: Optional[Callable[[], str]] = None,
     ) -> Tuple[str, TokenUsage, List, Optional[List[str]], List[str], Optional[str]]:
         """Execute prompt with specified agent.
 
@@ -605,9 +606,13 @@ class AgentManager:
                     primary_attempt += 1
                     attempt_prompt = (
                         "[system] The previous workflow session is unavailable. "
-                        "Continue the same step using the saved artifacts, checklist and current "
-                        "worktree. Preserve existing changes and completed work.\n\n" + prompt
+                        "Recover the current task and next action from this prompt's handoff "
+                        "and output references; do not assume earlier conversation memory. "
+                        "Preserve existing changes and reuse completed work only where current "
+                        "evidence and completion gates permit it.\n\n" + prompt
                     )
+                    if session_replacement_context and (recovery := session_replacement_context()):
+                        attempt_prompt += "\n\nDurable correction recovery context:\n" + recovery
                     print("Workflow session unavailable; continuing in a new session.")
                     continue
                 # Handle session conflict (only retry once)

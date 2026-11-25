@@ -42,7 +42,7 @@ def _has_approved_preparation_retry(issue_dir, workflow_id, step_name, marker, f
         result = records.get_result(task.id)
     except (HumanTaskRecordError, OSError, TypeError, ValueError):
         return False
-    if result is None or result.payload.get("decision") != "retry_fresh_session":
+    if result is None or result.payload.get("decision") not in {"retry", "retry_fresh_session"}:
         return False
     recovery = result.payload.get("session_continuation")
     return (
@@ -141,18 +141,19 @@ def pre_invocation_recovery_evidence(
 ) -> Optional[dict[str, Any]]:
     """Identify preparation failures without inventing a prior provider identity."""
     if ("agent_invoked" in context and context["agent_invoked"] is not False) or any(
-        key in context
-        for key in (
-            "cli",
-            "session_id",
-            "session_continuation",
-            "failed_attempts",
-            "response",
-            "start_time",
-            "stats",
-            "streaming_log",
+        key in context for key in (
+            "failed_attempts", "response", "start_time", "session_invocation_started_at",
+            "stats", "streaming_log",
         )
     ):
+        return None
+    if any(key in context for key in ("cli", "session_id", "session_continuation")):
+        continuation = context.get("session_continuation")
+        # Preparing a first invocation may already have saved a CLI preview
+        # and its intended continuation. The marker still precedes dispatch.
+        if (context.get("agent_invoked") is False and context.get("session_id") is None
+                and isinstance(continuation, dict) and continuation.get("policy") == "new"):
+            return {"kind": "agent_not_invoked"}
         return None
 
     # Older runtimes wrote the invocation marker after skill/workspace/checklist preparation.
@@ -168,11 +169,11 @@ def pre_invocation_recovery_evidence(
             task = audit.latest_record(
                 workflow_id,
                 {"agent_execution_task_materialized"},
-                step=step_name,
+                step=step_name, bounded=True,
             )
-            failure = audit.latest_record(workflow_id, {"step_interrupted"}, step=step_name)
+            failure = audit.latest_record(workflow_id, {"step_interrupted"}, step=step_name, bounded=True)
             prepared = (
-                audit.latest_record(workflow_id, {"agent_interruption_prepared"}, step=step_name)
+                audit.latest_record(workflow_id, {"agent_interruption_prepared"}, step=step_name, bounded=True)
                 if "agent_interruption" in context
                 else None
             )
@@ -195,7 +196,10 @@ def pre_invocation_recovery_evidence(
             "agent_interruption" in context
             and context.get("workflow_completion_trusted") is False
             and failure is not None
-            and failure["data"].get("detail") == CORRECTION_TODO_PROVENANCE_MISSING
+            and failure["data"].get("detail") in (
+                CORRECTION_TODO_PROVENANCE_MISSING,
+                "Correction Todo feedback route is ambiguous",
+            )
         )
         packet_preparation = (
             marker_matches and isinstance(marker, dict)
@@ -210,12 +214,13 @@ def pre_invocation_recovery_evidence(
             and task["data"].get("task_id") == task_id
             and task["sequence"] > failure["sequence"]
             and failure["data"].get("reason") == "agent_error"
-            and (failure["data"].get("attempt") == 1 or correction_preparation or packet_preparation)
+            and (failure["data"].get("attempt") == 1 or correction_preparation or packet_preparation
+                 or failure["data"].get("before_executor") is True)
         ):
             marker = context.get("agent_interruption")
             if marker is not None:
                 prepared = audit.latest_record(
-                    workflow_id, {"agent_interruption_prepared"}, step=step_name,
+                    workflow_id, {"agent_interruption_prepared"}, step=step_name, bounded=True,
                 )
                 if (
                     not isinstance(marker, dict)
@@ -228,6 +233,8 @@ def pre_invocation_recovery_evidence(
                 ):
                     return None
             detail = str(failure["data"].get("detail", ""))
+            if marker is not None and failure["data"].get("before_executor") is True:
+                return {"kind": "runtime_preparation_failed", "event_id": failure["event_id"]}
             if correction_preparation:
                 return {"kind": "correction_preparation_failed", "event_id": failure["event_id"]}
             if packet_preparation:
@@ -239,6 +246,14 @@ def pre_invocation_recovery_evidence(
                 # Session selection precedes invocation. A rejected preparation
                 # must remain recoverable without inventing a provider session.
                 return {"kind": "session_preparation_failed", "event_id": failure["event_id"]}
+            if marker is not None and re.fullmatch(
+                rf"(?:invalid phase config for {re.escape(repr(step_name))} in "
+                rf"{re.escape(repr(step_name))}: )?invalid phase config in "
+                rf"'[^\n]*/\.cafe/phases\.yaml': step={re.escape(repr(step_name))}: "
+                rf"field='{re.escape(step_name)}\.clis\[\d+\]\.reasoning_effort': reasoning_effort: [^\n]+",
+                detail,
+            ):
+                return {"kind": "phase_configuration_failed", "event_id": failure["event_id"]}
             if marker is not None and re.fullmatch(
                 r"Skill not found: Unmanaged or changed native skill conflict: [^\n]+\. "
                 r"Back up and relocate the entry, then rerun prepare or launch; "

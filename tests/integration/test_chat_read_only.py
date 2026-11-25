@@ -77,15 +77,8 @@ from cafe.core.types import AgentCLI
 from cafe.ui import cli
 
 
-@pytest.fixture
-def diagnostic_workspace(tmp_path, monkeypatch):
-    """Real declarations/state including a custom role and step; no model call."""
-    repo = tmp_path / "project"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-q", "-b", "issue520", str(repo)], check=True)
-    monkeypatch.chdir(repo)
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.delenv("CAFE_MOCK_AGENTS", raising=False)
+@pytest.fixture(scope="module")
+def diagnostic_playbook_yaml() -> str:
     # A valid existing playbook is adapted to test declarative custom topology.
     builtin = Path(__file__).resolve().parents[2] / "src/cafe/data/playbooks/standard.yaml"
 
@@ -100,10 +93,21 @@ def diagnostic_workspace(tmp_path, monkeypatch):
 
     declaration = rename(yaml.safe_load(builtin.read_text()))
     declaration["steps"]["spec"]["initial_input"].pop("legacy_presentation")
-    text = yaml.safe_dump(declaration)
+    return yaml.safe_dump(declaration)
+
+
+@pytest.fixture
+def diagnostic_workspace(tmp_path, monkeypatch, diagnostic_playbook_yaml):
+    """Real declarations/state including a custom role and step; no model call."""
+    repo = tmp_path / "project"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "issue520", str(repo)], check=True)
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("CAFE_MOCK_AGENTS", raising=False)
     catalog = repo / ".cafe/playbooks"
     catalog.mkdir(parents=True)
-    (catalog / "standard.yaml").write_text(text)
+    (catalog / "standard.yaml").write_text(diagnostic_playbook_yaml)
     issue = repo / ".cafe/issues/issue520"
     store = BlackboardStore(issue)
     state = store.load_or_create("inspect")

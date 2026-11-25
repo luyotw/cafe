@@ -24,10 +24,16 @@ from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 from cafe.skills.loader import SkillLoader
 
 
-@pytest.mark.parametrize("new_correction", [False, True])
 @pytest.mark.parametrize("foreign_cwd", [False, True])
+@pytest.mark.parametrize(("settlement", "new_correction"), [
+    (None, False), (None, True), ("normal", True), ("legacy_recovery", True),
+    ("legacy_changed_source", True), ("legacy_missing_projection", True),
+    ("legacy_missing_artifact", True), ("legacy_later_work", True),
+    ("legacy_missing_preparation", True), ("legacy_missing_receipts", True),
+    ("legacy_self_recovery_marker", True), ("legacy_partial_recovery", True),
+])
 def test_correction_generation_and_completion_follow_current_human_task(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, new_correction: bool, foreign_cwd: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, new_correction: bool, foreign_cwd: bool, settlement
 ) -> None:
     root = tmp_path / "project"
     root.mkdir()
@@ -54,7 +60,7 @@ def test_correction_generation_and_completion_follow_current_human_task(
         content="Correct the previous issue",
     )
     store = BlackboardStore(issue_dir)
-    state = store.load_or_create("repair_shop")
+    state = store.load_or_create("repair_shop", playbook_id="custom-corrections")
     events = [
         EventEntry(
             timestamp="2026-01-01T00:00:00Z",
@@ -94,6 +100,24 @@ def test_correction_generation_and_completion_follow_current_human_task(
                 "to_step": "repair_shop",
             },
         )
+        if settlement:
+            from cafe.core.human_task_records import HumanTaskRecordStore
+            records = HumanTaskRecordStore(issue_dir)
+            task = records.materialize(
+                workflow_id=state.workflow_id, step="publisher", iteration=2,
+                trigger="need_permission", policy_id="accept-output", prompt="Review",
+                expected_result={"decisions": [{"id": "fix_now", "correction": True}]},
+                continuations={"fix_now": "publisher"}, assignee_type="user",
+            )
+            result = records.complete(
+                workflow_id=state.workflow_id, task_id=task.id, source="command",
+                payload={"task": task.policy_id, "decision": "fix_now", "feedback": selected.content,
+                         "continuation": "repair_shop", "declared_continuation": "publisher",
+                         "supervisor_handoff_to": "repair_shop"},
+            )
+            event.timestamp = result.completed_at
+            event.data.update({"source": "command", "supervisor_handoff": True,
+                               "declared_to_step": "publisher"})
         store.log_event(state, event.step, event.event_type, event.message, event.data)
     # Same-step retry changes the baton sender, but owns the same inbound work.
     state.handoff_contract = HandoffContract(
@@ -144,10 +168,12 @@ workflow:
                 }
             },
             "publisher": {
+                "allowed_goto": ["repair_shop"],
                 "human_tasks": [
                     {
                         "task_id": "accept-output",
-                        "outcomes": {"fix_now": "repair_shop"},
+                        "trigger": "need_permission",
+                        "outcomes": {"fix_now": "publisher" if settlement else "repair_shop"},
                         "feedback_delivery": {
                             "artifact": "signals",
                             "source_kind": "approval",
@@ -161,6 +187,8 @@ workflow:
                 "skill": "repair-kit",
                 "role": "artisan",
                 "input_artifacts": ["signals"],
+                "output_artifact": "work",
+                "on": {"await_agent": "_done"},
             },
         },
     }
@@ -212,6 +240,86 @@ workflow:
         monkeypatch.chdir(tmp_path)
     passed, detail = executor._validate_projected_todo_completion_detail(checklist)
     assert passed, detail
+    if settlement:
+        from cafe.core.workflow_models import StepExecutionResult
+        from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
+        from cafe.ui.cli_shared import _consume_pending_chat_handoff
+
+        batch = ledger.write_pending_snapshot(
+            path=iteration / "workflow_feedback_batch.json", target_step="repair_shop", limit=100,
+        )
+        metadata_path = iteration / "iteration.json"
+        metadata = json.loads(metadata_path.read_text())
+        metadata.update({"iteration": 1, "step_name": "repair_shop", "agent_invoked": True})
+        metadata_path.write_text(json.dumps(metadata))
+        calls = []
+
+        def completed_consumer(name, declaration, current):
+            calls.append(name)
+            store.update_handoff_contract(current, from_step=name, to_owner=HandoffOwner.DONE,
+                                          to_step="done", intent=HandoffIntent.WORKFLOW_COMPLETE, source="test")
+            return StepExecutionResult(response="completed", artifacts={"work": str(output)},
+                                       agent_invoked=True, feedback_source_identities=batch)
+
+        runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=completed_consumer)
+        if settlement.startswith("legacy_"):
+            with monkeypatch.context() as legacy:
+                legacy.setattr(runtime, "_commit_delivered_feedback", lambda **kwargs:
+                               "the feedback completion evidence is invalid: workflow feedback source kind is not declared")
+                assert runtime.run(start_step="repair_shop").final_status_code == "INVALID_FEEDBACK_DELIVERY"
+            assert _consume_pending_chat_handoff(
+                issue_dir=issue_dir, playbook_data=playbook, requested_start_step=None,
+            ) is None
+            def no_replay(*args):
+                raise AssertionError("Completed consumer must not run again")
+            runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=no_replay)
+            if settlement == "legacy_changed_source":
+                raw = json.loads(ledger.path.read_text())
+                raw["entries"][-1]["content"] = "Changed correction."
+                ledger.path.write_text(json.dumps(raw))
+            elif settlement == "legacy_missing_projection":
+                raw = json.loads(metadata_path.read_text())
+                raw.pop("effective_checklist")
+                metadata_path.write_text(json.dumps(raw))
+            elif settlement == "legacy_missing_artifact":
+                runtime._latest_feedback_delivery_preparation(current_step="repair_shop")["artifact"] = {}
+            elif settlement == "legacy_later_work":
+                runtime.blackboard_store.record_event(runtime.blackboard, "step_started", {
+                    "step": "repair_shop", "iteration": 2,
+                })
+            elif settlement == "legacy_missing_preparation":
+                next(event for event in runtime.blackboard.events
+                     if event.event_type == "workflow_feedback_delivery_prepared").event_type = "observation"
+            elif settlement == "legacy_missing_receipts":
+                runtime._latest_feedback_delivery_preparation(current_step="repair_shop").pop("supervisor_sources")
+            elif settlement == "legacy_self_recovery_marker":
+                prepared = runtime._latest_feedback_delivery_preparation(current_step="repair_shop")
+                prepared["recovered_from_delivery_id"] = prepared["delivery_id"]
+            elif settlement == "legacy_partial_recovery":
+                original_record = runtime.blackboard_store.record_event
+                def interrupted_record(current, event_type, data):
+                    original_record(current, event_type, data)
+                    if event_type == "workflow_feedback_delivery_prepared" and data.get("recovered_from_delivery_id"):
+                        raise RuntimeError("Recovery publication interrupted")
+                with monkeypatch.context() as interrupted:
+                    interrupted.setattr(runtime.blackboard_store, "record_event", interrupted_record)
+                    with pytest.raises(RuntimeError, match="publication interrupted"):
+                        runtime.run()
+                runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=no_replay)
+            if settlement not in {"legacy_recovery", "legacy_partial_recovery"}:
+                assert runtime.run().final_status_code == "INVALID_FEEDBACK_DELIVERY"
+                assert calls == ["repair_shop"]
+                assert ledger.pending(target_step="repair_shop")
+                return
+            assert runtime.run().completed
+            assert runtime.run().completed
+        else:
+            assert runtime.run(start_step="repair_shop").completed
+        assert calls == ["repair_shop"]
+        assert not ledger.pending(target_step="repair_shop")
+        deliveries = [event for event in runtime.blackboard.events
+                      if event.event_type == "workflow_feedback_delivered"]
+        assert len(deliveries) == 2  # Retained old completion plus this exact batch.
     # Causal source content remains authoritative even after the producing cwd changes.
     ledger.path.unlink()
     assert not executor._validate_projected_todo_completion(checklist)

@@ -8,6 +8,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -131,6 +132,24 @@ def _local_result(commands, dest, proposal):
     if code != 1:
         raise OperationError("ancestry_unavailable", state="unknown", returncode=code)
     return None
+
+
+def _validate_prepared_local_result(commands, dest, proposal, commit):
+    observation = _local_evidence(commands, dest)
+    if (observation["head"] != commit or not observation["clean"] or observation["pending"]
+            or commands.git(dest, "symbolic-ref", "--short", "HEAD") != proposal.target_branch):
+        raise OperationError("inconsistent_integrated_checkout", state="unknown")
+    if commit == proposal.target_oid:
+        # The reviewed source may already be contained in the approved target.
+        return
+    if proposal.strategy == "ff-only":
+        if commit == proposal.source_oid:
+            return
+    else:
+        parents = commands.git(dest, "rev-list", "--parents", "-n", "1", commit).split()[1:]
+        if parents == [proposal.target_oid, proposal.source_oid]:
+            return
+    raise OperationError("unreconciled_local_attempt", state="unknown")
 
 
 def _local_evidence(commands, dest):
@@ -409,7 +428,15 @@ def execute_action(
             if action == "integration" and p.mode == "local":
                 with _destination_lock(p.destination):
                     dest = _local_identity(commands, root, p, reconcile_only=reconcile_only)
+                    observed_tip = commands.git(dest, "rev-parse", "HEAD")
+                    if p.local_preparation and not reconcile_only and observed_tip != p.target_oid:
+                        raise OperationError("changed_destination")
+                    if (p.local_preparation and prior and prior.get("state") == "succeeded"
+                            and observed_tip != prior.get("commit")):
+                        raise OperationError("changed_integrated_destination")
                     result = _local_result(commands, dest, p)
+                    if p.local_preparation and result is not None:
+                        _validate_prepared_local_result(commands, dest, p, result["commit"])
                     if result is None:
                         if prior and prior["state"] not in {"not_dispatched", "blocked"}:
                             settled = _settled_local_attempt(commands, dest, prior, p)
@@ -420,18 +447,26 @@ def execute_action(
                         if commands.git(dest, "rev-parse", "HEAD") != p.target_oid:
                             raise OperationError("changed_destination")
                         before = _local_evidence(commands, dest)
+                        if before["head"] != p.target_oid:
+                            raise OperationError("changed_destination")
                         if before["pending"]:
                             raise OperationError("unfinished_destination_operation")
                         store.start(action, local_before=before)
-                        flag = "--ff-only" if p.strategy == "ff-only" else "--no-ff"
-                        _, code = _dispatch(
-                            commands,
-                            store,
-                            action,
-                            ["git", "-C", str(dest), "merge", flag, "--no-edit", p.source_oid],
-                            allow_failure=True,
-                        )
+                        if p.local_preparation:
+                            argv = [
+                                sys.executable, "-I", "-m", "cafe.delivery.local_git", str(dest),
+                                p.strategy, p.target_branch, p.target_oid, p.source_oid,
+                                p.source_branch, str(root.resolve()),
+                            ]
+                        else:
+                            flag = "--ff-only" if p.strategy == "ff-only" else "--no-ff"
+                            argv = ["git", "-C", str(dest), "merge", flag, "--no-edit", p.source_oid]
+                        _, code = _dispatch(commands, store, action, argv, allow_failure=True)
+                        if p.local_preparation and code:
+                            raise OperationError("prepared_integration_failed", returncode=code)
                         result = _local_result(commands, dest, p)
+                        if result is not None and p.local_preparation:
+                            _validate_prepared_local_result(commands, dest, p, result["commit"])
                         if result is None:
                             if code:
                                 raise OperationError("integration_conflict", returncode=code)

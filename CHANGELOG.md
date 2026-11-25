@@ -4,6 +4,43 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.14.0] - 2026-11-25
+
+### Added
+
+- Publish workflow status and the current phase iteration to a paired CAFE
+  Dashboard connector. Workflows can appear before they have a pending task,
+  and their summaries stay available after worktree cleanup (#685, #689).
+- Review and approve the exact Git diff before integrating locally without a
+  remote provider. Closeout preserves evidence for retries, including when
+  the worktree and the archive are on different volumes (#687, #688).
+- Show pending human handoffs and overdue worker progress to the Manager
+  (#687, #688).
+
+### Changed
+
+- Preview Develop clarification context and streamline how saved prompts and
+  checklist information are passed to a resumed session (#686).
+- Carry unresolved Review findings and the relevant evidence into Develop
+  corrections (#686, #687, #688).
+
+### Fixed
+
+- Recover workflows interrupted before an agent session was saved. Resume
+  Supervisor corrections from saved feedback and recover interrupted handoffs
+  that require a fresh agent session.
+- Resume interrupted staged commits under the original approval and preserve
+  accepted local delivery when upgrading an in-flight workflow (#687, #688).
+- Preserve Dashboard publications through cleanup and connector pairing changes
+  (#685).
+
+### Tests
+
+- Reuse prepared diagnostic playbook YAML across chat tests while keeping each
+  case's repository and workflow state isolated.
+
+See [the v0.14.0 release notes](docs/releases/v0.14.0.md) for upgrade guidance.
+
 ## [0.13.0] - 2026-11-20
 
 ### Added
@@ -1121,6 +1158,7 @@ Major milestone release: deep refactor of CAFE's workflow engine from hardcoded 
 - Interactive phase management with checklist validation
 - GitHub integration for issue and PR management
 
+[0.14.0]: https://github.com/luyotw/cafe/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/luyotw/cafe/compare/v0.12.3...v0.13.0
 [0.12.3]: https://github.com/luyotw/cafe/compare/v0.12.2...v0.12.3
 [0.12.2]: https://github.com/luyotw/cafe/compare/v0.12.1...v0.12.2

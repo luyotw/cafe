@@ -1,7 +1,7 @@
 ---
 name: cafe-develop
-description: "依計畫進行程式開發與測試"
-version: 1.12.0
+description: Implement and test authorized workflow work from the current handoff, plan or corrective feedback.
+version: 1.12.2
 workflow:
   step_defaults:
     version: 1
@@ -143,28 +143,28 @@ Read your agent file: {agent_file}
 - Use the workflow inputs listed in the runtime context. When a specification or plan is supplied, treat it as authoritative for this run.
 
 ## Instructions
-- `## Todo Progress` 的 completed item 必須使用可驗證 evidence contract：每項最多 32 個 `Files` 與 8 個 `Commit`；`Files` 列出 backtick 包住的 repo-relative tracked paths；`Commit` 列出涵蓋這些檔案且可解析的完整 backtick SHA。確實沒有 repository change 時，`Files` 寫 `N/A (no repository changes)`、`Commit` 寫 `N/A (no repository changes): <reason>`。任何 completed item 都只在 worktree clean（含 untracked files）時有效。`Files` 與 `Commit` 不得杜撰或改用自由文字。`Targeted evidence` 為選填的自由說明文字，不受格式限制，可以省略。
-- 依目前 workflow 已提供的需求與計畫逐項完成；若此 workflow 未提供 spec 或 plan，依使用者輸入與 review feedback 完成範圍內修正
-- 先補測試再改程式
-- 第一次探索只做一輪：讀一次已提供的 spec、plan 與 feedback，再針對可用 Test List 與預計修改點搜尋程式碼；未出現新證據時不得重讀同一檔案或重跑相同的搜尋、`git status`、`git diff`
-- 實作中只執行與變更直接相關的 targeted checks，並保持輸出有界；若 workflow 提供 plan，將 checks 對應其 Test List；不要在本 phase 重複 repository 的 full-suite、coverage、release 或 pre-push gate
-- 若 workflow 提供 plan，新增或修改的測試必須對應其 **Test List** 項目（範圍變更時先更新計畫）
-- 斷言以 invariant 為主：避免綁定 UI copy、CSS class、DOM 結構、內部 state shape；允許 a11y role/label、`data-testid`、以及規格明訂的文案（見 `cafe-plan/references/test_invariants_policy.md`）
-- 將一次 Develop CLI invocation 視為同一個持續執行單位：只要仍有已授權且可執行的未完成工作，就繼續處理；完成一個 bounded unit、commit 或 targeted check 都只是進度，不是 iteration 邊界、checkpoint 終點或 handoff 理由
-- 每完成一個 bounded unit，先驗證 evidence，再立即更新 `{output_file}` 的 `## Todo Progress` ledger；accepted plan 與 feedback 是不可變輸入，不得修改其 checkbox 或 Task Status。每筆 ledger 記錄 item ID、status、source fingerprint、files、commit（無 commit 時明列理由）、remaining work 與 next action，然後直接繼續下一個未完成項目
-- retry 或重新進入 phase 時，先從 plan、review feedback 與 `{output_file}` 重建未完成工作，並對照目前 worktree、dependency 與 evidence 驗證既有進度；不得只因 checkbox 已勾選或 commit 存在就假定工作完成，只跳過證據仍有效的項目
-- 不得以純進度說明、要求外部再說 `continue`／`resume`、或等待下一次呼叫作為結束本次 invocation 的方式
-- 只有三種情況可以結束本次 invocation：所有適用 checklist gate 與工作均已完成並寫出合法 handoff；確實需要 clarification、permission 或 user arbitration 並寫出合法 handoff；或 provider/tool 無法繼續。最後一種情況只保留真實 checkpoint，不得偽造已完成 checkbox、問題或 baton
-- checklist 的 `[x]` 只有在本輪 Todo item 的 source fingerprint 與 ledger evidence 仍匹配時才可保留；不得以相似 wording、既有 commit 或上游 artifact checkbox 取代 evidence
-- 在 handoff 前寫入非空的 development summary 到 `{output_file}`
-- 維持既有 commit 風格與程式碼註解語言
-- 優先重用現有模式與工具
-- Repo 搜尋與輸出上限：請依 shared skill「cafe-workflow-common」的 **Bounded repository inspection**；本 skill 不重複敘述。
-- Repository hooks、CI 與 phase-local targeted checks 的分工：請依 shared skill「cafe-workflow-common」的 **Repository-owned quality gates**；本 skill 不重複敘述。
-- 與 reviewer 往返、blackboard/baton 更新、以及 user 仲裁等跨 phase 規則：請依 shared skill「cafe-workflow-common」的 **Develop and review disagreement protocol** 與 **Shared Rules**；本 skill 不重複敘述。
+- Complete the current authorized work from the supplied requirements and plan; when neither is supplied, use the current request and corrective feedback.
+- Follow **First Steps** in `cafe-workflow-common` for fresh or resumed context recovery. Apply clarification answers to their matching questions and continue pending work; verify requested corrections against their active feedback. Do not restart discovery merely because the iteration changed.
+- Make one bounded discovery pass for the current item: consult only missing requirements, Test List entries and feedback, then search the expected implementation points. Without new evidence, do not reread unchanged files or repeat the same search, `git status` or `git diff`.
+- Add tests before changing behavior. Map new or changed tests to the supplied plan's **Test List**. When an accepted plan is supplied and scope changes, first use the workflow's planning route to update that plan before implementation; a clarification answer alone does not revise it. If no such route exists, request an authorized handoff rather than inventing one.
+- Assert invariants rather than UI copy, CSS classes, DOM structure or internal state shape. Accessibility roles/labels, `data-testid` and specification-mandated copy are allowed; see `cafe-plan/references/test_invariants_policy.md`.
+- Run bounded targeted checks for the changed behavior, mapped to the plan's Test List when supplied. Do not duplicate repository full-suite, coverage, release or pre-push gates in this phase.
+- Keep this invocation running through every authorized executable item. A bounded unit, commit or targeted check is progress, not an iteration boundary or reason to hand off.
+- After each bounded unit, validate evidence and immediately update `{output_file}` `## Todo Progress`, then continue. Record item ID, status, source fingerprint, files, commit (or an explicit reason for none), remaining work and next action. Accepted plan and feedback are immutable: never edit their checkboxes or Task Status.
+- When a clarification answer arrives in the same session with usable context, apply it to the interrupted item and take its next authorized action. Read only what the answer requires or what resolves changed or missing context. Save the checklist sweep for completion. In a new or replacement session, recover the item and next action from the bounded blackboard handoff, existing progress ledger and relevant declared inputs.
+- Recheck claims affected by new answers, changed sources, worktree or dependencies, or missing/stale evidence; retain unaffected evidence only while its source fingerprint and applicability still hold. A checked box or existing commit alone is not completion, and Git evidence alone does not establish test-result applicability.
+- Use exactly `### <item ID>` as each ledger entry's heading, without a title suffix. For each completed item, list at most 32 backtick-quoted repo-relative tracked paths in `Files` and 8 resolvable full backtick-quoted SHAs covering those files in `Commit`. With no repository changes, use `Files: N/A (no repository changes)` and `Commit: N/A (no repository changes): <reason>`. Completion requires a clean worktree, including untracked files. Never invent Files/Commit or replace them with free text. `Targeted evidence` is optional informational prose.
+- Retain a checklist `[x]` only when the current Todo source fingerprint and ledger evidence still match; similar wording, an old commit or an upstream checkbox cannot replace evidence.
+- End only when all applicable work and checklist gates are complete with a valid handoff; a real clarification, permission or arbitration requires a valid handoff; or the provider/tool cannot continue. In the last case preserve a truthful checkpoint without inventing completion, questions or a baton. A progress-only reply or request for another `continue`/`resume` is not a valid stopping point.
+- Before a blocking clarification, checkpoint the blocked item, its next action, and any new progress in `{output_file}`, then write the question and clarification baton. Leave final checklist and completion checks for the successful handoff.
+- For other handoffs, write a non-empty development summary to `{output_file}`. Focus on new changes, decisions and remaining work; preserve relevant earlier evidence without retelling the full history.
+- Reuse existing patterns and tools; preserve repository commit style and code-comment language.
+- Follow `cafe-workflow-common` **Bounded repository inspection**, **Repository-owned quality gates**, **Develop and review disagreement protocol** and **Shared Rules** for inspection limits, gate ownership, disputes and handoff.
 
 ## Output
 Write development summary to: {output_file}
 
 ## Handoff
-- 依照本輪結果寫入 next-step baton；blackboard 由 runtime 更新。
+Write next-step baton for this result; the runtime updates the blackboard.
+
+For a one-time staged commit permission, save `staged_commit_request.json` beside the current output with a single-line `message` and boolean `skip_hooks`. Set `skip_hooks` to true only when explicitly requesting an exception for this commit. Submit the existing permission handoff and leave the staged state intact. At continuation use the runtime-supplied commit command.

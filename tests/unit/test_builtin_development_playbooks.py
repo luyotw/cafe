@@ -796,8 +796,27 @@ def test_phase_defaults_preserve_pre_change_complete_semantic_contracts(tmp_path
                         task["outcomes"][decision] = "deliver"
             from cafe.core.playbook import PlaybookDefinition
             model = PlaybookDefinition.model_validate(data)
+        serialized = model.model_dump(mode="json")
+        for step, definition in serialized["steps"].items():
+            # Local delivery chooses its presentation at runtime. The bundled
+            # base bindings keep their original task policies and outcomes.
+            for task in definition["human_tasks"]:
+                assert task.pop("presentation_task") is None
+            local_review = definition.pop("local_review")
+            if step == "pr" and name in {"standard", "bug"}:
+                assert local_review == {
+                    "presentation_task": "reviewed-revision",
+                    "review_step": "review",
+                    "implementation_step": "develop",
+                    "result_artifact": "local_review_result",
+                    "outcomes": {"confirm": "_done", "fix_now": "develop"},
+                    **({"integration_step": "deliver", "integration_artifact": "local_preparation"}
+                       if name == "standard" else {}),
+                }
+            else:
+                assert local_review is None
         contract = {
-            "model": model.model_dump(mode="json"),
+            "model": serialized,
             "behavior": {step: resolve_step_behavior(model, step).model_dump(mode="json")
                          for step in model.steps},
             "simulation": dataclasses.asdict(analyze_playbook(model)),

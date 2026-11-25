@@ -40,6 +40,9 @@ def _paused_task(
     manager: bool = False,
     required_input: bool = False,
     source_present: bool = False,
+    feedback_clarification: bool = False,
+    task_user_owned: bool = False,
+    exact_handoff: bool = False,
 ):
     step = "verify" if confirm else "design"
     task_name = "output-review" if confirm else "known-answer"
@@ -56,6 +59,8 @@ def _paused_task(
             {"id": "confirm", "label": "Confirm"},
             {"id": "revise", "label": "Revise"},
         ]
+    elif feedback_clarification:
+        policy.update(pattern="revision_feedback", input_schema="feedback")
     else:
         policy["questions"] = [
             {"id": "storage", "prompt": "Storage?", "options": ["SQLite", "Postgres"]},
@@ -209,9 +214,10 @@ def _paused_task(
         "driver_confirmable": [step] if confirm else [],
         "mandatory_human_stops": [],
     }
+    declared_task = {"phase": step, "task_id": task_name}
     proposal["task_contract"] = {
-        "user_required": [],
-        "driver_confirmable": [{"phase": step, "task_id": task_name}],
+        "user_required": [declared_task] if task_user_owned else [],
+        "driver_confirmable": [] if task_user_owned else [declared_task],
     }
     build_contract, persist_contract = build_initial_contract, write_contract
     if manager:
@@ -247,6 +253,10 @@ def _paused_task(
         expected_result=resolved.model_dump(mode="json"),
         continuations=binding.outcomes,
         assignee_type="user",
+        handoff_key=(
+            f"user-handoff:{board.workflow_id}:{step}:{trigger}:{board.handoff_contract.created_at}"
+            if exact_handoff else None
+        ),
     )
     return issue_dir, task, digest, contract, spec, report
 

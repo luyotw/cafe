@@ -146,6 +146,36 @@ def test_review_execute_outcome_and_restart_are_automatic(
     assert ctx[1].exists()  # Cleanup remains an explicit separate command.
 
 
+@pytest.mark.parametrize("final_github", [False, True])
+def test_cleanup_uses_final_accepted_route_after_prepared_config_drift(
+    local_action, fake_github, tmp_path, final_github,
+):
+    from cafe.delivery.contracts import ActionSnapshot
+    from cafe.delivery.records import ActionStore
+    from cafe.manager.local_cleanup import has_local_integration
+
+    ctx = setup(local_action, tmp_path, github=final_github)
+    runtime, _ = run(ctx)
+    answer(ctx, runtime, "integrate_only")
+    runtime, result = run(ctx)
+    assert result.final_status_code == "BATON_CONFIRM_OUTPUT", result
+    answer(ctx, runtime, "confirm")
+    issue = ctx[2]
+    if final_github:
+        previous = local_action[3]
+        proposal = previous.proposal.model_copy(update={"workflow_id": runtime.blackboard.workflow_id})
+        previous = ActionSnapshot(
+            proposal=proposal, proposal_digest=proposal.digest, task_id=previous.task_id,
+            result_id=previous.result_id, selected=previous.selected,
+        )
+        store = ActionStore(issue, previous)
+        store.directory.mkdir(parents=True)
+        (store.directory / "actions.json").write_text(previous.model_dump_json())
+    # The retained receipt decides the mode even when the issue configuration drifted.
+    config = {ctx[-1]: {"mode": "local" if final_github else "github", "destination": str(ctx[1])}}
+    assert has_local_integration(issue, config) is (not final_github)
+
+
 @pytest.mark.parametrize(
     "case",
     [

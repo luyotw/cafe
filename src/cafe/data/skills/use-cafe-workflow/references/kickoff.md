@@ -631,3 +631,5 @@ authorizes execution after workflow completion and delivery acceptance. Do not
 move cleanup selection into deliver or add a second terminal prompt for an
 already-confirmed choice. Changed commands, targets, effects or selections need
 explicit user reconfirmation through the existing Manager contract API.
+
+When the user selects acceptance of the independently reviewed local commit as the endpoint, pass `--local-review` to preparation for a playbook declaring that endpoint. Present the reviewed commit and its recorded checks for human acceptance. Integration destination, strategy and integration verification settings apply to integration choices. A manual PR selection retains its existing `--no-auto-create-pr` route.

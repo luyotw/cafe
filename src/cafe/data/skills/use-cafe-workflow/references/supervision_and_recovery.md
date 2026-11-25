@@ -8,7 +8,7 @@ recurrence counter, or additional runtime evidence schema.
 
 ## Observe active work
 
-Inspect `cafe status`, the relevant `cafe show` surfaces, the active HumanTask,
+Use the callback supervision summary for routine or verified later handoffs. A worker progress deadline, repeated problem, missing fact or contradiction calls for scoped inspection. For an open task, check its current authority before acting. As needed, inspect `cafe status`, the relevant `cafe show` surfaces, the active HumanTask,
 baton/handoff state, and bounded process output. Establish the current workflow,
 phase, iteration, task, operating mode, process owner, and applicable authority
 from what those surfaces currently show. Do not act from chat memory alone or

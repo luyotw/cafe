@@ -44,7 +44,7 @@ class DeliveryPresentation:
         return self.playbook["steps"][self.step]
 
 
-def materialize_task(ctx, prompt, *, trigger="confirm_output"):
+def materialize_task(ctx, prompt, *, trigger="confirm_output", handoff_key=None):
     state = ctx.state
     step = ctx.step
     policy, binding = resolve_step_human_task(
@@ -69,6 +69,8 @@ def materialize_task(ctx, prompt, *, trigger="confirm_output"):
     shown_prompt = policy.prompt + "\n\n" + prompt
     superseded = []
     if existing:
+        if handoff_key and existing[-1].handoff_key != handoff_key:
+            raise ValueError("pending task belongs to another delivery choice")
         if existing[-1].prompt != shown_prompt:
             from cafe.delivery.closeout import read_result_contract
 
@@ -105,7 +107,7 @@ def materialize_task(ctx, prompt, *, trigger="confirm_output"):
         handoff_key=(
             f"delivery-result:{state.workflow_id}:{step}:{ctx.iteration}:{digest(shown_prompt)}"
             if superseded
-            else None
+            else handoff_key
         ),
         superseded_task_ids=superseded,
     )
@@ -230,6 +232,16 @@ def present_action(
 
     verification = DeliveryVerification.model_validate(request["verification"])
     reviewed = output
+    local_evidence = ""
+    reviewed_head = None
+    if binding.local_preparation_artifact:
+        from cafe.delivery.reviewed_result import integration_evidence
+
+        entry = state.artifacts.get(binding.local_preparation_artifact)
+        if entry is None or request["mode"] != "local":
+            raise ValueError("declared local preparation artifact is missing")
+        local_evidence, reviewed_head = integration_evidence(ctx.issue_dir, state, entry)
+        reviewed = (root / entry.path).resolve(strict=True)
     if binding.publication_artifact:
         entry = state.artifacts.get(binding.publication_artifact)
         if entry is None:
@@ -243,6 +255,8 @@ def present_action(
     commands = Commands(30)
     source = commands.git(root, "rev-parse", "HEAD")
     branch = commands.git(root, "symbolic-ref", "--short", "HEAD")
+    if reviewed_head is not None and source != reviewed_head:
+        raise ValueError("checked out source differs from reviewed source")
     mode = request["mode"]
     publication_url = ""
     if mode == "local":
@@ -316,7 +330,15 @@ def present_action(
             raise ValueError("published PR link differs from the reviewed PR identity")
         target = pr["base"]["sha"]
         destination = ""
+    if reviewed_head is not None and (
+        commands.git(Path(destination), "rev-parse", "--path-format=absolute", "--git-common-dir")
+        != repository or branch == request["target_branch"]
+    ):
+        raise ValueError("local preparation requires the same repository and distinct source and target")
     proposals, review_source = _proposals(state, binding, ctx.issue_dir)
+    if reviewed_head is not None:
+        for item in proposals:
+            commands.git(root, "merge-base", "--is-ancestor", item.evidence_head, source)
     proposal = ActionProposal(
         workflow_id=state.workflow_id,
         approval_step=binding.approval_step,
@@ -333,6 +355,7 @@ def present_action(
         issue_repository=request.get("issue_repository", ""),
         proposals=proposals,
         review_source=review_source,
+        local_preparation=binding.local_preparation_artifact,
         reviewed_artifact=str(reviewed.resolve().relative_to(ctx.issue_dir.resolve())),
         reviewed_artifact_sha256=hashlib.sha256(reviewed.read_bytes()).hexdigest(),
         verification=verification,
@@ -350,7 +373,7 @@ def present_action(
 
     owner = SkillLoader(project_root=root).get_skill_dir(ctx.step_def["skill"])
     locale = getattr(state, "conversation_locale", "en-US")
-    prefix = "human_task.delivery" if binding.publication_artifact else "human_task.cafe_pr"
+    prefix = "human_task.delivery" if binding.publication_artifact or binding.local_preparation_artifact else "human_task.cafe_pr"
     shown = render_text(
         prefix + ".delivery_bundle",
         locale=locale,
@@ -394,6 +417,8 @@ def present_action(
     shown += "\n\nPost-integration verification:\n" + json.dumps(
         verification.model_dump(mode="json"), ensure_ascii=False, indent=2
     )
+    if local_evidence:
+        shown += "\n\n" + local_evidence.rstrip()
     shown += f"\n\nAction proposal SHA256: {proposal.digest}"
     task = materialize_task(ctx, shown, trigger=trigger)
     save_shown_proposal(ctx.issue_dir, task, proposal)

@@ -206,3 +206,52 @@ def test_automatic_delivery_requires_choices_before_creating_branch(local_action
     assert "automatic delivery requires prepare choices" in result.output
     assert git(root, "branch", "--show-current") == "feature"
     assert not (root / ".cafe/issues/missing-endpoint/issue.yaml").exists()
+
+
+@pytest.mark.parametrize(
+    "publication, mode, endpoint, expected",
+    [
+        (False, "local", None, "local_preparation"),
+        (False, None, None, "agent"),
+        (False, "local", "manual", "agent"),
+        (True, "local", None, "agent"),
+        (True, "github", None, "agent"),
+        (False, None, "local-review", "local_review"),
+        (False, "local", "local-review", "invalid"),
+        (False, "incomplete", None, "invalid"),
+    ],
+)
+def test_prepared_standard_routes_compare_explicit_choices(tmp_path, publication, mode, endpoint, expected):
+    from cafe.delivery.prepared import resolve_local_review
+    from cafe.playbooks.loader import PlaybookLoader
+
+    standard = PlaybookLoader(project_root=tmp_path).load("standard")
+    config = {"pr": {"auto_create": publication}}
+    if endpoint:
+        config["pr"]["endpoint"] = endpoint
+    if mode in {"local", "incomplete"}:
+        config["deliver"] = {"mode": "local"}
+        if mode == "local":
+            config["deliver"].update(
+                destination=str(tmp_path), target_branch="develop", strategy="ff-only",
+                verification={"not_required_reason": "Offline test"},
+            )
+    if mode == "github":
+        config["deliver"] = {
+            "mode": "github", "target_branch": "develop", "strategy": "merge",
+            "verification": {"not_required_reason": "Fixture verification"},
+        }
+    if expected == "invalid":
+        with pytest.raises(ValueError):
+            resolve_local_review(standard, config)
+    else:
+        effective = resolve_local_review(standard, config)
+        declaration = effective["steps"]["pr"].get("automatic", {})
+        assert declaration.get("executor", "agent") == expected
+        delivery = effective["steps"]["deliver"]
+        binding = delivery["delivery"]
+        if expected == "local_preparation":
+            assert binding["local_preparation_artifact"] in delivery["input_artifacts"]
+            assert "publication_artifact" not in binding
+        else:
+            assert binding["publication_artifact"] in delivery["input_artifacts"]

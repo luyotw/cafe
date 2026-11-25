@@ -356,7 +356,8 @@ repeat it when the user already has the same task and options unless they ask.
    the required contract and evidence verification. For `need_clarification`,
    record a concise contract basis and do not submit when the answer changes
    the contract, triggers a deviation, needs new authority, is reserved to the
-   user, or its authority is uncertain.
+   user, or its authority is uncertain. Use **Evidence for a technical
+   clarification** in `handoffs_and_alignment.md` to select what to read.
 3. For a `manager_confirmable` answer, save `{"response": ..., "evidence": ...}`
    as an assessment file. Inspect that exact assessment with
    `inspect_task_authority.py --assessment <file>` and pass its

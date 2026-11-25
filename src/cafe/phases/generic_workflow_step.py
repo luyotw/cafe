@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional
 from uuid import uuid4
 
+from cafe.core.runtime_locales import render_text
+from cafe.core import staged_commit
 from cafe.agents.manager import AgentManager
 from cafe.constraints.context import context_for_tools
 from cafe.core.artifact_validation import (
@@ -47,7 +49,7 @@ from cafe.core.delta_packet import (
     persist_delta_input_snapshot,
     persist_delta_packet,
 )
-from cafe.core.git import GitOperations
+from cafe.core.git import GitError, GitOperations
 from cafe.core.hooks import HookResult, NoChangesNeededHandler, PermissionRetryHandler
 from cafe.core.human_task_records import (
     HumanTaskRecordError,
@@ -85,6 +87,7 @@ from cafe.core.route_catalog import (
     build_route_projection,
     evaluate_route_readiness,
     normalize_route_target,
+    route_choices,
     select_route_label,
 )
 from cafe.core.session_continuation import (
@@ -117,8 +120,10 @@ from cafe.core.todo import (
 )
 from cafe.core.types import AgentCLI, AgentConfig, CliEntry
 from cafe.core.workflow_feedback import (
+    WorkflowFeedbackError,
     WorkflowFeedbackLedger,
     feedback_todo_mappings,
+    supervisor_feedback_receipts,
 )
 from cafe.core.workflow_models import BatonRejected, StepExecutionResult
 from cafe.core.workflow_tools import normalize_allowed_tools, runtime_granted_tools
@@ -660,13 +665,6 @@ class GenericWorkflowStepExecutor(Phase):
         execution_context: Optional[Mapping[str, Any]] = None,
         before_agent: Optional[Callable[[], None]] = None,
     ) -> StepExecutionResult:
-        if execution_context is not None:
-            from cafe.core.execution_checkpoints import checkpoint
-            receipt = checkpoint(execution_context, "resume", round_id=step_name, parent_id="phase-entry")
-            if not receipt["passed"]:
-                raise ValueError("execution_checkpoint_blocked: " + json.dumps(receipt["findings"]))
-            instructions = "Resolved execution checkpoint context:\n" + json.dumps(execution_context)
-            extra_prompt = (extra_prompt + "\n" if extra_prompt else "") + instructions
         self._execution_context = execution_context
         self._resolved_execution_chains = (execution_context.get("phase_chains", {})
                                            if execution_context is not None else {})
@@ -676,14 +674,6 @@ class GenericWorkflowStepExecutor(Phase):
         self.phase_name = step_name
         self.phase_dir = self.issue_dir / step_name
         self.phase_dir.mkdir(parents=True, exist_ok=True)
-
-        # A playbook rollout can introduce a workspace companion after its
-        # producer already completed. Refresh it from the one producer named
-        # by the declarations when its committed Git snapshot is stale.
-        self._refresh_declared_workspace_input(
-            step_def=step_def,
-            blackboard_state=blackboard_state,
-        )
 
         self.iteration = self._get_next_iteration_number(step_name, self.phase_dir)
         from cafe.core.workflow_control import current_control
@@ -698,14 +688,43 @@ class GenericWorkflowStepExecutor(Phase):
         ):
             self._invocation_order = None
         self._delta_packet_metadata = None
+        self._correction_review_projection = None
         iteration_dir = self._get_iteration_dir(self.iteration)
-        new_iteration = not iteration_dir.exists()
         iteration_dir.mkdir(parents=True, exist_ok=True)
-        if new_iteration:
+        # HumanTask continuations can stage user_input.md before execution.
+        if not self._resolve_iteration_context_file(iteration_dir).exists():
             self._persist_agent_invocation_marker(
                 iteration_dir=iteration_dir,
                 agent_invoked=False,
             )
+
+        if execution_context is not None:
+            from cafe.core.execution_checkpoints import checkpoint
+            receipt = checkpoint(execution_context, "resume", round_id=step_name, parent_id="phase-entry")
+            if not receipt["passed"]:
+                raise ValueError("execution_checkpoint_blocked: " + json.dumps(receipt["findings"]))
+            instructions = "Resolved execution checkpoint context:\n" + json.dumps(execution_context)
+            extra_prompt = (extra_prompt + "\n" if extra_prompt else "") + instructions
+
+        self._staged_task = (staged_commit.active_task(self.issue_dir, blackboard_state, step_name)
+                             if step_def.get("workspace_artifact") else None)
+        if self._staged_task:
+            import shlex
+            command = shlex.join(["cafe", "task", "commit-staged", self._staged_task.id,
+                                  "--issue-dir", str(self.issue_dir.resolve())])
+            extra_prompt = (extra_prompt or "") + "\n" + render_text(
+                "workspace.commit_resume", locale=blackboard_state.conversation_locale, command=command,
+            )
+            staged_commit.verify(self.issue_dir, self._staged_task)
+
+        # A playbook rollout can introduce a workspace companion after its
+        # producer already completed. Refresh it from the one producer named
+        # by the declarations when its committed Git snapshot is stale.
+        self._refresh_declared_workspace_input(
+            step_def=step_def,
+            blackboard_state=blackboard_state,
+        )
+
         portion_baton_path = (
             iteration_dir / "hybrid_portion_baton.json" if is_hybrid_portion else None
         )
@@ -780,6 +799,17 @@ class GenericWorkflowStepExecutor(Phase):
             step_name=step_name,
             continuation=self._session_continuation,
         )
+        if (
+            self.iteration > 1
+            and not same_invocation_retry
+            and canonical_skill_name(skill_name) in {"cafe-develop", "cafe-review"}
+            and self._session_continuation.is_exact
+            and self._correction_session_model_changed(effective_agent_config)
+        ):
+            self._session_continuation = SessionContinuation.new()
+            effective_agent_config = self._resolve_execution_config_for_iteration(
+                agent_name=agent_name, step_name=step_name, continuation=self._session_continuation,
+            )
         context = self._build_context(
             step_name=step_name,
             step_def=step_def,
@@ -947,10 +977,6 @@ class GenericWorkflowStepExecutor(Phase):
                 if not recovery_authorized:
                     budget.consume()
                 self._save_artifact_correction(iteration_dir, budget)
-            self._persist_agent_invocation_marker(
-                iteration_dir=iteration_dir,
-                agent_invoked=True,
-            )
             if self._delta_packet_metadata is not None:
                 phase_specific_data["delta_packet"] = dict(self._delta_packet_metadata)
             resolved_user_input = self._get_resolved_iteration_user_input(step_name)
@@ -975,6 +1001,7 @@ class GenericWorkflowStepExecutor(Phase):
                         "accounting_workspace_locked": True,
                         "allow_session_replacement": not same_invocation_retry,
                     },
+                    session_replacement_context=self._render_correction_recovery,
                     backup_context_callback=lambda error: self._build_backup_takeover_context(
                         error=error,
                         step_name=step_name,
@@ -1012,7 +1039,8 @@ class GenericWorkflowStepExecutor(Phase):
                     iteration_dir=iteration_dir,
                 )
             else:
-                response, _ = execute_agent()
+                with staged_commit.provider_scope(self.issue_dir, self._staged_task):
+                    response, _ = execute_agent()
             return response
 
         def transform_runtime_context(runtime_context: Dict[str, str]) -> Dict[str, str]:
@@ -2406,8 +2434,9 @@ class GenericWorkflowStepExecutor(Phase):
         *,
         iteration_dir: Path,
         agent_invoked: bool,
+        dispatch_started: bool = False,
     ) -> None:
-        """Persist whether this iteration crossed the agent execution boundary."""
+        """Persist the monotonic invocation flag and the start of an actual call."""
         context_file = self._resolve_iteration_context_file(iteration_dir)
         context_data: object = {}
         if context_file.exists():
@@ -2422,6 +2451,11 @@ class GenericWorkflowStepExecutor(Phase):
         if context_data.get("agent_invoked") is True and not agent_invoked:
             return
         context_data["agent_invoked"] = agent_invoked
+        if dispatch_started:
+            context_data["session_invocation_started_at"] = datetime.now().astimezone().isoformat()
+            recovery = getattr(self, "_session_recovery", None)
+            if recovery is not None and context_data.get("session_recovery") == recovery:
+                context_data["session_recovery_consumed"] = recovery["human_task_id"]
         persist_iteration_metadata(context_file, context_data)
 
     def _build_backup_takeover_context(
@@ -2495,6 +2529,8 @@ class GenericWorkflowStepExecutor(Phase):
             checklist_file=checklist_file,
             workspace=workspace,
         )
+        if recovery := self._render_correction_recovery():
+            snapshot["correction_review_recovery"] = json.loads(recovery)
         return json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
 
     @staticmethod
@@ -2794,6 +2830,7 @@ class GenericWorkflowStepExecutor(Phase):
         previous_data = self._load_previous_iteration_data()
         current_data = self._load_current_iteration_data()
         configured_clis = self._configured_clis_for_agent(agent_name)
+        interrupted_continuation = None
 
         if isinstance(current_data, dict):
             self._restart_recovery = None
@@ -2805,24 +2842,32 @@ class GenericWorkflowStepExecutor(Phase):
             if recovery is not None:
                 self._restart_recovery = recovery
                 return SessionContinuation.new()
+            if is_interrupted_iteration(
+                iteration=self.iteration,
+                previous_iteration_data=previous_data,
+                current_iteration_data=current_data,
+            ):
+                interrupted_continuation = exact_continuation_from_context(
+                    current_data, configured_clis=configured_clis,
+                ) or self._observed_iteration_session(agent_name, current_data, configured_clis)
             recovery = self._selected_fresh_session_recovery(
                 workflow_id=workflow_id,
                 current_data=current_data,
                 configured_clis=configured_clis,
+                interrupted_continuation=interrupted_continuation,
             )
             if recovery is not None:
+                if (
+                    recovery.get("reason") == "retry_without_session"
+                    and recovery.get("previous", {}).get("session_unobserved") is True
+                    and interrupted_continuation is not None
+                    and interrupted_continuation.is_exact
+                ):
+                    return interrupted_continuation
                 self._session_recovery = recovery
                 return SessionContinuation.new()
-        if is_interrupted_iteration(
-            iteration=self.iteration,
-            previous_iteration_data=previous_data,
-            current_iteration_data=current_data,
-        ):
-            exact = exact_continuation_from_context(
-                current_data,
-                configured_clis=configured_clis,
-            )
-            return exact or self._observed_iteration_session(agent_name, current_data, configured_clis)
+        if interrupted_continuation is not None:
+            return interrupted_continuation
 
         if same_invocation_retry:
             exact = exact_continuation_from_context(
@@ -2844,7 +2889,12 @@ class GenericWorkflowStepExecutor(Phase):
         """Use the session persisted while an interrupted invocation was live."""
         try:
             cli = AgentCLI(context.get("cli"))
-            started = datetime.fromisoformat(context.get("timestamp", ""))
+            started = datetime.fromisoformat(
+                context.get("session_invocation_started_at", context.get("timestamp", "")),
+            )
+            recovery = context.get("session_recovery")
+            previous = recovery.get("previous") if isinstance(recovery, Mapping) else None
+            retired_session = previous.get("session_id") if isinstance(previous, Mapping) else None
             if cli in configured_clis:
                 observed = self.agent_manager.session_manager.load_session(
                     agent_name, cli, self.issue_name, self.phase_name,
@@ -2852,6 +2902,7 @@ class GenericWorkflowStepExecutor(Phase):
                 if (
                     observed is not None
                     and observed.session_id
+                    and observed.session_id != retired_session
                     and observed.agent_name == agent_name
                     and observed.cli == cli
                     and observed.phase_name == self.phase_name
@@ -2913,6 +2964,8 @@ class GenericWorkflowStepExecutor(Phase):
             "retry": "user_selected_existing_session",
             AGENT_EXECUTION_FRESH_SESSION_DECISION: "user_selected_fresh_session",
         }.get(decision)
+        if decision == "retry" and getattr(self, "_session_recovery", None):
+            override = self._session_recovery["reason"]
         if decision == RETRY_CONFIGURED_ORDER and recovery is None:
             override = "configured_order_already_consumed_or_inapplicable"
         order = getattr(self, "_invocation_order", None)
@@ -3017,6 +3070,7 @@ class GenericWorkflowStepExecutor(Phase):
         workflow_id: Optional[str],
         current_data: Optional[dict[str, Any]],
         configured_clis: list[AgentCLI],
+        interrupted_continuation: SessionContinuation | None = None,
     ) -> Optional[Dict[str, Any]]:
         """Return the latest applicable user-authorized session rotation."""
         store = HumanTaskRecordStore(self.issue_dir)
@@ -3046,8 +3100,12 @@ class GenericWorkflowStepExecutor(Phase):
             raise RuntimeError("Cannot validate fresh-session recovery result") from exc
         if result is None:
             return None
-        if result.payload.get("decision") != AGENT_EXECUTION_FRESH_SESSION_DECISION:
-            if result.payload.get("decision") == "retry" and exact_continuation_from_context(
+        decision = result.payload.get("decision")
+        recovery = result.payload.get("session_continuation")
+        if decision != AGENT_EXECUTION_FRESH_SESSION_DECISION and not (
+            decision == "retry" and isinstance(recovery, Mapping)
+        ):
+            if decision == "retry" and exact_continuation_from_context(
                 current_data,
                 configured_clis=configured_clis,
             ) is None:
@@ -3059,15 +3117,14 @@ class GenericWorkflowStepExecutor(Phase):
 
         declared_decisions = latest.expected_result.get("decisions")
         if not isinstance(declared_decisions, list) or not any(
-            isinstance(decision, Mapping)
-            and decision.get("id") == AGENT_EXECUTION_FRESH_SESSION_DECISION
-            for decision in declared_decisions
+            isinstance(option, Mapping)
+            and option.get("id") == decision
+            for option in declared_decisions
         ):
             raise RuntimeError("Fresh-session recovery was not declared by the completed task")
-        if latest.continuations.get(AGENT_EXECUTION_FRESH_SESSION_DECISION) != self.phase_name:
+        if latest.continuations.get(decision) != self.phase_name:
             raise RuntimeError("Fresh-session recovery does not target the current step")
 
-        recovery = result.payload.get("session_continuation")
         if not isinstance(recovery, Mapping):
             raise RuntimeError("Fresh-session recovery result has no durable session evidence")
         expected_binding = {
@@ -3080,8 +3137,17 @@ class GenericWorkflowStepExecutor(Phase):
         if any(recovery.get(key) != value for key, value in expected_binding.items()):
             raise RuntimeError("Fresh-session recovery result does not match this workflow run")
 
+        persisted_recovery = current_data.get("session_recovery")
+        if persisted_recovery == recovery and current_data.get("session_recovery_consumed") == latest.id:
+            exact = exact_continuation_from_context(current_data, configured_clis=configured_clis)
+            if exact is not None or (
+                interrupted_continuation is not None and interrupted_continuation.is_exact
+            ):
+                return None
+            raise RuntimeError("The attempted session identity was not saved or is invalid")
+
         if "preparation" in recovery:
-            if current_data.get("session_recovery") == dict(recovery):
+            if persisted_recovery == recovery:
                 if current_data.get("agent_invoked") is True:
                     if (
                         exact_continuation_from_context(
@@ -3126,8 +3192,7 @@ class GenericWorkflowStepExecutor(Phase):
         elif not isinstance(previous_session, str) or not previous_session.strip():
             raise RuntimeError("Fresh-session recovery prior session is invalid")
 
-        persisted_recovery = current_data.get("session_recovery")
-        if persisted_recovery == dict(recovery):
+        if persisted_recovery == recovery:
             current_session = current_data.get("session_id")
             if isinstance(current_session, str) and current_session != previous_session:
                 return None
@@ -3168,6 +3233,52 @@ class GenericWorkflowStepExecutor(Phase):
         except Exception:
             return {}
         return snapshot
+
+    def _correction_session_model_changed(self, config):
+        session_id = self._current_session_continuation().session_id
+        for prior in (self._load_current_iteration_data(), self._load_previous_iteration_data()):
+            if prior and prior.get("session_id") == session_id:
+                effort = (prior.get("reasoning_evidence") or {}).get("configured")
+                return bool((prior.get("model") and prior["model"] != config.model)
+                            or (effort is not None and effort != config.reasoning_effort))
+        return False
+
+    def _add_review_correction_context(self, context, skill, artifacts, state, *, output_file):
+        if skill not in {"cafe-develop", "cafe-review"} or self.iteration < 2:
+            return
+        entry = state.artifacts.get("review_feedback")
+        if entry is None:
+            return
+        root = issue_project_root(self.issue_dir.resolve())
+        path = (root / entry.path).resolve()
+        if skill == "cafe-develop":
+            causal = artifacts.get("causal_todo")
+            if (causal is None or getattr(causal, "source", "review") != "review"
+                    or (root / causal.path).resolve() != path):
+                return
+        elif not path.is_relative_to(output_file.parent.parent.resolve()):
+            return
+
+        from cafe.core.correction_context import project_published_review, render_review_projection
+
+        try:
+            projection = project_published_review(
+                issue=self.issue_dir, root=root, state=state, entry=entry,
+                artifacts=artifacts, run_git=self.git_ops.run_git,
+            )
+        except (OSError, ValueError, KeyError, AttributeError, GitError):
+            # Existing declared inputs and checklist remain the recovery path.
+            return
+        self._correction_review_projection = projection
+        mode = "exact" if self._current_session_continuation().is_exact else "recovery"
+        context["correction_review_mode"] = mode
+        context["correction_review_scope"] = render_review_projection(projection, mode=mode)
+
+    def _render_correction_recovery(self):
+        from cafe.core.correction_context import render_review_projection
+
+        projection = getattr(self, "_correction_review_projection", None)
+        return render_review_projection(projection, mode="recovery")
 
     def _prepare_delta_packet(
         self,
@@ -3448,8 +3559,12 @@ class GenericWorkflowStepExecutor(Phase):
                 "the same workflow step, iteration, artifacts and authority."
             )
         elif getattr(self, "_session_recovery", None) is not None:
-            context["session_recovery"] = (
-                "The user explicitly selected a fresh provider session after an interruption. "
+            reason = (
+                "The user retried an interruption with no reusable provider session. "
+                if self._session_recovery["reason"] == "retry_without_session"
+                else "The user explicitly selected a fresh provider session after an interruption. "
+            )
+            context["session_recovery"] = reason + (
                 "Continue the same phase, iteration, model, and authority. Reconstruct the "
                 "current state only from the bounded runtime files and declared inputs in this "
                 "prompt; do not assume memory from the previous provider session."
@@ -3526,6 +3641,10 @@ class GenericWorkflowStepExecutor(Phase):
                 for placeholder, binding in effective_inputs.items()
             }
         )
+        self._add_review_correction_context(
+            context, canonical_skill_name(skill_name), input_artifacts, blackboard_state,
+            output_file=output_file,
+        )
         context["input_loading_modes"] = ", ".join(
             f"{placeholder}="
             + (
@@ -3575,6 +3694,19 @@ class GenericWorkflowStepExecutor(Phase):
 
     def _validate_workspace_inputs(self, artifacts, *, step_def=None, verified_workspace=None):
         from cafe.core.workspace_inputs import validate_workspace_inputs
+        task = getattr(self, "_staged_task", None)
+        if task:
+            head = staged_commit.verify(self.issue_dir, task)
+            parent = artifacts.get((step_def or {}).get("workspace_input_artifact"))
+            if parent is not None and verified_workspace is None:
+                repo = Path(self.git_ops.repo_path).resolve()
+                path = (repo / parent.path).resolve(strict=True)
+                path.relative_to(self.issue_dir.resolve())
+                candidate = WorkspaceArtifact.from_dict(json.loads(path.read_bytes()))
+                checked = verify_workspace_artifact(candidate, repo=repo)
+                reason = "workspace head is stale" if head else "workspace worktree is dirty"
+                if candidate.head_sha == task.staged_commit["parent"] and checked.reasons == (reason,):
+                    verified_workspace = candidate
         validate_workspace_inputs(
             artifacts,
             root=getattr(getattr(self, "git_ops", None), "repo_path", Path.cwd()),
@@ -3648,6 +3780,12 @@ class GenericWorkflowStepExecutor(Phase):
                 checked = verify_workspace_artifact(previous_workspace, repo=repo)
                 if checked.valid:
                     return previous_workspace
+                task = getattr(self, "_staged_task", None)
+                if task and previous_workspace.head_sha == task.staged_commit["parent"]:
+                    committed = staged_commit.verify(self.issue_dir, task)
+                    allowed = "workspace head is stale" if committed else "workspace worktree is dirty"
+                    if checked.reasons == (allowed,):
+                        return previous_workspace
                 if checked.reasons != ("workspace head is stale",):
                     detail = "; ".join(checked.reasons)
                     raise ValueError(
@@ -4206,13 +4344,14 @@ class GenericWorkflowStepExecutor(Phase):
             previous_output = self._display_path(
                 self._get_versioned_file_path(step_name, self.iteration - 1, self.phase_dir)
             )
-        context = dict(runtime_context or {})
-        context.update(
-            {
-                placeholder: self._display_path(Path(path))
-                for placeholder, path in declared_inputs.items()
-            }
-        )
+        # Use authoritative paths only as defaults. Preparation may have selected
+        # validated packets for the prompt; checklist prose must use those same
+        # effective inputs. Todo projection still reads input_artifacts below.
+        context = {
+            placeholder: self._display_path(Path(path))
+            for placeholder, path in declared_inputs.items()
+        }
+        context.update(runtime_context or {})
         context.update(
             {
                 "output_file": self._display_path(output_file),
@@ -4348,6 +4487,88 @@ class GenericWorkflowStepExecutor(Phase):
         return previous, identity
 
     @staticmethod
+    def _supervisor_correction_todo(issue_dir, state, event, artifacts, playbook):
+        """Read the exact saved supervisor request before producer-artifact inference."""
+        if issue_dir is None or state.current_step not in route_choices(
+            playbook, current_step=event.step, intent="manual_handoff",
+        ).authorized:
+            raise ValueError("Correction Todo supervisor route is not authorized")
+        bindings = [
+            binding for binding in playbook["steps"][event.step].get("human_tasks", ())
+            if binding.get("task_id") == event.data.get("task_id")
+            and binding.get("trigger") == event.data.get("trigger")
+        ]
+        if len(bindings) != 1 or not isinstance(bindings[0].get("feedback_delivery"), Mapping):
+            raise ValueError("Correction Todo supervisor task binding is ambiguous")
+        route = bindings[0]["feedback_delivery"]
+        if not all(isinstance(route.get(key), str) and route[key] for key in (
+            "artifact", "source_kind", "todo_source", "todo_id_prefix",
+        )):
+            raise ValueError("Correction Todo supervisor route is incomplete")
+        entry = artifacts.get(route["artifact"])
+        ledger = WorkflowFeedbackLedger(issue_dir)
+        if entry is None or (issue_project_root(issue_dir) / entry.path).resolve() != ledger.path.resolve():
+            raise ValueError("Correction Todo supervisor artifact does not bind its ledger")
+        records = HumanTaskRecordStore(issue_dir)
+        completed = datetime.fromisoformat(event.timestamp)
+        previous = next((
+            candidate for candidate in reversed(state.events[:state.events.index(event)])
+            if candidate.event_type == "human_task_completed" and candidate.step == event.step
+            and candidate.data.get("task_id") == event.data.get("task_id")
+            and candidate.data.get("trigger") == event.data.get("trigger")
+        ), None)
+        tasks = {
+            task.id: task for task in records.tasks()
+            if task.workflow_id == state.workflow_id and task.step == event.step
+            and task.trigger == event.data.get("trigger") and task.policy_id == event.data.get("task_id")
+        }
+        results = [
+            result for result in records.results()
+            if result.task_id in tasks and result.workflow_id == state.workflow_id
+            and datetime.fromisoformat(result.completed_at) <= completed
+            and (previous is None or datetime.fromisoformat(result.completed_at)
+                 > datetime.fromisoformat(previous.timestamp))
+        ]
+        if not results:
+            raise ValueError("Correction Todo supervisor result is missing")
+        result = max(results, key=lambda item: datetime.fromisoformat(item.completed_at))
+        if sum(datetime.fromisoformat(item.completed_at) == datetime.fromisoformat(result.completed_at)
+               for item in results) != 1:
+            raise ValueError("Correction Todo supervisor result is ambiguous")
+        task = tasks[result.task_id]
+        if (
+            task.status is not HumanTaskStatus.COMPLETED or task.superseded_by_task_id is not None
+            or result.source != event.data.get("source")
+            or ("human_task_id" in event.data and task.id != event.data["human_task_id"])
+            or ("result_id" in event.data and result.id != event.data["result_id"])
+            or ("declared_to_step" in event.data
+                and result.payload.get("declared_continuation") != event.data["declared_to_step"])
+        ):
+            raise ValueError("Correction Todo supervisor result does not match its completion")
+        identity = f"{route['source_kind']}:{event.step}:{task.policy_id}:{task.iteration}"
+        try:
+            receipts = supervisor_feedback_receipts(
+                issue_dir, playbook=playbook, workflow_id=state.workflow_id,
+                target_step=state.current_step,
+                entries=[item for item in ledger.load() if item.source_identity == identity],
+            )
+        except WorkflowFeedbackError as exc:
+            raise ValueError(f"Correction Todo supervisor receipt is invalid: {exc}") from exc
+        receipt = receipts.get(identity, {})
+        if receipt.get("task_id") != task.id or receipt.get("result_id") != result.id:
+            raise ValueError("Correction Todo supervisor receipt is missing")
+        items = workflow_feedback_todo_items(
+            ledger.path, target_step=state.current_step,
+            source_by_kind={route["source_kind"]: route["todo_source"]},
+            id_prefix_by_kind={route["source_kind"]: route["todo_id_prefix"]},
+            source_identities=(identity,),
+        )
+        return TodoSourceArtifact(
+            artifact=route["artifact"], source=route["todo_source"], path=ledger.path,
+            version=getattr(entry, "version", None), items=items,
+        )
+
+    @staticmethod
     def _add_causal_todo_artifact(
         artifacts: Dict[str, Any],
         state: BlackboardState,
@@ -4415,6 +4636,15 @@ class GenericWorkflowStepExecutor(Phase):
         )
         if delivery_recovery or inbound_feedback:
             from_step = inbound.step
+        if inbound_feedback and inbound.data.get("supervisor_handoff") is True and any(
+            binding.get("task_id") == inbound.data.get("task_id")
+            and binding.get("trigger") == inbound.data.get("trigger")
+            and binding.get("feedback_delivery") is not None
+            for binding in (steps.get(inbound.step, {}) or {}).get("human_tasks", ()) or ()
+        ):
+            return {**artifacts, causal_artifact: GenericWorkflowStepExecutor._supervisor_correction_todo(
+                issue_dir, state, inbound, artifacts, playbook_data,
+            )}
         producer = steps.get(from_step, {})
         direct_artifact = producer.get("output_artifact") if isinstance(producer, Mapping) else None
         selected = artifacts.get(direct_artifact) if isinstance(direct_artifact, str) else None
@@ -4851,6 +5081,9 @@ class GenericWorkflowStepExecutor(Phase):
 
     def _inspect_completion_workspace(self, step_name, step_def, blackboard_state):
         """Construct an unregistered preflight with the full snapshot rules."""
+        task = getattr(self, "_staged_task", None)
+        if task:
+            staged_commit.verify(self.issue_dir, task, completed=True)
         workspace_name = step_def["workspace_artifact"]
         if workspace_name == str(step_def.get("output_artifact", step_name)):
             raise WorkspaceArtifactError("workspace artifact must be distinct from summary")
@@ -4905,6 +5138,9 @@ class GenericWorkflowStepExecutor(Phase):
         if workspace_name == summary_name:
             raise ValueError("workspace artifact must be distinct from the summary artifact")
         repo = Path(getattr(self.git_ops, "repo_path", Path.cwd())).resolve()
+        task = getattr(self, "_staged_task", None)
+        if task and task.step == step_name:
+            staged_commit.verify(self.issue_dir, task, completed=True)
         base_ref = self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
         if not base_ref:
             base_ref = self.git_ops.get_default_base_branch()
