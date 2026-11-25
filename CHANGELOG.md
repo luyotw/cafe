@@ -39,6 +39,8 @@ All notable changes to this project will be documented in this file.
 - Reuse prepared diagnostic playbook YAML across chat tests while keeping each
   case's repository and workflow state isolated.
 
+See [the v0.14.0 release notes](docs/releases/v0.14.0.md) for upgrade guidance.
+
 ## [0.13.0] - 2026-11-20
 
 ### Added
