@@ -16,7 +16,10 @@ from cafe.utils.checklist_validator import validate_checklist
 from cafe.workflow_execution.workflow_hosting import WorkflowHost
 
 
-@pytest.mark.parametrize("activity", ["repeat", "quiet", "advance", "checklist", "history", "worker_history", "pending", "identical_gates", "large_checklist"])
+@pytest.mark.parametrize("activity", [
+    "repeat", "quiet", "advance", "checklist", "history", "legacy_history",
+    "worker_history", "pending", "identical_gates", "large_checklist",
+])
 def test_host_observes_provider_deadline_before_next_handoff(tmp_path, monkeypatch, activity):
     _exercise_hosted_wait(tmp_path, monkeypatch, activity)
 
@@ -65,15 +68,20 @@ for i in range(16):
     time.sleep(.1)
 print('complete', flush=True)
 """
-        if activity in {"history", "pending"}:
+        if activity in {"history", "legacy_history", "pending"}:
             from cafe.core.human_task_records import HumanTaskRecordStore
             records = HumanTaskRecordStore(issue)
             task = records.materialize(workflow_id=runtime.blackboard.workflow_id, step=step,
                 iteration=1, trigger="confirm_output", policy_id="prior", prompt="Earlier decision",
                 expected_result={}, continuations={}, assignee_type="user")
-            if activity == "history":
+            if activity != "pending":
                 records.complete(workflow_id=task.workflow_id, task_id=task.id,
                                  payload={"feedback": "x" * (256 * 1024)}, source="interactive")
+                if activity == "legacy_history":
+                    envelope = json.loads(records.file_path.read_text())
+                    del envelope["pending_observation"]
+                    records.file_path.write_text(json.dumps(envelope))
+                assert records.file_path.stat().st_size > 256 * 1024
         output.write_text("## Todo Progress\n")
         checklist = "[ ] Verify result\n  first source\n[ ] Verify result\n  second source\n[ ] Verify result\n  third source\n"
         if activity == "identical_gates":
@@ -117,9 +125,9 @@ print('complete', flush=True)
         assert diagnostic["step"] == step and diagnostic["worker_id"]
         assert diagnostic["elapsed_seconds"] >= diagnostic["wait_seconds"] == 1
         assert time.monotonic() - start < 8
-        if activity == "worker_history":
+        if activity in {"history", "worker_history"}:
             assert not diagnostic.get("reason")
-        if activity == "history":
+        if activity == "legacy_history":
             assert diagnostic.get("reason") == "progress_ownership_unverified"
 
 
