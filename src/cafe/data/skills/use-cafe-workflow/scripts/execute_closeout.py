@@ -299,7 +299,7 @@ def main() -> int:
                 command["status"] = "unknown"
                 _write(path, record)
                 if args.stage == "cleanup" and command["argv"] == ["cafe", "close"]:
-                    from cafe.delivery.local_cleanup import has_local_integration
+                    from cafe.manager.local_cleanup import has_local_integration
                     from cafe.utils.issue_config import read_issue_config_strict
 
                     config_path = args.issue_dir / "issue.yaml"

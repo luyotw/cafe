@@ -8,7 +8,7 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
-from cafe.ui.cli import app
+from cafe.manager.cli import app
 
 
 def git(root, *args):
@@ -510,6 +510,14 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
     from tests.unit.test_manager_closeout_contract import proposal as manager_proposal
 
     root, worktree, issue, source, linked = feature
+    if scenario == "ff-only":
+        dashboard = tmp_path / "dashboard"
+        dashboard.mkdir(mode=0o700)
+        pairing = dashboard / "publication-pairing.json"
+        connection = "e9302025-7b5b-4cab-af95-4091c945e362"
+        pairing.write_text(json.dumps({"connectionId": connection}))
+        pairing.chmod(0o600)
+        monkeypatch.setenv("CAFE_DASHBOARD_STATE_DIR", str(dashboard))
     base = git(root, "rev-parse", "develop")
     git(root, "branch", "unrelated", base)
     destination = root if linked else tmp_path / "destination"
@@ -953,6 +961,12 @@ def test_accepted_local_delivery_closes_exact_feature_with_diverged_remote(
             assert git(root, "branch", "--list", "feature") == ""
         assert git(root, "rev-parse", "develop") == target
         assert (target == source) == (scenario != "merge-commit")
+        if scenario == "ff-only":
+            publication, = (dashboard / f"workflow-publications-v3-{connection}").glob("*.json")
+            archived = json.loads(publication.read_text())
+            assert archived["archived"] is True
+            assert archived["workflow"]["workflowId"] == runtime.blackboard.workflow_id
+            assert archived["workflow"]["status"] == "completed"
         if scenario.startswith("cross-volume"):
             staged, = transferred
             assert_snapshot_report(result.output, staged)

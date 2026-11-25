@@ -151,8 +151,8 @@ def test_cleanup_uses_final_accepted_route_after_prepared_config_drift(
     local_action, fake_github, tmp_path, final_github,
 ):
     from cafe.delivery.contracts import ActionSnapshot
-    from cafe.delivery.local_cleanup import has_local_integration
     from cafe.delivery.records import ActionStore
+    from cafe.manager.local_cleanup import has_local_integration
 
     ctx = setup(local_action, tmp_path, github=final_github)
     runtime, _ = run(ctx)

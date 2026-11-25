@@ -1575,13 +1575,14 @@ def _finish_archived_local_close(
     clear_marker_if_matches(destination / ".cafe", source)
 
 
-def _retry_archived_local_close(archive, issue_name, caller, project_root):
+def _retry_archived_local_close(archive, issue_name, caller, project_root, *, local_authority):
     from contextlib import nullcontext
 
     from cafe.core.workspace_lock import workspace_execution_lock
-    from cafe.delivery.local_cleanup import accepted_local_cleanup
     from cafe.utils.file_lock import advancement_execution_lock
 
+    if local_authority is None:
+        raise ValueError("local delivery recovery requires the packaged cafe command")
     if not archive.is_dir() or archive.is_symlink():
         raise ValueError("local cleanup archive is unavailable")
     with advancement_execution_lock(archive, reuse_existing=False):
@@ -1595,7 +1596,7 @@ def _retry_archived_local_close(archive, issue_name, caller, project_root):
         retained = GitOperations(str(destination))
         source_lock = workspace_execution_lock(checkout, blocking=False) if checkout.is_dir() else nullcontext()
         with workspace_execution_lock(destination, blocking=False), source_lock:
-            proposal, receipt, bound_destination, selection = accepted_local_cleanup(
+            proposal, receipt, bound_destination, selection = local_authority.authorize(
                 archive, source=issue_name, checkout=checkout,
                 configured_target=retained.get_current_branch(), linked=linked, archived=True,
             )
@@ -1718,20 +1719,19 @@ def _write_local_close_journal(archive, journal, *, before_replace=None):
     )
 
 
-def _close_accepted_local(issue, source, target, checkout, project_root, git_ops, *, linked):
+def _close_accepted_local(issue, source, target, checkout, project_root, git_ops, *, linked, local_authority):
+    from cafe.core.dashboard_publication import prepare_workflow_archive
     from cafe.core.workspace_lock import workspace_execution_lock
-    from cafe.delivery.local_cleanup import accepted_local_cleanup, observe_local_cleanup
-    from cafe.manager._store import contract_lock
-    from cafe.manager.closeout import inspect_closeout
+    from cafe.delivery.local_cleanup import observe_local_cleanup
     from cafe.utils.file_lock import advancement_execution_lock
 
     with (
         advancement_execution_lock(issue, reuse_existing=False),
         workspace_execution_lock(checkout, blocking=False),
-        contract_lock(issue, blocking=False),
+        local_authority.contract_lock(issue, blocking=False),
     ):
         target = git_ops._cleanup_target_branch(target, git_ops.run_git("remote").splitlines())
-        proposal, receipt, destination, selection = accepted_local_cleanup(
+        proposal, receipt, destination, selection = local_authority.authorize(
             issue, source=source, checkout=checkout, configured_target=target, linked=linked,
         )
         retained = GitOperations(str(destination))
@@ -1745,7 +1745,7 @@ def _close_accepted_local(issue, source, target, checkout, project_root, git_ops
             observe()
             archive = _get_issue_archive_path(source)
             if archive.exists() or archive.is_symlink():
-                saved = inspect_closeout(archive, proposal.workflow_id, archived=True)
+                saved = local_authority.inspect_closeout(archive, proposal.workflow_id, archived=True)
                 if saved["status"] != "accepted" or saved["selection"] != selection:
                     raise ValueError("saved cleanup archive differs from current accepted evidence")
             else:
@@ -1768,20 +1768,25 @@ def _close_accepted_local(issue, source, target, checkout, project_root, git_ops
             source_paths = _volume_close_evidence_paths(binding)
             if _staged_volume_close_evidence(source_paths) is not None:
                 raise ValueError("relocated cleanup evidence already exists")
-            evidence = _relocate_close_evidence(
-                issue, archive, source_paths[0], _LocalCloseJournal(binding),
-            )
+            publish_archive = prepare_workflow_archive(issue)
             try:
-                _finish_archived_local_close(
-                    source, checkout, destination, project_root, retained, proposal, receipt, evidence,
-                    archive=archive, linked=linked, selection_id=selection["snapshot"],
+                evidence = _relocate_close_evidence(
+                    issue, archive, source_paths[0], _LocalCloseJournal(binding),
                 )
-            except Exception:
-                if checkout.is_dir() and not issue.exists() and not issue.is_symlink() and (
-                    linked or git_ops.get_current_branch() == source
-                ):
-                    evidence.rename(issue)
-                raise
+                try:
+                    _finish_archived_local_close(
+                        source, checkout, destination, project_root, retained, proposal, receipt, evidence,
+                        archive=archive, linked=linked, selection_id=selection["snapshot"],
+                    )
+                except Exception:
+                    if checkout.is_dir() and not issue.exists() and not issue.is_symlink() and (
+                        linked or git_ops.get_current_branch() == source
+                    ):
+                        evidence.rename(issue)
+                    raise
+            finally:
+                if not issue.exists() and not issue.is_symlink():
+                    publish_archive()
     return archive, destination, (evidence,) if evidence != archive / _LOCAL_CLOSE_EVIDENCE else ()
 
 
@@ -1832,6 +1837,10 @@ def close(
     that the exact source tip is integrated into the configured base branch.
     Local target synchronization is fast-forward only. No merge is performed.
     """
+    _close(archive_only, issue, local_authority=None)
+
+
+def _close(archive_only: bool, issue: str | None, *, local_authority) -> None:
     import os
 
     from cafe.core.dashboard_publication import prepare_workflow_archive
@@ -1848,7 +1857,9 @@ def close(
             if Path(git_ops.run_git("rev-parse", "--show-toplevel")).resolve() != original:
                 raise ValueError("run close from the retained checkout root")
             archive = _get_issue_archive_path(issue)
-            source_paths = _retry_archived_local_close(archive, issue, original, _get_project_root())
+            source_paths = _retry_archived_local_close(
+                archive, issue, original, _get_project_root(), local_authority=local_authority,
+            )
             _report_local_close(issue, archive, source_paths)
             return
         source = git_ops.get_current_branch()
@@ -1860,7 +1871,9 @@ def close(
                     and (live.is_symlink() or not (live / "issue.yaml").exists())):
                 archive = _get_issue_archive_path(recovery_issue)
                 if (archive / _LOCAL_CLOSE_JOURNAL).is_file():
-                    source_paths = _retry_archived_local_close(archive, recovery_issue, original, _get_project_root())
+                    source_paths = _retry_archived_local_close(
+                        archive, recovery_issue, original, _get_project_root(), local_authority=local_authority,
+                    )
                     _report_local_close(recovery_issue, archive, source_paths)
                     return
         if not source:
@@ -1909,11 +1922,15 @@ def close(
                 declared = project_root / declared
             if declared.resolve() != source_root:
                 raise ValueError("configured worktree differs from the current checkout")
-        from cafe.delivery.local_cleanup import has_local_integration
+        if local_authority is None:
+            from cafe.delivery.local_cleanup import has_local_delivery_configuration
 
-        if has_local_integration(issue, config):
+            if has_local_delivery_configuration(issue, config):
+                raise ValueError("local delivery cleanup requires the packaged cafe command")
+        elif local_authority.has_local_integration(issue, config):
             archive, destination, source_paths = _close_accepted_local(
-                issue, source, target, source_root, project_root, git_ops, linked=bool(worktree),
+                issue, source, target, source_root, project_root, git_ops,
+                linked=bool(worktree), local_authority=local_authority,
             )
             _report_local_close(source, archive, source_paths, destination=destination)
             return
