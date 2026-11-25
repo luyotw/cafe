@@ -31,6 +31,7 @@ from cafe.core.conversation_locale import (
     normalize_locale_tag,
     resolve_conversation_locale,
 )
+from cafe.core.dashboard_publication import publish_workflow
 from cafe.core.packet_io import atomic_write_bytes
 from cafe.core.workflow_models import BatonRejected
 from cafe.utils.file_lock import handoff_execution_lock
@@ -1089,6 +1090,7 @@ class BlackboardStore:
             payload,
         )
         state._persisted_snapshot = state.to_dict()
+        publish_workflow(self.issue_dir, state)
 
     def _reconcile_unlocked(self) -> None:
         """Apply committed state patches before another workflow operation."""

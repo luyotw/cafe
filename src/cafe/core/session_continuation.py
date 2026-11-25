@@ -196,7 +196,10 @@ def pre_invocation_recovery_evidence(
             "agent_interruption" in context
             and context.get("workflow_completion_trusted") is False
             and failure is not None
-            and failure["data"].get("detail") == CORRECTION_TODO_PROVENANCE_MISSING
+            and failure["data"].get("detail") in (
+                CORRECTION_TODO_PROVENANCE_MISSING,
+                "Correction Todo feedback route is ambiguous",
+            )
         )
         packet_preparation = (
             marker_matches and isinstance(marker, dict)

@@ -1035,6 +1035,7 @@ def test_recovery_prefers_observed_session_only_for_normal_retry(tmp_path, monke
 @pytest.mark.parametrize("legacy_workspace", [
     False, True, "native_skill", "native_skill_bad_marker", "native_skill_unknown_error",
     "native_skill_recovery_error", "correction_preparation", "correction_bad_marker",
+    "correction_route_ambiguous", "correction_route_bad_marker",
     "packet_preparation", "packet_already_materialized", "phase_configuration",
 ])
 def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
@@ -1048,7 +1049,7 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
     from cafe.ui.cli import app
 
     native_skill = isinstance(legacy_workspace, str) and legacy_workspace.startswith("native_skill")
-    correction_preparation = legacy_workspace in {"correction_preparation", "correction_bad_marker"}
+    correction_preparation = isinstance(legacy_workspace, str) and legacy_workspace.startswith("correction_")
     packet_preparation = legacy_workspace in {"packet_preparation", "packet_already_materialized"}
     phase_configuration = legacy_workspace == "phase_configuration"
     monkeypatch.chdir(tmp_path)
@@ -1137,6 +1138,9 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
                 "reason": "agent_error",
                 "detail": (
                     "Invalid persisted context packet decision" if packet_preparation else
+                    "Correction Todo feedback route is ambiguous" if legacy_workspace in {
+                        "correction_route_ambiguous", "correction_route_bad_marker",
+                    } else
                     "Correction Todo provenance is missing" if correction_preparation else
                     "invalid phase config in '/repo/.cafe/phases.yaml': step='spec': "
                     "field='spec.clis[0].reasoning_effort': reasoning_effort: unsupported tuple"
@@ -1165,7 +1169,7 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
         boards.record_event(
             state, "agent_execution_task_materialized", {"step": "spec", "task_id": task.id}
         )
-        if legacy_workspace in {"native_skill_bad_marker", "correction_bad_marker"}:
+        if legacy_workspace in {"native_skill_bad_marker", "correction_bad_marker", "correction_route_bad_marker"}:
             metadata = json.loads(path.read_text())
             metadata["agent_interruption"]["workflow_id"] = "another-workflow"
             path.write_text(json.dumps(metadata))
@@ -1182,7 +1186,7 @@ def test_preparation_recovery_task_starts_one_new_session_then_resumes_exactly(
         ],
     )
     if legacy_workspace in {
-        "native_skill_bad_marker", "native_skill_unknown_error", "correction_bad_marker", "packet_already_materialized",
+        "native_skill_bad_marker", "native_skill_unknown_error", "correction_bad_marker", "correction_route_bad_marker", "packet_already_materialized",
     }:
         assert completed.exit_code != 0
         assert records.get_result(task.id) is None
@@ -9136,6 +9140,121 @@ def test_causal_todo_local_review_human_task_precedes_direct_pr_fallback(
         artifacts, state, playbook=playbook
     )["causal_todo"]
     assert [item.work for item in resolved.items] == ["fix the user's selected PR concern"]
+
+
+@pytest.mark.parametrize("same_step_retry", [False, True])
+@pytest.mark.parametrize("defect", [
+    None, "revoked_route", "missing_supervisor", "wrong_task", "changed_content", "other_iteration",
+    "missing_result", "other_artifact", "changed_result_source", "old_task_id", "old_result_id", "declared_target",
+    "superseded_task", "missing_latest_pair",
+])
+def test_supervisor_correction_input_uses_the_saved_inbound_playbook_route(
+    tmp_path, same_step_retry, defect,
+):
+    issue = tmp_path / "issue"
+    ledger = WorkflowFeedbackLedger(issue)
+    ledger.record(
+        source_identity="editor_review:editor:accept-review:4", source_kind="editor_review",
+        target_step="builder", content="Repair the selected integration.",
+    )
+    state = BlackboardStore(issue).load_or_create("builder")
+    records = HumanTaskRecordStore(issue)
+    for iteration in (3, 4):
+        content = "Old correction." if iteration == 3 else "Repair the selected integration."
+        task = records.materialize(
+            workflow_id=state.workflow_id, step="editor", iteration=iteration, trigger="confirm_output",
+            policy_id="accept-review", prompt="Review the draft", assignee_type="user",
+            expected_result={"decisions": [{"id": "fix_now", "correction": True}]},
+            continuations={"fix_now": "editor", "confirm": "_done"},
+        )
+        result = records.complete(
+            workflow_id=state.workflow_id, task_id=task.id, source="command",
+            payload={"task": task.policy_id, "decision": "fix_now", "feedback": content,
+                     "continuation": "builder", "declared_continuation": "editor", "supervisor_handoff_to": "builder"},
+        )
+        if iteration == 3:
+            old_task, old_result = task, result
+            state.events.append(EventEntry(
+                timestamp=result.completed_at, step="editor", event_type="human_task_completed", message="",
+                data={"task_id": "accept-review", "trigger": "confirm_output", "to_step": "builder"},
+            ))
+            ledger.record(source_identity="editor_review:editor:accept-review:3", source_kind="editor_review",
+                          target_step="builder", content=content)
+            ledger.consume("editor_review:editor:accept-review:3")
+    state.events.append(EventEntry(
+        timestamp=result.completed_at, step="editor", event_type="human_task_completed",
+        message="", data={"task_id": "wrong" if defect == "wrong_task" else "accept-review",
+                          "trigger": "confirm_output", "source": "command",
+                          "to_step": "builder", "supervisor_handoff": defect != "missing_supervisor"},
+    ))
+    state.handoff_contract = HandoffContract(
+        version=1, to_owner=HandoffOwner.AGENT, to_step="builder", intent=HandoffIntent.AWAIT_AGENT,
+        from_step="builder" if same_step_retry else "editor", source="human_task.command",
+    )
+    playbook = {"steps": {
+        "editor": {
+            "allowed_goto": [] if defect == "revoked_route" else ["builder"],
+            "human_tasks": [{"task_id": "accept-review", "trigger": "confirm_output", "outcomes": {"fix_now": "editor", "confirm": "_done"},
+                             "feedback_delivery": {"artifact": "signals", "source_kind": "editor_review",
+                                                   "todo_source": "review_work", "todo_id_prefix": "EDIT"}}],
+        },
+        "builder": {},
+    }}
+    artifacts = {"signals": ArtifactEntry(
+        name="signals", kind=ArtifactKind.DOCUMENT, version=1, updated_by="human_task",
+        path=str(ledger.path),
+    )}
+    from copy import deepcopy
+    other_trigger = deepcopy(playbook["steps"]["editor"]["human_tasks"][0])
+    other_trigger["trigger"] = "need_clarification"
+    playbook["steps"]["editor"]["human_tasks"].append(other_trigger)
+    if defect == "changed_content":
+        raw = json.loads(ledger.path.read_text())
+        raw["entries"][0]["content"] = "Unrelated replacement."
+        ledger.path.write_text(json.dumps(raw))
+    elif defect == "other_iteration":
+        ledger.consume("editor_review:editor:accept-review:4")
+        ledger.record(source_identity="editor_review:editor:accept-review:5", source_kind="editor_review",
+                      target_step="builder", content="Unrelated later work.")
+    elif defect == "missing_result":
+        records.file_path.unlink()
+    elif defect == "other_artifact":
+        alternate = tmp_path / "unverified.json"
+        alternate.write_bytes(ledger.path.read_bytes())
+        artifacts["signals"].path = str(alternate)
+    elif defect == "changed_result_source":
+        raw = json.loads(records.file_path.read_text())
+        raw["results"][-1]["source"] = "other"
+        records.file_path.write_text(json.dumps(raw))
+    elif defect == "old_task_id":
+        state.events[-1].data["human_task_id"] = old_task.id
+    elif defect == "old_result_id":
+        state.events[-1].data["result_id"] = old_result.id
+    elif defect == "declared_target":
+        state.events[-1].data["declared_to_step"] = "builder"
+    elif defect in {"superseded_task", "missing_latest_pair"}:
+        raw = json.loads(records.file_path.read_text())
+        if defect == "superseded_task":
+            raw["tasks"][-1]["superseded_by_task_id"] = "replacement-task"
+        else:
+            raw["tasks"].pop()
+            raw["results"].pop()
+        records.file_path.write_text(json.dumps(raw))
+    if defect == "wrong_task" and same_step_retry:
+        resolved = GenericWorkflowStepExecutor._add_causal_todo_artifact(
+            artifacts, state, playbook=playbook, issue_dir=issue,
+        )
+        assert "causal_todo" not in resolved
+        return
+    if defect and defect != "other_iteration":
+        with pytest.raises(ValueError, match="Correction Todo"):
+            GenericWorkflowStepExecutor._add_causal_todo_artifact(artifacts, state, playbook=playbook, issue_dir=issue)
+        return
+    resolved = GenericWorkflowStepExecutor._add_causal_todo_artifact(
+        artifacts, state, playbook=playbook, issue_dir=issue,
+    )["causal_todo"]
+    assert [item.work for item in resolved.items] == ["Repair the selected integration."]
+    assert resolved.items[0].item_id.startswith("EDIT-")
 
 
 def test_outbound_causal_todo_is_validated_from_declarative_topology(tmp_path: Path) -> None:

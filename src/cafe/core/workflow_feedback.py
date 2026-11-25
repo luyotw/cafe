@@ -23,12 +23,14 @@ class WorkflowFeedbackError(RuntimeError):
 
 
 def feedback_todo_mappings(
-    playbook: Mapping[str, Any], *, target_step: str
+    playbook: Mapping[str, Any], *, target_step: str,
+    supervisor_bindings: Iterable[tuple[str, str, str]] = (),
 ) -> dict[str, tuple[str, str]]:
     """Resolve one curator's declared feedback source-to-Todo mappings."""
     from cafe.core.playbook import resolve_step_behavior
 
     mappings: dict[str, tuple[str, str]] = {}
+    selected_bindings = set(supervisor_bindings)
 
     def add_mapping(source_kind: object, todo_source: object, id_prefix: object) -> None:
         if not all(
@@ -63,7 +65,8 @@ def feedback_todo_mappings(
                 *(binding.get("allowed_targets", ()) or ()),
             ]
             delivery = binding.get("feedback_delivery")
-            if target_step not in targets or not isinstance(delivery, Mapping):
+            selected = (str(producer_name), binding.get("task_id"), binding.get("trigger"))
+            if (target_step not in targets and selected not in selected_bindings) or not isinstance(delivery, Mapping):
                 continue
             add_mapping(
                 delivery.get("source_kind"),
@@ -71,6 +74,27 @@ def feedback_todo_mappings(
                 delivery.get("todo_id_prefix"),
             )
     return mappings
+
+
+def feedback_completion_todo_mappings(
+    issue_dir: Path, *, playbook: Mapping[str, Any], workflow_id: str,
+    target_step: str, source_identities: tuple[str, ...],
+) -> dict[str, tuple[str, str]]:
+    """Include only exact receipt-proven supervisor bindings in a consumer batch."""
+    from cafe.core.human_task_records import HumanTaskRecordStore
+
+    selected = set(source_identities)
+    receipts = supervisor_feedback_receipts(
+        issue_dir, playbook=playbook, workflow_id=workflow_id, target_step=target_step,
+        entries=[entry for entry in WorkflowFeedbackLedger(issue_dir).load()
+                 if entry.source_identity in selected],
+    )
+    records = HumanTaskRecordStore(issue_dir)
+    tasks = [records.get_task(receipt["task_id"]) for receipt in receipts.values()]
+    return feedback_todo_mappings(
+        playbook, target_step=target_step,
+        supervisor_bindings=((task.step, task.policy_id, task.trigger) for task in tasks),
+    )
 
 
 def supervisor_feedback_receipts(

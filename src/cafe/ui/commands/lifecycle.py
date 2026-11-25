@@ -1834,6 +1834,8 @@ def close(
     """
     import os
 
+    from cafe.core.dashboard_publication import prepare_workflow_archive
+
     original = Path.cwd().resolve()
     try:
         explicit_issue = issue is not None
@@ -1880,9 +1882,11 @@ def close(
         worktree = config.get("worktree_path")
         project_root = _get_project_root()
         if archive_only:
+            publish_archive = prepare_workflow_archive(issue)
             archive = _archive_issue_directory(issue, issue_name, copy_current_config=True)
             if archive is None:
                 raise ValueError(f"no issue data found for: {issue_name}")
+            publish_archive()
             if worktree:
                 _remove_worktree_inventory_pointer(project_root=project_root,
                     issue_name=issue_name, worktree_path=worktree)
@@ -1964,13 +1968,16 @@ def close(
             # destination already owns the target branch. Release only its ref.
             git_ops.run_git("checkout", "--detach", snapshot["source_oid"])
         retained.delete_cleanup_remote(snapshot)
+        publish_archive = prepare_workflow_archive(issue)
         os.chdir(destination)
         if worktree:
             retained.remove_worktree(str(original))
+            publish_archive()
         # The exact source was proven integrated, including squash/rebase PRs.
         retained.delete_cleanup_branch(snapshot)
         if not worktree and issue.exists():
             shutil.rmtree(issue)
+            publish_archive()
             clear_marker_if_matches(original / ".cafe", source)
         if worktree:
             _remove_worktree_inventory_pointer(project_root=project_root,

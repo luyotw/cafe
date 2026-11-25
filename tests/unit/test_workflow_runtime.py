@@ -8947,3 +8947,255 @@ def test_runtime_plan_need_permission_pauses_at_user(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+
+
+def _settled_corrective_supervisor_redirect(
+    issue_dir, monkeypatch, *, selected_target=False, producer_route=False,
+):
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+    from cafe.ui.human_tasks import apply_human_task_payload
+
+    calls = []
+    runtime = _empty_batch_curation_runtime(issue_dir, calls)
+    ledger = WorkflowFeedbackLedger(issue_dir)
+    ledger.record(
+        source_identity="external:previous-review",
+        source_kind="external_note",
+        target_step="curator",
+        content="Previously reviewed publication.",
+    )
+    step = runtime.playbook["steps"]["curator"]
+    step["skill"] = "cafe-pr"
+    step["allowed_goto"] = ["consumer"]
+    step["on"]["confirm_output"] = "curator"
+    step["human_tasks"] = [{
+        "trigger": "confirm_output", "task_id": "pr-review",
+        "outcomes": {"fix_now": "curator", "confirm": "_done"},
+        "feedback_delivery": {
+            "artifact": "workflow_feedback", "source_kind": "local_review",
+            "todo_source": "workflow_feedback", "todo_id_prefix": "WF",
+        },
+    }]
+    if producer_route:
+        step["behavior"]["feedback_routes"] = {"consumer": {
+            "artifact": "curated_result", "source_kind": "external_note",
+            "todo_source": "review_note", "todo_id_prefix": "REV",
+        }}
+    if selected_target:
+        import yaml
+        from cafe.ui.human_tasks import resolve_step_human_task
+
+        policy, _ = resolve_step_human_task(
+            playbook_data=runtime.playbook, step_name="curator", trigger="confirm_output",
+        )
+        policy_data = policy.model_dump(mode="json")
+        policy_data["allowed_targets"] = ["curator"]
+        for decision in policy_data["decisions"]:
+            if decision["id"] == "fix_now":
+                decision["requires_target"] = True
+        skill_dir = issue_dir.parent / ".cafe/skills/target-review"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text("---\n" + yaml.safe_dump({
+            "name": "target-review", "description": "Review with a selected correction target",
+            "workflow": {"human_tasks": [policy_data]},
+        }) + "---\nReview the result.\n")
+        monkeypatch.chdir(issue_dir.parent)
+        step["skill"] = "target-review"
+        step["human_tasks"][0]["outcomes"].pop("fix_now")
+        step["human_tasks"][0]["allowed_targets"] = ["curator"]
+    original = runtime.executor
+    received = []
+
+    def executor(name, declaration, state):
+        if name == "consumer":
+            from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
+
+            prepared = GenericWorkflowStepExecutor._add_causal_todo_artifact(
+                dict(state.artifacts), state,
+                playbook=runtime.playbook, issue_dir=issue_dir,
+            )
+            assert [item.work for item in prepared["causal_todo"].items] == [
+                "Preserve both implementations and fix their integration."
+            ]
+            received.extend(ledger.pending(target_step="consumer"))
+        result = original(name, declaration, state)
+        if name == "curator":
+            ledger.write_pending_snapshot(
+                path=issue_dir / "curator/iteration_001/workflow_feedback_batch.json",
+                target_step="curator", limit=20,
+            )
+            _write_baton(issue_dir, from_step="curator", to_owner="user",
+                         to_step="user", intent="confirm_output")
+        return result
+
+    runtime.executor = executor
+    monkeypatch.setattr(runtime, "_notify_new_human_task", lambda task: None)
+    assert runtime.run(start_step="curator").final_status_code == "BATON_CONFIRM_OUTPUT"
+    task = next(t for t in HumanTaskRecordStore(issue_dir).tasks()
+                if t.status is HumanTaskStatus.PENDING)
+    payload = {"human_task_id": task.id, "decision": "fix_now",
+               "feedback": "Preserve both implementations and fix their integration."}
+    if selected_target:
+        payload["target"] = "curator"
+    applied = apply_human_task_payload(
+        issue_dir=issue_dir, playbook_data=runtime.playbook,
+        blackboard=runtime.blackboard, from_step="curator", trigger="confirm_output",
+        raw_payload=payload,
+        source="command", supervisor_handoff_to="consumer",
+    )
+    assert applied.target == "consumer", applied.rejection
+    return runtime, calls, received, task
+
+
+@pytest.mark.parametrize("legacy_reset", [False, True])
+@pytest.mark.parametrize("selected_target", [False, True])
+@pytest.mark.parametrize("producer_route", [False, True])
+def test_settled_feedback_does_not_block_a_corrective_supervisor_route(
+    tmp_path, monkeypatch, legacy_reset, selected_target, producer_route,
+):
+    runtime, calls, received, task = _settled_corrective_supervisor_redirect(
+        tmp_path / "settled-corrective-route", monkeypatch,
+        selected_target=selected_target, producer_route=producer_route,
+    )
+    if legacy_reset:
+        runtime.blackboard_store.record_event(runtime.blackboard, "step_reconciliation_failed", {
+            "step": "curator", "runtime": "feedback_delivery_recovery",
+            "reason": "incomplete_handoff", "missing_evidence": ["feedback_delivery_target"],
+        })
+        runtime._restore_interrupted_step_handoff(
+            current_step="curator", reason="feedback_delivery_recovery_failed",
+        )
+    resumed = BlackboardWorkflowRuntime(
+        issue_dir=runtime.issue_dir, playbook=runtime.playbook, executor=runtime.executor,
+    )
+    result = resumed.run(max_transitions=2)
+    assert result.completed, result.final_status_code
+    assert calls == ["curator", "consumer"]
+    assert [entry.content for entry in received] == [
+        "Preserve both implementations and fix their integration."
+    ]
+    assert all(entry.source_identity != "external:previous-review" for entry in received)
+    assert HumanTaskRecordStore(runtime.issue_dir).get_task(task.id).status is HumanTaskStatus.COMPLETED
+    assert resumed.run(max_transitions=2).completed
+    assert calls == ["curator", "consumer"]
+    assert sum(e.event_type == "workflow_feedback_delivered" for e in resumed.blackboard.events) == 1
+
+
+@pytest.mark.parametrize("legacy_reset", [False, True])
+@pytest.mark.parametrize("tamper", [
+    "route", "feedback", "result", "artifact", "later_work", "original_target", "target_and_route",
+])
+def test_corrective_supervisor_resume_keeps_existing_evidence_and_route_checks(
+    tmp_path, monkeypatch, legacy_reset, tamper,
+):
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+
+    runtime, calls, _, _ = _settled_corrective_supervisor_redirect(
+        tmp_path / "invalid-corrective-route", monkeypatch,
+    )
+    if legacy_reset:
+        runtime.blackboard_store.record_event(runtime.blackboard, "step_reconciliation_failed", {
+            "step": "curator", "runtime": "feedback_delivery_recovery",
+            "missing_evidence": ["feedback_delivery_target"],
+        })
+        runtime._restore_interrupted_step_handoff(
+            current_step="curator", reason="feedback_delivery_recovery_failed",
+        )
+    if tamper == "route":
+        step = runtime.playbook["steps"]["curator"]
+        step["allowed_goto"] = []
+        step["on"].pop("manual_handoff")
+    elif tamper == "feedback":
+        ledger = WorkflowFeedbackLedger(runtime.issue_dir)
+        raw = json.loads(ledger.path.read_text())
+        raw["entries"][-1]["content"] = "Unrelated correction."
+        ledger.path.write_text(json.dumps(raw))
+    elif tamper == "result":
+        records = HumanTaskRecordStore(runtime.issue_dir)
+        raw = json.loads(records.file_path.read_text())
+        raw["results"][-1]["payload"]["supervisor_handoff_to"] = "curator"
+        records.file_path.write_text(json.dumps(raw))
+    elif tamper == "artifact":
+        (runtime.issue_dir / "curator/iteration_001/output.md").write_text("Changed publication.")
+    elif tamper in {"original_target", "target_and_route"}:
+        if not legacy_reset:
+            pytest.skip("Altered prior publication target only applies to legacy recovery")
+        if tamper == "target_and_route":
+            step = runtime.playbook["steps"]["curator"]
+            step["allowed_goto"] = []
+            step["on"].pop("manual_handoff")
+    else:
+        if not legacy_reset:
+            pytest.skip("Later work only fences recovery of a reset route")
+        runtime.blackboard_store.record_event(runtime.blackboard, "step_started", {
+            "step": "curator", "iteration": 2,
+        })
+    resumed = BlackboardWorkflowRuntime(
+        issue_dir=runtime.issue_dir, playbook=runtime.playbook, executor=runtime.executor,
+    )
+    if tamper in {"original_target", "target_and_route"}:
+        prepared = next(e for e in resumed.blackboard.events
+                        if e.event_type == "workflow_feedback_delivery_prepared")
+        prepared.data["target"] = {
+            "to_owner": "agent", "to_step": "consumer", "intent": "await_agent",
+        }
+    if legacy_reset:
+        assert not resumed._try_restore_rejected_interruption_redirect()
+    else:
+        assert resumed.run(max_transitions=2).final_status_code == "INVALID_FEEDBACK_DELIVERY"
+    assert calls == ["curator"]
+
+
+@pytest.mark.parametrize("legacy_reset", [False, True])
+def test_corrective_resume_ignores_consumed_receipts_from_a_retired_step(
+    tmp_path, monkeypatch, legacy_reset,
+):
+    from copy import deepcopy
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger, supervisor_feedback_receipts
+
+    runtime, calls, received, task = _settled_corrective_supervisor_redirect(
+        tmp_path / "retired-producer", monkeypatch,
+    )
+    records = HumanTaskRecordStore(runtime.issue_dir)
+    old = records.materialize(
+        workflow_id=task.workflow_id, step="previous", iteration=1,
+        trigger=task.trigger, policy_id=task.policy_id, prompt=task.prompt,
+        expected_result=task.expected_result,
+        continuations={"fix_now": "previous", "confirm": "consumer"}, assignee_type="user",
+    )
+    records.complete(
+        workflow_id=task.workflow_id, task_id=old.id, source="command",
+        payload={"task": old.policy_id, "decision": "fix_now", "feedback": "Old correction",
+                 "continuation": "consumer", "declared_continuation": "previous",
+                 "supervisor_handoff_to": "consumer"},
+    )
+    ledger = WorkflowFeedbackLedger(runtime.issue_dir)
+    _, entry = ledger.record(
+        source_identity="local_review:previous:pr-review:1", source_kind="local_review",
+        target_step="consumer", content="Old correction",
+    )
+    previous = deepcopy(runtime.playbook["steps"]["curator"])
+    previous["human_tasks"][0]["outcomes"] = old.continuations
+    runtime.playbook["steps"]["previous"] = previous
+    assert entry.source_identity in supervisor_feedback_receipts(
+        runtime.issue_dir, playbook=runtime.playbook, workflow_id=task.workflow_id,
+        target_step="consumer", entries=[entry],
+    )
+    ledger.consume(entry.source_identity)
+    del runtime.playbook["steps"]["previous"]
+    if legacy_reset:
+        runtime.blackboard_store.record_event(runtime.blackboard, "step_reconciliation_failed", {
+            "step": "curator", "runtime": "feedback_delivery_recovery",
+            "missing_evidence": ["feedback_delivery_target"],
+        })
+        runtime._restore_interrupted_step_handoff(
+            current_step="curator", reason="feedback_delivery_recovery_failed",
+        )
+    resumed = BlackboardWorkflowRuntime(
+        issue_dir=runtime.issue_dir, playbook=runtime.playbook, executor=runtime.executor,
+    )
+    assert resumed.run(max_transitions=2).completed
+    assert calls == ["curator", "consumer"]
+    assert [item.content for item in received] == [
+        "Preserve both implementations and fix their integration."
+    ]
