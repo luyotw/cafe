@@ -22,6 +22,7 @@ from tests.integration import test_chat_read_only as chat_fixtures
 from tests.integration.test_chat_read_only import configure_provider
 from tests.integration.test_runtime_constraints_journeys import phase
 
+diagnostic_playbook_yaml = chat_fixtures.diagnostic_playbook_yaml
 diagnostic_workspace = chat_fixtures.diagnostic_workspace
 native_io = chat_fixtures.native_io
 

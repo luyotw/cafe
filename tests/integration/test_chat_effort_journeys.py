@@ -9,7 +9,7 @@ import yaml
 from cafe.core.session import SessionManager
 from cafe.core.types import AgentCLI
 from cafe.ui.chat import launch_chat_session
-from tests.integration.test_chat_read_only import diagnostic_workspace
+from tests.integration.test_chat_read_only import diagnostic_playbook_yaml, diagnostic_workspace
 from tests.unit.test_chat_read_only import inventory
 from tests.unit.test_reasoning_effort_adapters import install_provider_clients
 

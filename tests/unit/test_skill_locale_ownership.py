@@ -133,6 +133,11 @@ def test_phase_copy_is_absent_from_central_catalogs():
         phase_copy[resource.stem].update(yaml.safe_load(resource.read_text()).values())
     allowed = {
         "workspace.correction",
+        "workspace.commit_permission",
+        "workspace.commit_resume",
+        *[f"reviewed_result.{name}" for name in (
+            "title", "workflow", "revision", "review", "diff", "files", "implementation", "limits",
+        )],
         "notification.action_labels.agent_execution_interrupted",
         *[f"notification.{name}" for name in (
             "repository_fallback", "issue_fallback", "step_fallback", "action_fallback",
