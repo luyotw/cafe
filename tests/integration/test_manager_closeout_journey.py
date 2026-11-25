@@ -195,7 +195,7 @@ def test_manager_acceptance_executes_confirmed_cafe_close_without_reintegration(
     binaries = tmp_path / "bin"
     binaries.mkdir()
     cafe = binaries / "cafe"
-    cafe.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " -m cafe.ui.cli \"$@\"\n")
+    cafe.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " -m cafe.manager.cli \"$@\"\n")
     cafe.chmod(0o755)
     gh = binaries / "gh"
     gh.write_text("#!/bin/sh\nexit 1\n")
