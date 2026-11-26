@@ -1,14 +1,20 @@
-# Slack notifications for HumanTasks
+# Slack notifications for HumanTasks and workflow errors
 
 CAFE can make one Slack Incoming Webhook attempt when any built-in, global, or
 project playbook creates a new, durable HumanTask. This path is optional. The
 task inbox remains authoritative whether delivery succeeds, is disabled,
-deduplicated, denied, or fails.
+deduplicated, denied, or fails. With workflow callbacks enabled, CAFE also sends
+a notice for a recorded workflow error that interrupts execution. Replaying the
+same interruption does not send another notice.
+
+Normal handoffs, workflow completion, progress reminders and deliberate stops
+are reported through the usual workflow channels. A callback delivery failure
+is recorded locally. Slack is used as a fallback for a failed HumanTask callback.
 
 Each Incoming Webhook is bound to one Slack channel. Operators define named
 **destinations** in the login user's machine-owned `~/.cafe/credentials.yaml`
 and reference those names in private `~/.cafe/config.yaml` repository routes.
-The same resolver serves HumanTasks and workflow callback failure notices. Each
+The same resolver serves HumanTasks, interruption notices, and Slack fallbacks. Each
 notification selects exactly one destination; fan-out is not supported.
 
 Project configuration, playbooks, hooks, tasks, agent responses, files in the

@@ -64,6 +64,7 @@ SESSION_FILENAME = "session.json"
 DISPATCH_STATE_FILENAME = "dispatch_state.json"
 LOCK_FILENAME = "session.lock"
 FAILURE_NOTIFICATIONS_FILENAME = "callback_failure_notifications.json"
+INTERRUPTION_NOTIFICATIONS_FILENAME = "workflow_interruption_notifications.json"
 MAX_FAILURE_NOTIFICATIONS = 128
 MAX_CALLBACK_INPUT_BYTES = 256 * 1024
 _HOST_SESSION_KIND = "codex"
@@ -2856,21 +2857,80 @@ def _stored_conversation_locale(issue_dir: Path) -> str:
 def _notify_callback_failure(
     event: dict[str, Any], *, repository_root: Path, error: Exception
 ) -> None:
-    """Best-effort out-of-band notice when the primary callback path fails."""
+    """Record callback failures and alert only when a HumanTask may need attention."""
+    _notify_workflow_problem(
+        event, repository_root=repository_root, error_code=_callback_error_code(error),
+        send_slack=event.get("event_type") == "human_task",
+    )
+
+
+def _is_error_interruption(event: dict[str, Any]) -> bool:
+    if event.get("event_type") != "workflow_interruption":
+        return False
+    status = event.get("status_code")
+    reason = event.get("reason")
+    if reason is None and isinstance(status, str) and status.startswith("INTERRUPTED:"):
+        reason = status.removeprefix("INTERRUPTED:")
+    if isinstance(reason, str) and (
+        reason.startswith("agent_") or reason in {"startup_failed", "execution_failed", "publish_error"}
+    ):
+        return True
+    return isinstance(status, str) and status in {
+        "AUTOMATIC_EXECUTOR_REJECTED",
+        "CHECKLIST_VALIDATION_FAILED",
+        "COMPLETION_PUBLICATION_BLOCKED",
+        "DELIVERY_READINESS_BLOCKED",
+        "EXECUTION_CHECKPOINT_BLOCKED",
+        "HUMAN_TASK_CONFIGURATION_ERROR",
+        "HYBRID_RESULT_REJECTED",
+        "INVALID_FEEDBACK_DELIVERY",
+        "INVALID_STATUS_CODE",
+        "MISSING_CAPABILITY_RECEIPT",
+        "NO_BATON_TRANSITION",
+        "NO_STATUS_TRANSITION",
+    }
+
+
+def _notify_error_interruption(event: dict[str, Any], *, repository_root: Path) -> None:
+    """Send one alert for a durable workflow error, independently of Manager delivery."""
+    from cafe.core.blackboard import BlackboardStore
+
+    issue_dir = repository_root / ".cafe" / "issues" / _validated_issue_name(event)
+    validate_issue_directory(issue_dir)
+    workflow_id = _prepared_workflow_id(issue_dir)
+    BlackboardStore(issue_dir).validate_workflow_callback_event(workflow_id, event)
+    _notify_workflow_problem(
+        event, repository_root=repository_root, error_code="workflow_interrupted",
+        send_slack=True, receipt_file=INTERRUPTION_NOTIFICATIONS_FILENAME,
+    )
+
+
+def _notify_workflow_problem(
+    event: dict[str, Any], *, repository_root: Path, error_code: str, send_slack: bool,
+    receipt_file: str = FAILURE_NOTIFICATIONS_FILENAME,
+) -> None:
     issue = _validated_issue_name(event)
     step = event.get("step")
     event_type = event.get("event_type")
     issue_dir = repository_root / ".cafe" / "issues" / issue
     manager_dir = _manager_dir(issue_dir)
-    notification_root = resolve_human_task_notification_repository_root(issue_dir)
-    error_code = _callback_error_code(error)
-    notification_key = _callback_failure_key(event, error_code=error_code)
+    notification_key = (event["event_id"] if receipt_file == INTERRUPTION_NOTIFICATIONS_FILENAME
+                        else _callback_failure_key(event, error_code=error_code))
     with _session_lock(manager_dir):
-        records = _load_callback_failure_notifications(manager_dir)
+        records = _load_callback_failure_notifications(manager_dir, receipt_file)
         existing = records.get(notification_key)
         if isinstance(existing, dict) and existing.get("outcome") in {
-            "sent", "disabled", "pending"
+            "sent", "disabled", "pending", "skipped",
         }:
+            return
+        if not send_slack:
+            records[notification_key] = {
+                "occurred_at": _now(),
+                "outcome": "skipped",
+                "error_code": error_code,
+                "notification_code": "slack_event_filtered",
+            }
+            _write_callback_failure_notifications(manager_dir, records, receipt_file)
             return
         records[notification_key] = {
             "occurred_at": _now(),
@@ -2878,7 +2938,7 @@ def _notify_callback_failure(
             "error_code": error_code,
             "notification_code": "notification_pending",
         }
-        _write_callback_failure_notifications(manager_dir, records)
+        _write_callback_failure_notifications(manager_dir, records, receipt_file)
         settings = load_human_task_notification_settings()
         if not settings.enabled:
             records[notification_key] = {
@@ -2887,8 +2947,9 @@ def _notify_callback_failure(
                 "error_code": error_code,
                 "notification_code": settings.code,
             }
-            _write_callback_failure_notifications(manager_dir, records)
+            _write_callback_failure_notifications(manager_dir, records, receipt_file)
             return
+        notification_root = resolve_human_task_notification_repository_root(issue_dir)
         locale = _stored_conversation_locale(issue_dir)
         presentation = None
         try:
@@ -2943,7 +3004,7 @@ def _notify_callback_failure(
                 "error_code": error_code,
                 "notification_code": type(notification_error).__name__,
             }
-            _write_callback_failure_notifications(manager_dir, records)
+            _write_callback_failure_notifications(manager_dir, records, receipt_file)
             raise
         records[notification_key] = {
             "occurred_at": _now(),
@@ -2951,7 +3012,7 @@ def _notify_callback_failure(
             "error_code": error_code,
             "notification_code": "slack_notification_sent",
         }
-        _write_callback_failure_notifications(manager_dir, records)
+        _write_callback_failure_notifications(manager_dir, records, receipt_file)
 
 
 def _callback_error_code(error: Exception) -> str:
@@ -2986,9 +3047,11 @@ def _callback_failure_key(event: dict[str, Any], *, error_code: str) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def _load_callback_failure_notifications(manager_dir: Path) -> dict[str, dict[str, str]]:
+def _load_callback_failure_notifications(
+    manager_dir: Path, filename: str = FAILURE_NOTIFICATIONS_FILENAME,
+) -> dict[str, dict[str, str]]:
     """Load the bounded, workflow-bound callback failure authority."""
-    path = manager_dir / FAILURE_NOTIFICATIONS_FILENAME
+    path = manager_dir / filename
     if not path.exists():
         return {}
     try:
@@ -3009,7 +3072,8 @@ def _load_callback_failure_notifications(manager_dir: Path) -> dict[str, dict[st
 
 
 def _write_callback_failure_notifications(
-    manager_dir: Path, records: dict[str, dict[str, str]]
+    manager_dir: Path, records: dict[str, dict[str, str]],
+    filename: str = FAILURE_NOTIFICATIONS_FILENAME,
 ) -> None:
     """Persist secret-free callback notification outcomes for diagnosis."""
     # JSON persistence sorts hash keys; retain by occurrence time instead.
@@ -3020,7 +3084,7 @@ def _write_callback_failure_notifications(
     payload = {"schema_version": 1, "workflow_id": _prepared_workflow_id(manager_dir.parent),
                "records": bounded_records}
     _atomic_write(
-        manager_dir / FAILURE_NOTIFICATIONS_FILENAME,
+        manager_dir / filename,
         json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8"),
     )
 
@@ -3064,6 +3128,11 @@ def main(argv: list[str] | None = None) -> int:
     if not isinstance(raw_event, dict):
         raise ValueError("workflow event callback must be an object")
     repository_root = Path.cwd().resolve()
+    if _is_error_interruption(raw_event):
+        try:
+            _notify_error_interruption(raw_event, repository_root=repository_root)
+        except Exception:
+            pass  # A Slack failure must leave Manager delivery available.
     try:
         run_callback(raw_event, repository_root=repository_root)
     except (InvalidWorkflowEventError, StaleWorkflowEventError):

@@ -6051,7 +6051,8 @@ class BlackboardWorkflowRuntime:
                     )
                     self._dispatch_workflow_event(
                         "workflow_interruption",
-                        {"step": current_step, "reason": si.reason},
+                        {"step": current_step, "reason": si.reason,
+                         "status_code": f"INTERRUPTED:{si.reason}"},
                     )
                     return PlaybookRunResult(
                         final_step=current_step,
@@ -6416,7 +6417,8 @@ class BlackboardWorkflowRuntime:
                         )
                     self._dispatch_workflow_event(
                         "workflow_interruption",
-                        {"step": current_step, "reason": si.reason},
+                        {"step": current_step, "reason": si.reason,
+                         "status_code": f"INTERRUPTED:{si.reason}"},
                     )
                     return PlaybookRunResult(
                         final_step=current_step,

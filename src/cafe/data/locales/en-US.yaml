@@ -17,6 +17,8 @@ notification.step_field: Current step
 notification.action_field: What you need to do
 notification.task_closing: Return to the "{issue}" work item in CAFE to continue.
 notification.callback_headline: A CAFE automatic notification did not complete
+notification.interruption_headline: A CAFE workflow was interrupted
+notification.interruption_reason: A workflow error stopped execution.
 notification.status_field: Situation
 notification.reason_state: CAFE could not read the state or configuration the notification needs.
 notification.reason_queue: CAFE could not deliver the notification to the original conversation.

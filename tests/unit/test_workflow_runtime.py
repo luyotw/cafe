@@ -7526,8 +7526,11 @@ def test_runtime_rejects_plain_text_baton_written_by_pr_agent(tmp_path: Path) ->
     assert calls == ["pr"]
 
 
-def test_runtime_handles_keyboard_interrupt(tmp_path: Path) -> None:
-    """KeyboardInterrupt records step_interrupted and returns INTERRUPTED."""
+@pytest.mark.parametrize(
+    ("error", "reason"),
+    [(KeyboardInterrupt(), "interrupted"), (RuntimeError("PR sync script failed: unavailable"), "publish_error")],
+)
+def test_runtime_reports_interruption_once(tmp_path: Path, error, reason) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-interrupt"
     playbook = {
         "playbook": {"id": "default"},
@@ -7538,12 +7541,13 @@ def test_runtime_handles_keyboard_interrupt(tmp_path: Path) -> None:
     }
 
     call_count = 0
+    events = []
 
     def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
         nonlocal call_count
         call_count += 1
         if step_name == "spec" and call_count == 1:
-            raise KeyboardInterrupt()
+            raise error
         return StepExecutionResult(
             response="done",
             artifacts={},
@@ -7554,14 +7558,18 @@ def test_runtime_handles_keyboard_interrupt(tmp_path: Path) -> None:
         issue_dir=issue_dir,
         playbook=playbook,
         executor=executor,
+        workflow_event_callback=events.append,
     )
 
     result = runtime.run(start_step="spec", max_transitions=5)
 
     # Should return INTERRUPTED result, not raise
     assert result.completed is False
-    assert result.final_status_code.startswith("INTERRUPTED")
+    assert result.final_status_code == f"INTERRUPTED:{reason}"
     assert result.final_step == "spec"
+    assert [(event["event_type"], event["reason"], event["status_code"]) for event in events] == [
+        ("workflow_interruption", reason, result.final_status_code),
+    ]
 
     # Verify event was recorded
     bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="standard")

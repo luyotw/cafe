@@ -276,7 +276,7 @@ class HumanTaskSlackMessage:
 
 @dataclass(frozen=True)
 class WorkflowCallbackFailureSlackMessage:
-    """Readable, secret-free notification for an asynchronous callback failure."""
+    """Readable, secret-free notification for a callback or workflow error."""
 
     repository: str
     issue: str
@@ -298,22 +298,26 @@ class WorkflowCallbackFailureSlackMessage:
             presentation.step_label,
             _safe_label(self.step, text("unknown_step")),
         )
-        if self.error_code == "callback_ValueError":
+        interrupted = self.error_code == "workflow_interrupted"
+        if interrupted:
+            reason = text("interruption_reason")
+        elif self.error_code == "callback_ValueError":
             reason = text("reason_state")
         elif self.error_code.startswith("codex_queue_"):
             reason = text("reason_queue")
         else:
             reason = text("reason_generic")
         separator = text("field_separator")
-        lines = (
-            text("callback_headline"),
+        lines = [
+            text("interruption_headline" if interrupted else "callback_headline"),
             f"{text('repository_field')}{separator}{repository}",
             f"{text('issue_field')}{separator}{issue}",
             f"{text('step_field')}{separator}{step}",
             f"{text('status_field')}{separator}{reason}",
-            text("callback_impact"),
-            text("callback_closing", issue=issue),
-        )
+        ]
+        if not interrupted:
+            lines.append(text("callback_impact"))
+        lines.append(text("callback_closing", issue=issue))
         return {"text": "\n".join(lines)}
 
 
@@ -363,7 +367,7 @@ def build_workflow_callback_failure_message(
     locale: str = DEFAULT_CONVERSATION_LOCALE,
     presentation: NotificationPresentation | None = None,
 ) -> WorkflowCallbackFailureSlackMessage:
-    """Build a bounded callback-failure notification without raw exception text."""
+    """Build a bounded error notification without raw exception text."""
     return WorkflowCallbackFailureSlackMessage(
         repository=sanitize_human_task_metadata(repository),
         issue=sanitize_human_task_metadata(issue),

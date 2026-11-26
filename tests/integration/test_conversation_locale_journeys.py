@@ -203,7 +203,7 @@ def test_resume_and_a_changed_playbook_default_leave_the_stored_language_alone(
 
     slack_posts.clear()
     _callback_module()._notify_callback_failure(
-        {"issue": "resumed", "step": "develop", "event_type": "phase_terminal"},
+        {"issue": "resumed", "step": "develop", "event_type": "human_task"},
         repository_root=repo_root,
         error=ValueError("state unreadable"),
     )

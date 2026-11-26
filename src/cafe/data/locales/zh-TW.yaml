@@ -17,6 +17,8 @@ notification.step_field: 目前階段
 notification.action_field: 需要你做的事
 notification.task_closing: 請回到 CAFE 的「{issue}」工作項目處理。
 notification.callback_headline: CAFE 自動通知未完成
+notification.interruption_headline: CAFE 工作流程已中斷
+notification.interruption_reason: 工作流程因錯誤停止。
 notification.status_field: 狀況
 notification.reason_state: CAFE 無法讀取自動通知所需的狀態或設定。
 notification.reason_queue: CAFE 無法將通知送達原對話。

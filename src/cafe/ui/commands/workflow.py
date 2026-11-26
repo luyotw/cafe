@@ -1520,7 +1520,9 @@ def _dispatch_interruption_callback(runtime: Any, error: Exception) -> None:
             "workflow_interrupted",
             {"error": type(error).__name__},
         )
-        runtime._dispatch_workflow_event("workflow_interruption", {"error": type(error).__name__})
+        runtime._dispatch_workflow_event("workflow_interruption", {
+            "step": runtime.blackboard.current_step, "reason": "execution_failed",
+        })
     except Exception:
         pass
 

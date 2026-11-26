@@ -128,7 +128,7 @@ def test_actual_materialization_and_callback_use_selected_primary_and_shared_own
         {
             "issue": issue.name,
             "step": "renamed",
-            "event_type": "phase_terminal",
+            "event_type": "human_task",
             "workflow_id": task.workflow_id,
         },
         repository_root=project,
@@ -141,7 +141,8 @@ def test_actual_materialization_and_callback_use_selected_primary_and_shared_own
     runtime._notify_new_human_task(task)
     assert len(posts) == 2
     callback._notify_callback_failure(
-        {"issue": issue.name, "step": "renamed", "event_type": "other_failure"},
+        {"issue": issue.name, "step": "renamed", "event_type": "human_task",
+         "task_id": "other-task"},
         repository_root=project,
         error=ValueError("private"),
     )
@@ -299,7 +300,7 @@ def test_iteration_selector_and_primary_producer_reach_both_notifications(notifi
     assert task.iteration == 2
     assert "Second owner zh-TW" in posts[0] and "Primary action zh-TW" in posts[0]
     _callback_module()._notify_callback_failure(
-        {"issue": issue.name, "step": "renamed", "event_type": "phase_terminal"},
+        {"issue": issue.name, "step": "renamed", "event_type": "human_task"},
         repository_root=project,
         error=ValueError("private"),
     )

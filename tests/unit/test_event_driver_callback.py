@@ -2452,7 +2452,7 @@ def test_operator_sees_callback_failure_without_slack(tmp_path: Path, monkeypatc
     before = service.load_current_state("issue456", ["spec", "develop"])
     monkeypatch.setattr(
         callback, "load_human_task_notification_settings",
-        lambda: SimpleNamespace(enabled=False, code="disabled"),
+        lambda: pytest.fail("routine callback failures must not resolve Slack settings"),
     )
     callback._notify_callback_failure(
         event, repository_root=tmp_path, error=TimeoutError("delivery unavailable")
@@ -2460,6 +2460,7 @@ def test_operator_sees_callback_failure_without_slack(tmp_path: Path, monkeypatc
     receipt = json.loads((driver_dir / "callback_failure_notifications.json").read_text())
     status = service.load_current_state("issue456", ["spec", "develop"])
     assert receipt["workflow_id"] == event["workflow_id"]
+    assert next(iter(receipt["records"].values()))["outcome"] == "skipped"
     assert status["State"] != before["State"]
     assert "dispatch_state.json" in status["Next"]
 
@@ -2496,7 +2497,7 @@ def test_interrupted_notification_keeps_failure_visible(tmp_path: Path, monkeypa
 
     callback = _callback_module()
     driver_dir, _state, event = _contract_event_context(
-        callback, tmp_path, [("codex", "exact")], issue_name="issue456"
+        callback, tmp_path, [("codex", "exact")], issue_name="issue456", event_type="human_task"
     )
     service = StatusService(issues_root=driver_dir.parent.parent)
     before = service.load_current_state("issue456", ["spec", "develop"])
@@ -2929,6 +2930,92 @@ def test_callback_failure_sends_a_best_effort_slack_notice(tmp_path: Path, monke
     ]
 
 
+@pytest.mark.parametrize(
+    ("event_type", "reason"),
+    [
+        ("phase_terminal", None),
+        ("workflow_completed", None),
+        ("worker_progress_overdue", None),
+        ("workflow_interruption", "interrupted"),
+        ("workflow_interruption", "supervisor_correction"),
+        ("workflow_interruption", "max_transitions"),
+    ],
+)
+def test_workflow_progress_does_not_send_slack_even_if_callback_fails(
+    tmp_path: Path, monkeypatch, event_type, reason,
+) -> None:
+    callback = _callback_module()
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe/issues/issue456"
+    prepared = _prepare_issue(issue_dir)
+    event = {
+        "issue": issue_dir.name, "workflow_id": prepared.workflow_id,
+        "event_type": event_type, "step": "develop", "reason": reason,
+    }
+    calls = []
+    monkeypatch.setattr(callback, "run_callback", lambda event, **kwargs: calls.append(event))
+    monkeypatch.setattr(
+        callback, "post_slack_notification", lambda *_a, **_kw: pytest.fail("unexpected Slack post"),
+    )
+    args = ["--workflow-event", json.dumps(event)]
+    assert callback.main(args) == 0
+    assert calls == [event]
+    with patch.object(callback, "run_callback", side_effect=TimeoutError("callback unavailable")):
+        with pytest.raises(TimeoutError, match="callback unavailable"):
+            callback.main(args)
+    manager_dir = callback._manager_dir(issue_dir)
+    records = callback._load_callback_failure_notifications(manager_dir)
+    assert [record["outcome"] for record in records.values()] == ["skipped"]
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"reason": "startup_failed"},
+        {"reason": "execution_failed"},
+        {"reason": "publish_error", "status_code": "INTERRUPTED:publish_error"},
+        {"status_code": "AUTOMATIC_EXECUTOR_REJECTED"},
+    ],
+)
+def test_durable_error_interruption_sends_slack_once_independently_of_manager(
+    tmp_path: Path, monkeypatch, fields,
+) -> None:
+    from cafe.core.blackboard import BlackboardStore
+
+    callback = _callback_module()
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe/issues/issue456"
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    event = store.prepare_workflow_callback_event(state, {
+        "issue": issue_dir.name, "workflow_id": state.workflow_id,
+        "event_type": "workflow_interruption", "step": "develop", **fields,
+    })
+    posts = []
+    monkeypatch.setattr(
+        callback, "load_human_task_notification_settings", lambda: SimpleNamespace(enabled=True),
+    )
+    monkeypatch.setattr(callback, "load_slack_webhook_url", lambda **_kw: "webhook")
+    monkeypatch.setattr(
+        callback, "post_slack_notification", lambda _, message, **_kw: posts.append(message.to_slack_payload()),
+    )
+    monkeypatch.setattr(callback, "run_callback", lambda *_a, **_kw: None)
+    args = ["--workflow-event", json.dumps(event)]
+    assert callback.main(["--workflow-event", json.dumps({**event, "event_id": "invalid"})]) == 0
+    assert not posts
+    assert callback.main(args) == 0
+    with patch.object(callback, "run_callback", side_effect=TimeoutError("callback unavailable")):
+        with pytest.raises(TimeoutError, match="callback unavailable"):
+            callback.main(args)
+    assert len(posts) == 1
+    assert "A CAFE workflow was interrupted" in posts[0]["text"]
+    manager_dir = callback._manager_dir(issue_dir)
+    receipt = callback._load_callback_failure_notifications(
+        manager_dir, callback.INTERRUPTION_NOTIFICATIONS_FILENAME,
+    )
+    assert receipt[event["event_id"]]["outcome"] == "sent"
+
+
 def test_callback_failure_uses_canonical_repository_route_and_deduplicates(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -2997,7 +3084,7 @@ def test_callback_failure_notice_survives_blackboard_replacement_after_pending_r
 ) -> None:
     callback = _callback_module()
     driver_dir, _state, event = _contract_event_context(
-        callback, tmp_path, [("codex", "exact")], issue_name="issue456"
+        callback, tmp_path, [("codex", "exact")], issue_name="issue456", event_type="human_task"
     )
     issue_dir = driver_dir.parent
     blackboard_path = issue_dir / "blackboard.json"
@@ -3021,8 +3108,8 @@ def test_callback_failure_notice_survives_blackboard_replacement_after_pending_r
         lambda _webhook, message, *, timeout_sec: posts.append(message),
     )
 
-    def replace_blackboard_after_pending_write(directory, records):
-        write_receipts(directory, records)
+    def replace_blackboard_after_pending_write(directory, records, filename):
+        write_receipts(directory, records, filename)
         if any(record.get("outcome") == "pending" for record in records.values()):
             blackboard_path.write_text("[]", encoding="utf-8")
 

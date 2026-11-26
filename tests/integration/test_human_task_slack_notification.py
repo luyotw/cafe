@@ -573,7 +573,7 @@ def test_an_unsupported_or_absent_locale_delivers_english_without_a_notice(
     assert legacy_state.get("conversation_locale") is None
 
 
-def test_a_background_callback_failure_notification_uses_the_stored_locale(
+def test_a_background_workflow_error_notification_uses_the_stored_locale(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Integration 3: the background path reads the stored value, never re-resolves."""
@@ -608,14 +608,14 @@ def test_a_background_callback_failure_notification_uses_the_stored_locale(
     state.conversation_locale_source = "explicit"
     store.save(state)
 
-    workflow_event_callback._notify_callback_failure(
-        {"issue": "callback", "step": "develop", "event_type": "phase_terminal"},
-        repository_root=repo_root,
-        error=ValueError("state unreadable"),
-    )
+    event = store.prepare_workflow_callback_event(state, {
+        "issue": issue_dir.name, "workflow_id": state.workflow_id, "step": "develop",
+        "event_type": "workflow_interruption", "reason": "execution_failed",
+    })
+    workflow_event_callback._notify_error_interruption(event, repository_root=repo_root)
 
     assert len(posts) == 1
-    assert "無法讀取自動通知所需的狀態或設定" in json.loads(posts[0].data)["text"]
+    assert "CAFE 工作流程已中斷" in json.loads(posts[0].data)["text"]
 
 
 def _named_store(home: Path) -> tuple[Path, str]:
@@ -727,7 +727,8 @@ def test_human_task_and_callback_failure_share_destination_and_keep_deduplicatio
         "issue": issue_dir.name,
         "workflow_id": task.workflow_id,
         "step": "spec",
-        "event_type": "phase_terminal",
+        "event_type": "human_task",
+        "task_id": task.id,
     }
     callback._notify_callback_failure(
         event, repository_root=active, error=ValueError("private callback detail")
@@ -802,7 +803,7 @@ def test_failed_named_notifications_leave_secret_free_exceptions_logs_receipts_a
     assert state.capability_receipts[0]["code"] == expected_code
     assert HumanTaskRecordStore(issue_dir).tasks()[0].status is HumanTaskStatus.PENDING
     callback = _callback_notification_module()
-    event = {"issue": issue_dir.name, "step": "spec", "event_type": "phase_terminal"}
+    event = {"issue": issue_dir.name, "step": "spec", "event_type": "human_task"}
     # Config errors disable delivery before invoking the shared credential resolver.
     if source == "config_yaml":
         callback._notify_callback_failure(
@@ -872,7 +873,7 @@ def test_test_run_human_task_and_callback_never_open_normal_credentials_or_route
     _pause_for_output_review(issue_dir)
     state = BlackboardStore(issue_dir).load_or_create("spec")
     callback = _callback_notification_module()
-    event = {"issue": issue_dir.name, "step": "spec", "event_type": "phase_terminal"}
+    event = {"issue": issue_dir.name, "step": "spec", "event_type": "human_task"}
     if available:
         callback._notify_callback_failure(event, repository_root=repo, error=ValueError("callback"))
         assert [post.full_url for post in posts] == [named, named]
@@ -915,7 +916,7 @@ def test_disabled_notifications_require_neither_valid_store_nor_legacy_credentia
     _pause_for_output_review(issue_dir)
     callback = _callback_notification_module()
     callback._notify_callback_failure(
-        {"issue": issue_dir.name, "step": "spec", "event_type": "phase_terminal"},
+        {"issue": issue_dir.name, "step": "spec", "event_type": "human_task"},
         repository_root=repo,
         error=ValueError("callback"),
     )
